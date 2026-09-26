@@ -14,6 +14,7 @@ import {
   buildRewindDraftAttachments,
   dropMissingAnnotationSources,
   hasRestorableAnnotationSources,
+  startRewindSourceProbe,
 } from '@/lib/rewindDraftAttachments';
 
 describe('buildRewindDraftAttachments', () => {
@@ -160,10 +161,10 @@ describe('rewind draft attachment wiring', () => {
     expect(userMessageSrc).toMatch(
       /buildRewindDraftAttachments\(\{\s*images:\s*draftImages,\s*files\s*\}\)/,
     );
-    // 带可再编辑标注的历史图先探测原图,丢失的退回烧录图后再写草稿。
-    expect(userMessageSrc).toMatch(
-      /hasRestorableAnnotationSources\(images\)[\s\S]{0,120}dropMissingAnnotationSources\(images\)\.then\(saveRewindDraft\)/,
-    );
+    // 原图探测在确认框打开时发起,提交时同步取结果写草稿——不存在迟到的二次写入。
+    expect(userMessageSrc).toMatch(/startRewindSourceProbe\(images\)[\s\S]{0,80}setRewindOpen\(true\)/);
+    expect(userMessageSrc).toMatch(/probe\.imagesForDraft\(\)/);
+    expect(userMessageSrc).not.toMatch(/dropMissingAnnotationSources\([^)]*\)\.then/);
     expect(userMessageSrc).toMatch(
       /saveComposerDraft\(sessionId,\s*\{\s*text:\s*draftText,\s*attachments:\s*draftAttachments/s,
     );
@@ -288,5 +289,39 @@ describe('dropMissingAnnotationSources', () => {
         throw new Error('probe crashed');
       }),
     ).resolves.toEqual([annotated]);
+  });
+});
+
+describe('startRewindSourceProbe (rewind draft timing)', () => {
+  const annotated = {
+    url: 'cindy-media://blobs/burned.png',
+    mimeType: 'image/png',
+    originalName: 'shot-annotated.png',
+    annotationSourceUrl: 'cindy-media://blobs/gone.png',
+    annotationStrokes: [{ points: [{ x: 0.5, y: 0.5 }] }],
+  };
+
+  it('never waits: before the probe settles the draft uses the editable images (old behavior)', async () => {
+    let settle: (exists: boolean) => void = () => {};
+    const probe = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const handle = startRewindSourceProbe([annotated], probe);
+
+    // 提交时探测尚未完成:同步返回原列表,草稿照旧一次写完。
+    expect(handle.imagesForDraft()).toEqual([annotated]);
+
+    settle(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 探测完成后(例如确认框还开着时)再提交:丢失的原图退回烧录图。
+    expect(handle.imagesForDraft()).toEqual([
+      { url: 'cindy-media://blobs/burned.png', mimeType: 'image/png', originalName: 'shot-annotated.png' },
+    ]);
+  });
+
+  it('does not probe at all when no image carries restorable annotations', () => {
+    const probe = vi.fn(async () => false);
+    const plain = [{ url: 'cindy-media://blobs/p.png', mimeType: 'image/png', originalName: 'p.png' }];
+    const handle = startRewindSourceProbe(plain, probe);
+    expect(probe).not.toHaveBeenCalled();
+    expect(handle.imagesForDraft()).toBe(plain);
   });
 });

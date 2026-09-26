@@ -255,7 +255,9 @@ export async function materializeAnnotatedAttachmentsForSend(
   if (!needsAnnotationMaterialize(files)) {
     return files ? [...files] : undefined;
   }
-  const abortOnFailure = opts?.burnFailure === 'abort';
+  if (opts?.burnFailure === 'abort') {
+    return materializeOrAbort(files!, sessionId, opts);
+  }
   let fallbackCount = 0;
   const materialized = await Promise.all(
     files!.map(async (f): Promise<AttachedFile> => {
@@ -273,58 +275,10 @@ export async function materializeAnnotatedAttachmentsForSend(
         return f;
       }
       try {
-        const source = f.url
-          ? await loadImageSourceBase64(f.url)
-          : f.base64
-            ? { base64: f.base64, mimeType: f.mimeType }
-            : null;
-        if (!source) return f;
-        const { blob, mimeType } = await burnInAnnotations(source, strokes);
-        const ext = mimeType === 'image/jpeg' ? '.jpg' : '.png';
-        const name = annotatedFileName(f.originalName ?? f.name, ext, Date.now());
-        const regions = summarizeAnnotationRegions(strokes);
-        const annotationRegions = regions.length > 0 ? { annotationRegions: regions } : {};
-        if (f.url) {
-          const cached = await window.electronAPI.cacheImageFromBuffer({
-            sessionId,
-            buffer: new Uint8Array(await blob.arrayBuffer()),
-            mimeType,
-            suggestedName: name,
-          });
-          return {
-            ...f,
-            url: cached.url,
-            name,
-            originalName: name,
-            ext,
-            mimeType,
-            size: blob.size,
-            annotated: true,
-            ...annotationRegions,
-            ...(opts?.stripAnnotationMeta
-              ? { annotationSourceUrl: undefined, annotationStrokes: undefined }
-              : { annotationSourceUrl: f.url }),
-          };
-        }
-        return {
-          ...f,
-          base64: await blobToBase64Payload(blob),
-          name,
-          originalName: name,
-          ext,
-          mimeType,
-          size: blob.size,
-          annotated: true,
-          ...annotationRegions,
-        };
+        const burned = await burnAttachment(f, strokes);
+        if (!burned) return f;
+        return await persistBurnedAttachment(f, strokes, burned, sessionId, opts);
       } catch (err) {
-        if (abortOnFailure) {
-          log.warn('burn-in failed, aborting send', {
-            name: f.name,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          throw new AnnotationBurnInError(f.name, err);
-        }
         log.warn('burn-in failed, sending original image without annotations', {
           name: f.name,
           error: err instanceof Error ? err.message : String(err),
@@ -356,6 +310,147 @@ export async function materializeAnnotatedAttachmentsForSend(
     }
   }
   return materialized;
+}
+
+/** 需要按笔迹烧录的附件(未烧录过的图片且带笔迹)。 */
+function needsBurn(f: AttachedFile): boolean {
+  return f.category === 'image' && !f.annotated && (f.annotationStrokes?.length ?? 0) > 0;
+}
+
+/**
+ * 读取原图字节并烧录笔迹。只在渲染进程内计算,不产生任何持久化副作用;
+ * 没有可用字节源(既无 url 也无 base64)时返回 null。
+ */
+async function burnAttachment(
+  f: AttachedFile,
+  strokes: readonly AnnotationStroke[],
+): Promise<{ blob: Blob; mimeType: string } | null> {
+  const source = f.url
+    ? await loadImageSourceBase64(f.url)
+    : f.base64
+      ? { base64: f.base64, mimeType: f.mimeType }
+      : null;
+  if (!source) return null;
+  return burnInAnnotations(source, strokes);
+}
+
+/**
+ * 把烧录位图落成发送附件:缓存附件写入媒体仓成为新 url(原 url 记为
+ * annotationSourceUrl);base64 草稿附件就地替换字节。
+ */
+async function persistBurnedAttachment(
+  f: AttachedFile,
+  strokes: readonly AnnotationStroke[],
+  burned: { blob: Blob; mimeType: string },
+  sessionId: string,
+  opts: MaterializeAnnotatedOptions | undefined,
+): Promise<AttachedFile> {
+  const { blob, mimeType } = burned;
+  const ext = mimeType === 'image/jpeg' ? '.jpg' : '.png';
+  const name = annotatedFileName(f.originalName ?? f.name, ext, Date.now());
+  const regions = summarizeAnnotationRegions(strokes);
+  const annotationRegions = regions.length > 0 ? { annotationRegions: regions } : {};
+  if (f.url) {
+    const cached = await window.electronAPI.cacheImageFromBuffer({
+      sessionId,
+      buffer: new Uint8Array(await blob.arrayBuffer()),
+      mimeType,
+      suggestedName: name,
+    });
+    return {
+      ...f,
+      url: cached.url,
+      name,
+      originalName: name,
+      ext,
+      mimeType,
+      size: blob.size,
+      annotated: true,
+      ...annotationRegions,
+      ...(opts?.stripAnnotationMeta
+        ? { annotationSourceUrl: undefined, annotationStrokes: undefined }
+        : { annotationSourceUrl: f.url }),
+    };
+  }
+  return {
+    ...f,
+    base64: await blobToBase64Payload(blob),
+    name,
+    originalName: name,
+    ext,
+    mimeType,
+    size: blob.size,
+    annotated: true,
+    ...annotationRegions,
+  };
+}
+
+/**
+ * `burnFailure: 'abort'` 的物化:整批要么全部成功,要么不留副作用地中止。
+ * 1. 先烧录全部附件(纯计算,allSettled 等全部结束);任一失败即中止,此时
+ *    还没有写入媒体仓、也没有私有化复制。
+ * 2. 全部烧录成功后再写入 / 私有化;这一步若仍有失败,把本批已新建的文件经
+ *    既有清理接口回收后中止——重试不会累积孤儿文件。
+ */
+async function materializeOrAbort(
+  files: readonly AttachedFile[],
+  sessionId: string,
+  opts: MaterializeAnnotatedOptions,
+): Promise<AttachedFile[]> {
+  const burns = await Promise.allSettled(
+    files.map((f) => (needsBurn(f) ? burnAttachment(f, f.annotationStrokes!) : null)),
+  );
+  const burnFailure = burns.findIndex((result) => result.status === 'rejected');
+  if (burnFailure >= 0) {
+    const reason = (burns[burnFailure] as PromiseRejectedResult).reason;
+    log.warn('burn-in failed, aborting send', {
+      name: files[burnFailure].name,
+      error: reason instanceof Error ? reason.message : String(reason),
+    });
+    throw new AnnotationBurnInError(files[burnFailure].name, reason);
+  }
+  const persisted = await Promise.allSettled(
+    files.map(async (f, i): Promise<AttachedFile> => {
+      const burned = (burns[i] as PromiseFulfilledResult<{ blob: Blob; mimeType: string } | null>)
+        .value;
+      if (burned) return persistBurnedAttachment(f, f.annotationStrokes!, burned, sessionId, opts);
+      if (
+        f.category === 'image' &&
+        !f.annotated &&
+        !needsBurn(f) &&
+        f.cacheUrlShared &&
+        f.url
+      ) {
+        // 与 fallback 模式同一私有化语义(失败原样发送),只是推迟到整批烧录成功之后。
+        return (await privatizeSharedAttachment(f, sessionId)) ?? f;
+      }
+      return f;
+    }),
+  );
+  const persistFailure = persisted.findIndex((result) => result.status === 'rejected');
+  if (persistFailure < 0) {
+    return persisted.map((result) => (result as PromiseFulfilledResult<AttachedFile>).value);
+  }
+  const createdUrls = persisted.flatMap((result, i) =>
+    result.status === 'fulfilled' && result.value.url && result.value.url !== files[i].url
+      ? [result.value.url]
+      : [],
+  );
+  if (createdUrls.length > 0) {
+    void Promise.resolve()
+      .then(() => window.electronAPI.cleanupCachedImages(createdUrls))
+      .catch((cleanupError: unknown) => {
+        log.warn('cleanup aborted burn-in outputs failed', {
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      });
+  }
+  const reason = (persisted[persistFailure] as PromiseRejectedResult).reason;
+  log.warn('burn-in persist failed, aborting send', {
+    name: files[persistFailure].name,
+    error: reason instanceof Error ? reason.message : String(reason),
+  });
+  throw new AnnotationBurnInError(files[persistFailure].name, reason);
 }
 
 /**

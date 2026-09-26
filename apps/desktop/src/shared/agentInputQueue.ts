@@ -780,7 +780,8 @@ export const ANNOTATED_IMAGE_NOTE =
  * 顺序从 1 编号,帮助模型在多张图 / 多处标注时对上用户所指。
  */
 export const ANNOTATED_IMAGE_REGIONS_PREFIX =
-  'Marked regions (normalized image coordinates, origin top-left): ';
+  'Marked regions (normalized coordinates, origin top-left; ' +
+  'images numbered in their order within this message): ';
 
 /** 一张标注图的区域描述,如 `image 2: x 0.31–0.46, y 0.12–0.20; x 0.70–0.90, y 0.55–0.61`。 */
 function describeAnnotatedImageRegions(

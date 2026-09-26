@@ -1343,6 +1343,43 @@ describe('annotation burn-in in the renderer send / queue-edit paths', () => {
     expect(errorToast).toHaveBeenCalledTimes(1);
   });
 
+  it('does not claim "sent without annotations" when the fallback send is not accepted', async () => {
+    const sid = `annotated-send-fallback-rejected-${Math.random().toString(36).slice(2, 8)}`;
+    const warningToast = vi.spyOn(toast, 'warning');
+    (
+      annotationBurnInMocks.materialize as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementationOnce(
+      async (
+        files: readonly AttachedFile[] | undefined,
+        _sessionId: string,
+        opts?: { onFallback?: (count: number) => void },
+      ) => {
+        opts?.onFallback?.(1);
+        return files ? files.map((f) => ({ ...f, annotationStrokes: undefined })) : undefined;
+      },
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    const ok = await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file], undefined, {
+      beforeEnqueue: async () => false,
+    });
+    await flushPromises();
+
+    expect(ok).toBe(false);
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(warningToast).not.toHaveBeenCalled();
+  });
+
   it('keeps the fallback (and warns) for sends that did not opt into aborting', async () => {
     const sid = `annotated-send-fallback-${Math.random().toString(36).slice(2, 8)}`;
     const warningToast = vi.spyOn(toast, 'warning');

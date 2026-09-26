@@ -9236,7 +9236,7 @@
       "annotateSaveFailed": "保存标注失败",
       "annotateRedo": "重做",
       "annotateDiscardConfirmTitle": "放弃本次标注？",
-      "annotateDiscardConfirmDescription": "打开后新画或撤销的笔迹不会保留。",
+      "annotateDiscardConfirmDescription": "将恢复到打开时的标注。",
       "annotateDiscardConfirmAction": "放弃",
       "annotateDiscardConfirmCancel": "继续标注",
       "annotateBurnFailedNotSent": "标注图片合成失败，消息未发送。可重试，或移除标注后发送。",

@@ -58,8 +58,8 @@ import type { AgentInputReference } from '../../../shared/agentInputQueue';
 import type { PersistedSessionReferenceMetadata } from '../../../shared/sessionReferenceMetadata';
 import {
   buildRewindDraftAttachments,
-  dropMissingAnnotationSources,
-  hasRestorableAnnotationSources,
+  startRewindSourceProbe,
+  type RewindSourceProbe,
 } from '@/lib/rewindDraftAttachments';
 import {
   useAgentCapabilities,
@@ -1241,11 +1241,15 @@ export function UserMessage({
   // dialog opens → preview dryRun → user confirm → commit → close, the whole
   // span counts as "rewinding" for the action-bar Loader2). Reset on close.
   const [rewindOpen, setRewindOpen] = useState(false);
+  // 带可再编辑标注的历史图:确认框打开时就预探测未烧录原图是否还在,提交时
+  // 同步取结果(丢失的退回烧录图),草稿仍在提交当下一次写完。
+  const rewindSourceProbeRef = useRef<RewindSourceProbe<UserImageItem> | null>(null);
 
   const handleRewind = useCallback(() => {
     if (!sessionId || !messageClientId) return;
+    rewindSourceProbeRef.current = images ? startRewindSourceProbe(images) : null;
     setRewindOpen(true);
-  }, [sessionId, messageClientId]);
+  }, [sessionId, messageClientId, images]);
 
   const handleRewindCommitted = useCallback(
     (session: Session) => {
@@ -1255,21 +1259,15 @@ export function UserMessage({
       // reload it disappears from the list; the composer keeps the draft so
       // the user can edit and re-send.
       const draftText = quoteDraftDocument ?? textToTiptapDoc(bubbleBody);
-      const saveRewindDraft = (draftImages: typeof images) => {
-        const draftAttachments = buildRewindDraftAttachments({ images: draftImages, files });
-        if (draftText || draftAttachments.length > 0) {
-          saveComposerDraft(sessionId, {
-            text: draftText,
-            attachments: draftAttachments,
-          });
-        }
-      };
-      // 带可再编辑标注的历史图:先确认未烧录原图仍在,丢失的退回烧录图(否则
-      // 草稿里是一张打不开的原图)。其余消息保持同步写草稿,时序与以往一致。
-      if (images && hasRestorableAnnotationSources(images)) {
-        void dropMissingAnnotationSources(images).then(saveRewindDraft);
-      } else {
-        saveRewindDraft(images);
+      const probe = rewindSourceProbeRef.current;
+      rewindSourceProbeRef.current = null;
+      const draftImages = probe && probe.images === images ? probe.imagesForDraft() : images;
+      const draftAttachments = buildRewindDraftAttachments({ images: draftImages, files });
+      if (draftText || draftAttachments.length > 0) {
+        saveComposerDraft(sessionId, {
+          text: draftText,
+          attachments: draftAttachments,
+        });
       }
       // Patch sidebar: tokens reset, sdkSessionId may have changed, bump
       // updatedAt so this session sorts back to top.

@@ -186,3 +186,36 @@ export async function dropMissingAnnotationSources<T extends RewindDraftImage>(
     }),
   );
 }
+
+/** 回退草稿的原图预探测句柄(见 {@link startRewindSourceProbe})。 */
+export interface RewindSourceProbe<T extends RewindDraftImage> {
+  /** 发起探测时的图片列表(调用方用它确认探测对象未变)。 */
+  readonly images: readonly T[];
+  /**
+   * 同步取写草稿用的图片:探测已完成则返回"丢失原图已退回烧录图"的结果;
+   * 尚未完成则原样返回发起时的列表(即旧行为:可编辑还原),绝不等待。
+   */
+  imagesForDraft(): readonly T[];
+}
+
+/**
+ * 在回退确认框打开时就开始探测历史标注图的原图是否还在,提交回退时同步取用
+ * 结果写草稿。这样草稿写入时序与旧版完全一致(提交后同步写一次),不会有迟到
+ * 的二次写入覆盖用户在输入框里刚输入 / 添加的内容;探测未完成时按旧行为还原。
+ * 无可还原标注图时不发起任何探测。
+ */
+export function startRewindSourceProbe<T extends RewindDraftImage>(
+  images: readonly T[],
+  probe: (url: string) => Promise<boolean> = probeImageSource,
+): RewindSourceProbe<T> {
+  let resolved: readonly T[] | null = null;
+  if (hasRestorableAnnotationSources(images)) {
+    void dropMissingAnnotationSources(images, probe).then((checked) => {
+      resolved = checked;
+    });
+  }
+  return {
+    images,
+    imagesForDraft: () => resolved ?? images,
+  };
+}

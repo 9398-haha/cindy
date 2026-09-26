@@ -39,9 +39,11 @@ const api = {
   readCachedImageAsBase64: vi.fn(),
   cacheImageFromBuffer: vi.fn(),
   cacheMediaForSession: vi.fn(),
+  cleanupCachedImages: vi.fn(),
 };
 
 beforeEach(() => {
+  api.cleanupCachedImages.mockResolvedValue(undefined);
   api.readCachedImageAsBase64.mockResolvedValue({ base64: 'AAAA', mimeType: 'image/png' });
   api.cacheImageFromBuffer.mockResolvedValue({
     url: 'cindy-media://blobs/burned.png',
@@ -191,6 +193,58 @@ describe('materializeAnnotatedAttachmentsForSend', () => {
     await promise.catch((error) => expect(isAnnotationBurnInError(error)).toBe(true));
     expect(onFallback).not.toHaveBeenCalled();
     expect(api.cacheImageFromBuffer).not.toHaveBeenCalled();
+  });
+
+  it('abort mode burns the whole batch first: no cache writes or private copies if any burn fails', async () => {
+    api.readCachedImageAsBase64.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.includes('broken')) throw new Error('decode failed');
+      return { base64: 'AAAA', mimeType: 'image/png' };
+    });
+    const files = [
+      imageFile({ id: 'ok', annotationStrokes: strokes }),
+      imageFile({ id: 'bad', url: 'cindy-media://blobs/broken.png', annotationStrokes: strokes }),
+      imageFile({ id: 'shared', url: 'cindy-media://blobs/history.png', cacheUrlShared: true }),
+    ];
+
+    await expect(
+      materializeAnnotatedAttachmentsForSend(files, 's1', { burnFailure: 'abort' }),
+    ).rejects.toBeInstanceOf(AnnotationBurnInError);
+    // 失败图片之外的图也已烧完(allSettled),但整批中止前不写媒体仓、不私有化。
+    expect(api.readCachedImageAsBase64).toHaveBeenCalledTimes(2);
+    expect(api.cacheImageFromBuffer).not.toHaveBeenCalled();
+    expect(api.cacheMediaForSession).not.toHaveBeenCalled();
+  });
+
+  it('abort mode cleans up files it already created when a later persist step fails', async () => {
+    api.cacheImageFromBuffer
+      .mockResolvedValueOnce({ url: 'cindy-media://blobs/burned-a.png', filename: 'a.png' })
+      .mockRejectedValueOnce(new Error('disk full'));
+    const files = [
+      imageFile({ id: 'a', annotationStrokes: strokes }),
+      imageFile({ id: 'b', annotationStrokes: strokes }),
+    ];
+
+    await expect(
+      materializeAnnotatedAttachmentsForSend(files, 's1', { burnFailure: 'abort' }),
+    ).rejects.toBeInstanceOf(AnnotationBurnInError);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(api.cleanupCachedImages).toHaveBeenCalledWith(['cindy-media://blobs/burned-a.png']);
+  });
+
+  it('abort mode succeeds like fallback mode when every image burns', async () => {
+    const result =
+      (await materializeAnnotatedAttachmentsForSend(
+        [
+          imageFile({ id: 'a', annotationStrokes: strokes }),
+          imageFile({ id: 'shared', url: 'cindy-media://blobs/history.png', cacheUrlShared: true }),
+        ],
+        's1',
+        { burnFailure: 'abort' },
+      )) ?? [];
+    expect(result[0]).toMatchObject({ annotated: true, url: 'cindy-media://blobs/burned.png' });
+    expect(result[1]).toMatchObject({ url: 'cindy-media://blobs/private.png' });
+    expect(api.cleanupCachedImages).not.toHaveBeenCalled();
   });
 
   it('privatizes a shared history image whose strokes were all removed', async () => {

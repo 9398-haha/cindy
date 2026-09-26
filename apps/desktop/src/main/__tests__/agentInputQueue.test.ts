@@ -161,6 +161,11 @@ describe('agentInputQueue', () => {
       'Note: the red freehand marks on the attached image(s) are annotations drawn by the user ' +
         'to highlight the region(s) they are referring to; they are not part of the original image.',
     );
+    // 编号只在本条消息内有效,说明里必须讲清楚。
+    expect(ANNOTATED_IMAGE_REGIONS_PREFIX).toBe(
+      'Marked regions (normalized coordinates, origin top-left; ' +
+        'images numbered in their order within this message): ',
+    );
   });
 
   it('appends marked regions indexed by image order when annotated images carry them', () => {

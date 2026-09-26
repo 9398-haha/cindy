@@ -9236,7 +9236,7 @@
       "annotateSaveFailed": "注釈の保存に失敗しました",
       "annotateRedo": "やり直す",
       "annotateDiscardConfirmTitle": "注釈の変更を破棄しますか？",
-      "annotateDiscardConfirmDescription": "この画像を開いてから描いた線や取り消した線は保持されません。",
+      "annotateDiscardConfirmDescription": "注釈はこの画像を開いたときの状態に戻ります。",
       "annotateDiscardConfirmAction": "破棄",
       "annotateDiscardConfirmCancel": "注釈を続ける",
       "annotateBurnFailedNotSent": "画像への注釈の合成に失敗したため、メッセージは送信されませんでした。再試行するか、注釈を削除してから送信してください。",

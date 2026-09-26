@@ -9235,7 +9235,7 @@
       "annotateSaveFailed": "儲存標註失敗",
       "annotateRedo": "重做",
       "annotateDiscardConfirmTitle": "放棄本次標註？",
-      "annotateDiscardConfirmDescription": "開啟後新畫或撤銷的筆跡不會保留。",
+      "annotateDiscardConfirmDescription": "將恢復到開啟時的標註。",
       "annotateDiscardConfirmAction": "放棄",
       "annotateDiscardConfirmCancel": "繼續標註",
       "annotateBurnFailedNotSent": "標註圖片合成失敗，訊息未傳送。可重試，或移除標註後傳送。",
