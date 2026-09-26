@@ -454,6 +454,7 @@ it('a rejected operation does not poison subsequent drain', async () => {
 });
 
 
+
 describe('current plugin dispatch authority', () => {
   it.each(['plan', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
     const modes = ['plan', 'acceptEdits', 'auto'];
@@ -493,4 +494,18 @@ describe('current plugin dispatch authority', () => {
     await f.send(); expect(f.deps.dispatch).toHaveBeenCalledTimes(calls);
     await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
   });
+});
+
+it('adds missing delegation scopes once without mutating an older plan identity', async () => {
+ const f=fixture(),task=await f.create();
+ const old={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};
+ await f.service.setTeamPlan('p',task.taskId,old);
+ const scoped={...old,task:'Coordinate',items:[{...old.items[0]!,task:'Run tests'}]};
+ await f.service.setTeamPlan('p',task.taskId,scoped);
+ await f.service.setTeamPlan('p',task.taskId,scoped);
+ expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toEqual(scoped);
+ await expect(f.service.setTeamPlan('p',task.taskId,{...scoped,task:'Publish'})).rejects.toThrow('immutable');
+ await expect(f.service.setTeamPlan('p',task.taskId,{...scoped,items:[{...scoped.items[0]!,task:'Publish'}]})).rejects.toThrow('immutable');
+ await expect(f.service.setTeamPlan('p',task.taskId,old)).rejects.toThrow('immutable');
+
 });
