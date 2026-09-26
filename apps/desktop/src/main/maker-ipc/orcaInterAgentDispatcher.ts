@@ -678,7 +678,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           clientId,
           role: 'user',
           content: dbContent,
-          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: '', delivery: 'turn' },
+          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
         });
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
@@ -741,7 +741,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   return {
     clientId: params.clientId,
     text: params.agentMessageText,
-    autoReviewUserText: '',
+    autoReviewUserText: { kind: 'delegated-continuation' },
     persistedContent: params.persistedContent,
     model: params.createOpts.model,
     effort: params.createOpts.effort ?? '',
