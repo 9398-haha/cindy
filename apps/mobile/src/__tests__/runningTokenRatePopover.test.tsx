@@ -67,7 +67,11 @@ vi.mock("react-native", () => {
     },
     useWindowDimensions: () => harness.window,
     ScrollView: view,
-    Text: view,
+    Text: (props: any) => {
+      // Text is an accessibility element by default; plain Views are not.
+      if (props.ref) props.ref.current = { testID: `text:${props.children}` };
+      return view(props);
+    },
     StyleSheet: { create: (s: unknown) => s },
     Pressable: (props: any) => {
       harness.press = props;
@@ -562,12 +566,15 @@ it("moves screen reader focus into the pinned card and back to the trigger, exce
     await gesture("onPress");
     await layout();
     await layout();
-    expect(harness.focus).toEqual(["session.tokenRate.card"]);
+    expect(harness.focus).toEqual(["text:session.screen.currentRate"]);
     await act(async () => {
       await close();
     });
     expect(card()).toBeNull();
-    expect(harness.focus).toEqual(["session.tokenRate.card", "trigger"]);
+    expect(harness.focus).toEqual([
+      "text:session.screen.currentRate",
+      "trigger",
+    ]);
     harness.focus = [];
   }
   await gesture("onPressIn");
@@ -575,5 +582,5 @@ it("moves screen reader focus into the pinned card and back to the trigger, exce
   await layout();
   await act(async () => harness.outsideTap!.onOutsideTap());
   expect(card()).toBeNull();
-  expect(harness.focus).toEqual(["session.tokenRate.card"]);
+  expect(harness.focus).toEqual(["text:session.screen.currentRate"]);
 });

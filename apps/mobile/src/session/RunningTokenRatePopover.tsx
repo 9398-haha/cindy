@@ -7,6 +7,7 @@ import {
   StyleSheet,
   View,
   useWindowDimensions,
+  type Text as RNText,
 } from "react-native";
 import { Text } from "@/components/AppText";
 import Svg, { Circle, Path } from "react-native-svg";
@@ -76,7 +77,8 @@ export function RunningTokenRatePopover({
   const insets = useSafeAreaInsets();
   const anchorRef = useRef<View>(null);
   const triggerRef = useRef<View>(null);
-  const cardRef = useRef<View>(null);
+  // Plain Views are not accessibility elements; focus the card's first label.
+  const cardFocusTarget = useRef<RNText>(null);
   const [anchor, setAnchor] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [cardHeight, setCardHeight] = useState(0);
   const measureAnchor = () =>
@@ -260,14 +262,20 @@ export function RunningTokenRatePopover({
     <View
       pointerEvents={mode === "held" ? "none" : "auto"}
       onStartShouldSetResponder={() => true}
-      ref={cardRef}
       onAccessibilityEscape={() => setMode("closed")}
       testID="session.tokenRate.card"
       onLayout={(event) => {
         setCardHeight(event.nativeEvent.layout.height);
-        if (mode === "pinned" && !cardFocused.current && cardRef.current) {
+        if (
+          mode === "pinned" &&
+          !cardFocused.current &&
+          cardFocusTarget.current
+        ) {
           cardFocused.current = true;
-          AccessibilityInfo.sendAccessibilityEvent(cardRef.current, "focus");
+          AccessibilityInfo.sendAccessibilityEvent(
+            cardFocusTarget.current,
+            "focus",
+          );
         }
       }}
       style={[
@@ -288,7 +296,9 @@ export function RunningTokenRatePopover({
       >
         <View style={styles.top}>
           <View style={styles.metric}>
-            <Text style={styles.label}>{t("session.screen.currentRate")}</Text>
+            <Text ref={cardFocusTarget} style={styles.label}>
+              {t("session.screen.currentRate")}
+            </Text>
             <Text style={styles.value}>
               {formatTokenRate(recent)}{" "}
               <Text style={styles.label}>
