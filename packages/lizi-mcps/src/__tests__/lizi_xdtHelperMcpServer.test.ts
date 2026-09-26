@@ -58,6 +58,42 @@ describe("cindy_helper MCP server", () => {
       await server.close();
     }
   });
+  it('hides app updates from a remote Pi task while retaining its other helper categories', async () => {
+    let remoteHostId: string | undefined;
+    const check = vi.fn(async () => ({ status: 'ready', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      appUpdate: { isCurrentSession: () => true, check },
+    }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'pi-task',
+      getSessionContext: () => ({
+        agentKind: 'pi', workingDir: '/repo', sessionId: 'pi-task',
+        sessionInstanceId: 'instance-1', remoteHostId,
+      }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'remote-pi-update-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const list = async () => parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      const local = (await list()).categories as Array<{ name: string }>;
+      expect(local.map((category) => category.name)).toContain('app_update');
+      remoteHostId = 'ssh-host';
+      const remote = (await list()).categories as Array<{ name: string }>;
+      expect(remote.map((category) => category.name)).not.toContain('app_update');
+      expect(remote.map((category) => category.name)).toContain('cindy');
+      expect(parsePayload(await client.callTool({
+        name: 'list_tools', arguments: { category: 'app_update' },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(parsePayload(await client.callTool({
+        name: 'call_tool', arguments: { name: 'check_app_update', args: {} },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(check).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
   it('lets a remote agent start only the scoped Grok device login and returns no credential', async () => {
     let current = true;
     const start = vi.fn(async () => ({

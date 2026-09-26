@@ -810,6 +810,9 @@ export function createXdtHelperMcpServer(
     const sessionId = context.sessionId;
     const remoteBotOnly = !!context.remoteHostId && context.agentKind !== 'pi';
     const defaultCategories = new Set(CATEGORY_ENUM.filter((category) => category !== 'bots'));
+    // Remote Pi retains the regular helper surface, but a remote task cannot
+    // check the local desktop updater; keep that unavailable tool undiscoverable.
+    if (context.remoteHostId) defaultCategories.delete('app_update');
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
       extraTools: new Set(),
