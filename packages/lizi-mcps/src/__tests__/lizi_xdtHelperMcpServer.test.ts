@@ -18,19 +18,18 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
-  it('offers app updates only to a live local task and delegates installation once to the host', async () => {
+  it('offers update checks without installation only to a live local task', async () => {
     let context = {
       agentKind: 'codex' as const, workingDir: '/repo', sessionId: 'local-task',
       sessionInstanceId: 'instance-1', remoteHostId: undefined as string | undefined,
     };
     let current = true;
     const check = vi.fn(async () => ({ status: 'ready', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
-    const install = vi.fn(async () => ({ accepted: true, currentVersion: '0.1.86', targetVersion: '0.1.90' }));
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => 'default',
       appUpdate: {
         isCurrentSession: (sessionId, instanceId) => current && sessionId === 'local-task' && instanceId === 'instance-1',
-        check, install,
+        check,
       },
     }, {
       ...context, getSessionContext: () => context,
@@ -44,17 +43,16 @@ describe("cindy_helper MCP server", () => {
     try {
       const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
       expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
-        'check_app_update', 'install_app_update',
+        'check_app_update',
       ]);
       expect(await call('check_app_update')).toMatchObject({ status: 'ready', targetVersion: '0.1.90' });
-      expect(await call('install_app_update')).toMatchObject({ accepted: true, targetVersion: '0.1.90' });
+      expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'UNKNOWN_TOOL' });
       expect(check).toHaveBeenCalledOnce();
-      expect(install).toHaveBeenCalledOnce();
       current = false;
-      expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
+      expect(await call('check_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
       context = { ...context, remoteHostId: 'remote-machine' };
-      expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-      expect(install).toHaveBeenCalledOnce();
+      expect(await call('check_app_update')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(check).toHaveBeenCalledOnce();
     } finally {
       await client.close();
       await server.close();

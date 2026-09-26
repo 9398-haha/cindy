@@ -42,7 +42,7 @@ import { feishuIm, wechatIm } from '../im';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
-import { checkAppUpdateForAgent, installAppUpdateForAgent } from '../updateService.js';
+import { checkAppUpdateForAgent } from '../updateService.js';
 import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { searchSessionsFn } from '../maker-host/session-search.js';
@@ -392,7 +392,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         isCurrentSession: (sessionId, sessionInstanceId) =>
           deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true,
         check: checkAppUpdateForAgent,
-        install: async () => installAppUpdateForAgent(),
       },
       logger: createLogger('mcp/cindy_helper'),
       grokLogin: {

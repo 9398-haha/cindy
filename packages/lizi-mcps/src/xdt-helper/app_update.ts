@@ -5,7 +5,6 @@ import { errorPayload, okPayload } from './_payload.js';
 export interface AppUpdateCallbacks {
   isCurrentSession(sessionId: string, sessionInstanceId: string): boolean;
   check(): Promise<{ status: string; currentVersion: string; targetVersion?: string; reason?: string }>;
-  install(): Promise<{ accepted: boolean; currentVersion: string; targetVersion?: string; reason?: string }>;
 }
 
 export function registerAppUpdateTools(
@@ -28,7 +27,7 @@ export function registerAppUpdateTools(
   registry.register({
     name: 'check_app_update',
     category: 'app_update',
-    description: `检查当前运行的 ${BRAND_NAME} 是否有可通过应用内更新器安装的新版本。不要用 GitHub Release 文件替换正在运行的应用。`,
+    description: `检查当前运行的 ${BRAND_NAME} 是否有可通过应用内更新器安装的新版本。本工具不能安装或重启应用；如需手动安装，请用户使用内置「检查更新」界面。不要用 GitHub Release 文件替换正在运行的应用。`,
     inputShape: {},
     handler: async () => {
       const error = callerError();
@@ -37,25 +36,6 @@ export function registerAppUpdateTools(
         return okPayload(await deps.callbacks.check());
       } catch (cause) {
         return errorPayload('UPDATE_CHECK_FAILED', String(cause));
-      }
-    },
-  });
-
-  registry.register({
-    name: 'install_app_update',
-    category: 'app_update',
-    description: `仅当用户明确要求安装/更新当前运行的 ${BRAND_NAME} 时使用。仅安装应用内更新器已下载的新版本；成功表示已安排重启，不代表新版本已启动。本工具会结束正在运行的 Cindy 和当前任务。不要另写重启脚本或使用 launchctl。`,
-    inputShape: {},
-    handler: async () => {
-      const error = callerError();
-      if (error) return error;
-      try {
-        const result = await deps.callbacks.install();
-        return result.accepted
-          ? okPayload(result)
-          : errorPayload('UPDATE_NOT_READY', result.reason ?? '没有可安装的应用内更新；请先调用 check_app_update。', result);
-      } catch (cause) {
-        return errorPayload('UPDATE_INSTALL_FAILED', String(cause));
       }
     },
   });
