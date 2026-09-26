@@ -10283,9 +10283,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const live = maker.getSession(task.taskId);
           if (live?.isTurnRunning() || live?.getTurnControlSnapshot().pendingInteractionCount || inputCoordinator.getQueueControlSnapshot(task.taskId).pendingQueue.length) throw new PluginTaskError('TASK_BUSY', 'Wait for the current turn before changing permission');
         };
-        await assertIdle();
         pluginPermissionRequests.add(pluginId);
         try {
+          await assertIdle();
           const result = await dialog.showMessageBox({
             type: 'question', title: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoTitle' : 'pluginTaskWriteAccess.title'),
             message: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoMessage' : 'pluginTaskWriteAccess.message').replace('{{name}}', getInstalledGhostName(pluginId) ?? pluginId),
@@ -10309,7 +10309,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
           await service.get(pluginId, task.taskId);
-          if (mode === 'auto' || clampErrandPermissionMode(cfg.permissionMode) === 'plan') writeGhostErrandConfig(pluginId, {...cfg, permissionMode: mode});
+          if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+          const currentConfig = readGhostErrandConfig(pluginId);
+          if (currentConfig.permissionMode !== cfg.permissionMode) throw new PluginTaskError('PERMISSION_DENIED', 'Permission settings changed');
+          if (mode === 'auto' || clampErrandPermissionMode(currentConfig.permissionMode) === 'plan') writeGhostErrandConfig(pluginId, {...currentConfig, permissionMode: mode});
           broadcastSessionPatched(task.taskId, {permissionMode: mode});
           return { granted: true, task: await service.get(pluginId, task.taskId) };
         } finally { pluginPermissionRequests.delete(pluginId); }
