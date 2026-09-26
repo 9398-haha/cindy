@@ -105,6 +105,22 @@ describe('messageAttachmentPayload', () => {
     expect(payload.serializedFiles?.[1]).not.toHaveProperty('annotationRegions');
   });
 
+  it('sends a base-annotated image (lost source, burned pixels) as annotated without regions', () => {
+    const fallback = attachment({
+      id: 'fallback',
+      name: 'shot-annotated.png',
+      ext: '.png',
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/burned.png',
+      baseAnnotated: true,
+    });
+    const [file] = buildUserMessageAttachmentPayload([fallback]).serializedFiles ?? [];
+    expect(file).toMatchObject({ annotated: true });
+    expect(file).not.toHaveProperty('annotationRegions');
+    expect(file).not.toHaveProperty('baseAnnotated');
+  });
+
   it('uses base64 only for image fallback and keeps it out of persisted refs', () => {
     const image = attachment({
       name: 'fallback.png',

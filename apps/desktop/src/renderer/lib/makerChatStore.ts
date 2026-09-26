@@ -13828,6 +13828,7 @@ function queueEditFilesMatch(
       textContent: file.textContent,
       truncated: file.truncated,
       annotated: file.annotated,
+      baseAnnotated: file.baseAnnotated,
       annotationSourceUrl: file.annotationSourceUrl,
       annotationStrokes: file.annotationStrokes,
     }));

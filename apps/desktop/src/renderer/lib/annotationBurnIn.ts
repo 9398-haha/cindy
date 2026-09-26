@@ -348,7 +348,9 @@ async function persistBurnedAttachment(
   const { blob, mimeType } = burned;
   const ext = mimeType === 'image/jpeg' ? '.jpg' : '.png';
   const name = annotatedFileName(f.originalName ?? f.name, ext, Date.now());
-  const regions = summarizeAnnotationRegions(strokes);
+  // 底图本身已带旧红线(baseAnnotated)时只知道新笔迹的位置,只描述新笔迹会与
+  // 图上红线不符——不带区域,退回固定说明。
+  const regions = f.baseAnnotated ? [] : summarizeAnnotationRegions(strokes);
   const annotationRegions = regions.length > 0 ? { annotationRegions: regions } : {};
   if (f.url) {
     const cached = await window.electronAPI.cacheImageFromBuffer({

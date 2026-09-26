@@ -270,11 +270,14 @@ describe('dropMissingAnnotationSources', () => {
       url: 'cindy-media://blobs/burned.png',
       mimeType: 'image/png',
       originalName: 'shot-annotated.png',
+      // 烧录图本身带红线:保留标注身份。
+      baseAnnotated: true,
     });
     const [attachment] = buildRewindDraftAttachments({ images: [images[1]] });
     expect(attachment).toMatchObject({
       url: 'cindy-media://blobs/burned.png',
       path: 'cindy-media://blobs/burned.png',
+      baseAnnotated: true,
     });
     expect(attachment.annotationStrokes).toBeUndefined();
     expect(attachment.cacheUrlShared).toBeUndefined();
@@ -313,7 +316,12 @@ describe('startRewindSourceProbe (rewind draft timing)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     // 探测完成后(例如确认框还开着时)再提交:丢失的原图退回烧录图。
     expect(handle.imagesForDraft()).toEqual([
-      { url: 'cindy-media://blobs/burned.png', mimeType: 'image/png', originalName: 'shot-annotated.png' },
+      {
+        url: 'cindy-media://blobs/burned.png',
+        mimeType: 'image/png',
+        originalName: 'shot-annotated.png',
+        baseAnnotated: true,
+      },
     ]);
   });
 

@@ -101,6 +101,13 @@ export interface AttachedFile {
    */
   annotated?: boolean;
   /**
+   * 底图像素本身已含烧录的标注红线(历史标注图的未烧录原图已被清理,退回烧录图
+   * 继续使用 / 编辑时)。仅 renderer 内使用、不上 wire:序列化时并入 `annotated`,
+   * 让模型照常收到"红色笔迹是用户标注"的说明;旧红线位置已不可知,故不带
+   * `annotationRegions`(与 mobile 的 baseAnnotated 同一规则)。
+   */
+  baseAnnotated?: boolean;
+  /**
    * 非破坏性标注:发送物化(烧录)后才存在——`url` 已是烧录位图,这里记录未烧录
    * **原图**的缓存 url(xdt-image:// / cindy-media://),随消息持久化进 ImageRef,
    * 供历史图"再编辑"还原成"原图 + 矢量笔迹"。托盘(编辑期)附件不设本字段:

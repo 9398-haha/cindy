@@ -122,6 +122,17 @@ describe('materializeAnnotatedAttachmentsForSend', () => {
     expect(result.path).toBe('/Users/sam/shot.png');
   });
 
+  it('burns new strokes onto a base-annotated image without describing regions', async () => {
+    const [result] =
+      (await materializeAnnotatedAttachmentsForSend(
+        [imageFile({ annotationStrokes: strokes, baseAnnotated: true })],
+        's1',
+      )) ?? [];
+    expect(result).toMatchObject({ annotated: true, baseAnnotated: true });
+    // 旧红线位置不可知:只描述新笔迹会与图上红线不符,故不带区域。
+    expect(result.annotationRegions).toBeUndefined();
+  });
+
   it('is idempotent for already-burned attachments (auth-retry resend)', async () => {
     const burned = imageFile({
       url: 'cindy-media://blobs/burned.png',

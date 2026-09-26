@@ -1408,6 +1408,15 @@ export function ImageLightbox({
           }
         }
       }
+      // 历史标注图的原图已丢失、当前显示的是烧录图:底图本身带红线,转发后仍是
+      // 标注图(模型照常收到标注说明)。
+      if (
+        currentItem.annotationSourceUrl &&
+        currentItem.annotationStrokes?.length &&
+        failedAnnotationSources.has(currentItem.annotationSourceUrl)
+      ) {
+        attached = { ...attached, baseAnnotated: true };
+      }
       const existing = getDraft(chatSessionId);
       saveDraft(
         chatSessionId,

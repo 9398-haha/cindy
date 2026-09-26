@@ -9,7 +9,10 @@ import type { FileRef, ImageRef } from '@/lib/imageRef';
 import { toEditableAnnotatedAttachment } from '@/lib/annotationRestore';
 
 export type RewindDraftImage =
-  | ImageRef
+  | (ImageRef & {
+      /** 未烧录原图已丢失、退回烧录图:底图本身带标注红线(见 AttachedFile.baseAnnotated)。 */
+      baseAnnotated?: boolean;
+    })
   | { base64: string; mimeType: string; originalName?: string };
 
 function extForMime(mimeType: string): string {
@@ -102,7 +105,9 @@ export function buildRewindDraftAttachments(input: {
       continue;
     }
     attachments.push(
-      'url' in image ? { ...common, url: image.url } : { ...common, base64: image.base64 },
+      'url' in image
+        ? { ...common, url: image.url, ...(image.baseAnnotated ? { baseAnnotated: true } : {}) }
+        : { ...common, base64: image.base64 },
     );
   }
 
@@ -179,7 +184,8 @@ export async function dropMissingAnnotationSources<T extends RewindDraftImage>(
         exists = true;
       }
       if (exists) return image;
-      const burnedOnly: ImageRef = { ...image };
+      // 烧录图本身带着红线:保留标注身份,重发时模型仍会收到标注说明。
+      const burnedOnly: ImageRef & { baseAnnotated?: boolean } = { ...image, baseAnnotated: true };
       delete burnedOnly.annotationSourceUrl;
       delete burnedOnly.annotationStrokes;
       return burnedOnly as T;

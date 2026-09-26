@@ -85,7 +85,8 @@ export function serializeAttachedFiles(
       mimeType: file.mimeType,
       originalName: file.originalName ?? file.name,
       ...(file.url ? { url: file.url } : {}),
-      ...(file.annotated ? { annotated: true } : {}),
+      // baseAnnotated:底图本身已带标注红线(原图丢失后退回烧录图),同样是标注图。
+      ...(file.annotated || file.baseAnnotated ? { annotated: true } : {}),
       // 标注区域只随烧录产物(annotated)上 wire;缺省时被控端退回纯说明。
       ...(file.annotated && file.annotationRegions?.length
         ? { annotationRegions: file.annotationRegions }
