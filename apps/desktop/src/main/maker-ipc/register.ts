@@ -11540,6 +11540,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
+    withLeadSendLock: withSendToSessionLock,
     getActiveTeamByLead,
     listWorkersByLead,
     isActiveWorkerStatus,
@@ -11547,7 +11548,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     validateCreationPlan: async (params, resolvedWorkingDir) => {
       const epoch = getCurrentDbClientSnapshot();
       if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable');
-      const receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
+      let receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!receipt || receipt.operation !== 'create') return undefined;
       const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
@@ -11563,7 +11564,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (resolvedWorkingDir !== undefined && directory !== await realpathWorkingDirectory(resolvedWorkingDir)) throw new PluginTaskError('PERMISSION_DENIED','Worker directory changed during creation');
       // get() waits behind plan registration in the existing receipt queue.
       const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
-      if (!currentReceipt) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+      if (!currentReceipt || currentReceipt.operation !== 'create' || epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Task ownership changed');
       const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
       // Last admission check also covers no-plan plugin tasks and revocation
