@@ -5,6 +5,7 @@ import { DURABLE_OUTBOX_PREFIX, type DurableOutboxRecord, type DurableUpload } f
 import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachmentUpload";
 import { isAttachmentOssRef } from './attachmentOssRef';
 import { isPeerAttachmentRef } from '@cindy/device-link';
+import { summarizeAnnotationRegions } from '@cindy/maker-shared/image-annotation';
 
 /** Desktop path references already have their source on the controlled device. */
 export function outboxAttachmentNeedsLocalBytes(attachment: { path: string }): boolean {
@@ -29,6 +30,16 @@ export function durableOutboxUploadUri(
     throw new Error("OUTBOX_FILE_INVALID");
   return durableOutboxDirectory(record) + upload.fileName;
 }
+/** 标注区域随发件箱落盘(与乐观上传路径同一归纳算法),重投时照样带给被控端。 */
+function annotationRegionsFor(
+  source: MobileLocalAttachmentUploadCandidate,
+): Pick<DurableUpload, "annotationRegions"> {
+  // 底图已是烧录图(旧红线位置不可知)时不带区域,见 annotationRegionsForUpload。
+  if (!source.annotation || source.annotation.baseAnnotated) return {};
+  const regions = summarizeAnnotationRegions(source.annotation.strokes);
+  return regions.length > 0 ? { annotationRegions: regions } : {};
+}
+
 export async function retainOutboxFile(
   record: DurableOutboxRecord,
   slot: number,
@@ -45,6 +56,7 @@ export async function retainOutboxFile(
     kind: source.kind,
     size: source.size,
     ...(source.annotation ? { annotated: true } : {}),
+    ...annotationRegionsFor(source),
   };
   await FileSystem.makeDirectoryAsync(durableOutboxDirectory(record), {
     intermediates: true,

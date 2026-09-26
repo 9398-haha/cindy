@@ -161,9 +161,10 @@ link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订
 每张图至多 6 处）。只经既有 device-link 隧道与 IPC 透传，不新增 channel、relay 类型或
 持久化 schema。消费端 `buildMakerUserMessage` 一律经 `sanitizeAnnotationRegions` 校验，
 有合法区域时在原标注说明后另起一行按本条消息内图片顺序描述区域；仍然每条消息至多一条说明。
-旧主机忽略该字段，只注入原固定说明；新主机收到旧控制端或 mobile（不带该字段）的消息时，
-说明与旧版逐字节相同。remote 会话剥离 `annotationSourceUrl` / `annotationStrokes` 时保留
-区域字段。服务端无需改动。
+旧主机忽略该字段，只注入原固定说明；新主机收到旧控制端（不带该字段）的消息时，说明与
+旧版逐字节相同。remote 会话剥离 `annotationSourceUrl` / `annotationStrokes` 时保留区域字段。
+Mobile 以同一归纳算法在上传后的附件（含持久发件箱 `DurableUpload`，可选字段、旧记录缺省）
+上携带该字段；底图本身已是烧录图、旧红线位置不可知时不带区域。服务端无需改动。
 
 ## 事实来源
 

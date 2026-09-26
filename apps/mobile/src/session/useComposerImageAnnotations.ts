@@ -25,6 +25,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import { summarizeAnnotationRegions } from '@cindy/maker-shared/image-annotation';
 import { useAnnotationBurnIn } from '@/session/AnnotationBurnInWebView';
 import {
   annotationBurnedFileName,
@@ -151,6 +152,19 @@ async function runAnnotationBurnSourcePlan(
 
 function positiveHintDimension(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
+/**
+ * 给模型的标注区域(与桌面同一归纳算法)。底图本身已是烧录图(再编辑真相丢失)时,
+ * 旧红线的位置不可知,只描述新笔迹会让说明与图上红线不符——此时不带区域,
+ * 退回固定说明。
+ */
+export function annotationRegionsForUpload(
+  annotation: { strokes: readonly AnnotationStroke[]; baseAnnotated?: boolean } | undefined,
+): Pick<RemoteSerializedAttachment, 'annotationRegions'> {
+  if (!annotation || annotation.baseAnnotated) return {};
+  const regions = summarizeAnnotationRegions(annotation.strokes);
+  return regions.length > 0 ? { annotationRegions: regions } : {};
 }
 
 function extForMime(mimeType: string): string {
@@ -553,7 +567,7 @@ export function useComposerImageAnnotations(
       sourceMimeType: candidate.annotation.sourceMimeType,
       ...(candidate.annotation.baseAnnotated ? { baseAnnotated: true } : {}),
     });
-    return { ...attachment, annotated: true };
+    return { ...attachment, annotated: true, ...annotationRegionsForUpload(candidate.annotation) };
   }, [isHookGeneratedFile, deleteUnreferencedFiles]);
 
   const chatAnnotation = useMemo<ImageLightboxAnnotationConfig>(() => ({

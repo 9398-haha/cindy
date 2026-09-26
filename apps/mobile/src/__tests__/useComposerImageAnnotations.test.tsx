@@ -171,6 +171,8 @@ describe('generated file lifecycle', () => {
     const candidate = enqueued()[0];
     const decorated = api().decorateUploadedAttachment(attachment('att-1'), candidate);
     expect(decorated.annotated).toBe(true);
+    // 与桌面同一归纳算法:给模型的标注区域随附件发给被控端。
+    expect(decorated.annotationRegions).toEqual([{ x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 }]);
     candidate.onAbandoned?.();
     expect(runtime.deleted).toEqual([]);
     act(() => api().forgetAttachment('att-1'));
@@ -265,7 +267,10 @@ describe('re-edit replacement', () => {
     const candidate = hook.enqueued()[0];
     expect(runtime.burnIn).not.toHaveBeenCalled();
     expect(candidate.annotation).toMatchObject({ strokes: [], baseAnnotated: true });
-    expect(hook.api().decorateUploadedAttachment(attachment('R2'), candidate).annotated).toBe(true);
+    const resaved = hook.api().decorateUploadedAttachment(attachment('R2'), candidate);
+    expect(resaved.annotated).toBe(true);
+    // 旧红线位置不可知:不带区域,退回固定说明。
+    expect(resaved.annotationRegions).toBeUndefined();
     // 之后再次保存(已有内存真相但底图仍是烧录图):标仍保留。
     await traySubmit(hook.api(), 'R2', hook.api().trayImageSourceUri('R2', 'preview'), []);
     const again = hook.enqueued()[1];
