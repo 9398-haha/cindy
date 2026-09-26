@@ -297,6 +297,23 @@ describe('搬家', () => {
     expect(leftovers).toEqual([]);
   });
 
+  it('link 报权限、空间等其他错误时不走 rename 回退,原样抛出,不补种', async () => {
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+    const rename = vi.spyOn(fs, 'rename');
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'ENOSPC' });
+      // No replacing rename onto a target path.
+      expect(rename).not.toHaveBeenCalled();
+    } finally {
+      link.mockRestore();
+      rename.mockRestore();
+    }
+    await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
+    await expect(fs.access(path.join(home, 'memories', 'USER.md'))).rejects.toBeTruthy();
+    expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
+  });
+
   it('不支持硬链接且 rename 失败时不留半截目标,下一次补种照常补齐', async () => {
     const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
     const realRename = fs.rename.bind(fs);

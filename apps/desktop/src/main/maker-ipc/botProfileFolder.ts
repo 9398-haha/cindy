@@ -79,6 +79,11 @@ import path from 'node:path';
 
 /** 原子写的临时文件序号,进程内自增 —— 见 writeTextAtomic 里的并发说明。 */
 let writeSeq = 0;
+/**
+ * link 报这些错误码表示这个文件系统不支持硬链接:Linux 的 vfat / exFAT 报 EPERM,
+ * macOS 与部分网络盘报 ENOTSUP / EOPNOTSUPP,Windows 的 FAT 系列经 libuv 映射为 EISDIR。
+ */
+const HARD_LINK_UNSUPPORTED_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EISDIR']);
 const LEGACY_OWNER_CLAIM = '.cindy-owner-claim-v1.json';
 
 /** 单个文本槽的上限。灵魂与画像是「说明」,不是知识库。 */
@@ -225,7 +230,8 @@ async function writeTextAtomic(absPath: string, content: string): Promise<void> 
  * 不支持硬链接的文件系统(exFAT、部分网络盘):Node 不提供 NOREPLACE 的 rename,不存在
  * 既原子又不替换的写法。这里确认目标不存在后 rename:崩溃时目标要么不存在要么完整,
  * 不需要任何「写到一半」的猜测与恢复;代价是确认与 rename 两次系统调用之间若有人恰好
- * 新建了同名文件会被替换 —— 只在这类文件系统、只在该文件本来缺失时存在。
+ * 新建了同名文件会被替换 —— 只在这类文件系统、只在该文件本来缺失时存在。所以只有 link
+ * 明确报「不支持硬链接」时才走这条回退;权限、空间、I/O 等其他错误原样抛出,这次不补种。
  */
 async function writeTextIfAbsent(absPath: string, content: string): Promise<boolean> {
   if (Buffer.byteLength(content, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) {
@@ -242,7 +248,9 @@ async function writeTextIfAbsent(absPath: string, content: string): Promise<bool
       await fs.link(tmp, absPath);
       return true;
     } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      const code = (cause as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') return false;
+      if (!code || !HARD_LINK_UNSUPPORTED_CODES.has(code)) throw cause;
     }
     try {
       await fs.access(absPath);
