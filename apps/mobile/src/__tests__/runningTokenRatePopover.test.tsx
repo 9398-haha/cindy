@@ -12,10 +12,16 @@ import { resolve } from "node:path";
 import ts from "typescript";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { clearRateHistoryCache, loadCachedRateHistory } from "@cindy/maker-shared/usage-format";
+import {
+  clearRateHistoryCache,
+  loadCachedRateHistory,
+} from "@cindy/maker-shared/usage-format";
 import { useRunningTokenRateHistory } from "../session/useRunningTokenRateHistory";
 import { RunningTokenRatePopover } from "@/session/RunningTokenRatePopover";
-import { keyboardControlRegion, type ReservedRegion } from "@/platform/windowGeometry";
+import {
+  keyboardControlRegion,
+  type ReservedRegion,
+} from "@/platform/windowGeometry";
 
 const harness = vi.hoisted(() => ({
   viewport: { x: 0, y: 0, width: 320, height: 800 },
@@ -66,6 +72,7 @@ vi.mock("react-native", () => {
 vi.mock("@/platform/OutsideTap", async () => {
   const { useEffect } = await import("react");
   return {
+    RootOverlay: ({ children }: any) => children,
     useOutsideTap: (
       active: boolean,
       contains: (x: number, y: number) => boolean,
@@ -146,11 +153,16 @@ const statusSource = route.statements.find(
     node.name?.text === "ComposerActivityStatus",
 )!;
 const rateSource = route.statements.find(
-  (node) => ts.isFunctionDeclaration(node) && node.name?.text === "formatComposerActivityRateValue",
+  (node) =>
+    ts.isFunctionDeclaration(node) &&
+    node.name?.text === "formatComposerActivityRateValue",
 )!;
-const compiledStatus = ts.transpileModule(statusSource.getText(route) + "\n" + rateSource.getText(route), {
-  compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
-}).outputText;
+const compiledStatus = ts.transpileModule(
+  statusSource.getText(route) + "\n" + rateSource.getText(route),
+  {
+    compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
+  },
+).outputText;
 const bindings = {
   React: { createElement, Fragment: "div" },
   useEffect,
@@ -176,32 +188,70 @@ const ActivityStatus = new Function(
   `${compiledStatus}; return ComposerActivityStatus;`,
 )(...Object.values(bindings));
 
-it.each(["onPress", "onLongPress"])("records the first completed interval before enabling %s, without sampling inactive gaps", async (open) => {
-  const renderStatus = (props = {}) => act(async () => root.render(createElement(ActivityStatus, {
-    ...base, visible: true, tokenUsage: 100, sideTaskRunning: false,
-    reconnectAttempt: null, ...props,
-  })));
-  await renderStatus();
-  expect(host.querySelector('[data-testid="session.tokenRate.trigger"]')).toBeNull();
-  // The only paired report may arrive at completion, after startedAt clears.
-  await renderStatus({ startedAt: null, outputTokens: 100, generationDurationMs: 1000 });
-  await gesture("onPressIn");
-  await gesture(open);
-  expect(card()!.textContent).toContain("100 tok/s");
-  expect(loadCachedRateHistory(base.sessionKey)?.samples.map(s => s.rate)).toEqual([100]);
-  for (const inactive of [{ sideTaskRunning: true }, { reconnectAttempt: { attempt: 1, maxAttempts: 3 } }, { generationReliable: false }]) {
-    await renderStatus({ outputTokens: 500, generationDurationMs: 2000, ...inactive });
-    expect(card()).toBeNull();
-    await renderStatus({ outputTokens: 600, generationDurationMs: 3000 });
-    expect(card()).toBeNull();
-    expect(loadCachedRateHistory(base.sessionKey)?.samples.map(s => s.rate)).toEqual([100]);
-  }
-  await renderStatus({ outputTokens: 650, generationDurationMs: 4000 });
-  expect(loadCachedRateHistory(base.sessionKey)?.samples.map(s => s.rate)).toEqual([100, 50]);
-  await renderStatus({ sessionKey: "another-task" });
-  await renderStatus({ sessionKey: "another-task", outputTokens: 20, generationDurationMs: 1000 });
-  expect(loadCachedRateHistory("another-task")?.samples.map(s => s.rate)).toEqual([20]);
-});
+it.each(["onPress", "onLongPress"])(
+  "records the first completed interval before enabling %s, without sampling inactive gaps",
+  async (open) => {
+    const renderStatus = (props = {}) =>
+      act(async () =>
+        root.render(
+          createElement(ActivityStatus, {
+            ...base,
+            visible: true,
+            tokenUsage: 100,
+            sideTaskRunning: false,
+            reconnectAttempt: null,
+            ...props,
+          }),
+        ),
+      );
+    await renderStatus();
+    expect(
+      host.querySelector('[data-testid="session.tokenRate.trigger"]'),
+    ).toBeNull();
+    // The only paired report may arrive at completion, after startedAt clears.
+    await renderStatus({
+      startedAt: null,
+      outputTokens: 100,
+      generationDurationMs: 1000,
+    });
+    await gesture("onPressIn");
+    await gesture(open);
+    expect(card()!.textContent).toContain("100 tok/s");
+    expect(
+      loadCachedRateHistory(base.sessionKey)?.samples.map((s) => s.rate),
+    ).toEqual([100]);
+    for (const inactive of [
+      { sideTaskRunning: true },
+      { reconnectAttempt: { attempt: 1, maxAttempts: 3 } },
+      { generationReliable: false },
+    ]) {
+      await renderStatus({
+        outputTokens: 500,
+        generationDurationMs: 2000,
+        ...inactive,
+      });
+      expect(card()).toBeNull();
+      await renderStatus({ outputTokens: 600, generationDurationMs: 3000 });
+      expect(card()).toBeNull();
+      expect(
+        loadCachedRateHistory(base.sessionKey)?.samples.map((s) => s.rate),
+      ).toEqual([100]);
+    }
+    await renderStatus({ outputTokens: 650, generationDurationMs: 4000 });
+    expect(
+      loadCachedRateHistory(base.sessionKey)?.samples.map((s) => s.rate),
+    ).toEqual([100, 50]);
+    await renderStatus({ sessionKey: "another-task" });
+    await renderStatus({
+      sessionKey: "another-task",
+      outputTokens: 20,
+      generationDurationMs: 1000,
+    });
+    expect(
+      loadCachedRateHistory("another-task")?.samples.map((s) => s.rate),
+    ).toEqual([20]);
+  },
+);
 
 it.each(["onPress", "onLongPress"])(
   "removes the %s rate panel whenever rate metadata becomes unavailable, then restores a closed trigger",
@@ -244,7 +294,10 @@ it.each(["onPress", "onLongPress"])(
       ).toBeNull();
       if (!("visible" in inactive)) {
         expect(host.textContent).toContain("1s");
-        if (!("sideTaskRunning" in inactive) && !("reconnectAttempt" in inactive)) {
+        if (
+          !("sideTaskRunning" in inactive) &&
+          !("reconnectAttempt" in inactive)
+        ) {
           expect(host.textContent).toContain("session.screen.tokenCount");
         }
       }
@@ -308,8 +361,8 @@ it("floats without a backdrop and dismisses only on taps outside the card and tr
     harness.card.onLayout({ nativeEvent: { layout: { height: 120 } } }),
   );
   const style = Object.assign({}, ...(harness.card as any).style);
-  const cardX = style.left + harness.anchor.x;
-  const cardY = style.top + harness.anchor.y;
+  const cardX = style.left;
+  const cardY = style.top;
   const tap = harness.outsideTap!;
   // Taps on the card or its trigger keep it open.
   expect(tap.contains(cardX + 10, cardY + 10)).toBe(true);
@@ -371,8 +424,8 @@ it.each(["onPress", "onLongPress"])(
           harness.card.onLayout({ nativeEvent: { layout: { height } } }),
         );
         const style = Object.assign({}, ...(harness.card as any).style);
-        const x = style.left + harness.anchor.x;
-        const top = style.top + y;
+        const x = style.left;
+        const top = style.top;
         expect(x).toBeGreaterThanOrEqual(harness.insets.left);
         expect(x + style.width).toBeLessThanOrEqual(800 - harness.insets.right);
         expect(top).toBeGreaterThanOrEqual(harness.insets.top);
@@ -385,37 +438,70 @@ it.each(["onPress", "onLongPress"])(
   },
 );
 
-it.each(["onPress", "onLongPress"])("keeps %s in the composer's fold/occlusion region and closes on region changes", async (open) => {
-  const scenarios: { regions: ReservedRegion[]; keyboard: number }[] = [
-    { regions: [{ kind: "division", x: 0, y: 380, width: 800, height: 40 }], keyboard: 0 },
-    { regions: [{ kind: "division", x: 0, y: 380, width: 800, height: 40 }], keyboard: 420 },
-    { regions: [{ kind: "division", x: 380, y: 0, width: 40, height: 800 }], keyboard: 0 },
-    { regions: [{ kind: "occlusion", x: 200, y: 0, width: 400, height: 100 }], keyboard: 0 },
-  ];
-  harness.window = { width: 800, height: 800 };
-  harness.viewport = { x: 0, y: 0, ...harness.window };
-  for (const [index, scenario] of scenarios.entries()) {
-    const region = keyboardControlRegion({ ...harness.window, insets: harness.insets,
-      regularWidth: true, regularHeight: true, barEdge: "none", reservedRegionsSupported: true,
-      regions: scenario.regions }, scenario.keyboard);
-    harness.anchor = { x: region.x + region.width - 80, y: region.y + 30, width: 80 };
-    await render({ key: String(index), availableRegion: region });
-    await gesture("onPressIn");
-    await gesture(open);
-    let style = Object.assign({}, ...(harness.card as any).style);
-    const height = style.maxHeight;
-    await act(async () => harness.card.onLayout({ nativeEvent: { layout: { height } } }));
-    style = Object.assign({}, ...(harness.card as any).style);
-    const x = style.left + harness.anchor.x;
-    const y = style.top + harness.anchor.y;
-    expect(x).toBeGreaterThanOrEqual(region.x);
-    expect(y).toBeGreaterThanOrEqual(region.y);
-    expect(x + style.width).toBeLessThanOrEqual(region.x + region.width);
-    expect(y + height).toBeLessThanOrEqual(region.y + region.height);
-    await render({ key: String(index), availableRegion: { ...region, height: region.height - 20 } });
-    expect(card()).toBeNull();
-  }
-});
+it.each(["onPress", "onLongPress"])(
+  "keeps %s in the composer's fold/occlusion region and closes on region changes",
+  async (open) => {
+    const scenarios: { regions: ReservedRegion[]; keyboard: number }[] = [
+      {
+        regions: [{ kind: "division", x: 0, y: 380, width: 800, height: 40 }],
+        keyboard: 0,
+      },
+      {
+        regions: [{ kind: "division", x: 0, y: 380, width: 800, height: 40 }],
+        keyboard: 420,
+      },
+      {
+        regions: [{ kind: "division", x: 380, y: 0, width: 40, height: 800 }],
+        keyboard: 0,
+      },
+      {
+        regions: [{ kind: "occlusion", x: 200, y: 0, width: 400, height: 100 }],
+        keyboard: 0,
+      },
+    ];
+    harness.window = { width: 800, height: 800 };
+    harness.viewport = { x: 0, y: 0, ...harness.window };
+    for (const [index, scenario] of scenarios.entries()) {
+      const region = keyboardControlRegion(
+        {
+          ...harness.window,
+          insets: harness.insets,
+          regularWidth: true,
+          regularHeight: true,
+          barEdge: "none",
+          reservedRegionsSupported: true,
+          regions: scenario.regions,
+        },
+        scenario.keyboard,
+      );
+      harness.anchor = {
+        x: region.x + region.width - 80,
+        y: region.y + 30,
+        width: 80,
+      };
+      await render({ key: String(index), availableRegion: region });
+      await gesture("onPressIn");
+      await gesture(open);
+      let style = Object.assign({}, ...(harness.card as any).style);
+      const height = style.maxHeight;
+      await act(async () =>
+        harness.card.onLayout({ nativeEvent: { layout: { height } } }),
+      );
+      style = Object.assign({}, ...(harness.card as any).style);
+      const x = style.left;
+      const y = style.top;
+      expect(x).toBeGreaterThanOrEqual(region.x);
+      expect(y).toBeGreaterThanOrEqual(region.y);
+      expect(x + style.width).toBeLessThanOrEqual(region.x + region.width);
+      expect(y + height).toBeLessThanOrEqual(region.y + region.height);
+      await render({
+        key: String(index),
+        availableRegion: { ...region, height: region.height - 20 },
+      });
+      expect(card()).toBeNull();
+    }
+  },
+);
 
 it("uses paired generation samples, expires recent speed, and isolates a different task", async () => {
   vi.useFakeTimers();

@@ -28,7 +28,7 @@ import {
   typeScale,
 } from "@/theme/tokens";
 import { usePaneViewport } from "@/platform/AdaptiveWindowContext";
-import { useOutsideTap } from "@/platform/OutsideTap";
+import { RootOverlay, useOutsideTap } from "@/platform/OutsideTap";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LayoutRect } from "@/platform/windowGeometry";
 
@@ -246,8 +246,8 @@ export function RunningTokenRatePopover({
         {
           width: cardWidth,
           maxHeight: maxCardHeight,
-          left: cardLeft - anchor.x,
-          top: cardTop - anchor.y,
+          left: cardLeft,
+          top: cardTop,
           opacity: cardHeight > 0 ? 1 : 0,
         },
       ]}
@@ -378,7 +378,9 @@ export function RunningTokenRatePopover({
       >
         {children}
       </Pressable>
-      {mode !== "closed" && card}
+      {/* A window-sized host keeps the card hit-testable on Android, where
+          touches outside a parent's bounds never reach its children. */}
+      {mode !== "closed" && <RootOverlay>{card}</RootOverlay>}
     </View>
   );
 }
