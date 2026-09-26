@@ -6,9 +6,11 @@
  * - 遮罩：使用 `--overlay-lightbox` 主题 token，保持 lightbox 遮罩语义一致。
  * - 图片：`object-fit: contain`，四周保留 40px 安全边距。
  * - 缩放/平移(手势数学共用 `lightboxGestures`,与 MermaidLightbox 同一套):
- *   - 滚轮 / 触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium
- *     合成为带 ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 → 以光标为焦点缩放。
- *     普通滚轮不区分修饰键也直接缩放(Windows 看图器惯例,鼠标用户单手可缩放)。
+ *   - 触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium 合成为带
+ *     ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 → 以光标为焦点缩放。
+ *   - macOS:双指滑动(不带修饰键的 wheel)在放大后平移,适配态不响应(与
+ *     MermaidLightbox 同一惯例)。其它平台普通滚轮不区分修饰键也直接缩放
+ *     (Windows 看图器惯例,鼠标用户单手可缩放)。
  *   - 双击图片:1x ↔ 2x 切换(以双击点为焦点)。
  *   - 放大后左键拖拽平移;松手时若拖动超过阈值,该次 click 不触发关闭。
  *   - 键盘 +/- 步进缩放,0 重置。翻页(←/→ 或箭头按钮)时视口自动重置。
@@ -98,7 +100,9 @@ import {
   LIGHTBOX_WHEEL_IDLE_MS,
   LIGHTBOX_ZOOM_STEP,
   clampScale,
+  imageLightboxWheelIntent,
   type LightboxViewport,
+  normalizeWheelDelta,
   wheelZoomFactor,
   zoomAtPoint,
 } from './lightboxGestures';
@@ -724,17 +728,28 @@ export function ImageLightbox({
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
   }, [index, resetViewport]);
 
-  // 滚轮缩放。native listener + passive:false 才能 preventDefault,阻止事件穿透
-  // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。
-  // 不区分修饰键:普通滚轮、Ctrl(⌘)+滚轮、触控板 pinch(Chromium 把 macOS /
-  // Windows 精密触摸板的捏合合成为 ctrlKey=true 的 wheel)统一以光标为焦点缩放。
+  // 滚轮 / 触控板。native listener + passive:false 才能 preventDefault,阻止事件穿透
+  // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。路由见
+  // imageLightboxWheelIntent:macOS 双指捏合(Chromium 合成为 ctrlKey=true 的 wheel)
+  // 与 ⌘/Ctrl+滚轮以光标为焦点缩放,双指滑动在放大后平移;其它平台照旧所有滚轮
+  // 都缩放(Windows 看图器惯例)。
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
     const onWheel = (e: globalThis.WheelEvent) => {
       e.preventDefault();
-      if (e.deltaY === 0) return;
       const current = viewportRef.current;
+      const intent = imageLightboxWheelIntent(e, isMacPlatform(), current.scale);
+      if (intent === 'none') return;
+      if (intent === 'pan') {
+        markWheeling();
+        applyViewport({
+          ...current,
+          tx: current.tx - normalizeWheelDelta(e.deltaX, e.deltaMode),
+          ty: current.ty - normalizeWheelDelta(e.deltaY, e.deltaMode),
+        });
+        return;
+      }
       const rect = overlay.getBoundingClientRect();
       const point = {
         // 光标相对 overlay 中心的坐标。图片由 flex 居中,其盒中心与 overlay 中心

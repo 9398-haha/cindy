@@ -103,3 +103,27 @@ export function zoomAtPoint(
     ty: point.cy - (point.cy - viewport.ty) * ratio,
   };
 }
+
+/** What a single wheel event should do in the image lightbox. */
+export type ImageLightboxWheelIntent = 'zoom' | 'pan' | 'none';
+
+/**
+ * Route one wheel event for ImageLightbox.
+ *
+ * - macOS follows the trackpad convention (same as MermaidLightbox): a pinch
+ *   (Chromium delivers it as wheel + ctrlKey) or ⌘/Ctrl + wheel zooms; a plain
+ *   two-finger scroll pans while zoomed in and does nothing at fit scale.
+ * - Other platforms keep the Windows image-viewer convention: every wheel event
+ *   zooms (one-handed mouse zoom), including precision-touchpad pinch.
+ */
+export function imageLightboxWheelIntent(
+  event: { ctrlKey: boolean; metaKey: boolean; deltaX: number; deltaY: number },
+  isMac: boolean,
+  scale: number,
+): ImageLightboxWheelIntent {
+  if (!isMac || event.ctrlKey || event.metaKey) {
+    return event.deltaY === 0 ? 'none' : 'zoom';
+  }
+  if (scale <= 1 || (event.deltaX === 0 && event.deltaY === 0)) return 'none';
+  return 'pan';
+}

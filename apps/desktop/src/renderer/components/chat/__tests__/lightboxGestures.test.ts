@@ -7,6 +7,7 @@ import {
   clampScale,
   wheelZoomFactor,
   zoomAtPoint,
+  imageLightboxWheelIntent,
 } from '../lightboxGestures';
 
 describe('lightboxGestures', () => {
@@ -61,5 +62,35 @@ describe('lightboxGestures', () => {
 
   it('normalizes line-mode wheel deltas before clamping', () => {
     expect(wheelZoomFactor(1, 1)).toBeCloseTo(wheelZoomFactor(16), 12);
+  });
+});
+
+describe('imageLightboxWheelIntent', () => {
+  const wheel = (over: Partial<{ ctrlKey: boolean; metaKey: boolean; deltaX: number; deltaY: number }>) => ({
+    ctrlKey: false,
+    metaKey: false,
+    deltaX: 0,
+    deltaY: 0,
+    ...over,
+  });
+
+  it('macOS: pinch (ctrl) and ⌘ + wheel zoom', () => {
+    expect(imageLightboxWheelIntent(wheel({ ctrlKey: true, deltaY: -3 }), true, 1)).toBe('zoom');
+    expect(imageLightboxWheelIntent(wheel({ metaKey: true, deltaY: 40 }), true, 2)).toBe('zoom');
+    expect(imageLightboxWheelIntent(wheel({ ctrlKey: true, deltaX: 5 }), true, 2)).toBe('none');
+  });
+
+  it('macOS: two-finger scroll pans only while zoomed in', () => {
+    expect(imageLightboxWheelIntent(wheel({ deltaY: 12 }), true, 1)).toBe('none');
+    expect(imageLightboxWheelIntent(wheel({ deltaX: -8 }), true, 2)).toBe('pan');
+    expect(imageLightboxWheelIntent(wheel({ deltaY: 12 }), true, 2)).toBe('pan');
+    expect(imageLightboxWheelIntent(wheel({}), true, 2)).toBe('none');
+  });
+
+  it('other platforms: every vertical wheel zooms (unchanged)', () => {
+    expect(imageLightboxWheelIntent(wheel({ deltaY: 100 }), false, 1)).toBe('zoom');
+    expect(imageLightboxWheelIntent(wheel({ deltaY: -100 }), false, 3)).toBe('zoom');
+    expect(imageLightboxWheelIntent(wheel({ ctrlKey: true, deltaY: -2 }), false, 1)).toBe('zoom');
+    expect(imageLightboxWheelIntent(wheel({ deltaX: 30 }), false, 2)).toBe('none');
   });
 });
