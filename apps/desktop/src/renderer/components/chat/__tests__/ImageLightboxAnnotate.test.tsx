@@ -171,6 +171,36 @@ describe('ImageLightbox annotate mode', () => {
     expect(committedPaths('stroke')).toHaveLength(2);
   });
 
+  it('greys out undo / redo when there is nothing to undo or redo', () => {
+    render(<ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave: vi.fn() }} />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    const undo = () => screen.getByRole('button', { name: label('chat.media.annotateUndo') });
+    const redo = () => screen.getByRole('button', { name: label('chat.media.annotateRedo') });
+    expect(undo().getAttribute('aria-disabled')).toBe('true');
+    expect(redo().getAttribute('aria-disabled')).toBe('true');
+
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(undo().getAttribute('aria-disabled')).toBeNull();
+    expect(redo().getAttribute('aria-disabled')).toBe('true');
+
+    pressKey({ key: 'z', ctrlKey: true });
+    expect(undo().getAttribute('aria-disabled')).toBe('true');
+    expect(redo().getAttribute('aria-disabled')).toBeNull();
+    // 不可用时点击无效。
+    fireEvent.click(undo());
+    expect(committedPaths('stroke')).toHaveLength(0);
+
+    fireEvent.click(redo());
+    expect(committedPaths('stroke')).toHaveLength(1);
+    expect(redo().getAttribute('aria-disabled')).toBe('true');
+
+    // 撤销后画新笔迹,重做失效。
+    pressKey({ key: 'z', ctrlKey: true });
+    drawStroke({ x: 60, y: 10 }, { x: 90, y: 50 });
+    expect(redo().getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('Esc without changes exits annotate mode immediately (no confirm)', () => {
     const baseline: Stroke[] = [{ points: [{ x: 0.5, y: 0.5 }] }];
     render(

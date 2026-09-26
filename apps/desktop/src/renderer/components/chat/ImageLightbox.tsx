@@ -502,9 +502,14 @@ export function ImageLightbox({
   // 已保存的笔迹起步(托盘编辑或历史图再编辑)——"撤销之前的编辑"就是从
   // 这里往回 pop。
   const [strokes, setStrokes] = useState<AnnotationStroke[]>(() => [...baselineStrokesRef.current]);
-  // 重做栈:撤销弹出的笔迹按序压栈;画新笔迹、放弃标注、翻页时清空。只在事件
-  // handler 中读写(不驱动渲染),用 ref 即可。
+  // 重做栈:撤销弹出的笔迹按序压栈;画新笔迹、放弃标注、翻页时清空。ref 供事件
+  // handler 同步读写(按键连发),canRedo 驱动工具栏重做按钮的可用态。
   const redoStackRef = useRef<AnnotationStroke[]>([]);
+  const [canRedo, setCanRedo] = useState(false);
+  const setRedoStack = useCallback((next: AnnotationStroke[]) => {
+    redoStackRef.current = next;
+    setCanRedo(next.length > 0);
+  }, []);
   // 标注模式下按住 Space = 平移修饰键(state 驱动光标,ref 供事件 handler 同步读)。
   const [spaceHeld, setSpaceHeld] = useState(false);
   const spaceHeldRef = useRef(false);
@@ -569,16 +574,16 @@ export function ImageLightbox({
   const undoLastStroke = useCallback(() => {
     const current = strokesRef.current;
     if (current.length === 0) return;
-    redoStackRef.current = [...redoStackRef.current, current[current.length - 1]];
+    setRedoStack([...redoStackRef.current, current[current.length - 1]]);
     replaceStrokes(current.slice(0, -1));
-  }, [replaceStrokes]);
+  }, [replaceStrokes, setRedoStack]);
 
   const redoStroke = useCallback(() => {
     const redo = redoStackRef.current;
     if (redo.length === 0) return;
-    redoStackRef.current = redo.slice(0, -1);
+    setRedoStack(redo.slice(0, -1));
     replaceStrokes([...strokesRef.current, redo[redo.length - 1]]);
-  }, [replaceStrokes]);
+  }, [replaceStrokes, setRedoStack]);
 
   /**
    * 放弃标注:恢复到打开时的笔迹(编辑模式=上次保存的;发送模式=空)并退出
@@ -594,7 +599,7 @@ export function ImageLightbox({
       return;
     }
     resetDraftStroke();
-    redoStackRef.current = [];
+    setRedoStack([]);
     replaceStrokes([...baselineStrokesRef.current]);
     setIsAnnotating(false);
   };
@@ -713,7 +718,7 @@ export function ImageLightbox({
       failedAnnotationSourcesRef.current,
     );
     resetDraftStroke();
-    redoStackRef.current = [];
+    setRedoStack([]);
     replaceStrokes([...baselineStrokesRef.current]);
     setNaturalSize(null);
     // biome-ignore lint/correctness/useExhaustiveDependencies: galleryItems 挂载时固定。
@@ -963,7 +968,7 @@ export function ImageLightbox({
       draftRafRef.current = null;
     }
     if (draft && draft.points.length > 0) {
-      redoStackRef.current = [];
+      setRedoStack([]);
       replaceStrokes([...strokesRef.current, draft]);
     } else {
       draftPathCacheRef.current = null;
@@ -1508,7 +1513,7 @@ export function ImageLightbox({
               setFailedAnnotationSources((prev) => new Set(prev).add(sourceUrl));
               baselineStrokesRef.current = EMPTY_STROKES;
               resetDraftStroke();
-              redoStackRef.current = [];
+              setRedoStack([]);
               replaceStrokes([]);
               return;
             }
@@ -1638,6 +1643,7 @@ export function ImageLightbox({
           <LightboxToolbarButton
             onClick={undoLastStroke}
             label={t('chat.media.annotateUndo')}
+            disabled={strokes.length === 0}
             keepPointerFocus
           >
             <Undo2 className="h-4 w-4" />
@@ -1645,6 +1651,7 @@ export function ImageLightbox({
           <LightboxToolbarButton
             onClick={redoStroke}
             label={t('chat.media.annotateRedo')}
+            disabled={!canRedo}
             keepPointerFocus
           >
             <Redo2 className="h-4 w-4" />
@@ -1774,6 +1781,7 @@ function LightboxToolbarButton({
   onClick,
   label,
   keepPointerFocus = false,
+  disabled = false,
   children,
 }: {
   onClick: () => void;
@@ -1783,19 +1791,27 @@ function LightboxToolbarButton({
    * 后按住 Space 平移会变成再次激活该按钮。键盘 Tab 聚焦与 Space / Enter 激活不受影响。
    */
   keepPointerFocus?: boolean;
+  /**
+   * 当前不可用(如没有可撤销 / 可重做的笔迹):60% 不透明度、普通指针、无 hover 反馈,
+   * 点击无效。用 aria-disabled 而非原生 disabled,悬停仍能看到按钮说明。
+   */
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <Tip text={label} contentClassName="z-[10001]">
       <button
         type="button"
-        onClick={onClick}
+        onClick={disabled ? undefined : onClick}
         onMouseDown={keepPointerFocus ? (e) => e.preventDefault() : undefined}
         aria-label={label}
+        aria-disabled={disabled || undefined}
         className={cn(
           'inline-flex h-7 w-7 items-center justify-center',
           'rounded-full text-[var(--lightbox-toolbar-fg)]',
-          'hover:bg-[var(--lightbox-toolbar-hover-bg)] hover:text-[var(--lightbox-toolbar-fg-hover)]',
+          disabled
+            ? 'cursor-default opacity-60'
+            : 'hover:bg-[var(--lightbox-toolbar-hover-bg)] hover:text-[var(--lightbox-toolbar-fg-hover)]',
         )}
       >
         {children}
