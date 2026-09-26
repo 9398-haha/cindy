@@ -37,7 +37,7 @@ export function IncomingShareBridge() {
             if (!active) return;
             // Sweep before staging, so an expired native copy cannot start a new
             // upload concurrently with deletion. The native adapter filters missing
-            // and already-consumed copies before they can trigger navigation.
+            // copies before they can trigger navigation.
             try {
               receiveIncomingShare(sharing);
             } catch {

@@ -42,14 +42,13 @@ let unsubscribeOwner: (() => void) | undefined;
 
 export async function deleteIncomingSharedFiles(uris: readonly string[]): Promise<void> {
   const FileSystem = await import('expo-file-system/legacy');
-  await Promise.all([...new Set(uris)].filter((uri) => uri.startsWith('file://')).map(async (uri) => {
-    try {
-      // Delete the copy first. A failed deletion must retain its consumption receipt.
-      await FileSystem.deleteAsync(uri, { idempotent: true });
-      const directory = uri.match(/^(file:\/\/.*\/cindy-share-[\da-f-]{36})\/[^/]+$/i)?.[1];
-      if (directory) await FileSystem.deleteAsync(directory, { idempotent: true });
-    } catch { /* The existing expiry sweep reclaims orphan copies later. */ }
-  }));
+  await Promise.all([...new Set(uris)].filter((uri) => uri.startsWith('file://')).map((uri) => (
+    FileSystem.deleteAsync(
+      // Each native input owns one UUID directory; converted images are files.
+      uri.match(/^(file:\/\/.*\/cindy-share-[\da-f-]{36})\/[^/]+$/i)?.[1] ?? uri,
+      { idempotent: true },
+    ).catch(() => undefined)
+  )));
 }
 
 function acknowledgeBatch(batch: IncomingShareBatch): void {

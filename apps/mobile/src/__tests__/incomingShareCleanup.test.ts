@@ -4,12 +4,10 @@ import { cleanupExpiredIncomingShares } from '@/session/incomingShareCleanup';
 const fs = vi.hoisted(() => {
   class Directory {
     uri: string;
-    children: Array<Directory | { uri: string }> = [];
     constructor(public name: string, public created?: number) {
       this.uri = `file:///app-group/${name}`;
     }
     info() { return { creationTime: this.created }; }
-    list() { return this.children; }
   }
   return { Directory, roots: {} as Record<string, { list: () => unknown[] }>, delete: vi.fn() };
 });
@@ -59,18 +57,5 @@ describe('incoming share copy expiry', () => {
     expect(fs.delete).toHaveBeenCalledTimes(2);
     await cleanupExpiredIncomingShares(now);
     expect(fs.delete).toHaveBeenCalledTimes(4);
-  });
-
-  it('retains receipts when an expired copy cannot be deleted', async () => {
-    const expired = new fs.Directory(name, 1);
-    const copy = { uri: `${expired.uri}/report.pdf` };
-    expired.children = [new fs.Directory('.cindy-share-consumed'), copy];
-    fs.roots.sharing = { list: () => [expired] };
-    fs.delete.mockRejectedValueOnce(new Error('busy'));
-    await cleanupExpiredIncomingShares(now);
-    expect(fs.delete).toHaveBeenCalledExactlyOnceWith(copy.uri, { idempotent: true });
-    fs.delete.mockClear();
-    await cleanupExpiredIncomingShares(now);
-    expect(fs.delete.mock.calls.map(([uri]) => uri)).toEqual([copy.uri, expired.uri]);
   });
 });

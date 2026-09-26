@@ -20,11 +20,6 @@ export async function cleanupExpiredIncomingShares(now = Date.now()): Promise<vo
           const created = entry.info().creationTime;
           if (typeof created !== 'number' || !Number.isFinite(created) || created <= 0
             || now - created < SHARE_COPY_RETENTION_MS) continue;
-          // Remove files before any receipt directories: a failed sweep must not
-          // resurrect a consumed share whose original copy remains readable.
-          for (const child of entry.list()) {
-            if (!(child instanceof Directory)) await deleteAsync(child.uri, { idempotent: true });
-          }
           await deleteAsync(entry.uri, { idempotent: true });
         } catch {
           // Best effort: inaccessible or concurrently removed entries retry on foreground.

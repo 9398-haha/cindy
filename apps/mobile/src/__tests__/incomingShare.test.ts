@@ -5,7 +5,6 @@ import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, isMobileAuthOwn
 import {
   __resetIncomingShareForTest,
   consumeIncomingShareBatch,
-  deleteIncomingSharedFiles,
   incomingShareBatchId,
   selectIncomingShareUploadCandidates,
   stageIncomingShareBatch,
@@ -201,17 +200,6 @@ describe('incoming Share Extension payloads', () => {
     expect(consumeIncomingShareBatch(batch.id)).toBe(true);
     expect(consumeIncomingShareBatch(batch.id)).toBe(false);
     expect(acknowledge).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps the receipt directory when cancelling cannot delete the copy', async () => {
-    const directory = 'file:///group/cindy-share-12345678-1234-1234-1234-123456789abc';
-    const uri = `${directory}/report.pdf`;
-    deleteAsync.mockRejectedValueOnce(new Error('busy'));
-    await deleteIncomingSharedFiles([uri]);
-    expect(deleteAsync).toHaveBeenCalledExactlyOnceWith(uri, { idempotent: true });
-    deleteAsync.mockClear();
-    await deleteIncomingSharedFiles([uri]);
-    expect(deleteAsync.mock.calls.map(([uri]) => uri)).toEqual([uri, directory]);
   });
 
   it('never treats remote URLs as local upload/cleanup targets', () => {
