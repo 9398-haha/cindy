@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Modal,
+  BackHandler,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -28,6 +28,7 @@ import {
   typeScale,
 } from "@/theme/tokens";
 import { usePaneViewport } from "@/platform/AdaptiveWindowContext";
+import { useOutsideTap } from "@/platform/OutsideTap";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { LayoutRect } from "@/platform/windowGeometry";
 
@@ -73,13 +74,12 @@ export function RunningTokenRatePopover({
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const anchorRef = useRef<View>(null);
-  const [anchor, setAnchor] = useState({ x: 0, y: 0, width: 0 });
+  const [anchor, setAnchor] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [cardHeight, setCardHeight] = useState(0);
   const measureAnchor = () =>
-    anchorRef.current?.measureInWindow((x, y, width) => {
-      setAnchor({ x, y, width });
+    anchorRef.current?.measureInWindow((x, y, width, height) => {
+      setAnchor({ x, y, width, height });
     });
-  const outsideTouch = useRef({ x: 0, y: 0, moved: false });
   // The composer owns region selection, including folds, occlusions and keyboard.
   const region = availableRegion ?? {
     x: insets.left,
@@ -95,10 +95,7 @@ export function RunningTokenRatePopover({
       region.width - spacing.lg * 2,
     ),
   );
-  const maxCardHeight = Math.max(
-    1,
-    region.height - spacing.lg * 2,
-  );
+  const maxCardHeight = Math.max(1, region.height - spacing.lg * 2);
   const cardLeft = Math.max(
     region.x + spacing.lg,
     Math.min(
@@ -133,6 +130,40 @@ export function RunningTokenRatePopover({
       region.height,
     ],
   );
+  // Pinned cards float without a backdrop: the conversation keeps scrolling
+  // underneath, and only a tap outside the card and its trigger closes it.
+  const within = (
+    x: number,
+    y: number,
+    rect: { x: number; y: number; width: number; height: number },
+  ) =>
+    x >= rect.x &&
+    x <= rect.x + rect.width &&
+    y >= rect.y &&
+    y <= rect.y + rect.height;
+  useOutsideTap(
+    mode === "pinned",
+    (x, y) =>
+      within(x, y, anchor) ||
+      within(x, y, {
+        x: cardLeft,
+        y: cardTop,
+        width: cardWidth,
+        height: cardHeight,
+      }),
+    () => setMode("closed"),
+  );
+  useEffect(() => {
+    if (mode !== "pinned") return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        setMode("closed");
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, [mode]);
   const longPressed = useRef(false);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const [internalHistory, setInternalHistory] = useState(() => {
@@ -151,7 +182,13 @@ export function RunningTokenRatePopover({
         generationReliable,
       }),
     );
-  }, [managedHistory, startedAt, outputTokens, generationDurationMs, generationReliable]);
+  }, [
+    managedHistory,
+    startedAt,
+    outputTokens,
+    generationDurationMs,
+    generationReliable,
+  ]);
   const history = managedHistory ?? internalHistory;
   useEffect(() => {
     if (managedHistory) return;
@@ -209,8 +246,8 @@ export function RunningTokenRatePopover({
         {
           width: cardWidth,
           maxHeight: maxCardHeight,
-          left: cardLeft - (mode === "held" ? anchor.x : 0),
-          top: cardTop - (mode === "held" ? anchor.y : 0),
+          left: cardLeft - anchor.x,
+          top: cardTop - anchor.y,
           opacity: cardHeight > 0 ? 1 : 0,
         },
       ]}
@@ -341,57 +378,13 @@ export function RunningTokenRatePopover({
       >
         {children}
       </Pressable>
-      {mode === "held" && card}
-      <Modal
-        supportedOrientations={[
-          "portrait",
-          "portrait-upside-down",
-          "landscape-left",
-          "landscape-right",
-        ]}
-        visible={mode === "pinned"}
-        transparent
-        animationType="none"
-        statusBarTranslucent
-        navigationBarTranslucent
-        onRequestClose={() => setMode("closed")}
-      >
-        <View style={styles.overlay}>
-          <Pressable
-            testID="session.tokenRate.backdrop"
-            style={StyleSheet.absoluteFill}
-            accessible={false}
-            onPressIn={(event) => {
-              outsideTouch.current = {
-                x: event.nativeEvent.pageX,
-                y: event.nativeEvent.pageY,
-                moved: false,
-              };
-            }}
-            onTouchMove={(event) => {
-              const start = outsideTouch.current;
-              if (
-                Math.hypot(
-                  event.nativeEvent.pageX - start.x,
-                  event.nativeEvent.pageY - start.y,
-                ) > 8
-              )
-                start.moved = true;
-            }}
-            onPress={() => {
-              if (!outsideTouch.current.moved) setMode("closed");
-            }}
-          />
-          {card}
-        </View>
-      </Modal>
+      {mode !== "closed" && card}
     </View>
   );
 }
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    overlay: { flex: 1 },
     anchor: { position: "relative", flexShrink: 0 },
     trigger: {
       minHeight: 44,

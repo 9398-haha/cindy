@@ -23,8 +23,12 @@ const harness = vi.hoisted(() => ({
   anchor: { x: 220, y: 600, width: 80 },
   insets: { top: 24, bottom: 16, left: 0, right: 0 },
   press: {} as Record<string, (...args: any[]) => void>,
-  backdrop: {} as Record<string, (...args: any[]) => void>,
   card: {} as Record<string, (...args: any[]) => void>,
+  outsideTap: null as null | {
+    contains: (x: number, y: number) => boolean;
+    onOutsideTap: () => void;
+  },
+  back: null as null | (() => boolean),
 }));
 vi.mock("react-native", () => {
   const view = ({ children, testID }: any) =>
@@ -43,17 +47,37 @@ vi.mock("react-native", () => {
       if (props.testID === "session.tokenRate.card") harness.card = props;
       return view(props);
     }),
-    Modal: ({ visible, children }: any) =>
-      visible ? createElement("div", {}, children) : null,
+    BackHandler: {
+      addEventListener: (_: string, handler: () => boolean) => {
+        harness.back = handler;
+        return { remove: () => (harness.back = null) };
+      },
+    },
     useWindowDimensions: () => harness.window,
     ScrollView: view,
     Text: view,
     StyleSheet: { create: (s: unknown) => s },
     Pressable: (props: any) => {
-      if (props.testID === "session.tokenRate.backdrop")
-        harness.backdrop = props;
-      else harness.press = props;
+      harness.press = props;
       return view(props);
+    },
+  };
+});
+vi.mock("@/platform/OutsideTap", async () => {
+  const { useEffect } = await import("react");
+  return {
+    useOutsideTap: (
+      active: boolean,
+      contains: (x: number, y: number) => boolean,
+      onOutsideTap: () => void,
+    ) => {
+      useEffect(() => {
+        if (!active) return;
+        harness.outsideTap = { contains, onOutsideTap };
+        return () => {
+          harness.outsideTap = null;
+        };
+      });
     },
   };
 });
@@ -273,27 +297,39 @@ it("toggles on tap, holds only until release, and does not turn the long-press r
   expect(card()).not.toBeNull();
 });
 
-it("dismisses on outside tap, but not card taps or swipes", async () => {
+it("floats without a backdrop and dismisses only on taps outside the card and trigger", async () => {
   await render();
+  await gesture("onPressIn");
   await gesture("onPress");
   expect(harness.card.onStartShouldSetResponder()).toBe(true);
+  expect(harness.card.pointerEvents).toBe("auto");
   expect(card()).not.toBeNull();
+  await act(async () =>
+    harness.card.onLayout({ nativeEvent: { layout: { height: 120 } } }),
+  );
+  const style = Object.assign({}, ...(harness.card as any).style);
+  const cardX = style.left + harness.anchor.x;
+  const cardY = style.top + harness.anchor.y;
+  const tap = harness.outsideTap!;
+  // Taps on the card or its trigger keep it open.
+  expect(tap.contains(cardX + 10, cardY + 10)).toBe(true);
+  expect(tap.contains(harness.anchor.x + 10, harness.anchor.y + 10)).toBe(true);
+  expect(tap.contains(20, 20)).toBe(false);
+  await act(async () => tap.onOutsideTap());
+  expect(card()).toBeNull();
+  expect(harness.outsideTap).toBeNull();
+  await gesture("onPressIn");
+  await gesture("onPress");
+  let handled = false;
   await act(async () => {
-    harness.backdrop.onPressIn({ nativeEvent: { pageX: 20, pageY: 20 } });
-    harness.backdrop.onTouchMove({ nativeEvent: { pageX: 20, pageY: 80 } });
-    harness.backdrop.onPress();
+    handled = harness.back!();
   });
-  expect(card()).not.toBeNull();
-  await act(async () => {
-    harness.backdrop.onPressIn({ nativeEvent: { pageX: 20, pageY: 20 } });
-    harness.backdrop.onPress();
-  });
+  expect(handled).toBe(true);
   expect(card()).toBeNull();
   await gesture("onPressIn");
   await gesture("onLongPress");
-  expect(
-    host.querySelector('[data-testid="session.tokenRate.backdrop"]'),
-  ).toBeNull();
+  expect(harness.card.pointerEvents).toBe("none");
+  expect(harness.outsideTap).toBeNull();
   await gesture("onTouchCancel");
   expect(card()).toBeNull();
 });
@@ -335,8 +371,8 @@ it.each(["onPress", "onLongPress"])(
           harness.card.onLayout({ nativeEvent: { layout: { height } } }),
         );
         const style = Object.assign({}, ...(harness.card as any).style);
-        const x = style.left + (open === "onLongPress" ? harness.anchor.x : 0);
-        const top = style.top + (open === "onLongPress" ? y : 0);
+        const x = style.left + harness.anchor.x;
+        const top = style.top + y;
         expect(x).toBeGreaterThanOrEqual(harness.insets.left);
         expect(x + style.width).toBeLessThanOrEqual(800 - harness.insets.right);
         expect(top).toBeGreaterThanOrEqual(harness.insets.top);
@@ -370,8 +406,8 @@ it.each(["onPress", "onLongPress"])("keeps %s in the composer's fold/occlusion r
     const height = style.maxHeight;
     await act(async () => harness.card.onLayout({ nativeEvent: { layout: { height } } }));
     style = Object.assign({}, ...(harness.card as any).style);
-    const x = style.left + (open === "onLongPress" ? harness.anchor.x : 0);
-    const y = style.top + (open === "onLongPress" ? harness.anchor.y : 0);
+    const x = style.left + harness.anchor.x;
+    const y = style.top + harness.anchor.y;
     expect(x).toBeGreaterThanOrEqual(region.x);
     expect(y).toBeGreaterThanOrEqual(region.y);
     expect(x + style.width).toBeLessThanOrEqual(region.x + region.width);
