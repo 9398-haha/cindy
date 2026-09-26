@@ -56,7 +56,11 @@ import type {
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
 import type { PersistedSessionReferenceMetadata } from '../../../shared/sessionReferenceMetadata';
-import { buildRewindDraftAttachments } from '@/lib/rewindDraftAttachments';
+import {
+  buildRewindDraftAttachments,
+  dropMissingAnnotationSources,
+  hasRestorableAnnotationSources,
+} from '@/lib/rewindDraftAttachments';
 import {
   useAgentCapabilities,
   type AgentKind as MakerAgentKind,
@@ -1251,12 +1255,21 @@ export function UserMessage({
       // reload it disappears from the list; the composer keeps the draft so
       // the user can edit and re-send.
       const draftText = quoteDraftDocument ?? textToTiptapDoc(bubbleBody);
-      const draftAttachments = buildRewindDraftAttachments({ images, files });
-      if (draftText || draftAttachments.length > 0) {
-        saveComposerDraft(sessionId, {
-          text: draftText,
-          attachments: draftAttachments,
-        });
+      const saveRewindDraft = (draftImages: typeof images) => {
+        const draftAttachments = buildRewindDraftAttachments({ images: draftImages, files });
+        if (draftText || draftAttachments.length > 0) {
+          saveComposerDraft(sessionId, {
+            text: draftText,
+            attachments: draftAttachments,
+          });
+        }
+      };
+      // 带可再编辑标注的历史图:先确认未烧录原图仍在,丢失的退回烧录图(否则
+      // 草稿里是一张打不开的原图)。其余消息保持同步写草稿,时序与以往一致。
+      if (images && hasRestorableAnnotationSources(images)) {
+        void dropMissingAnnotationSources(images).then(saveRewindDraft);
+      } else {
+        saveRewindDraft(images);
       }
       // Patch sidebar: tokens reset, sdkSessionId may have changed, bump
       // updatedAt so this session sorts back to top.

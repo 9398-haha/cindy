@@ -9,6 +9,7 @@
  * 打进 canvas 后 toBlob 被跨源 taint 拦截)。
  */
 
+import { summarizeAnnotationRegions } from '@cindy/maker-shared/image-annotation';
 import {
   drawStrokesOnCanvas,
   type AnnotationStroke,
@@ -17,6 +18,68 @@ import type { AttachedFile } from '@/lib/fileTypes';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AnnotationBurnIn');
+
+/**
+ * 发送前烧录失败(`burnFailure: 'abort'` 时抛出)。调用方据此中止本次发送 /
+ * 保存并保留草稿里的矢量笔迹,让用户重试,而不是悄悄发出一张没有圈的图。
+ */
+export class AnnotationBurnInError extends Error {
+  constructor(
+    readonly fileName: string,
+    readonly cause?: unknown,
+  ) {
+    super(`annotation burn-in failed: ${fileName}`);
+    this.name = 'AnnotationBurnInError';
+  }
+}
+
+export function isAnnotationBurnInError(error: unknown): error is AnnotationBurnInError {
+  return (
+    error instanceof AnnotationBurnInError ||
+    (error instanceof Error && error.name === 'AnnotationBurnInError')
+  );
+}
+
+/** {@link materializeAnnotatedAttachmentsForSend} 的选项。 */
+export interface MaterializeAnnotatedOptions {
+  /**
+   * remote(device-link/SSH)会话发送时剥离 annotationSourceUrl/annotationStrokes——
+   * 它们指向控制端本地缓存,被控端无法解析。annotated 与 annotationRegions 保留。
+   */
+  stripAnnotationMeta?: boolean;
+  /**
+   * 烧录失败时的处理:
+   * - `'fallback'`(默认,历史行为):降级发原图并剥离全部标注字段,随后调用一次
+   *   `onFallback` 让调用方给出用户可见提示。用于无法安全中止的路径(例如
+   *   device-link 乐观发送:气泡已上屏、输入框已清空)。
+   * - `'abort'`:整体抛 {@link AnnotationBurnInError},调用方中止发送并保留草稿。
+   */
+  burnFailure?: 'fallback' | 'abort';
+  /** fallback 模式下本次有图片降级时回调一次(参数为降级张数)。 */
+  onFallback?: (failedCount: number) => void;
+}
+
+/**
+ * 烧录产物文件名:保留用户原图的基础名(`截图.png` → `截图-annotated.png`),
+ * 自动标题 / 缺图占位等处能认出是哪张图。重复烧录(队列编辑、回退重发)先剥掉
+ * 已有的 `-annotated` 后缀,不会越叠越长;本来就是实现名(`annotated-<ts>`)或
+ * 取不到基础名时沿用 `annotated-<ts>`。文件名只作展示用途——烧录字节按内容
+ * 寻址入库,文件名不参与存储路径、去重与缓存解析。
+ */
+export function annotatedFileName(
+  originalName: string | undefined,
+  ext: string,
+  nowMs: number,
+): string {
+  const name = (originalName ?? '').split(/[\\/]/).pop() ?? '';
+  const dot = name.lastIndexOf('.');
+  // 点号开头(只有扩展名)视为无基础名。
+  const stem = (dot > 0 ? name.slice(0, dot) : dot === 0 ? '' : name)
+    .replace(/-annotated$/i, '')
+    .trim();
+  if (!stem || /^annotated-\d+$/i.test(stem)) return `annotated-${nowMs}${ext}`;
+  return `${stem}-annotated${ext}`;
+}
 
 /**
  * 剥掉 MIME 参数(`image/svg+xml;charset=utf-8` → `image/svg+xml`)。
@@ -169,8 +232,12 @@ export function needsAnnotationMaterialize(files?: readonly AttachedFile[]): boo
  * - 缓存附件(有 url):烧录图写入会话缓存成为发送 url;物化前的 url(原图)
  *   记入 annotationSourceUrl、笔迹保留——两者随消息持久化,历史图可再编辑。
  * - base64 草稿附件:烧录结果直接替换 base64 随消息走。
- * - 烧录失败:降级发原图并剥离全部标注字段(不能带着 annotated 标发一张
- *   没有圈的图误导模型),只记日志不阻塞发送。
+ * - 两种形态都附带 `annotationRegions`(笔迹归纳出的标注区域,归一化坐标),
+ *   供 buildMakerUserMessage 给模型说明每张图圈在哪;remote 剥离元数据时保留。
+ * - 烧录失败:按 `opts.burnFailure` 处理——`'abort'` 抛 AnnotationBurnInError
+ *   (调用方中止并保留草稿);默认 `'fallback'` 降级发原图并剥离全部标注字段
+ *   (不能带着 annotated 标发一张没有圈的图误导模型),并经 `onFallback` 通知
+ *   调用方提示用户。
  * 幂等:`f.annotated` 的附件已是烧录产物,原样返回——远程 auth-retry 会把
  * 已物化的 retryFiles 重新送进本函数,若再烧一遍会把笔迹叠画到烧录图上、
  * annotationSourceUrl 也会被错误重指到烧录副本(review P2)。
@@ -183,12 +250,14 @@ export function needsAnnotationMaterialize(files?: readonly AttachedFile[]): boo
 export async function materializeAnnotatedAttachmentsForSend(
   files: readonly AttachedFile[] | undefined,
   sessionId: string,
-  opts?: { stripAnnotationMeta?: boolean },
+  opts?: MaterializeAnnotatedOptions,
 ): Promise<AttachedFile[] | undefined> {
   if (!needsAnnotationMaterialize(files)) {
     return files ? [...files] : undefined;
   }
-  return Promise.all(
+  const abortOnFailure = opts?.burnFailure === 'abort';
+  let fallbackCount = 0;
+  const materialized = await Promise.all(
     files!.map(async (f): Promise<AttachedFile> => {
       const strokes = f.annotationStrokes;
       if (f.category !== 'image' || f.annotated) return f;
@@ -212,7 +281,9 @@ export async function materializeAnnotatedAttachmentsForSend(
         if (!source) return f;
         const { blob, mimeType } = await burnInAnnotations(source, strokes);
         const ext = mimeType === 'image/jpeg' ? '.jpg' : '.png';
-        const name = `annotated-${Date.now()}${ext}`;
+        const name = annotatedFileName(f.originalName ?? f.name, ext, Date.now());
+        const regions = summarizeAnnotationRegions(strokes);
+        const annotationRegions = regions.length > 0 ? { annotationRegions: regions } : {};
         if (f.url) {
           const cached = await window.electronAPI.cacheImageFromBuffer({
             sessionId,
@@ -229,6 +300,7 @@ export async function materializeAnnotatedAttachmentsForSend(
             mimeType,
             size: blob.size,
             annotated: true,
+            ...annotationRegions,
             ...(opts?.stripAnnotationMeta
               ? { annotationSourceUrl: undefined, annotationStrokes: undefined }
               : { annotationSourceUrl: f.url }),
@@ -243,17 +315,27 @@ export async function materializeAnnotatedAttachmentsForSend(
           mimeType,
           size: blob.size,
           annotated: true,
+          ...annotationRegions,
         };
       } catch (err) {
+        if (abortOnFailure) {
+          log.warn('burn-in failed, aborting send', {
+            name: f.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw new AnnotationBurnInError(f.name, err);
+        }
         log.warn('burn-in failed, sending original image without annotations', {
           name: f.name,
           error: err instanceof Error ? err.message : String(err),
         });
+        fallbackCount += 1;
         const stripped: AttachedFile = {
           ...f,
           annotated: undefined,
           annotationSourceUrl: undefined,
           annotationStrokes: undefined,
+          annotationRegions: undefined,
         };
         // 共享引用附件烧录失败:降级发的是**历史消息的原图文件**,与上方撤光
         // 笔迹分支同一悬空引用问题——同样先私有化,失败再原样降级(review P2)。
@@ -264,6 +346,16 @@ export async function materializeAnnotatedAttachmentsForSend(
       }
     }),
   );
+  if (fallbackCount > 0) {
+    try {
+      opts?.onFallback?.(fallbackCount);
+    } catch (notifyError) {
+      log.warn('burn-in fallback notify failed', {
+        error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+      });
+    }
+  }
+  return materialized;
 }
 
 /**

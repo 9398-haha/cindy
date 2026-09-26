@@ -10,7 +10,11 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cleanupRemovedCachedImage } from '@/hooks/useAttachments';
-import { buildRewindDraftAttachments } from '@/lib/rewindDraftAttachments';
+import {
+  buildRewindDraftAttachments,
+  dropMissingAnnotationSources,
+  hasRestorableAnnotationSources,
+} from '@/lib/rewindDraftAttachments';
 
 describe('buildRewindDraftAttachments', () => {
   it('restores cached image refs and persisted file refs into composer attachments', () => {
@@ -77,6 +81,38 @@ describe('buildRewindDraftAttachments', () => {
     });
   });
 
+  it('restores an annotated history image as editable source + strokes (shared source)', () => {
+    const strokes = [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }];
+    const attachments = buildRewindDraftAttachments({
+      images: [
+        {
+          url: 'cindy-media://blobs/burned.png',
+          mimeType: 'image/png',
+          originalName: 'shot-annotated.png',
+          annotationSourceUrl: 'cindy-media://blobs/source.jpg',
+          annotationStrokes: strokes,
+        },
+      ],
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({
+      name: 'shot-annotated.png',
+      path: 'cindy-media://blobs/source.jpg',
+      url: 'cindy-media://blobs/source.jpg',
+      ext: '.jpg',
+      mimeType: 'image/jpeg',
+      category: 'image',
+      cacheUrlShared: true,
+      annotationStrokes: strokes,
+    });
+    expect(attachments[0].annotated).toBeUndefined();
+    expect(attachments[0].annotationSourceUrl).toBeUndefined();
+    // 深拷贝:草稿里的笔迹不与历史消息共享可变对象。
+    expect(attachments[0].annotationStrokes?.[0]).not.toBe(strokes[0]);
+    expect(attachments[0].annotationStrokes?.[0].points[0]).not.toBe(strokes[0].points[0]);
+  });
+
   it('restores unknown historical file refs as generic composer attachments', () => {
     const attachments = buildRewindDraftAttachments({
       files: [
@@ -121,7 +157,13 @@ describe('rewind draft attachment wiring', () => {
   );
 
   it('rewind prefill writes text plus attachments to the composer draft', () => {
-    expect(userMessageSrc).toMatch(/buildRewindDraftAttachments\(\{\s*images,\s*files\s*\}\)/);
+    expect(userMessageSrc).toMatch(
+      /buildRewindDraftAttachments\(\{\s*images:\s*draftImages,\s*files\s*\}\)/,
+    );
+    // 带可再编辑标注的历史图先探测原图,丢失的退回烧录图后再写草稿。
+    expect(userMessageSrc).toMatch(
+      /hasRestorableAnnotationSources\(images\)[\s\S]{0,120}dropMissingAnnotationSources\(images\)\.then\(saveRewindDraft\)/,
+    );
     expect(userMessageSrc).toMatch(
       /saveComposerDraft\(sessionId,\s*\{\s*text:\s*draftText,\s*attachments:\s*draftAttachments/s,
     );
@@ -197,5 +239,54 @@ describe('cleanupRemovedCachedImage', () => {
     expect(() =>
       cleanupRemovedCachedImage({ url: 'xdt-image://session-a/removed.png' }),
     ).not.toThrow();
+  });
+});
+
+describe('dropMissingAnnotationSources', () => {
+  const annotated = {
+    url: 'cindy-media://blobs/burned.png',
+    mimeType: 'image/png',
+    originalName: 'shot-annotated.png',
+    annotationSourceUrl: 'cindy-media://blobs/gone.png',
+    annotationStrokes: [{ points: [{ x: 0.5, y: 0.5 }] }],
+  };
+  const plain = { url: 'cindy-media://blobs/plain.png', mimeType: 'image/png', originalName: 'p.png' };
+
+  it('detects which image lists need a source probe', () => {
+    expect(hasRestorableAnnotationSources([plain])).toBe(false);
+    expect(hasRestorableAnnotationSources([{ base64: 'x', mimeType: 'image/png' }])).toBe(false);
+    expect(hasRestorableAnnotationSources([plain, annotated])).toBe(true);
+  });
+
+  it('falls back to the burned image (no strokes) when the unburned source is gone', async () => {
+    const probe = vi.fn(async () => false);
+    const images = await dropMissingAnnotationSources([plain, annotated], probe);
+
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledWith('cindy-media://blobs/gone.png');
+    expect(images[0]).toBe(plain);
+    expect(images[1]).toEqual({
+      url: 'cindy-media://blobs/burned.png',
+      mimeType: 'image/png',
+      originalName: 'shot-annotated.png',
+    });
+    const [attachment] = buildRewindDraftAttachments({ images: [images[1]] });
+    expect(attachment).toMatchObject({
+      url: 'cindy-media://blobs/burned.png',
+      path: 'cindy-media://blobs/burned.png',
+    });
+    expect(attachment.annotationStrokes).toBeUndefined();
+    expect(attachment.cacheUrlShared).toBeUndefined();
+  });
+
+  it('keeps the editable restore when the source still exists or the probe cannot decide', async () => {
+    await expect(dropMissingAnnotationSources([annotated], async () => true)).resolves.toEqual([
+      annotated,
+    ]);
+    await expect(
+      dropMissingAnnotationSources([annotated], async () => {
+        throw new Error('probe crashed');
+      }),
+    ).resolves.toEqual([annotated]);
   });
 });
