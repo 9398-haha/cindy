@@ -99,7 +99,11 @@ it('aborts both internal delegated entry points when authorization history canno
 });
 
 it('shares the Lead send lock across whole plan registration and final Worker admission', () => {
-  expect(source).toContain("case 'setTeamPlan': return withSendToSessionLock(request.taskId, () => service.setTeamPlan(pluginId, request.taskId, request.plan));");
+  const registration = source.slice(source.indexOf("case 'setTeamPlan':"), source.indexOf("case 'releaseWorker':"));
+  expect(registration).toContain('return withSendToSessionLock(request.taskId, async () => {');
+  expect(registration.indexOf('await resolvePluginWorkerDirectory(')).toBeGreaterThan(registration.indexOf('withSendToSessionLock('));
+  expect(registration.indexOf('return service.setTeamPlan(')).toBeGreaterThan(registration.indexOf('await resolvePluginWorkerDirectory('));
+  expect(registration.trimEnd().endsWith('});')).toBe(true);
   const start=source.indexOf('const orcaWorkerCreationService = createOrcaWorkerCreationService({');
   const block=source.slice(start, source.indexOf('getLeadSessionRow:',start));
   expect(block).toContain('withLeadSendLock: withSendToSessionLock');
