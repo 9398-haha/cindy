@@ -69,6 +69,7 @@ describe('annotationStrokeWidth', () => {
     const sizes: Array<[number, number]> = [
       [320, 240], [800, 600], [1179, 2556], [1920, 1080], [2560, 1600],
       [3024, 4032], [4000, 3000], [6000, 4000], [8000, 6000], [1000, 2500],
+      [10000, 10000], [20000, 20000], [6000, 13000], [30000, 12000],
     ];
     for (const [w, h] of sizes) {
       expect(annotationStrokeWidth(w, h)).toBe(legacyStrokeWidth(w, h));

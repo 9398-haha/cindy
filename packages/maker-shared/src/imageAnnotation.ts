@@ -89,8 +89,8 @@ export function shouldAppendAnnotationPoint(
  * - 主项:0.5% 短边,4px 下限、24px 上限(常规比例图片的一贯观感)。
  * - 长边兜底:超长截图(如 1000×8000)按短边算只有 5px,送模前缩到长边 1568
  *   后不足 1px、基本被压没;因此再保证"缩到 1568 长边后仍 ≥3px",该项以
- *   2% 短边封顶。长宽比约 2.6:1 以内的图片兜底项永远不超过主项,线宽与旧公式
- *   完全一致。
+ *   2% 短边封顶。兜底项只在超过未封顶的短边项(长宽比大于约 2.6:1)时生效,
+ *   其余图片(含短边项被 24px 封顶的超大图)线宽与旧公式完全一致。
  */
 export function annotationStrokeWidth(naturalWidth: number, naturalHeight: number): number {
   const shortEdge = Math.min(naturalWidth, naturalHeight);
@@ -100,7 +100,10 @@ export function annotationStrokeWidth(naturalWidth: number, naturalHeight: numbe
     (longEdge / MODEL_IMAGE_LONG_EDGE) * MODEL_VISIBLE_MIN_LINE_PX,
     shortEdge * LONG_EDGE_TERM_MAX_SHORT_RATIO,
   );
-  return Math.round(Math.max(primary, longEdgeFloor));
+  // 只在兜底项超过未封顶的短边项时生效(即长宽比大于约 2.6:1),常规比例图片
+  // (包括短边项被 24px 封顶的超大图)线宽与旧公式逐像素一致。
+  const floor = longEdgeFloor > shortEdge * 0.005 ? longEdgeFloor : 0;
+  return Math.round(Math.max(primary, floor));
 }
 
 /** 白描边线宽(与 {@link annotationStrokeWidth} 配套)。 */
@@ -192,7 +195,8 @@ function cindyAnnotationStrokeWidth(width, height) {
     (longEdge / ${MODEL_IMAGE_LONG_EDGE}) * ${MODEL_VISIBLE_MIN_LINE_PX},
     shortEdge * ${LONG_EDGE_TERM_MAX_SHORT_RATIO}
   );
-  return Math.round(Math.max(primary, longEdgeFloor));
+  var floor = longEdgeFloor > shortEdge * 0.005 ? longEdgeFloor : 0;
+  return Math.round(Math.max(primary, floor));
 }
 function cindyDrawAnnotationStrokes(ctx, strokes, width, height) {
   var strokeWidth = cindyAnnotationStrokeWidth(width, height);
