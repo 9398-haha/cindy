@@ -235,12 +235,14 @@ async function writeTextIfAbsent(absPath: string, content: string): Promise<bool
   }
   await fs.mkdir(path.dirname(absPath), { recursive: true });
   const tmp = `${absPath}.tmp-${process.pid}-${(writeSeq += 1)}`;
-  await fs.writeFile(tmp, content, 'utf8');
   try {
-    await fs.link(tmp, absPath);
-    return true;
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    await fs.writeFile(tmp, content, 'utf8');
+    try {
+      await fs.link(tmp, absPath);
+      return true;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    }
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => {});
   }
@@ -442,6 +444,7 @@ export interface BotProfileFolderMigration {
  *
  *   1. 用数据库里的当前值播种 `SOUL.md` / `memories/USER.md` / `config.json`。
  *      **只在没有 SOUL.md 时做**,且只补缺失的那几个文件,绝不覆盖用户已经改过的文件。
+ *      SOUL.md 最后写:它在就代表家已建好,其他槽写失败时下次仍会重试补种。
  *   2. 把 `<userData>/bot-skills/<botId>/` 整个搬成 `<家>/skills` 的邻居
  *      (`.claude-plugin/` 一并带走)。一个伙伴一个家,不该散在两处。
  *
@@ -466,9 +469,12 @@ export async function migrateBotProfileFolder(
     // Seed only what is missing, each slot with an atomic create-if-absent: a hand-edited
     // USER.md or config.json next to a missing SOUL.md — or a file the user saves in an
     // editor at this very moment — is the user's content and must not be reset.
-    seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
+    // SOUL.md goes last: its presence is what marks the Home as seeded, so if a sibling
+    // slot fails the next run still sees SOUL.md missing and retries, instead of
+    // reconciling an absent USER.md as an emptied user profile.
     await writeTextIfAbsent(at(SLOT.userContext), seed.userContextSource);
     await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(seed.config, null, 2)}\n`);
+    seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
   }
 
   const skillsMoved = await migrateBotSkillsIntoProfileFolder(userDataDir, botId, legacyUserDataDir);

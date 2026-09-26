@@ -318,8 +318,11 @@ describe('搬家', () => {
   it('无硬链接补种写到一半失败时保留恢复标记,下一次补种把截断的文件补全', async () => {
     const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
     const realOpen = fs.open.bind(fs);
-    const open = vi.spyOn(fs, 'open').mockImplementationOnce(async (target, flags) => {
+    let failed = false;
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (target, flags) => {
       const handle = await realOpen(target, flags);
+      if (failed || !String(target).endsWith('SOUL.md')) return handle;
+      failed = true;
       return Object.assign(Object.create(handle), {
         writeFile: async (data: string) => {
           await handle.writeFile(data.slice(0, 2));
@@ -341,6 +344,33 @@ describe('搬家', () => {
     await migrateBotProfileFolder(root, 'bot-a', SEED);
     expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe(SEED.identitySource);
     await expect(fs.access(path.join(home, 'SOUL.md.seeding'))).rejects.toBeTruthy();
+  });
+
+  it('SOUL.md 之外的槽写失败时不落 SOUL.md,下一次仍会补齐,而不是把缺失的 USER.md 当成清空', async () => {
+    const realWriteFile = fs.writeFile.bind(fs);
+    const writeFile = vi.spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+      if (String(target).includes('USER.md.tmp-')) {
+        await realWriteFile(target, String(data).slice(0, 2), options);
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      }
+      return realWriteFile(target, data, options);
+    });
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'ENOSPC' });
+    } finally {
+      writeFile.mockRestore();
+    }
+    // SOUL.md marks a seeded Home, so it must not exist while a sibling slot is missing.
+    await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
+    // The half-written temp file does not linger either.
+    expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
+
+    expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe(SEED.userContextSource);
+    expect(content.config).toEqual(SEED.config);
   });
 
   it('被中断的无硬链接补种:截断的文件补全,中断后用户改过的原样保留', async () => {

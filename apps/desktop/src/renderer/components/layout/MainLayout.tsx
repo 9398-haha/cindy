@@ -102,7 +102,6 @@ import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNe
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { ensureBotProfilesLoaded, getBotProfiles } from '@/features/bots/botStore';
 import { createSessionEntryNavigator, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
-import * as sessionService from '@/lib/sessionService';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
@@ -542,7 +541,6 @@ export function MainLayout() {
   const [navigateToSession] = useState(() => createSessionEntryNavigator({
     resolveBotRoute: (sessionId) => resolveBotRouteForSessionEntry(sessionId, {
       readProfiles: getBotProfiles,
-      readSessionSource: async (id) => (await sessionService.get(id)).source,
       loadProfiles: ensureBotProfilesLoaded,
     }),
     openBotRoute: (route) => {

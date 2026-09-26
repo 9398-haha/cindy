@@ -48,7 +48,6 @@ export function botRouteForOwnedSession(
 
 export interface BotSessionEntryRouteDeps {
   readProfiles: () => readonly BotProfile[];
-  readSessionSource: (sessionId: string) => Promise<string | null | undefined>;
   /** Loads the current owner's profiles; `refresh` re-reads an already loaded projection. */
   loadProfiles: (refresh: boolean) => Promise<readonly BotProfile[]>;
 }
@@ -57,7 +56,9 @@ export interface BotSessionEntryRouteDeps {
  * Resolve a session-only entry such as a notification click. The in-memory
  * projection is only kept fresh while a Bots view is mounted, so a click can
  * arrive before it was ever loaded for this account, or after a new Bot session
- * was linked. Load it once, and re-read it when the row itself is a Bot session.
+ * was linked. The session row cannot tell: delegated tasks keep
+ * `source: 'desktop'` and their owner lives only in `bot_session_links`. So a
+ * session the projection does not know always re-reads it once.
  */
 export async function resolveBotRouteForSessionEntry(
   sessionId: string,
@@ -65,8 +66,7 @@ export async function resolveBotRouteForSessionEntry(
 ): Promise<string | null> {
   const known = botRouteForOwnedSession(deps.readProfiles(), sessionId);
   if (known) return known;
-  const source = await deps.readSessionSource(sessionId).catch(() => null);
-  const profiles = await deps.loadProfiles(source === 'bot').catch(() => []);
+  const profiles = await deps.loadProfiles(true).catch(() => []);
   return botRouteForOwnedSession(profiles, sessionId);
 }
 
