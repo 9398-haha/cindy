@@ -52,7 +52,6 @@ import {
   botProfileDir,
   ensureBotWorkspaceDir,
   migrateBotProfileFolder,
-  recoverInterruptedBotProfileSeed,
   readBotProfileFolder,
   writeBotProfileFolder,
 } from '../../maker-ipc/botProfileFolder.js';
@@ -342,10 +341,7 @@ export async function reconcileBotProfileFolder(
           currentVersion: profile.currentVersion,
         };
       },
-      readFolder: async (id) => {
-        await recoverInterruptedBotProfileSeed(userDataDir, id);
-        return readBotProfileFolder(userDataDir, id);
-      },
+      readFolder: (id) => readBotProfileFolder(userDataDir, id),
       // 播种顺带把技能从旧目录搬进来 —— 存量伙伴第一次走到这里时一并完成。
       seedFolder: async (id, seed) => {
         await migrateBotProfileFolder(userDataDir, id, seed, legacyUserDataDir);

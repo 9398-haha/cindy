@@ -12,7 +12,7 @@ import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -918,21 +918,27 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
   });
 
-  it('completes an interrupted seed before reconcile reads it, instead of absorbing a truncated SOUL.md', async () => {
+  it('keeps the stored identity when the Home cannot be seeded without hard links', async () => {
     const created = await invoke('local-db:bots:create', {
-      id: 'interrupted-seed', name: 'Interrupted Seed', identitySource: 'Stored identity',
+      id: 'no-hardlinks', name: 'No Hardlinks', identitySource: 'Stored identity',
+      userContextSource: 'Stored user context',
     });
     const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
-    // A seed that failed mid-write on a filesystem without hard links.
-    writeFileSync(join(home, 'SOUL.md'), 'Stored');
-    writeFileSync(join(home, 'SOUL.md.seeding'), 'Stored identity');
-    const canonical = await invoke('local-db:bots:create-canonical-session', {
-      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    rmSync(join(home, 'SOUL.md'));
+    const link = vi.spyOn(fsPromises, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    try {
+      const canonical = await invoke('local-db:bots:create-canonical-session', {
+        botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      });
+      expect(canonical.canonicalSessionId).toBeTruthy();
+    } finally {
+      link.mockRestore();
+    }
+    // The database stays authoritative: no version is derived from a Home that could not be seeded.
+    expect(await invoke('local-db:bots:get', created.id)).toMatchObject({
+      currentVersion: 1, identitySource: 'Stored identity', userContextSource: 'Stored user context',
     });
-    expect(canonical.canonicalSessionId).toBeTruthy();
-    expect(await invoke('local-db:bots:get', created.id)).toMatchObject({ currentVersion: 1, identitySource: 'Stored identity' });
-    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
-    expect(existsSync(join(home, 'SOUL.md.seeding'))).toBe(false);
+    expect(existsSync(join(home, 'SOUL.md'))).toBe(false);
   });
 
   it('seeds a never-created Bot Home on an unrelated save without touching an existing one', async () => {

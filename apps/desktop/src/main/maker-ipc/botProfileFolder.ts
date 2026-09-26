@@ -218,13 +218,13 @@ async function writeTextAtomic(absPath: string, content: string): Promise<void> 
  * 原子的「不存在才创建」:补种不能覆盖用户此刻正在编辑器里保存的文件,也不能留下
  * 写到一半的文件(半截 SOUL.md 会被对账当成正式身份收进数据库)。
  *
- * 常见文件系统:内容写进临时文件后用 link 挂到目标路径 —— 目标已存在时 link 报
- * EEXIST 而不是替换,且内容完整后才出现在目标路径,两条都满足。
+ * 内容写进临时文件后用 link 挂到目标路径 —— 目标已存在时 link 报 EEXIST 而不是
+ * 替换,且内容完整后才出现在目标路径,两条都满足。返回是否真的创建了。
  *
- * 没有硬链接的文件系统上不存在「原子且不替换」的 rename,于是改用独占创建 + 可恢复:
- * 先写一个装着完整内容的 `.seeding` 标记,再以 `wx` 独占创建目标并落盘,最后删标记。
- * 独占创建保证绝不替换别人刚创建的文件;中途崩溃留下的标记由下一次补种前的
- * `recoverInterruptedSeed` 收尾。返回是否真的创建了。
+ * 没有硬链接的文件系统上不存在「原子且不替换」的写法(Node 不提供 NOREPLACE 的
+ * rename),任何模拟都要在「可能替换用户文件」和「只能猜文件是不是写到一半」之间
+ * 二选一。所以这里不模拟:link 的其他错误原样抛出,这次不补种。数据库仍是正本,
+ * 设置页的显式修改照常写文件,下一次对账再试。
  */
 async function writeTextIfAbsent(absPath: string, content: string): Promise<boolean> {
   if (Buffer.byteLength(content, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) {
@@ -237,96 +237,14 @@ async function writeTextIfAbsent(absPath: string, content: string): Promise<bool
   const tmp = `${absPath}.tmp-${process.pid}-${(writeSeq += 1)}`;
   try {
     await fs.writeFile(tmp, content, 'utf8');
-    try {
-      await fs.link(tmp, absPath);
-      return true;
-    } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    }
+    await fs.link(tmp, absPath);
+    return true;
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw cause;
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => {});
   }
-  return createExclusiveRecoverable(absPath, content);
-}
-
-/** 同一进程里对同一个槽的无硬链接补种串行进行,两次补种不会抢同一个 `.seeding` 标记。 */
-const exclusiveSeedTails = new Map<string, Promise<unknown>>();
-
-function seedingMarker(absPath: string): string {
-  return `${absPath}.seeding`;
-}
-
-async function createExclusiveRecoverable(absPath: string, content: string): Promise<boolean> {
-  const previous = exclusiveSeedTails.get(absPath) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(async () => {
-    const marker = seedingMarker(absPath);
-    await fs.writeFile(marker, content, 'utf8');
-    let created = false;
-    let completed = false;
-    try {
-      let handle: Awaited<ReturnType<typeof fs.open>>;
-      try {
-        handle = await fs.open(absPath, 'wx');
-      } catch (cause) {
-        if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
-        throw cause;
-      }
-      created = true;
-      try {
-        await handle.writeFile(content, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      completed = true;
-      return true;
-    } finally {
-      // A target we created but could not finish (ENOSPC, I/O error) keeps its marker,
-      // so the next read or seed completes it instead of trusting a truncated file.
-      if (!created || completed) await fs.rm(marker, { force: true }).catch(() => {});
-    }
-  });
-  exclusiveSeedTails.set(absPath, run);
-  try {
-    return await run;
-  } finally {
-    if (exclusiveSeedTails.get(absPath) === run) exclusiveSeedTails.delete(absPath);
-  }
-}
-
-/**
- * 读 Home 之前先收尾被中断的补种:对账在决定要不要补种之前就会读文件,
- * 一个截断但非空的 SOUL.md 不能被当成正式身份收进数据库。
- */
-export async function recoverInterruptedBotProfileSeed(userDataDir: string, botId: string): Promise<void> {
-  for (const slot of [SLOT.soul, SLOT.userContext, SLOT.config]) {
-    await recoverInterruptedSeed(resolveInside(userDataDir, botId, slot));
-  }
-}
-
-/**
- * 收尾一次被中断的无硬链接补种:标记里是当时要写的完整内容。目标恰好是它的前缀
- * (空或截断)说明写到一半,补全;否则是中断之后用户自己写的,原样保留。标记总是删掉。
- */
-async function recoverInterruptedSeed(absPath: string): Promise<void> {
-  const marker = seedingMarker(absPath);
-  if (exclusiveSeedTails.has(absPath)) return;
-  let expected: string;
-  try {
-    expected = await fs.readFile(marker, 'utf8');
-  } catch {
-    return;
-  }
-  let actual: string | null = null;
-  try {
-    actual = await fs.readFile(absPath, 'utf8');
-  } catch {
-    actual = null;
-  }
-  if (actual !== null && actual !== expected && expected.startsWith(actual)) {
-    await writeTextAtomic(absPath, expected);
-  }
-  await fs.rm(marker, { force: true }).catch(() => {});
 }
 
 /** 一份摊开的伙伴档案。 */
@@ -460,9 +378,8 @@ export async function migrateBotProfileFolder(
   await migrateLegacyBotProfileFolder(userDataDir, legacyUserDataDir, botId);
   const soulPath = resolveInside(userDataDir, botId, SLOT.soul);
   const at = (relative: string) => resolveInside(userDataDir, botId, relative);
-  // Finish any seeding a crash interrupted before deciding what is missing.
-  await recoverInterruptedBotProfileSeed(userDataDir, botId);
   let seeded = false;
+  let seedFailure: unknown = null;
   try {
     await fs.access(soulPath);
   } catch {
@@ -472,12 +389,19 @@ export async function migrateBotProfileFolder(
     // SOUL.md goes last: its presence is what marks the Home as seeded, so if a sibling
     // slot fails the next run still sees SOUL.md missing and retries, instead of
     // reconciling an absent USER.md as an emptied user profile.
-    await writeTextIfAbsent(at(SLOT.userContext), seed.userContextSource);
-    await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(seed.config, null, 2)}\n`);
-    seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
+    try {
+      await writeTextIfAbsent(at(SLOT.userContext), seed.userContextSource);
+      await writeTextIfAbsent(at(SLOT.config), `${JSON.stringify(seed.config, null, 2)}\n`);
+      seeded = await writeTextIfAbsent(soulPath, seed.identitySource);
+    } catch (cause) {
+      seedFailure = cause;
+    }
   }
 
+  // Skills move regardless: a Home that cannot be seeded (e.g. no hard links) must not
+  // also strand the Bot's legacy skills.
   const skillsMoved = await migrateBotSkillsIntoProfileFolder(userDataDir, botId, legacyUserDataDir);
+  if (seedFailure !== null) throw seedFailure;
   return { seeded, skillsMoved };
 }
 
