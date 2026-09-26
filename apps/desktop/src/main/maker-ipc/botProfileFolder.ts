@@ -259,6 +259,8 @@ async function createExclusiveRecoverable(absPath: string, content: string): Pro
   const run = previous.catch(() => undefined).then(async () => {
     const marker = seedingMarker(absPath);
     await fs.writeFile(marker, content, 'utf8');
+    let created = false;
+    let completed = false;
     try {
       let handle: Awaited<ReturnType<typeof fs.open>>;
       try {
@@ -267,15 +269,19 @@ async function createExclusiveRecoverable(absPath: string, content: string): Pro
         if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
         throw cause;
       }
+      created = true;
       try {
         await handle.writeFile(content, 'utf8');
         await handle.sync();
       } finally {
         await handle.close();
       }
+      completed = true;
       return true;
     } finally {
-      await fs.rm(marker, { force: true }).catch(() => {});
+      // A target we created but could not finish (ENOSPC, I/O error) keeps its marker,
+      // so the next read or seed completes it instead of trusting a truncated file.
+      if (!created || completed) await fs.rm(marker, { force: true }).catch(() => {});
     }
   });
   exclusiveSeedTails.set(absPath, run);
@@ -283,6 +289,16 @@ async function createExclusiveRecoverable(absPath: string, content: string): Pro
     return await run;
   } finally {
     if (exclusiveSeedTails.get(absPath) === run) exclusiveSeedTails.delete(absPath);
+  }
+}
+
+/**
+ * 读 Home 之前先收尾被中断的补种:对账在决定要不要补种之前就会读文件,
+ * 一个截断但非空的 SOUL.md 不能被当成正式身份收进数据库。
+ */
+export async function recoverInterruptedBotProfileSeed(userDataDir: string, botId: string): Promise<void> {
+  for (const slot of [SLOT.soul, SLOT.userContext, SLOT.config]) {
+    await recoverInterruptedSeed(resolveInside(userDataDir, botId, slot));
   }
 }
 
@@ -442,7 +458,7 @@ export async function migrateBotProfileFolder(
   const soulPath = resolveInside(userDataDir, botId, SLOT.soul);
   const at = (relative: string) => resolveInside(userDataDir, botId, relative);
   // Finish any seeding a crash interrupted before deciding what is missing.
-  for (const slot of [SLOT.soul, SLOT.userContext, SLOT.config]) await recoverInterruptedSeed(at(slot));
+  await recoverInterruptedBotProfileSeed(userDataDir, botId);
   let seeded = false;
   try {
     await fs.access(soulPath);

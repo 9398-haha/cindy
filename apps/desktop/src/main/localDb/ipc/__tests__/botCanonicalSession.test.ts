@@ -918,6 +918,23 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
   });
 
+  it('completes an interrupted seed before reconcile reads it, instead of absorbing a truncated SOUL.md', async () => {
+    const created = await invoke('local-db:bots:create', {
+      id: 'interrupted-seed', name: 'Interrupted Seed', identitySource: 'Stored identity',
+    });
+    const home = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', created.id);
+    // A seed that failed mid-write on a filesystem without hard links.
+    writeFileSync(join(home, 'SOUL.md'), 'Stored');
+    writeFileSync(join(home, 'SOUL.md.seeding'), 'Stored identity');
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(canonical.canonicalSessionId).toBeTruthy();
+    expect(await invoke('local-db:bots:get', created.id)).toMatchObject({ currentVersion: 1, identitySource: 'Stored identity' });
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
+    expect(existsSync(join(home, 'SOUL.md.seeding'))).toBe(false);
+  });
+
   it('seeds a never-created Bot Home on an unrelated save without touching an existing one', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'legacy-home', name: 'Legacy Home', identitySource: 'Stored identity',

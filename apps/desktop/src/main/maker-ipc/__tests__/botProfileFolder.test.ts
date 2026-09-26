@@ -315,6 +315,34 @@ describe('搬家', () => {
     expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe('编辑器刚保存的灵魂');
   });
 
+  it('无硬链接补种写到一半失败时保留恢复标记,下一次补种把截断的文件补全', async () => {
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open').mockImplementationOnce(async (target, flags) => {
+      const handle = await realOpen(target, flags);
+      return Object.assign(Object.create(handle), {
+        writeFile: async (data: string) => {
+          await handle.writeFile(data.slice(0, 2));
+          throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+        },
+        sync: () => handle.sync(),
+        close: () => handle.close(),
+      });
+    });
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'ENOSPC' });
+      // The truncated SOUL.md still has its marker to recover from.
+      expect(await fs.readFile(path.join(home, 'SOUL.md.seeding'), 'utf8')).toBe(SEED.identitySource);
+    } finally {
+      open.mockRestore();
+      link.mockRestore();
+    }
+    await migrateBotProfileFolder(root, 'bot-a', SEED);
+    expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe(SEED.identitySource);
+    await expect(fs.access(path.join(home, 'SOUL.md.seeding'))).rejects.toBeTruthy();
+  });
+
   it('被中断的无硬链接补种:截断的文件补全,中断后用户改过的原样保留', async () => {
     const home = botProfileDir(root, 'bot-a');
     await fs.mkdir(path.join(home, 'memories'), { recursive: true });
