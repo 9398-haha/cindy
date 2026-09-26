@@ -189,11 +189,17 @@ describe('planAnnotationBurnSource(烧录前预处理)', () => {
       .toMatchObject({ resize: { width: 2048 }, format: 'png' });
   });
 
-  it('Android 上 HEIC / AVIF 即使是小图也先转码为 PNG;iOS 小图维持原路径', () => {
+  it('Android 上 HEIC / AVIF 即使是小图 / 尺寸未知也先转码为高质量 JPEG;iOS 小图维持原路径', () => {
     expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'android', naturalWidth: 800, naturalHeight: 600 }))
-      .toEqual({ resize: null, format: 'png', compress: 1, strokeSpace: null });
+      .toEqual({ resize: null, format: 'jpeg', compress: 0.92, strokeSpace: null });
     expect(planAnnotationBurnSource({ mimeType: 'image/avif', platformOS: 'android' }))
-      .toMatchObject({ resize: null, format: 'png' });
+      .toMatchObject({ resize: null, format: 'jpeg', compress: 0.92 });
+    // 转码 + 预缩同时发生时仍是 JPEG。
+    expect(planAnnotationBurnSource({ mimeType: 'image/heif', platformOS: 'android', naturalWidth: 4032, naturalHeight: 3024 }))
+      .toMatchObject({ resize: { width: 2048 }, format: 'jpeg', compress: 0.92, strokeSpace: { width: 4032, height: 3024 } });
+    // iOS 大 HEIC 只预缩,保持无损 PNG(与既有非 JPEG 源的输出格式一致)。
+    expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'ios', naturalWidth: 4032, naturalHeight: 3024 }))
+      .toMatchObject({ format: 'png', compress: 1 });
     expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'ios', naturalWidth: 800, naturalHeight: 600 })).toBeNull();
   });
 

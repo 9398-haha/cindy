@@ -144,10 +144,10 @@ export interface ImageLightboxAnnotationConfig {
    */
   initialStrokesFor?: (image: MobileMessageGalleryImage) => readonly AnnotationStroke[] | undefined;
   /**
-   * 某页此刻能否进入标注(可选;缺省可以)。返回 false 时画笔按钮置灰禁用
-   * (如托盘附件的替换上传尚未落定)。
+   * 某页此刻暂不能进入标注的原因(可选;返回 undefined = 可以)。有原因时画笔
+   * 按钮置灰但仍可点,点按弹出该说明(如托盘附件的上一次修改尚未上传完成)。
    */
-  canAnnotate?: (image: MobileMessageGalleryImage) => boolean;
+  annotationBlockedReason?: (image: MobileMessageGalleryImage) => string | undefined;
   /**
    * 进入标注模式时调用(可选):宿主据此提前准备提交所需资源(烧录 WebView
    * 预热)。返回的释放函数在退出标注 / 关闭查看器时调用。
@@ -560,15 +560,22 @@ export const ImageLightbox = memo(function ImageLightbox({
     && canAnnotateImageMime(activeMimeType)
     && !activeLooksGif
     && !activeLooksSvg;
-  // 画笔要等图片自然尺寸就位(坐标换算基准),否则进入标注后作画静默无效;
-  // 宿主也可暂时禁止(canAnnotate)。不满足时按钮置灰禁用,与撤销的禁用态同观感。
-  const annotateEnabled = annotateVisible
-    && !!activeNaturalSize
-    && (!activeImage || !annotation?.canAnnotate || annotation.canAnnotate(activeImage));
+  // 画笔要等图片自然尺寸就位(坐标换算基准),否则进入标注后作画静默无效:
+  // 此前按钮置灰禁用,与撤销的禁用态同观感。宿主给出暂不可标注的原因时,按钮
+  // 同样置灰但可点,点按说明原因(否则用户不知道为什么不能画)。
+  const annotateReady = annotateVisible && !!activeNaturalSize;
+  const annotateBlockedReason = annotateReady && activeImage
+    ? annotation?.annotationBlockedReason?.(activeImage)
+    : undefined;
+  const annotateEnabled = annotateReady && !annotateBlockedReason;
   const enterAnnotationMode = useCallback(() => {
-    if (!annotateEnabled || submittingRef.current || sharingRef.current) return;
+    if (!annotateReady || submittingRef.current || sharingRef.current) return;
+    if (annotateBlockedReason) {
+      Alert.alert(t('message.lightbox.annotateUnavailableTitle'), annotateBlockedReason);
+      return;
+    }
     setIsAnnotating(true);
-  }, [annotateEnabled]);
+  }, [annotateReady, annotateBlockedReason, t]);
   // 独立直发(发送到对话):不要求可标注——gif 等不可画的图同样能转发。
   const directSubmitVisible = !!annotation?.allowDirectSubmit && !!activeImage && !!activeUri;
 
@@ -801,9 +808,12 @@ export const ImageLightbox = memo(function ImageLightbox({
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
-                    accessibilityLabel={t('message.lightbox.annotateImage')}
-                    accessibilityState={{ disabled: !annotateEnabled }}
-                    disabled={annotationSubmitting || sharing || !annotateEnabled}
+                    accessibilityHint={annotateBlockedReason}
+                    accessibilityLabel={annotateBlockedReason
+                      ? t('message.lightbox.annotateImageUnavailable')
+                      : t('message.lightbox.annotateImage')}
+                    accessibilityState={{ disabled: !annotateReady }}
+                    disabled={annotationSubmitting || sharing || !annotateReady}
                     hitSlop={8}
                     onPress={enterAnnotationMode}
                     style={styles.actionItem}
@@ -862,9 +872,12 @@ export const ImageLightbox = memo(function ImageLightbox({
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
-                    accessibilityLabel={t('message.lightbox.annotateImage')}
-                    accessibilityState={{ disabled: !annotateEnabled }}
-                    disabled={annotationSubmitting || sharing || !annotateEnabled}
+                    accessibilityHint={annotateBlockedReason}
+                    accessibilityLabel={annotateBlockedReason
+                      ? t('message.lightbox.annotateImageUnavailable')
+                      : t('message.lightbox.annotateImage')}
+                    accessibilityState={{ disabled: !annotateReady }}
+                    disabled={annotationSubmitting || sharing || !annotateReady}
                     hitSlop={8}
                     onPress={enterAnnotationMode}
                     style={styles.actionItem}

@@ -12,8 +12,11 @@
  *   - 任务超时只覆盖真正注入 WebView 的队首任务(排队不计时);ready 超时只在
  *     有任务等待时计时(预热期间不计)。
  *   - WebView 进程被系统杀掉 / 加载失败时,队首任务立即失败(不再干等 30s),
- *     剩余任务在一个新挂载的 WebView 上继续;每次崩溃至少消耗一个任务,不会
- *     无限重挂载。
+ *     剩余任务在一个新挂载的 WebView 上继续;每次崩溃至少消耗一个任务,连续
+ *     崩溃达到上限时剩余任务一并失败。崩溃 / 超时 / 起不来之后只为「等待中的
+ *     任务」重挂载:仅被预热持有时直接卸载,且预热不再触发重挂载(直到下一个
+ *     任务到来或预热全部释放),避免有缺陷的 System WebView / 内存压力下反复
+ *     崩溃重建。
  *   - 没有任务、也没有预热持有者时卸载 WebView(空闲零开销)。
  */
 import {
@@ -46,6 +49,8 @@ export const BURN_IN_TIMEOUT_MS = 30_000;
  * 时永远等不到 ready,任务级超时(注入时刻才起表)覆盖不到这段。
  */
 export const WEBVIEW_READY_TIMEOUT_MS = 10_000;
+/** 连续崩溃(期间没有任何任务正常回包)的重挂载上限:超过后剩余任务全部失败。 */
+export const MAX_CONSECUTIVE_CRASH_REMOUNTS = 2;
 
 export interface AnnotationBurnInQueueHost {
   /** 以新的 sessionKey 挂载(或重挂载)WebView。 */
@@ -101,6 +106,10 @@ export function createAnnotationBurnInQueue(
   let ready = false;
   let readyTimer: unknown = null;
   let warmCount = 0;
+  /** WebView 出过故障后预热不再挂载(下一个任务或预热全部释放后恢复)。 */
+  let warmSuspended = false;
+  /** 连续崩溃次数:任务正常回包(成功或脚本内失败)即清零。 */
+  let consecutiveCrashes = 0;
 
   function clearReadyTimer(): void {
     if (readyTimer !== null) clearTimer(readyTimer);
@@ -133,10 +142,9 @@ export function createAnnotationBurnInQueue(
       readyTimer = null;
       if (ready || queue.length === 0) return;
       failAllQueued(new Error('annotation burn-in webview failed to initialize'));
-      // 起不来的 WebView 不再复用:预热中则换一个新实例(无任务不计时,不会循环),
-      // 否则卸载,下次任务重新挂载重试。
-      if (warmCount > 0) mountFresh();
-      else unmount();
+      // 起不来的 WebView 不再复用:卸载,下次任务重新挂载重试(预热不重挂)。
+      warmSuspended = true;
+      unmount();
     }, readyTimeoutMs);
   }
 
@@ -158,9 +166,13 @@ export function createAnnotationBurnInQueue(
     if (warmCount === 0) unmount();
   }
 
-  /** WebView 不再可信(崩溃 / 超时):有后续需求则换新实例,否则卸载。 */
+  /**
+   * WebView 不再可信(崩溃 / 超时):还有等待中的任务才换新实例,否则卸载;
+   * 仅预热持有时不重挂(见文件头不变量)。
+   */
   function replaceWebView(): void {
-    if (queue.length > 0 || warmCount > 0) {
+    warmSuspended = true;
+    if (queue.length > 0) {
       mountFresh();
       armReadyTimer();
     } else {
@@ -210,6 +222,11 @@ export function createAnnotationBurnInQueue(
     if (head && takeHead(head)) {
       head.reject(new Error(`annotation burn-in webview terminated: ${reason}`));
     }
+    consecutiveCrashes += 1;
+    if (consecutiveCrashes > MAX_CONSECUTIVE_CRASH_REMOUNTS) {
+      // 反复崩溃:不再重建,剩余任务一并失败(走调用方既有失败提示),卸载。
+      failAllQueued(new Error(`annotation burn-in webview terminated: ${reason}`));
+    }
     replaceWebView();
   }
 
@@ -218,6 +235,8 @@ export function createAnnotationBurnInQueue(
       return new Promise<AnnotationBurnInResult>((resolve, reject) => {
         jobSeq += 1;
         queue.push({ id: `burn-${jobSeq}`, input, resolve, reject, timer: null, dispatched: false });
+        // 用户真正提交了:给 WebView 一次新机会(连续崩溃仍受上限约束)。
+        warmSuspended = false;
         ensureMounted();
         if (ready) dispatchHead();
         else armReadyTimer();
@@ -226,13 +245,16 @@ export function createAnnotationBurnInQueue(
 
     acquireWarm() {
       warmCount += 1;
-      ensureMounted();
+      if (!warmSuspended) ensureMounted();
       let released = false;
       return () => {
         if (released) return;
         released = true;
         warmCount = Math.max(0, warmCount - 1);
-        if (warmCount === 0 && queue.length === 0) unmount();
+        if (warmCount === 0) {
+          warmSuspended = false;
+          if (queue.length === 0) unmount();
+        }
       };
     },
 
@@ -250,6 +272,7 @@ export function createAnnotationBurnInQueue(
       // 过期回包(超时后到达 / 非队首)丢弃。
       if (!active || !active.dispatched || message.id !== active.id) return;
       takeHead(active);
+      consecutiveCrashes = 0;
       if (message.ok) {
         active.resolve({
           base64: message.base64,
@@ -269,6 +292,8 @@ export function createAnnotationBurnInQueue(
       clearReadyTimer();
       failAllQueued(new Error('annotation burn-in host unmounted'));
       warmCount = 0;
+      warmSuspended = false;
+      consecutiveCrashes = 0;
       ready = false;
       sessionKey = null;
     },

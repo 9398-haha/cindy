@@ -599,10 +599,24 @@ describe("annotation drawing", () => {
     expect(annotating()).toBe(true);
   });
 
-  it("lets the host keep the pen disabled (pending replacement)", () => {
-    mount({ annotation: { submitLabel: "Save", onSubmit: vi.fn(), canAnnotate: () => false } });
+  it("explains why the pen is unavailable when the host blocks annotation (pending replacement)", () => {
+    let reason: string | undefined = "Still uploading";
+    mount({ annotation: { submitLabel: "Save", onSubmit: vi.fn(), annotationBlockedReason: () => reason } });
     load();
-    expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(true);
+    const pen = () => runtime.nodes.get("message.imageLightboxAnnotateButton");
+    // 置灰但可点:点按说明原因,不进入标注。
+    expect(pen().disabled).toBe(false);
+    expect(pen().accessibilityLabel).toBe("message.lightbox.annotateImageUnavailable");
+    expect(pen().accessibilityHint).toBe("Still uploading");
+    press("message.imageLightboxAnnotateButton");
+    expect(runtime.alerts).toEqual([["message.lightbox.annotateUnavailableTitle", "Still uploading"]]);
+    expect(annotating()).toBe(false);
+    // 阻塞解除后(下次渲染)恢复正常。
+    reason = undefined;
+    act(() => runtime.nodes.get("Image").onLoad({ source: { width: 401, height: 800 } }));
+    expect(pen().accessibilityLabel).toBe("message.lightbox.annotateImage");
+    press("message.imageLightboxAnnotateButton");
+    expect(annotating()).toBe(true);
   });
 
   it("drops the stray dot left when a second finger starts a pinch, but keeps taps and real strokes", async () => {

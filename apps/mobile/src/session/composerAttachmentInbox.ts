@@ -19,7 +19,7 @@ export interface ComposerAnnotationSubmission {
   displayUri: string;
   strokes: AnnotationStroke[];
   mimeType?: string;
-  /** lightbox 已解码的图片尺寸(可选):供烧录预缩 / 上传降采样决策。 */
+  /** lightbox 已解码的图片尺寸(可选):仅供带笔迹 / 需光栅化时的烧录前预缩决策。 */
   naturalWidth?: number;
   naturalHeight?: number;
   /**

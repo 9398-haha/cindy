@@ -488,8 +488,9 @@ export function createMobileLocalAttachmentUploadController(
         task.state = 'failed';
       } else {
         // uploaded 的成功路径由 onUploaded 在把预览换成持久缩略图后清理；
-        // discarded 在这里回收全部自有临时文件。
-        if (outcome === 'discarded') cleanupTaskLocalUris(task, false);
+        // discarded(以及退屏后才失败、不再保留失败卡的任务)在这里回收全部
+        // 自有临时文件并回调 onAbandoned。
+        if (outcome !== 'uploaded') cleanupTaskLocalUris(task, false);
         tasks.delete(task.localId);
       }
       runningCount -= 1;

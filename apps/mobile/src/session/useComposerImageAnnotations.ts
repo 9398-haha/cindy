@@ -76,7 +76,7 @@ export interface UseComposerImageAnnotationsOptions {
   getAttachment?: (attachmentId: string) => RemoteSerializedAttachment | undefined;
 }
 
-/** lightbox 已解码的源图尺寸(可选提示,用于预缩 / 上传降采样决策)。 */
+/** lightbox 已解码的源图尺寸(可选提示,仅用于烧录前预缩决策)。 */
 export interface AnnotationSourceSizeHint {
   naturalWidth?: number;
   naturalHeight?: number;
@@ -248,8 +248,9 @@ export function useComposerImageAnnotations(
 
   /**
    * 烧录源准备:Android WebView 解不了的格式先转码、已知超大图先按上传口径预缩
-   * (见 planAnnotationBurnSource)。manipulator 失败或产物与提示尺寸对不上时
-   * 回退原图(即既有路径)。tempUri = 仅供本次烧录的中间产物,烧完即删。
+   * (见 planAnnotationBurnSource)。manipulator 失败、产物与提示尺寸对不上或
+   * 体积超过源图上限(烧录要全量 base64 进 JS 内存)时回退原图(即既有路径)。
+   * tempUri = 仅供本次烧录的中间产物,烧完即删。
    */
   const prepareBurnSource = useCallback(async (
     source: { fileUri: string; mimeType: string },
@@ -274,7 +275,15 @@ export function useComposerImageAnnotations(
     if (!plan) return original;
     try {
       const result = await runAnnotationBurnSourcePlan(source.fileUri, plan);
-      if (!isAnnotationBurnSourceResultUsable(plan, result, hint)) {
+      const info = await FileSystem.getInfoAsync(result.uri).catch(() => null);
+      const resultSize = info?.exists && typeof info.size === 'number' && Number.isFinite(info.size)
+        ? info.size
+        : 0;
+      if (
+        !isAnnotationBurnSourceResultUsable(plan, result, hint)
+        || !(resultSize > 0)
+        || resultSize > MOBILE_MAX_ATTACHMENT_BYTES
+      ) {
         void FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => undefined);
         return original;
       }
@@ -402,8 +411,6 @@ export function useComposerImageAnnotations(
         replacedMeta?.sourceMimeType ?? mimeTypeHint,
       );
       if (source.fileUri !== sourceInputUri) createdFiles.push(source.fileUri);
-      const hintWidth = positiveHintDimension(sizeHint?.naturalWidth);
-      const hintHeight = positiveHintDimension(sizeHint?.naturalHeight);
       const annotation = strokes.length > 0 || baseIsAnnotatedBurn
         ? {
           strokes: strokes.map((s) => ({ points: [...s.points] })),
@@ -464,10 +471,9 @@ export function useComposerImageAnnotations(
           kind: 'image',
           uri: source.fileUri,
           name: `image-${nextFileTag()}.${ext}`,
-          // 直传源至少带上真实字节数让 preprocess 的重编码判断生效;lightbox 已解码
-          // 的尺寸一并带上,超大图与相册选图一样按长边上限降采样。
+          // 直传源无解码尺寸,至少带上真实字节数让 preprocess 的重编码判断生效。
+          // (lightbox 尺寸提示只用于烧录预缩,不改变直传转发的分辨率。)
           size: source.size,
-          ...(hintWidth && hintHeight ? { width: hintWidth, height: hintHeight } : {}),
           mimeType: source.mimeType,
           ...(annotation ? { annotation } : {}),
         };
@@ -562,8 +568,11 @@ export function useComposerImageAnnotations(
   const trayAnnotation = useMemo<ImageLightboxAnnotationConfig>(() => ({
     submitLabel: t('composer.attachments.save'),
     initialStrokesFor: (image) => metaRef.current.get(image.key)?.strokes,
-    // 替换上传未落定(上传中 / 失败待重试)的附件不可再编辑,防双重替换。
-    canAnnotate: (image) => !hasPendingReplacement(image.key),
+    // 替换上传未落定(上传中 / 失败待重试)的附件不可再编辑,防双重替换;
+    // 画笔置灰,点按说明原因。
+    annotationBlockedReason: (image) => (
+      hasPendingReplacement(image.key) ? t('composer.attachments.replacementPending') : undefined
+    ),
     prewarm: acquireWarm,
     onSubmit: (image, displayUri, strokes, context) =>
       submitAnnotation(displayUri, strokes, context.mimeType, image.key, context),

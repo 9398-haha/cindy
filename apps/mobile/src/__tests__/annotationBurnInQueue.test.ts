@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BURN_IN_TIMEOUT_MS,
+  MAX_CONSECUTIVE_CRASH_REMOUNTS,
   WEBVIEW_READY_TIMEOUT_MS,
   createAnnotationBurnInQueue,
   type AnnotationBurnInQueue,
@@ -226,6 +227,42 @@ describe('annotation burn-in queue', () => {
     expect(host.mounted).toBe(1);
     reply(queue, 1, 'burn-1');
     expect((await settled(a)).value).toBeDefined();
+    expect(host.mounted).toBeNull();
+  });
+
+  it('does not remount for a prewarm after a crash, so a crashing webview cannot loop', async () => {
+    const { queue, host } = setup();
+    const release = queue.acquireWarm();
+    expect(host.mounts).toEqual([1]);
+    queue.handleProcessGone(1, 'render process gone');
+    expect(host.mounted).toBeNull(); // 仅预热持有:崩溃后卸载,不重挂
+    queue.handleProcessGone(1, 'duplicate event');
+    const again = queue.acquireWarm(); // 同一标注会话里再次预热也不重挂
+    expect(host.mounts).toEqual([1]);
+    // 用户真正提交时才重新挂载。
+    const job = queue.burnIn(input);
+    expect(host.mounts).toEqual([1, 2]);
+    ready(queue, 2);
+    reply(queue, 2, 'burn-1');
+    expect((await settled(job)).value).toBeDefined();
+    again();
+    release();
+    expect(host.mounted).toBeNull();
+    // 预热全部释放后,下一次标注会话可以重新预热。
+    queue.acquireWarm();
+    expect(host.mounts).toEqual([1, 2, 3]);
+  });
+
+  it('caps consecutive crash remounts and fails the remaining jobs', async () => {
+    const { queue, host } = setup();
+    queue.acquireWarm();
+    const jobs = Array.from({ length: 6 }, () => queue.burnIn(input));
+    for (let crash = 0; crash <= MAX_CONSECUTIVE_CRASH_REMOUNTS; crash++) {
+      queue.handleProcessGone(host.mounted!, 'render process gone');
+    }
+    const outcomes = await Promise.all(jobs.map(settled));
+    expect(outcomes.every((o) => o.error?.message.includes('terminated'))).toBe(true);
+    expect(host.mounts).toHaveLength(MAX_CONSECUTIVE_CRASH_REMOUNTS + 1);
     expect(host.mounted).toBeNull();
   });
 });

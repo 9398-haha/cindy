@@ -991,23 +991,33 @@ describe('onAbandoned(自生成输入文件的生命周期回收)', () => {
     expect(abandoned).toHaveBeenCalledTimes(1);
   });
 
-  it('removeAll / dispose / 退屏后入队 都视为放弃', async () => {
+  it('removeAll / dispose / 退屏后入队 都视为放弃,每个任务恰好回调一次', async () => {
     const a = vi.fn();
     const b = vi.fn();
+    const c = vi.fn();
+    const e = vi.fn();
     const { deps } = makeDeps({ upload: () => new Promise(() => undefined) });
     const controller = createMobileLocalAttachmentUploadController(deps);
     controller.enqueue([
       { ...candidate('a.jpg'), onAbandoned: a },
       { ...candidate('b.jpg'), onAbandoned: b },
-      { ...candidate('c.jpg'), onAbandoned: b },
+      { ...candidate('c.jpg'), onAbandoned: c },
     ], { token: 't' });
+    await flush(); // a / b 开跑(并发 2),c 排队
     controller.removeAll();
+    expect(c).toHaveBeenCalledTimes(1); // 排队中:立即回调
+    await flush(); // in-flight 的 a / b 在任务落定后回调
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
+    controller.enqueue([{ ...candidate('e.jpg'), onAbandoned: e }], { token: 't' });
     await flush();
-    expect(b).toHaveBeenCalled(); // 排队中的 c 立即回调
-    const d = vi.fn();
     controller.dispose();
+    await flush();
+    controller.removeAll(); // 重复放弃不会二次回调
+    await flush();
+    const d = vi.fn();
     controller.enqueue([{ ...candidate('d.jpg'), onAbandoned: d }], { token: 't' });
-    expect(d).toHaveBeenCalledTimes(1);
+    for (const fn of [a, b, c, e, d]) expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it('交接给持久发件箱:提交后才回调(文件已复制),回滚不回调', async () => {

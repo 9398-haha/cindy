@@ -163,7 +163,9 @@
     "discardAnnotationTitle": "注釈を破棄しますか？",
     "discardAnnotationBody": "保存されていない描画は失われます。",
     "continueAnnotating": "注釈を続ける",
-    "discardAnnotation": "破棄"
+    "discardAnnotation": "破棄",
+    "annotateUnavailableTitle": "現在は注釈できません",
+    "annotateImageUnavailable": "画像に注釈（現在利用不可）"
   },
   "queue": {
     "continueSystemInstruction": "未完了のタスクを続行(システム指令)",

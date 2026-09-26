@@ -433,6 +433,8 @@ const ANDROID_WEBVIEW_UNDECODABLE_MIMES = new Set([
   'image/heif-sequence',
   'image/avif',
 ]);
+/** Android 转码 HEIC / HEIF / AVIF 的 JPEG 质量(高质量,体积可控)。 */
+export const ANDROID_TRANSCODE_JPEG_QUALITY = 0.92;
 /** 烧录前允许交给原生 manipulator 预缩的格式(未知 / 矢量 / 动图一律走原路径)。 */
 const MANIPULATOR_PRESCALE_MIMES = new Set([
   'image/jpeg',
@@ -445,7 +447,11 @@ const MANIPULATOR_PRESCALE_MIMES = new Set([
 export interface AnnotationBurnSourcePlan {
   /** 等比缩放目标(只给长边一维);null = 只转码不缩尺寸。 */
   resize: { width: number } | { height: number } | null;
-  /** 中间产物格式:JPEG 源保持 JPEG(最高质量),其余一律无损 PNG(保透明)。 */
+  /**
+   * 中间产物格式:JPEG 源保持 JPEG(最高质量);Android 转码的 HEIC / HEIF / AVIF
+   * 一律高质量 JPEG(照片格式,无损 PNG 在无尺寸提示时可达数十 MB);其余预缩
+   * 为无损 PNG(保透明,长边已钳到上限)。
+   */
   format: 'jpeg' | 'png';
   compress: number;
   /**
@@ -459,8 +465,8 @@ export interface AnnotationBurnSourcePlan {
  * 决定烧录前要不要先把源图交给原生 manipulator 处理。返回 null = 原样交给
  * WebView(与既有路径完全一致)。
  *
- * - Android 系统 WebView 解不了 HEIC / HEIF / AVIF:先转成 WebView 能解的格式,
- *   否则用户画完才得到解码失败。
+ * - Android 系统 WebView 解不了 HEIC / HEIF / AVIF:先转成高质量 JPEG,否则用户
+ *   画完才得到解码失败。
  * - 已知尺寸长边超过上传上限(2048)的大图:先按上传同口径缩到上限,WebView
  *   只需解码 / 注入 / 烧录一张小图(内存与注入体积按像素数下降)。
  *   尺寸未知时不预缩(不为探测尺寸额外解码),维持原路径。
@@ -482,8 +488,8 @@ export function planAnnotationBurnSource(input: {
     resize: prescale
       ? (width >= height ? { width: MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE } : { height: MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE })
       : null,
-    format: mime === 'image/jpeg' ? 'jpeg' : 'png',
-    compress: 1,
+    format: mime === 'image/jpeg' || transcode ? 'jpeg' : 'png',
+    compress: transcode ? ANDROID_TRANSCODE_JPEG_QUALITY : 1,
     strokeSpace: prescale ? annotationBurnCanvasSize(width, height) : null,
   };
 }

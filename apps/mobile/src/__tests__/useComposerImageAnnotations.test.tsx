@@ -19,6 +19,8 @@ const runtime = vi.hoisted(() => ({
   manipulatorResult: null as null | { width: number; height: number },
   manipulatorError: null as Error | null,
   manipulatorSeq: 0,
+  /** uri 前缀 → getInfoAsync 字节数(未命中默认 1234)。 */
+  sizes: {} as Record<string, number>,
   burnIn: null as unknown as ReturnType<typeof vi.fn>,
   acquireWarm: null as unknown as ReturnType<typeof vi.fn>,
 }));
@@ -35,7 +37,10 @@ vi.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
   EncodingType: { Base64: 'base64' },
   makeDirectoryAsync: async () => undefined,
-  getInfoAsync: async () => ({ exists: true, size: 1234 }),
+  getInfoAsync: async (uri: string) => ({
+    exists: true,
+    size: Object.entries(runtime.sizes).find(([prefix]) => uri.startsWith(prefix))?.[1] ?? 1234,
+  }),
   // 头部嗅探读不出魔数 → 以调用方给的 mime 为准。
   readAsStringAsync: async (_uri: string, options?: { length?: number }) => (options?.length ? '' : 'QUJD'),
   writeAsStringAsync: async (uri: string) => { runtime.written.push(uri); },
@@ -84,6 +89,7 @@ beforeEach(() => {
   runtime.manipulatorResult = null;
   runtime.manipulatorError = null;
   runtime.manipulatorSeq = 0;
+  runtime.sizes = {};
   runtime.burnIn = vi.fn(async (input: { mimeType: string }) => ({
     base64: 'b3V0',
     mimeType: input.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png',
@@ -207,12 +213,13 @@ describe('re-edit replacement', () => {
     const hook = mountHook({ getAttachment: (id) => attachments.get(id) });
     const original = await seedAnnotated(hook, 'A');
     attachments.set('A', attachment('A', { annotated: true }));
-    expect(hook.api().trayAnnotation.canAnnotate?.(image('A'))).toBe(true);
+    expect(hook.api().trayAnnotation.annotationBlockedReason?.(image('A'))).toBeUndefined();
     await traySubmit(hook.api(), 'A', hook.api().trayImageSourceUri('A', 'preview'));
     const replacement = hook.enqueued().at(-1)!;
     expect(replacement.replacesAttachmentId).toBe('A');
-    // 替换未落定:画笔禁用,且直接提交也被拒绝(不会产生第二份替换)。
-    expect(hook.api().trayAnnotation.canAnnotate?.(image('A'))).toBe(false);
+    // 替换未落定:画笔置灰并给出原因,且直接提交也被拒绝(不会产生第二份替换)。
+    expect(hook.api().trayAnnotation.annotationBlockedReason?.(image('A')))
+      .toBe('composer.attachments.replacementPending');
     await expect(Promise.resolve(
       hook.api().trayAnnotation.onSubmit(image('A'), 'x', STROKES, {}),
     )).rejects.toThrow('composer.attachments.replacementPending');
@@ -234,7 +241,7 @@ describe('re-edit replacement', () => {
     await traySubmit(hook.api(), 'A', hook.api().trayImageSourceUri('A', 'preview'));
     const replacement = hook.enqueued().at(-1)!;
     replacement.onAbandoned?.();
-    expect(hook.api().trayAnnotation.canAnnotate?.(image('A'))).toBe(true);
+    expect(hook.api().trayAnnotation.annotationBlockedReason?.(image('A'))).toBeUndefined();
     // 只删替换自己的烧录图;与 A 共享的源副本仍被 A 引用。
     expect(runtime.deleted).toEqual([replacement.uri]);
     expect(runtime.deleted).not.toContain(original.annotation?.sourceUri);
@@ -272,22 +279,32 @@ describe('re-edit replacement', () => {
 });
 
 describe('burn source preparation', () => {
-  it('transcodes HEIC with the native manipulator on Android before burning, and falls back when it fails', async () => {
+  it('transcodes HEIC to high-quality JPEG with the native manipulator on Android, and falls back when it fails', async () => {
     runtime.platform = 'android';
     const hook = mountHook();
     await chatSubmit(hook.api(), 'file:///photos/x.heic', [], { mimeType: 'image/heic' });
     expect(runtime.manipulations).toHaveLength(1);
     expect(runtime.manipulations[0].resize).toBeUndefined();
-    expect(runtime.manipulations[0].save).toEqual({ format: 'png', compress: 1 });
-    expect(runtime.burnIn).toHaveBeenLastCalledWith(expect.objectContaining({ mimeType: 'image/png', strokes: [] }));
+    expect(runtime.manipulations[0].save).toEqual({ format: 'jpeg', compress: 0.92 });
+    expect(runtime.burnIn).toHaveBeenLastCalledWith(expect.objectContaining({ mimeType: 'image/jpeg', strokes: [] }));
     expect(runtime.burnIn.mock.calls[0][0]).not.toHaveProperty('strokeSpace');
     expect(runtime.deleted).toContain('file:///cache/ImageManipulator/out-1'); // 中间产物烧完即删
-    expect(hook.enqueued()[0].mimeType).toBe('image/png');
+    expect(hook.enqueued()[0].mimeType).toBe('image/jpeg');
     expect(hook.enqueued()[0].annotation).toBeUndefined();
-    expect(hook.enqueued()[0].name).toMatch(/^image-\d+\.png$/);
+    expect(hook.enqueued()[0].name).toMatch(/^image-\d+\.jpg$/);
 
     runtime.manipulatorError = new Error('unsupported');
     await chatSubmit(hook.api(), 'file:///photos/y.heic', [], { mimeType: 'image/heic' });
+    expect(runtime.burnIn).toHaveBeenLastCalledWith(expect.objectContaining({ mimeType: 'image/heic' }));
+  });
+
+  it('falls back to the original path when the transcoded file exceeds the source size limit', async () => {
+    runtime.platform = 'android';
+    runtime.sizes['file:///cache/ImageManipulator/'] = 31 * 1024 * 1024;
+    const hook = mountHook();
+    await chatSubmit(hook.api(), 'file:///photos/x.heic', STROKES, { mimeType: 'image/heic' });
+    expect(runtime.manipulations).toHaveLength(1);
+    expect(runtime.deleted).toContain('file:///cache/ImageManipulator/out-1');
     expect(runtime.burnIn).toHaveBeenLastCalledWith(expect.objectContaining({ mimeType: 'image/heic' }));
   });
 
@@ -329,14 +346,16 @@ describe('burn source preparation', () => {
     expect(hook.enqueued()[0]).toMatchObject({ width: 4032, height: 3024 });
   });
 
-  it('forwards the viewer size on direct (stroke-free) forwarding so preprocess can downscale', async () => {
+  it('does not pass the viewer size on direct (stroke-free) forwarding, keeping the original resolution policy', async () => {
     const hook = mountHook();
     await chatSubmit(hook.api(), 'file:///photos/shot.png', [], { mimeType: 'image/png', naturalWidth: 3000, naturalHeight: 2000 });
     expect(runtime.burnIn).not.toHaveBeenCalled();
-    expect(hook.enqueued()[0]).toMatchObject({ mimeType: 'image/png', width: 3000, height: 2000 });
-    expect(hook.enqueued()[0].skipPreprocess).toBeUndefined();
-    await chatSubmit(hook.api(), 'file:///photos/shot2.png', [], { mimeType: 'image/png' });
-    expect(hook.enqueued()[1].width).toBeUndefined();
+    expect(runtime.manipulations).toHaveLength(0);
+    const candidate = hook.enqueued()[0];
+    expect(candidate).toMatchObject({ mimeType: 'image/png', size: 1234 });
+    expect(candidate.width).toBeUndefined();
+    expect(candidate.height).toBeUndefined();
+    expect(candidate.skipPreprocess).toBeUndefined();
   });
 
   it('exposes burn-in prewarm on both lightbox configs', () => {

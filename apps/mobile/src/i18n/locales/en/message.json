@@ -160,10 +160,12 @@
     "retryLoadImage": "Retry loading image",
     "retry": "Retry",
     "closeImage": "Close image",
-    "discardAnnotationTitle": "Discard Annotation?",
+    "discardAnnotationTitle": "Discard annotation?",
     "discardAnnotationBody": "Your unsaved strokes will be lost.",
-    "continueAnnotating": "Keep Annotating",
-    "discardAnnotation": "Discard"
+    "continueAnnotating": "Keep annotating",
+    "discardAnnotation": "Discard",
+    "annotateUnavailableTitle": "Can't annotate right now",
+    "annotateImageUnavailable": "Annotate image (unavailable)"
   },
   "queue": {
     "continueSystemInstruction": "Continue the unfinished task (system instruction)",
