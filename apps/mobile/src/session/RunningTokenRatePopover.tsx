@@ -154,33 +154,33 @@ export function RunningTokenRatePopover({
         width: cardWidth,
         height: cardHeight,
       }),
-    () => setMode("closed"),
+    () => {
+      closedByOutsideTap.current = true;
+      setMode("closed");
+    },
   );
   // The card is not an accessibility modal, so the chat stays usable. Screen
-  // reader focus moves into it on open and back to the trigger when the user
-  // closes it from the trigger, back or escape; an outside tap keeps focus
-  // wherever that tap went.
+  // reader focus moves into it on open and, however it closes, back to the
+  // trigger; only an outside tap keeps focus wherever that tap went.
   const cardFocused = useRef(false);
-  const refocusTrigger = useRef(false);
-  const closeAndRefocus = () => {
-    refocusTrigger.current = true;
-    setMode("closed");
-  };
+  const closedByOutsideTap = useRef(false);
   useEffect(() => {
     if (mode === "pinned") return;
+    if (
+      cardFocused.current &&
+      !closedByOutsideTap.current &&
+      triggerRef.current
+    )
+      AccessibilityInfo.sendAccessibilityEvent(triggerRef.current, "focus");
     cardFocused.current = false;
-    if (mode === "closed" && refocusTrigger.current) {
-      refocusTrigger.current = false;
-      if (triggerRef.current)
-        AccessibilityInfo.sendAccessibilityEvent(triggerRef.current, "focus");
-    }
+    closedByOutsideTap.current = false;
   }, [mode]);
   useEffect(() => {
     if (mode !== "pinned") return;
     const subscription = BackHandler.addEventListener(
       "hardwareBackPress",
       () => {
-        closeAndRefocus();
+        setMode("closed");
         return true;
       },
     );
@@ -261,7 +261,7 @@ export function RunningTokenRatePopover({
       pointerEvents={mode === "held" ? "none" : "auto"}
       onStartShouldSetResponder={() => true}
       ref={cardRef}
-      onAccessibilityEscape={closeAndRefocus}
+      onAccessibilityEscape={() => setMode("closed")}
       testID="session.tokenRate.card"
       onLayout={(event) => {
         setCardHeight(event.nativeEvent.layout.height);

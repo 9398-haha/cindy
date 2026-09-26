@@ -543,8 +543,20 @@ it("moves screen reader focus into the pinned card and back to the trigger, exce
   // Holding is a touch gesture; it never moves screen reader focus.
   expect(harness.focus).toEqual([]);
   for (const close of [
-    () => harness.back!(),
-    () => harness.card.onAccessibilityEscape(),
+    async () => harness.back!(),
+    async () => harness.card.onAccessibilityEscape(),
+    async () => {
+      await gesture("onPressIn");
+      harness.press.onPress();
+    },
+    async () => {
+      // Rotation or a fold change closes the card automatically.
+      harness.viewport = {
+        ...harness.viewport,
+        width: harness.viewport.width + 1,
+      };
+      await render();
+    },
   ]) {
     await gesture("onPressIn");
     await gesture("onPress");
@@ -552,7 +564,7 @@ it("moves screen reader focus into the pinned card and back to the trigger, exce
     await layout();
     expect(harness.focus).toEqual(["session.tokenRate.card"]);
     await act(async () => {
-      close();
+      await close();
     });
     expect(card()).toBeNull();
     expect(harness.focus).toEqual(["session.tokenRate.card", "trigger"]);
