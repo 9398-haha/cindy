@@ -1,6 +1,7 @@
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { projectGhostAgentModels } from './ghostAgentModels.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
 import { openDeviceAuthorizationCard, openPluginAuthorizationCard } from '../plugin-oauth/deviceCard.js';
 import { t as authorizationText } from '../i18n.js';
@@ -1695,6 +1696,14 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
 export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | null): void {
   getGhostAgentSlot().setRevealSession(reveal);
   getGhostErrandSlot().setRevealSession(reveal);
+}
+
+let pluginTaskHandler: PluginTaskHandler | null = null;
+export function setPluginTaskHandler(handler: PluginTaskHandler | null): void { pluginTaskHandler = handler; }
+
+export function isPluginTaskAuthorized(id: string): boolean {
+  const ghost = findAvailableGhost(id);
+  return ghost?.enabled === true && ghost.manifest.agent?.tasks === true;
 }
 
 let errandSlotSingleton: GhostErrandSlot | null = null;
@@ -7180,6 +7189,13 @@ export function registerGhostIpc(): void {
     // 专属 errand 会话跑一轮,最终回复文字取回给插件;任务文本同样只进
     // 普通 user 消息。资格审/频控/任务表在 errandSlot,会话与收口在注入
     // 的 runner(maker-ipc)。
+    if (type === 'tasks-request') {
+      const owner = getActiveDataOwnerPushStamp();
+      return handlePluginTaskRequest(id, payload, {
+        getGhost: findAvailableGhost, handler: pluginTaskHandler,
+        isCurrent: () => { const current = getActiveDataOwnerPushStamp(); return owner.dataOwnerId === current.dataOwnerId && owner.ownerGeneration === current.ownerGeneration; },
+      });
+    }
     if (type === 'agent-errand-request') {
       return getGhostErrandSlot().handleRequest(id, payload);
     }
