@@ -69,6 +69,7 @@ export interface PluginTaskServiceDeps {
     isolatedWorkspace?: boolean,
   ): Promise<void>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
+  assertTeamPlanUnstarted?(taskId: string): Promise<void>;
   dispatch(
     pluginId: string,
     taskId: string,
@@ -164,6 +165,11 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     return run;
   };
   return {
+    /** Account teardown awaits already accepted writes before closing this DB. */
+    drain: async () => {
+      let pending: Promise<unknown>;
+      do { pending = tail; await pending; } while (pending !== tail);
+    },
     create: (
       pluginId: string,
       request: { requestKey: string; title: string; route?: PluginTaskRoute; isolatedWorkspace?: boolean },
@@ -201,6 +207,11 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       const row = (await deps.store.get(taskId))!;
       const data = JSON.parse(row.payload);
       if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      if (data.teamPlan) return {ok:true};
+      if ((await deps.store.forSession(taskId)).length) return fail('TASK_BUSY', 'Register the team plan before sending input');
+      const observed = await deps.inspect(taskId);
+      if (observed.execution || observed.pending.length) return fail('TASK_BUSY', 'Register the team plan before starting work');
+      await deps.assertTeamPlanUnstarted?.(taskId);
       deps.assertAuthorized(pluginId);
       await save(row,{...data,teamPlan:plan});
       return {ok:true};
@@ -345,6 +356,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
             return fail('REQUEST_EXPIRED', 'Input was already settled');
           }
           const view = await ownTask(row.pluginId, taskId);
+          if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
           if (view.permissionMode === 'bypassPermissions') return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
           if (hash(view.resolvedConfig) !== hash(run.acceptedConfig))
             return fail('ROUTE_UNAVAILABLE', 'Accepted route changed before dispatch');

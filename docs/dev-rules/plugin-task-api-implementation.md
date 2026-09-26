@@ -52,9 +52,8 @@ getTeam 的 completedAt 可由宿主落盘的 turnCompleted 终态恢复：仅�
 
 ### 已登记协同计划与释放
 
-`setTeamPlan({taskId,plan:{concurrency,items}})` 在本插件自己的创建收据中冻结计划。每项含唯一 label、workingDir 和精确 route；重复设置必须一致。未登记计划的存量插件沿用原行为。Worker 创建复用原子 reservation，计划上限只可收窄宿主硬上限。已结算 label 持久保留，不因归档再次变成可派发项。
+`setTeamPlan({taskId,plan:{concurrency,items}})` 在本插件自己的创建收据中冻结计划。首次登记必须早于输入派发和 Worker 创建（包括创建预留）；同一计划的幂等重放不受此限制。每项含唯一 label、workingDir 和精确 route；重复设置必须一致。未登记计划的存量插件沿用原行为。Worker 创建复用原子 reservation，预留后再次核对计划，计划上限只可收窄宿主硬上限。已结算 label 持久保留，不因归档再次变成可派发项。
 
-`releaseWorker({taskId,workerId,completedAt})` 仅释放本插件 Lead 内、结束时间仍匹配、无活动/排队输入的 Worker。调用方应先保存交卷快照和评分。复用 Orca 的归档路径、transition 锁和发送锁；持锁后再次核对 completedAt 与归属。已有发送锁时直接拒绝释放，不等待而形成锁反转；只有归档成功才结算 label。拒绝正在发送或运行的 Worker，保留任务历史与作答文件。
+`releaseWorker({taskId,workerId,completedAt})` 仅释放本插件 Lead 内、结束时间仍匹配、无活动/排队输入的 Worker。它与 getTeam 共用宿主成功终态判据，不能以 Worker 更新时间或失败轮结束时间替代交卷凭据。调用方应先保存交卷快照和评分。复用 Orca 的归档路径、transition 锁和发送锁；持锁后再次核对 completedAt 与归属。有计划时必须在归档前确认标签归属；无计划的兼容调用不写标签结算。已有发送锁时直接拒绝释放，不等待而形成锁反转；只有归档成功才结算 label。拒绝正在发送或运行的 Worker，保留任务历史与作答文件。
 
 `getTeam` 增加包含创建预留的 capacity 快照（advisory；准入仍由创建事务裁决）、逐 Worker 的等待确认状态、首条输入/首条执行消息时间、最近轮结束时间，以及 Worker/Lead 分列的 session-total 用量。`host-message-window` 是可观测作答窗口，不是精确模型计算时长。无确切 USD 金额时返回 null，不把订阅估值或其他币种直接当美元。
-

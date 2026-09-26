@@ -224,6 +224,14 @@ describe('plugin ordinary task receipts', () => {
     f.switchOwner();
     await expect(f.service.list('p')).rejects.toThrow('Owner changed');
   });
+  it('rejects queued input when the task was archived before vendor acceptance', async () => {
+    const f = fixture();
+    const run = await f.send();
+    f.tasks.get(run.taskId)!.status = 'archived';
+    await expect(f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution))
+      .rejects.toMatchObject({ code: 'TASK_BUSY' });
+    expect(JSON.parse(f.rows.get(run.runId)!.payload).execution).toBeUndefined();
+  });
   it('does not recreate a deleted task on request replay', async () => {
     const f = fixture();
     const task = await f.create();
@@ -305,4 +313,35 @@ it('rechecks permissions when queued input reaches native dispatch', async () =>
  f.tasks.get(run.taskId)!.permissionMode='bypassPermissions';
  await expect(f.service.accept(run.taskId,{clientId:run.inputMessageId},f.execution)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('queued');
+});
+
+it('registers plans only before input and preserves identical retries after dispatch', async () => {
+  const f = fixture(), task = await f.create();
+  const plan = {concurrency: 2, items: [{label: 'sample', workingDir: '/answer', route: f.route}]};
+  f.deps.assertTeamPlanUnstarted = vi.fn(async () => { throw new Error('Worker reservation exists'); });
+  await expect(f.service.setTeamPlan('p', task.taskId, plan)).rejects.toThrow('reservation');
+  f.deps.assertTeamPlanUnstarted = vi.fn(async () => undefined);
+  await f.service.setTeamPlan('p', task.taskId, plan);
+  await f.send();
+  await expect(f.service.setTeamPlan('p', task.taskId, plan)).resolves.toEqual({ok: true});
+  const late = fixture(), run = await late.send();
+  await expect(late.service.setTeamPlan('p', run.taskId, plan)).rejects.toMatchObject({code: 'TASK_BUSY'});
+});
+
+it('drains terminal receipt writes before the owner database closes', async () => {
+  const f = fixture(), run = await f.send();
+  await f.service.accept(run.taskId, {clientId: run.inputMessageId}, f.execution);
+  const save = f.deps.store.save;
+  let unblock!: () => void;
+  const barrier = new Promise<void>(resolve => { unblock = resolve; });
+  f.deps.store.save = async row => { await barrier; await save(row); };
+  const terminal = f.service.settle(run.taskId, f.execution, 'completed', 'answer');
+  let drained = false;
+  const drain = f.service.drain().then(() => { drained = true; });
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  unblock();
+  await Promise.all([terminal, drain]);
+  f.switchOwner();
+  expect(JSON.parse(f.rows.get(run.runId)!.payload)).toMatchObject({status: 'completed', outputMessageId: 'answer'});
 });

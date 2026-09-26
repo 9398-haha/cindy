@@ -1024,6 +1024,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     renewalTimer.unref?.();
 
     try {
+      // Registration may race the preflight. Once a reservation exists, a new
+      // plan cannot be registered; reread any plan that won before reservation.
+      const reservedPlanLimit = await deps.validateCreationPlan?.(params);
+      if (reservedPlanLimit != null && reservation.occupiedSlotsBefore >= reservedPlanLimit) {
+        return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+      }
       const workerSessionId = deps.createSessionId();
       const workerVendorOptions = {
         orcaRole: 'worker' as const,

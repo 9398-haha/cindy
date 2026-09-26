@@ -2726,3 +2726,15 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
 
 it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
 it('rejects invalid plan before reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>{throw Error('not pending');})});await expect(service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'})).rejects.toThrow('not pending');expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();});
+it('revalidates a plan registered during creation preflight and releases the reservation on rejection', async () => {
+  let reserved = false;
+  const {deps, service} = createDeps({validateCreationPlan: vi.fn(async () => {
+    if (reserved) throw new Error('Worker not in newly registered plan');
+    return undefined;
+  })});
+  const reserve = deps.reserveWorkerCreation;
+  deps.reserveWorkerCreation = vi.fn(async input => { const result = await reserve(input); reserved = true; return result; });
+  await expect(service.createWorker({leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: 'sample'})).rejects.toThrow('newly registered plan');
+  expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
+});

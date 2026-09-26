@@ -13755,11 +13755,11 @@
     "description": "이 기기에서 {{host}}를 열어 이 작업을 실행하는 플러그인을 인증하세요. 인증 정보는 인증을 시작한 기기에 저장됩니다."
   },
   "pluginTaskWriteAccess": {
-    "title": "Allow this plugin’s AI to edit files?",
-    "message": "Allow the AI in “{{name}}” to edit files and continue?",
-    "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
-    "allow": "Allow and continue",
-    "cancel": "Not now",
+    "title": "이 플러그인의 AI가 파일을 수정하도록 허용할까요?",
+    "message": "“{{name}}”의 AI가 파일을 수정하도록 허용하고 계속할까요?",
+    "detail": "이 플러그인의 AI 권한을 수정 가능으로 변경하며, 이후 작업에도 적용됩니다. 별도의 작업 디렉터리는 시스템 샌드박스가 아니며, 명령에는 계속 Cindy의 권한 검사가 적용됩니다. 플러그인 AI 설정에서 언제든지 읽기 전용으로 되돌릴 수 있습니다.",
+    "allow": "허용하고 계속",
+    "cancel": "지금은 허용 안 함",
     "autoTitle": "Auto 자동 승인 사용",
     "autoMessage": "“{{name}}”에 Auto 자동 승인을 허용할까요?",
     "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다."

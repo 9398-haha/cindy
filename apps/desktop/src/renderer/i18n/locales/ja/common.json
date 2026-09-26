@@ -13755,11 +13755,11 @@
     "description": "このデバイスで {{host}} を開き、このタスクを実行するプラグインを認証します。認証情報は認証を開始したデバイスに保存されます。"
   },
   "pluginTaskWriteAccess": {
-    "title": "Allow this plugin’s AI to edit files?",
-    "message": "Allow the AI in “{{name}}” to edit files and continue?",
-    "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
-    "allow": "Allow and continue",
-    "cancel": "Not now",
+    "title": "このプラグインの AI にファイルの編集を許可しますか？",
+    "message": "「{{name}}」の AI にファイルの編集を許可して続行しますか？",
+    "detail": "このプラグインの AI 権限を編集可能に変更します。今後のタスクにも適用されます。独立した作業ディレクトリはシステムのサンドボックスではなく、コマンドには引き続き Cindy の権限チェックが適用されます。プラグインの AI 設定でいつでも読み取り専用に戻せます。",
+    "allow": "許可して続行",
+    "cancel": "今は許可しない",
     "autoTitle": "Auto 自動承認を有効化",
     "autoMessage": "「{{name}}」で Auto 自動承認を使用しますか？",
     "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。"

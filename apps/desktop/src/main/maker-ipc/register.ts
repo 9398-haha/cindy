@@ -4550,6 +4550,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
 });
 
 let pluginTaskServiceForCurrentOwner: (() => PluginTaskService) | null = null;
+let drainPluginTaskReceipts: (() => Promise<void>) | null = null;
+export async function flushPluginTaskLifecycle(): Promise<void> {
+  await drainPluginTaskReceipts?.();
+}
 function notePluginTaskLifecycle(operation: (service: PluginTaskService) => Promise<unknown>): void {
   if (!pluginTaskServiceForCurrentOwner) return;
   try { void operation(pluginTaskServiceForCurrentOwner()).catch(() => log.warn('Plugin task receipt update failed')); }
@@ -4817,8 +4821,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // listeners never treat it as turn text; Desktop persist/broadcast still
   // consumes the localized notice.
   const emitWiredSessionEvent = (event: AgentEvent) => {
-    handleSessionEvent(sessionEventDependencies, session, event);
+    handleSessionEvent(ownerEventDependencies, session, event);
   };
+  const ownerDb = getCurrentDbClientSnapshot();
+  const ownerEventDependencies = Object.create(sessionEventDependencies) as SessionEventDependencies;
+  Object.defineProperty(ownerEventDependencies, 'onPluginTaskTerminal', {
+    value: (...args: Parameters<NonNullable<SessionEventDependencies['onPluginTaskTerminal']>>) => {
+      if (!ownerDb || getCurrentDbClientSnapshot() !== ownerDb) return;
+      sessionEventDependencies.onPluginTaskTerminal?.(...args);
+    },
+  });
   registration.disposers.push(session.onEvent(emitWiredSessionEvent));
   registration.disposers.push(session.onRuntimeRecovery(emitWiredSessionEvent));
   sessionBindings.attachStatusListener(registration);
@@ -10109,6 +10121,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // is retained by an asynchronous task request.
   let pluginTaskEpoch: ReturnType<typeof getCurrentDbClientSnapshot> = null;
   let pluginTasks: PluginTaskService | null = null;
+  drainPluginTaskReceipts = async () => { await pluginTasks?.drain(); };
   pluginTaskServiceForCurrentOwner = () => {
     const snapshot = getCurrentDbClientSnapshot();
     if (!snapshot) throw new PluginTaskError('HOST_NOT_READY', 'Task storage is unavailable', true);
@@ -10147,6 +10160,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      assertTeamPlanUnstarted: async taskId => {
+        assertCurrent();
+        const workers = await snapshot.client.drizzle.select({id:orcaWorkers.id}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(eq(orcaTeams.leadSessionId,taskId)).limit(1);
+        const reservations = await snapshot.client.drizzle.select({id:orcaWorkerCreationReservations.id}).from(orcaWorkerCreationReservations).innerJoin(orcaTeams,eq(orcaWorkerCreationReservations.teamId,orcaTeams.id)).where(and(eq(orcaTeams.leadSessionId,taskId),gte(orcaWorkerCreationReservations.expiresAt,Date.now()))).limit(1);
+        assertCurrent();
+        if (workers.length || reservations.length) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before creating Workers');
+      },
       createSession: async (pluginId, taskId, title, route, isolatedWorkspace) => {
         assertPlugin(pluginId);
         const cfg = readGhostErrandConfig(pluginId);
@@ -10235,6 +10255,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
   };
   const pluginPermissionRequests = new Set<string>();
+  // Projection and release consume the same host-stamped completion evidence.
+  const readPluginWorkerCompletion = async (epoch: NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>, sessionId: string, status: string) => {
+    const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const safeMeta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
+    const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta}).from(messages)
+      .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), inArray(messages.role, ['user', 'assistant']), sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`))
+      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
+    const flow = await createOrcaDiagnosticsDeps().getWorkerFlowStatus(sessionId);
+    if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+    return {row, completedAt: pluginWorkerCompletedAt({status, working:flow.isWorking, queued:flow.queuedCount, paused:flow.queuePaused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor})};
+  };
   setPluginTaskHandler(async (pluginId, request) => {
     const service = pluginTaskServiceForCurrentOwner!();
     switch (request.kind) {
@@ -10304,22 +10335,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
         await service.get(pluginId,request.taskId);
         if (!record) throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
+        const planReceipt = await createPluginTaskStore(epoch.client).get(request.taskId);
+        const plan = planReceipt ? JSON.parse(planReceipt.payload).teamPlan : undefined;
+        if (plan && !plan.items.some((item: {label: string}) => item.label === record.label)) throw new PluginTaskError('INVALID_REQUEST', 'Worker is not in team plan');
         const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
         if (!row || row.status === 'deleted') throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
         const validate = async () => {
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
           await service.get(pluginId,request.taskId);
-          const [fresh] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
-          if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
-          if (!fresh || fresh.lastTurnEndedAt !== request.completedAt || (fresh.activeTurnStartedAt ?? 0) > request.completedAt) throw new PluginTaskError('STALE_REVISION','Worker execution changed');
+          const [worker] = await epoch.client.drizzle.select({status:orcaWorkers.status}).from(orcaWorkers).where(eq(orcaWorkers.id,record.id)).limit(1);
+          const {row: fresh, completedAt} = await readPluginWorkerCompletion(epoch, record.sessionId, worker?.status ?? 'unknown');
+          if (!fresh || fresh.status === 'deleted' || completedAt === null || completedAt !== request.completedAt) throw new PluginTaskError('STALE_REVISION','Worker has no matching successful completion');
         };
         if (row.status === 'archived') {
           await validate();
-          await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
+          if (plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
           return {ok:true,workerId:record.id};
         }
         const result = await orcaTeamService.archiveWorker({callerLeadSessionId:request.taskId,workerId:record.id,onlyIfIdle:true,beforeArchive:validate});
-        if (result.ok) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
+        if (result.ok && plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
         return result;
       }
       case 'getTeam': {
@@ -10328,17 +10362,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await service.get(pluginId, request.taskId);
         const team = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), request.taskId);
         if (!team.ok) throw new PluginTaskError('HOST_NOT_READY', 'Collaboration state unavailable', true);
-        const records = await listWorkersByLead(request.taskId);
         const workers = await Promise.all(team.workers.map(async worker => {
-          const [row] = await epoch!.client.drizzle.select().from(sessions).where(eq(sessions.id, worker.session_id)).limit(1);
-          const safeMeta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
-          const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta}).from(messages)
-            .where(and(eq(messages.sessionId, worker.session_id), isNull(messages.rewindAt), inArray(messages.role, ['user', 'assistant']), sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`))
-            .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
+          const {row, completedAt} = await readPluginWorkerCompletion(epoch, worker.session_id, worker.status);
           const [firstInput] = await epoch.client.drizzle.select({at:messages.createdAt}).from(messages).where(and(eq(messages.sessionId,worker.session_id),eq(messages.role,'user'),isNull(messages.rewindAt))).orderBy(asc(messages.createdAt)).limit(1);
           const [firstActivity] = await epoch.client.drizzle.select({at:messages.createdAt}).from(messages).where(and(eq(messages.sessionId,worker.session_id),inArray(messages.role,['assistant','thinking','tool_use']),gte(messages.createdAt,firstInput?.at??row?.createdAt??0),isNull(messages.rewindAt))).orderBy(asc(messages.createdAt)).limit(1);
-          const restoredCompletion = pluginWorkerCompletedAt({status:worker.status, working:worker.is_working, queued:worker.queued_count, paused:worker.queue_paused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor});
-          const completedAt = restoredCompletion ?? (worker.status === 'done' && !worker.is_working && worker.queued_count === 0 && !worker.queue_paused ? records.find(r=>r.id===worker.worker_id)?.updatedAt : null);
           return {...worker, acceptedAt:firstInput?.at, startedAt:firstActivity?.at, timingBasis:'host-message-window', createdAt:row?.createdAt, lastTurnStartedAt:row?.activeTurnStartedAt, lastTurnEndedAt:row?.lastTurnEndedAt, waitingForUser:!!maker.getSession(worker.session_id)?.getTurnControlSnapshot().pendingInteractionCount, usage: {scope:'session-total', tokens:row?.totalTokenUsage ?? null, costUSD:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? row.totalCostAmount : null, approximate:row?.totalCostIsApproximate ?? false, reason:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? null : 'No confirmed USD cost; subscription value and other currencies are not a bill'}, status:completedAt ? 'done' : worker.status, permissionMode:row?.permissionMode, providerId:row?.providerId, fastMode:row?.fastMode, completedAt};
         }));
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
@@ -11359,7 +11386,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!receipt || receipt.operation !== 'create') return undefined;
       await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
-      const data = JSON.parse(receipt.payload);
+      // get() waits behind plan registration in the existing receipt queue.
+      const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
+      if (!currentReceipt) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+      const data = JSON.parse(currentReceipt.payload);
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
       const item = data.teamPlan.items.find((x: {label:string})=>x.label===params.label);
       if (!item || data.settledLabels?.includes(params.label)) throw new PluginTaskError('INVALID_REQUEST','Worker is not pending in the registered plan');
