@@ -221,8 +221,10 @@ export function createAnnotationBurnInQueue(
     const head = queue[0];
     if (head && takeHead(head)) {
       head.reject(new Error(`annotation burn-in webview terminated: ${reason}`));
+      // 只有真正打断了任务的崩溃才计数:仅预热持有时(如切后台被系统回收)的崩溃
+      // 不累计,避免之后一次正常崩溃就让排队任务全部失败。
+      consecutiveCrashes += 1;
     }
-    consecutiveCrashes += 1;
     if (consecutiveCrashes > MAX_CONSECUTIVE_CRASH_REMOUNTS) {
       // 反复崩溃:不再重建,剩余任务一并失败(走调用方既有失败提示),卸载。
       failAllQueued(new Error(`annotation burn-in webview terminated: ${reason}`));

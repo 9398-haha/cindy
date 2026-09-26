@@ -570,12 +570,14 @@ export const ImageLightbox = memo(function ImageLightbox({
   const annotateEnabled = annotateReady && !annotateBlockedReason;
   const enterAnnotationMode = useCallback(() => {
     if (!annotateReady || submittingRef.current || sharingRef.current) return;
-    if (annotateBlockedReason) {
-      Alert.alert(t('message.lightbox.annotateUnavailableTitle'), annotateBlockedReason);
+    // 点按时重新询问宿主:替换上传可能在上次渲染后已落定,避免弹出过期原因。
+    const blockedReason = activeImage ? annotation?.annotationBlockedReason?.(activeImage) : undefined;
+    if (blockedReason) {
+      Alert.alert(t('message.lightbox.annotateUnavailableTitle'), blockedReason);
       return;
     }
     setIsAnnotating(true);
-  }, [annotateReady, annotateBlockedReason, t]);
+  }, [annotateReady, activeImage, annotation, t]);
   // 独立直发(发送到对话):不要求可标注——gif 等不可画的图同样能转发。
   const directSubmitVisible = !!annotation?.allowDirectSubmit && !!activeImage && !!activeUri;
 

@@ -189,11 +189,11 @@ describe('planAnnotationBurnSource(烧录前预处理)', () => {
       .toMatchObject({ resize: { width: 2048 }, format: 'png' });
   });
 
-  it('Android 上 HEIC / AVIF 即使是小图 / 尺寸未知也先转码为高质量 JPEG;iOS 小图维持原路径', () => {
+  it('Android 上 HEIC 即使是小图 / 尺寸未知也先转码为高质量 JPEG,AVIF 转无损 PNG 保留透明;iOS 小图维持原路径', () => {
     expect(planAnnotationBurnSource({ mimeType: 'image/heic', platformOS: 'android', naturalWidth: 800, naturalHeight: 600 }))
       .toEqual({ resize: null, format: 'jpeg', compress: 0.92, strokeSpace: null });
     expect(planAnnotationBurnSource({ mimeType: 'image/avif', platformOS: 'android' }))
-      .toMatchObject({ resize: null, format: 'jpeg', compress: 0.92 });
+      .toEqual({ resize: null, format: 'png', compress: 1, strokeSpace: null });
     // 转码 + 预缩同时发生时仍是 JPEG。
     expect(planAnnotationBurnSource({ mimeType: 'image/heif', platformOS: 'android', naturalWidth: 4032, naturalHeight: 3024 }))
       .toMatchObject({ resize: { width: 2048 }, format: 'jpeg', compress: 0.92, strokeSpace: { width: 4032, height: 3024 } });

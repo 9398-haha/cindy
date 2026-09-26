@@ -163,7 +163,7 @@ describe('agentInputQueue', () => {
     );
     // 编号只在本条消息内有效,说明里必须讲清楚。
     expect(ANNOTATED_IMAGE_REGIONS_PREFIX).toBe(
-      'Marked regions (normalized coordinates, origin top-left; ' +
+      'Marked regions (normalized image coordinates, origin top-left; ' +
         'images numbered in their order within this message): ',
     );
   });

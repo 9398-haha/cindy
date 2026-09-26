@@ -265,4 +265,23 @@ describe('annotation burn-in queue', () => {
     expect(host.mounts).toHaveLength(MAX_CONSECUTIVE_CRASH_REMOUNTS + 1);
     expect(host.mounted).toBeNull();
   });
+
+  it('does not count idle (prewarm-only) crashes toward the remount cap', async () => {
+    const { queue, host } = setup();
+    // 切后台被系统回收之类的空闲崩溃,多次也不累计。
+    for (let i = 0; i <= MAX_CONSECUTIVE_CRASH_REMOUNTS + 1; i++) {
+      const release = queue.acquireWarm();
+      queue.handleProcessGone(host.mounted!, 'render process gone');
+      release();
+    }
+    const first = queue.burnIn(input);
+    const second = queue.burnIn(input);
+    // 一次打断任务的崩溃:队首失败,但仍换新 WebView 继续处理后续任务。
+    queue.handleProcessGone(host.mounted!, 'render process gone');
+    expect((await settled(first)).error?.message).toContain('terminated');
+    const key = host.mounted!;
+    ready(queue, key);
+    reply(queue, key, 'burn-2');
+    expect((await settled(second)).value).toBeDefined();
+  });
 });

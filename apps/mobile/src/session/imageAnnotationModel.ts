@@ -465,8 +465,8 @@ export interface AnnotationBurnSourcePlan {
  * 决定烧录前要不要先把源图交给原生 manipulator 处理。返回 null = 原样交给
  * WebView(与既有路径完全一致)。
  *
- * - Android 系统 WebView 解不了 HEIC / HEIF / AVIF:先转成高质量 JPEG,否则用户
- *   画完才得到解码失败。
+ * - Android 系统 WebView 解不了 HEIC / HEIF / AVIF:先转码(HEIC / HEIF 转高质量
+ *   JPEG 控制体积,AVIF 可能带透明、转无损 PNG),否则用户画完才得到解码失败。
  * - 已知尺寸长边超过上传上限(2048)的大图:先按上传同口径缩到上限,WebView
  *   只需解码 / 注入 / 烧录一张小图(内存与注入体积按像素数下降)。
  *   尺寸未知时不预缩(不为探测尺寸额外解码),维持原路径。
@@ -484,12 +484,15 @@ export function planAnnotationBurnSource(input: {
   const transcode = input.platformOS === 'android' && ANDROID_WEBVIEW_UNDECODABLE_MIMES.has(mime);
   const prescale = width > 0 && height > 0 && Math.max(width, height) > MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE;
   if (!transcode && !prescale) return null;
+  // HEIC/HEIF(相机照片,无透明通道)转 JPEG 控制体积;AVIF 可能带透明(贴纸等),
+  // 保持 PNG 以免透明区变黑(体积由调用方的源文件上限兜底)。
+  const transcodeToJpeg = transcode && mime !== 'image/avif';
   return {
     resize: prescale
       ? (width >= height ? { width: MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE } : { height: MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE })
       : null,
-    format: mime === 'image/jpeg' || transcode ? 'jpeg' : 'png',
-    compress: transcode ? ANDROID_TRANSCODE_JPEG_QUALITY : 1,
+    format: mime === 'image/jpeg' || transcodeToJpeg ? 'jpeg' : 'png',
+    compress: transcodeToJpeg ? ANDROID_TRANSCODE_JPEG_QUALITY : 1,
     strokeSpace: prescale ? annotationBurnCanvasSize(width, height) : null,
   };
 }
