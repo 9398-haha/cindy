@@ -63,7 +63,7 @@ import {
   piSubagentRunRoot,
 } from '@cindy/maker-core/pi-subagent-runs';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
-import { readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import type {
   AgentEvent,
   AgentKind,
@@ -9420,6 +9420,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         lockStage = 'live-send';
         try {
           const sendResult = await sendUserMessageWithAwaitedGitBaseline(live, message, clientId, {
+            ...(params.autoReviewUserText ? {
+              [AUTO_REVIEW_SOURCE_CONTENT]: '',
+              [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId).catch(() => [])),
+            } : {}),
             planMode: false,
             onAccepted: persistUserMessage,
             onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
@@ -9530,6 +9534,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const { session } = await bootstrapSession(createOpts);
         await markOrcaRoleIfNeeded(session.id, createOpts.orcaRole);
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(session, message, clientId, {
+          ...(params.autoReviewUserText ? {
+            [AUTO_REVIEW_SOURCE_CONTENT]: '',
+            [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId).catch(() => [])),
+          } : {}),
           planMode: false,
           onAccepted: persistUserMessage,
           onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
@@ -10875,6 +10883,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
+    readAutoReviewHistory: sessionId => readAutoReviewHistory(sessionId),
     createId,
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
@@ -13644,6 +13653,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       expectedTurnGeneration?: number;
       readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
       readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
+      readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
       readonly [AUTO_REVIEW_USER_INTENT]?: string;
     };
     const readCurrentSteerSession = () => {

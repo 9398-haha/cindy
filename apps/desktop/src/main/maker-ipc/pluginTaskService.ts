@@ -239,7 +239,9 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
       const data = JSON.parse(row.payload);
-      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) {
+        return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
+      }
       if (data.teamPlan) return {ok:true};
       if ((await deps.store.forSession(taskId)).length) return fail('TASK_BUSY', 'Register the team plan before sending input');
       const observed = await deps.inspect(taskId);
