@@ -2,6 +2,7 @@ import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../mak
 import { projectGhostAgentModels } from './ghostAgentModels.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
+import { ensurePluginTaskApproval, hasPluginTaskApproval } from './taskCapability.js';
 import { registerGhostCardRemoteProvider, persistGhostCardWithRemoteChange } from './cardRemoteResource.js';
 import { openDeviceAuthorizationCard, openPluginAuthorizationCard } from '../plugin-oauth/deviceCard.js';
 import { t as authorizationText } from '../i18n.js';
@@ -310,6 +311,7 @@ import {
 import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
+  confirmedTaskCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
   type GhostInstallConsentPrompt,
@@ -1703,7 +1705,7 @@ export function setPluginTaskHandler(handler: PluginTaskHandler | null): void { 
 
 export function isPluginTaskAuthorized(id: string): boolean {
   const ghost = findAvailableGhost(id);
-  return ghost?.enabled === true && ghost.manifest.agent?.tasks === true;
+  return hasPluginTaskApproval(ghost);
 }
 
 let errandSlotSingleton: GhostErrandSlot | null = null;
@@ -5890,15 +5892,17 @@ async function installAndDockLocked(
 ): Promise<InstalledGhost> {
   // 确认依据的 manifest 必须就是 expectedPackageSha256 钉住的那份包；锁内现读受体
   // 复核，确认后同 id 被别处装上或包内容变化都不能沿用这次确认。
+  const installedBefore = manager.list().find((ghost) => ghost.manifest.id === opts.ghostId);
   assertGhostInstallConsent(
     opts.consent.decision,
-    manager.list().find((ghost) => ghost.manifest.id === opts.ghostId),
+    installedBefore,
     opts.consent.manifest,
     opts.expectedPackageSha256,
   );
   // 初始启用态由入口显式传入；当前用户导入与市场首装都传 true，覆盖更新
   // 则走 manager.update 延续既有状态。保留 false 缺省以兼容内部受控调用方。
   const result = await manager.install(lizFilePath, {
+    taskCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -6020,6 +6024,7 @@ async function updateLocalGhostPackageLocked(
   try {
     result = await withActiveOwnerGhostOauthMutationLock(inspected.manifest.id, () =>
       manager.update(cindyFilePath, {
+        taskCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest),
         expectedPackageSha256,
         expectedInstalledApproval,
         ...(installOrigin ? { installOrigin } : {}),
@@ -6384,6 +6389,7 @@ async function installOrUpdateMarketGhostPackageLocked(
       // the strict lock through package swap, receipt commit, and compensation.
       result = await withActiveOwnerGhostOauthMutationLock(expected.ghostId, () =>
         manager.update(cindyFilePath, {
+          taskCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(trustOverride ? { trustOverride } : {}),
@@ -7191,9 +7197,24 @@ export function registerGhostIpc(): void {
     // 的 runner(maker-ipc)。
     if (type === 'tasks-request') {
       const owner = getActiveDataOwnerPushStamp();
+      const manager = getGhostManager();
+      const isCurrent = () => {
+        const current = getActiveDataOwnerPushStamp();
+        return owner.dataOwnerId === current.dataOwnerId && owner.ownerGeneration === current.ownerGeneration &&
+          !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id;
+      };
       return handlePluginTaskRequest(id, payload, {
         getGhost: findAvailableGhost, handler: pluginTaskHandler,
-        isCurrent: () => { const current = getActiveDataOwnerPushStamp(); return owner.dataOwnerId === current.dataOwnerId && owner.ownerGeneration === current.ownerGeneration; },
+        isCurrent,
+        ensureAuthorized: () => ensurePluginTaskApproval(id, {
+          getGhost: findAvailableGhost, isCurrent,
+          confirm: facts => {
+            const window = getDeepLinkMainWindow();
+            if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
+            return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
+          },
+          approve: (pluginId, revision, active) => manager.approveTaskCapability(pluginId, revision, active),
+        }),
       });
     }
     if (type === 'agent-errand-request') {

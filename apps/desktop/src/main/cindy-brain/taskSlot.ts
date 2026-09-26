@@ -1,5 +1,6 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
+import { hasPluginTaskApproval } from './taskCapability.js';
 
 export const PLUGIN_TASK_OPERATIONS = [
   'capabilities',
@@ -108,18 +109,21 @@ export async function handlePluginTaskRequest(
     getGhost(id: string): InstalledGhost | null;
     handler: PluginTaskHandler | null;
     isCurrent: () => boolean;
+    ensureAuthorized?: () => Promise<boolean>;
   },
 ): Promise<PluginTaskResult> {
   const permitted = () =>
     deps.isCurrent() &&
-    deps.getGhost(pluginId)?.enabled === true &&
-    deps.getGhost(pluginId)?.manifest.agent?.tasks === true;
+    hasPluginTaskApproval(deps.getGhost(pluginId));
   const error = (code: string, message: string, retryable = false): PluginTaskResult => ({
     ok: false,
     error: { code, message, retryable },
   });
-  if (!permitted()) return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
   if (!validPluginTaskRequest(value)) return error('INVALID_REQUEST', 'Invalid task request');
+  if (!permitted() && deps.ensureAuthorized) {
+    try { await deps.ensureAuthorized(); } catch { /* No UI or persistence failure grants nothing. */ }
+  }
+  if (!permitted()) return error('PERMISSION_DENIED', 'Plugin task capability is unavailable');
   if (value.kind === 'capabilities')
     return {
       ok: true,

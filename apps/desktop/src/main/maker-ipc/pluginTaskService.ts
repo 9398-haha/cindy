@@ -47,6 +47,10 @@ export class PluginTaskError extends Error {
     this.name = 'PluginTaskError';
   }
 }
+/** Service failures must reject the public task API, without exposing internal diagnostics. */
+export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
+  if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
+}
 const fail = (code: string, message: string): never => {
   throw new PluginTaskError(code, message);
 };

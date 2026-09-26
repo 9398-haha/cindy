@@ -1601,6 +1601,8 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
 
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
+  /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
+  taskCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id>)。 */
   dir: string;

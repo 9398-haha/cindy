@@ -3,7 +3,7 @@ import { handlePluginTaskRequest, validPluginTaskRequest } from '../taskSlot.js'
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
 describe('plugin task pipe', () => {
-  const ghost = { enabled: true, manifest: { agent: { tasks: true } } } as InstalledGhost;
+  const ghost = { enabled: true, taskCapabilityApproved: true, approval: {state:'approved', revision:'r'}, manifest: { agent: { tasks: true } } } as InstalledGhost;
   it('requires its own declared capability; errand alone grants nothing', async () => {
     const handler = vi.fn();
     const result = await handlePluginTaskRequest(
@@ -83,4 +83,3 @@ it('allows an Auto request but never Full access', () => {
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'auto'})).toBe(true);
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'bypassPermissions'})).toBe(false);
 });
-

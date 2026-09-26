@@ -1,4 +1,4 @@
-import { createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
@@ -10325,6 +10325,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
         await service.get(pluginId, task.taskId);
+        assertPluginTaskResult(result, 'Collaboration could not be started');
         return result;
       }
       case 'setTeamPlan': {
@@ -10366,6 +10367,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return {ok:true,workerId:record.id};
         }
         const result = await orcaTeamService.archiveWorker({callerLeadSessionId:request.taskId,workerId:record.id,onlyIfIdle:true,beforeArchive:validate});
+        assertPluginTaskResult(result, 'Worker could not be released');
         if (result.ok && plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
         return result;
       }

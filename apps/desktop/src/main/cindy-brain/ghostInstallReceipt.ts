@@ -52,6 +52,8 @@ const ICON_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/
  * 目录加载，只有技能目录因为越出沙箱而被拷成快照。
  */
 export interface GhostInstallReceipt {
+  /** Explicit Host confirmation; absent on older receipts, never inferred from manifest. */
+  taskCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   revision: string;
@@ -1020,6 +1022,7 @@ export function readLegacyInstallTrust(dir: string): GhostTrustInfo | null {
 }
 
 export function createGhostInstallReceipt(input: {
+  taskCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1043,6 +1046,7 @@ export function createGhostInstallReceipt(input: {
     enabled: input.enabled,
     trust: input.trust,
     skillContentSha256: input.skillContentSha256,
+    ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1219,6 +1223,7 @@ function validateReceipt(
       enabled: value.enabled,
       trust,
       skillContentSha256,
+      ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),
