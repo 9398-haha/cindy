@@ -35,6 +35,7 @@ const harness = vi.hoisted(() => ({
     onOutsideTap: () => void;
   },
   back: null as null | (() => boolean),
+  focus: [] as unknown[],
 }));
 vi.mock("react-native", () => {
   const view = ({ children, testID }: any) =>
@@ -42,6 +43,7 @@ vi.mock("react-native", () => {
   return {
     View: forwardRef((props: any, ref) => {
       useImperativeHandle(ref, () => ({
+        testID: props.testID,
         measureInWindow: (callback: any) =>
           callback(
             harness.anchor.x,
@@ -53,6 +55,10 @@ vi.mock("react-native", () => {
       if (props.testID === "session.tokenRate.card") harness.card = props;
       return view(props);
     }),
+    AccessibilityInfo: {
+      sendAccessibilityEvent: (target: any) =>
+        harness.focus.push(target?.testID ?? target),
+    },
     BackHandler: {
       addEventListener: (_: string, handler: () => boolean) => {
         harness.back = handler;
@@ -65,6 +71,7 @@ vi.mock("react-native", () => {
     StyleSheet: { create: (s: unknown) => s },
     Pressable: (props: any) => {
       harness.press = props;
+      if (props.ref) props.ref.current = "trigger";
       return view(props);
     },
   };
@@ -317,6 +324,7 @@ it.each(["onPress", "onLongPress"])(
 );
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  harness.focus = [];
   clearRateHistoryCache();
   harness.viewport = { x: 0, y: 0, width: 320, height: 800 };
   harness.window = { width: 320, height: 800 };
@@ -520,4 +528,40 @@ it("uses paired generation samples, expires recent speed, and isolates a differe
   await gesture("onPressIn");
   await gesture("onPress");
   expect(card()!.textContent).not.toContain("100 tok/s");
+});
+
+it("moves screen reader focus into the pinned card and back to the trigger, except after an outside tap", async () => {
+  const layout = () =>
+    act(async () =>
+      harness.card.onLayout({ nativeEvent: { layout: { height: 120 } } }),
+    );
+  await render();
+  await gesture("onPressIn");
+  await gesture("onLongPress");
+  await layout();
+  await gesture("onPressOut");
+  // Holding is a touch gesture; it never moves screen reader focus.
+  expect(harness.focus).toEqual([]);
+  for (const close of [
+    () => harness.back!(),
+    () => harness.card.onAccessibilityEscape(),
+  ]) {
+    await gesture("onPressIn");
+    await gesture("onPress");
+    await layout();
+    await layout();
+    expect(harness.focus).toEqual(["session.tokenRate.card"]);
+    await act(async () => {
+      close();
+    });
+    expect(card()).toBeNull();
+    expect(harness.focus).toEqual(["session.tokenRate.card", "trigger"]);
+    harness.focus = [];
+  }
+  await gesture("onPressIn");
+  await gesture("onPress");
+  await layout();
+  await act(async () => harness.outsideTap!.onOutsideTap());
+  expect(card()).toBeNull();
+  expect(harness.focus).toEqual(["session.tokenRate.card"]);
 });

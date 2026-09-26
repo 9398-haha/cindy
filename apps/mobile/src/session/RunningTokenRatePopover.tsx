@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  AccessibilityInfo,
   BackHandler,
   Pressable,
   ScrollView,
@@ -74,6 +75,8 @@ export function RunningTokenRatePopover({
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const anchorRef = useRef<View>(null);
+  const triggerRef = useRef<View>(null);
+  const cardRef = useRef<View>(null);
   const [anchor, setAnchor] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [cardHeight, setCardHeight] = useState(0);
   const measureAnchor = () =>
@@ -153,12 +156,31 @@ export function RunningTokenRatePopover({
       }),
     () => setMode("closed"),
   );
+  // The card is not an accessibility modal, so the chat stays usable. Screen
+  // reader focus moves into it on open and back to the trigger when the user
+  // closes it from the trigger, back or escape; an outside tap keeps focus
+  // wherever that tap went.
+  const cardFocused = useRef(false);
+  const refocusTrigger = useRef(false);
+  const closeAndRefocus = () => {
+    refocusTrigger.current = true;
+    setMode("closed");
+  };
+  useEffect(() => {
+    if (mode === "pinned") return;
+    cardFocused.current = false;
+    if (mode === "closed" && refocusTrigger.current) {
+      refocusTrigger.current = false;
+      if (triggerRef.current)
+        AccessibilityInfo.sendAccessibilityEvent(triggerRef.current, "focus");
+    }
+  }, [mode]);
   useEffect(() => {
     if (mode !== "pinned") return;
     const subscription = BackHandler.addEventListener(
       "hardwareBackPress",
       () => {
-        setMode("closed");
+        closeAndRefocus();
         return true;
       },
     );
@@ -238,9 +260,16 @@ export function RunningTokenRatePopover({
     <View
       pointerEvents={mode === "held" ? "none" : "auto"}
       onStartShouldSetResponder={() => true}
-      onAccessibilityEscape={() => setMode("closed")}
+      ref={cardRef}
+      onAccessibilityEscape={closeAndRefocus}
       testID="session.tokenRate.card"
-      onLayout={(event) => setCardHeight(event.nativeEvent.layout.height)}
+      onLayout={(event) => {
+        setCardHeight(event.nativeEvent.layout.height);
+        if (mode === "pinned" && !cardFocused.current && cardRef.current) {
+          cardFocused.current = true;
+          AccessibilityInfo.sendAccessibilityEvent(cardRef.current, "focus");
+        }
+      }}
       style={[
         styles.card,
         {
@@ -331,6 +360,7 @@ export function RunningTokenRatePopover({
       onLayout={measureAnchor}
     >
       <Pressable
+        ref={triggerRef}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityState={{ expanded: mode !== "closed" }}
