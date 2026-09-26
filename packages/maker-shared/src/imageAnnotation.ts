@@ -106,6 +106,26 @@ export function annotationStrokeWidth(naturalWidth: number, naturalHeight: numbe
   return Math.round(Math.max(primary, floor));
 }
 
+/**
+ * 被系统 / 第二根手指打断(非正常抬笔)的笔迹,屏幕路径短于该值时视为误触丢弃;
+ * 更长的笔迹照常保留,避免丢掉用户真正画了的内容。桌面 pointercancel 与手机
+ * 多指打断共用同一阈值。
+ */
+export const INTERRUPTED_STROKE_DISCARD_SCREEN_PX = 12;
+
+/** 笔迹在 width×height 显示尺寸下的屏幕路径长度(像素)。 */
+export function annotationStrokeScreenLength(
+  points: readonly AnnotationPoint[],
+  width: number,
+  height: number,
+): number {
+  let length = 0;
+  for (let i = 1; i < points.length; i++) {
+    length += Math.hypot((points[i].x - points[i - 1].x) * width, (points[i].y - points[i - 1].y) * height);
+  }
+  return length;
+}
+
 /** 白描边线宽(与 {@link annotationStrokeWidth} 配套)。 */
 export function annotationOutlineWidth(strokeWidth: number): number {
   return Math.round(strokeWidth * ANNOTATION_OUTLINE_WIDTH_RATIO);

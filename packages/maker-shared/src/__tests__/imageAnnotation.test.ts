@@ -4,7 +4,9 @@ import {
   ANNOTATION_OUTLINE_COLOR,
   ANNOTATION_STROKE_COLOR,
   MAX_ANNOTATION_REGIONS,
+  INTERRUPTED_STROKE_DISCARD_SCREEN_PX,
   annotationOutlineWidth,
+  annotationStrokeScreenLength,
   annotationStrokeToSvgPath,
   annotationStrokeWidth,
   drawAnnotationStrokes,
@@ -229,5 +231,16 @@ describe('formatAnnotationRegion', () => {
     expect(formatAnnotationRegion({ x0: 0.1, y0: 0.25, x1: 0.5, y1: 1 })).toBe(
       'x 0.10–0.50, y 0.25–1.00',
     );
+  });
+});
+
+describe('annotationStrokeScreenLength', () => {
+  it('sums segment lengths in display pixels', () => {
+    expect(annotationStrokeScreenLength([{ x: 0, y: 0 }], 100, 100)).toBe(0);
+    expect(annotationStrokeScreenLength([{ x: 0, y: 0 }, { x: 0.03, y: 0.04 }], 100, 100)).toBeCloseTo(5);
+    expect(
+      annotationStrokeScreenLength([{ x: 0, y: 0 }, { x: 0.1, y: 0 }, { x: 0.1, y: 0.1 }], 200, 100),
+    ).toBeCloseTo(30);
+    expect(INTERRUPTED_STROKE_DISCARD_SCREEN_PX).toBe(12);
   });
 });

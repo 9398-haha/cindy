@@ -171,6 +171,23 @@ describe('ImageLightbox annotate mode', () => {
     expect(committedPaths('stroke')).toHaveLength(2);
   });
 
+  it('pointercancel drops a tiny interrupted stroke but keeps a real one', () => {
+    render(<ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave: vi.fn() }} />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    const el = surface();
+    // 起笔后几乎没动就被系统接管:视为误触,不留红点。
+    fireEvent.pointerDown(el, { pointerId: 7, button: 0, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(el, { pointerId: 7, clientX: 24, clientY: 22 });
+    fireEvent.pointerCancel(el, { pointerId: 7, clientX: 24, clientY: 22 });
+    expect(committedPaths('stroke')).toHaveLength(0);
+    // 已经画了一段的笔迹被打断:照常保留。
+    fireEvent.pointerDown(el, { pointerId: 8, button: 0, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(el, { pointerId: 8, clientX: 120, clientY: 60 });
+    fireEvent.pointerCancel(el, { pointerId: 8, clientX: 120, clientY: 60 });
+    expect(committedPaths('stroke')).toHaveLength(1);
+  });
+
   it('greys out undo / redo when there is nothing to undo or redo', () => {
     render(<ImageLightbox src={SRC} onClose={vi.fn()} annotationEdit={{ onSave: vi.fn() }} />);
     loadImage(lightboxImage());

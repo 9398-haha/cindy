@@ -83,6 +83,10 @@ import {
   type AnnotationStroke,
   type DraftSvgPathCache,
 } from './lightboxAnnotations';
+import {
+  INTERRUPTED_STROKE_DISCARD_SCREEN_PX,
+  annotationStrokeScreenLength,
+} from '@cindy/maker-shared/image-annotation';
 import { AnnotationStrokesSvg, type AnnotationDraftPathRefs } from './AnnotationStrokesSvg';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDraft, saveDraft } from '@/lib/composerDraftStore';
@@ -987,7 +991,7 @@ export function ImageLightbox({
     scheduleDraftPaint();
   }
 
-  /** 收笔(pointerup / pointercancel / 失去 capture 均走这里,幂等)。 */
+  /** 收笔(pointerup / 失去 capture 走这里,较长的 pointercancel 也经此提交;幂等)。 */
   function finishAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
     if (e.pointerId !== drawingPointerIdRef.current) return;
     const draft = draftStrokeRef.current;
@@ -1004,6 +1008,27 @@ export function ImageLightbox({
       draftPathCacheRef.current = null;
       writeDraftPath('');
     }
+  }
+
+  /**
+   * pointercancel(系统 / 浏览器接管了这次触摸或笔输入,并非用户抬笔):很短的
+   * 半笔视为误触丢弃,较长的笔迹照常保留,不丢用户真正画的内容。阈值与手机端
+   * 多指打断共用。
+   */
+  function cancelAnnotateStroke(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.pointerId !== drawingPointerIdRef.current) return;
+    const draft = draftStrokeRef.current;
+    const rect = imgRef.current?.getBoundingClientRect();
+    if (
+      draft &&
+      rect &&
+      annotationStrokeScreenLength(draft.points, rect.width, rect.height) <
+        INTERRUPTED_STROKE_DISCARD_SCREEN_PX
+    ) {
+      resetDraftStroke();
+      return;
+    }
+    finishAnnotateStroke(e);
   }
 
   /** 即时烧录当前所见(复制/另存为用),实现在共享模块 annotationBurnIn。 */
@@ -1496,7 +1521,7 @@ export function ImageLightbox({
         onPointerDown={isAnnotating ? handleAnnotatePointerDown : undefined}
         onPointerMove={isAnnotating ? handleAnnotatePointerMove : undefined}
         onPointerUp={isAnnotating ? finishAnnotateStroke : undefined}
-        onPointerCancel={isAnnotating ? finishAnnotateStroke : undefined}
+        onPointerCancel={isAnnotating ? cancelAnnotateStroke : undefined}
         onLostPointerCapture={isAnnotating ? finishAnnotateStroke : undefined}
         onDoubleClick={isAnnotating ? undefined : handleImageDoubleClick}
       >

@@ -18,6 +18,7 @@
 
 import {
   ANNOTATION_CANVAS_SCRIPT,
+  INTERRUPTED_STROKE_DISCARD_SCREEN_PX,
   annotationStrokeToSvgPath,
   annotationStrokeWidth,
   annotationOutlineWidth,
@@ -141,7 +142,7 @@ export function annotationMinPointDistanceForRect(
  * 短于它的半笔视为捏合起手的误触(点 / 小短线)丢弃;单指点按(手势正常结束)
  * 与真正的笔画不受影响。
  */
-export const ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX = 12;
+export const ANNOTATION_MULTI_TOUCH_DISCARD_SCREEN_PX = INTERRUPTED_STROKE_DISCARD_SCREEN_PX;
 
 /**
  * 画笔手势结束时是否丢弃进行中的一笔:仅当手势非正常结束(第二根手指落下使
