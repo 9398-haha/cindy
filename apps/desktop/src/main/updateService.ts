@@ -2114,15 +2114,22 @@ export async function checkAppUpdateForAgent(): Promise<{
   if (currentStatus === 'downloading' || currentStatus === 'superseding') {
     return { status: 'downloading', currentVersion, targetVersion: readyVersion };
   }
-  const result = await checkForUpdate();
-  if (currentStatus === 'ready' && readyVersion) {
-    return { status: 'ready', currentVersion, targetVersion: readyVersion };
+  // An Agent check must not stage a patch: checkForUpdate() downloads it and
+  // enables the existing auto-relaunch-on-idle path. Read only the manifest;
+  // the user can download and install through the built-in update action.
+  const manifest = await fetchManifest();
+  if (!manifest) return { status: 'manifest_failed', currentVersion, reason: '无法读取当前渠道的更新信息。' };
+  const relation = compareAppUpdateVersions(manifest.app?.version, currentVersion);
+  if (relation === 'invalid') return {
+    status: 'manifest_failed', currentVersion, reason: '当前渠道的更新版本信息无效。',
+  };
+  if (relation === 'newer' && resolveUpdateAsset(manifest)) {
+    return { status: 'available', currentVersion, targetVersion: manifest.app.version };
   }
-  if (result === 'idle') return {
+  return {
     status: 'no_installable_update', currentVersion,
     reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
   };
-  return { status: result, currentVersion, reason: `应用内更新检查结果：${result}` };
 }
 
 export function initUpdateService(): void {

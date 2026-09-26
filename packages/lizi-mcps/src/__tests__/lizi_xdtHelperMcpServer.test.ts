@@ -24,7 +24,7 @@ describe("cindy_helper MCP server", () => {
       sessionInstanceId: 'instance-1', remoteHostId: undefined as string | undefined,
     };
     let current = true;
-    const check = vi.fn(async () => ({ status: 'ready', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
+    const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => 'default',
       appUpdate: {
@@ -45,7 +45,7 @@ describe("cindy_helper MCP server", () => {
       expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
         'check_app_update',
       ]);
-      expect(await call('check_app_update')).toMatchObject({ status: 'ready', targetVersion: '0.1.90' });
+      expect(await call('check_app_update')).toMatchObject({ status: 'available', targetVersion: '0.1.90' });
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'UNKNOWN_TOOL' });
       expect(check).toHaveBeenCalledOnce();
       current = false;

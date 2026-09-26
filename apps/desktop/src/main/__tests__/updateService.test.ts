@@ -327,40 +327,33 @@ describe('installation version repair scope', () => {
 });
 
 describe('agent-facing managed app update check', () => {
-  it('reports a downloaded newer version without restarting the app', async () => {
-    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
-    fetchManifest.mockResolvedValue(updateManifest());
-    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.writeFileSync(targetPath, 'update');
-      return { path: targetPath, size: 123 };
-    });
+  it('checks version metadata without staging a patch or arming auto-relaunch', async () => {
+    // Auto-relaunch is enabled. The normal background check gets a same-version
+    // manifest so this test isolates any patch staged by the Agent check.
+    fetchManifest.mockResolvedValueOnce(updateManifest()).mockResolvedValue(updateManifest('0.0.64'));
     const service = await freshUpdateService('darwin');
     try {
+      service.initUpdateService();
       expect(await service.checkAppUpdateForAgent()).toMatchObject({
-        status: 'ready', currentVersion: '0.0.64', targetVersion: '0.0.65',
+        status: 'available', currentVersion: '0.0.64', targetVersion: '0.0.65',
       });
-      await vi.advanceTimersByTimeAsync(5_000);
+      expect(download).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(download).not.toHaveBeenCalled();
       expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
     } finally {
       service.stopUpdateService();
     }
   });
 
-  it('rejects a staged patch after the macOS app moves into a translocated location', async () => {
-    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+  it('rejects a translocated macOS app without staging a patch', async () => {
     fetchManifest.mockResolvedValue(updateManifest());
-    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      fs.writeFileSync(targetPath, 'update');
-      return { path: targetPath, size: 123 };
-    });
     const service = await freshUpdateService('darwin');
-    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'ready' });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'available' });
     appIsInApplicationsFolder.mockReturnValue(false);
     expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
     service.stopUpdateService();
   });
 
@@ -389,6 +382,16 @@ describe('agent-facing managed app update check', () => {
     fetchManifest.mockResolvedValue(updateManifest('0.0.64'));
     expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
     expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise an invalid or asset-free manifest as an installable update', async () => {
+    const service = await freshUpdateService('darwin');
+    fetchManifest.mockResolvedValueOnce(updateManifest('not-semver'));
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'manifest_failed' });
+    fetchManifest.mockResolvedValueOnce({ app: { version: '0.0.65' } });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
+    expect(download).not.toHaveBeenCalled();
+    service.stopUpdateService();
   });
 });
 

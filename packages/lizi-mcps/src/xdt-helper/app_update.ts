@@ -27,7 +27,7 @@ export function registerAppUpdateTools(
   registry.register({
     name: 'check_app_update',
     category: 'app_update',
-    description: `检查当前运行的 ${BRAND_NAME} 是否有可通过应用内更新器安装的新版本。本工具不能安装或重启应用；如需手动安装，请用户使用内置「检查更新」界面。不要用 GitHub Release 文件替换正在运行的应用。`,
+    description: `仅读取当前渠道更新版本信息，检查当前运行的 ${BRAND_NAME} 是否有可通过应用内更新器安装的新版本。本工具不会下载、安装或重启应用；如需安装，请用户使用内置「检查更新」界面。不要用 GitHub Release 文件替换正在运行的应用。`,
     inputShape: {},
     handler: async () => {
       const error = callerError();
