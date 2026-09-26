@@ -215,16 +215,17 @@ async function writeTextAtomic(absPath: string, content: string): Promise<void> 
 }
 
 /**
- * 原子的「不存在才创建」:补种不能覆盖用户此刻正在编辑器里保存的文件,也不能留下
- * 写到一半的文件(半截 SOUL.md 会被对账当成正式身份收进数据库)。
+ * 「不存在才创建」:补种不能覆盖用户已有的文件,也不能留下写到一半的文件(半截
+ * SOUL.md 会被对账当成正式身份收进数据库)。内容总是先完整写进临时文件,目标路径上
+ * 只会出现完整内容。返回是否真的创建了。
  *
- * 内容写进临时文件后用 link 挂到目标路径 —— 目标已存在时 link 报 EEXIST 而不是
- * 替换,且内容完整后才出现在目标路径,两条都满足。返回是否真的创建了。
+ * 常见文件系统:用 link 把临时文件挂到目标 —— 目标已存在时报 EEXIST 而不是替换,
+ * 原子且不替换。
  *
- * 没有硬链接的文件系统上不存在「原子且不替换」的写法(Node 不提供 NOREPLACE 的
- * rename),任何模拟都要在「可能替换用户文件」和「只能猜文件是不是写到一半」之间
- * 二选一。所以这里不模拟:link 的其他错误原样抛出,这次不补种。数据库仍是正本,
- * 设置页的显式修改照常写文件,下一次对账再试。
+ * 不支持硬链接的文件系统(exFAT、部分网络盘):Node 不提供 NOREPLACE 的 rename,不存在
+ * 既原子又不替换的写法。这里确认目标不存在后 rename:崩溃时目标要么不存在要么完整,
+ * 不需要任何「写到一半」的猜测与恢复;代价是确认与 rename 两次系统调用之间若有人恰好
+ * 新建了同名文件会被替换 —— 只在这类文件系统、只在该文件本来缺失时存在。
  */
 async function writeTextIfAbsent(absPath: string, content: string): Promise<boolean> {
   if (Buffer.byteLength(content, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) {
@@ -237,11 +238,20 @@ async function writeTextIfAbsent(absPath: string, content: string): Promise<bool
   const tmp = `${absPath}.tmp-${process.pid}-${(writeSeq += 1)}`;
   try {
     await fs.writeFile(tmp, content, 'utf8');
-    await fs.link(tmp, absPath);
+    try {
+      await fs.link(tmp, absPath);
+      return true;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    }
+    try {
+      await fs.access(absPath);
+      return false;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+    }
+    await fs.rename(tmp, absPath);
     return true;
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw cause;
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => {});
   }
@@ -398,8 +408,8 @@ export async function migrateBotProfileFolder(
     }
   }
 
-  // Skills move regardless: a Home that cannot be seeded (e.g. no hard links) must not
-  // also strand the Bot's legacy skills.
+  // Skills move regardless: a seeding failure (e.g. disk full) must not also strand the
+  // Bot's legacy skills.
   const skillsMoved = await migrateBotSkillsIntoProfileFolder(userDataDir, botId, legacyUserDataDir);
   if (seedFailure !== null) throw seedFailure;
   return { seeded, skillsMoved };

@@ -273,16 +273,13 @@ describe('搬家', () => {
     expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
   });
 
-  it('不支持硬链接的文件系统不补种:不写目标文件,已有文件不动,不留临时文件,技能照常搬', async () => {
+  it('不支持硬链接的文件系统确认不存在后 rename 补种:只补缺失的文件,不直接写目标,不留临时文件', async () => {
     await writeBotProfileFolder(root, 'bot-a', { userContextSource: '用户手改的档案' });
-    const legacy = path.join(root, 'bot-skills', 'bot-a');
-    await fs.mkdir(path.join(legacy, 'skills', 's1'), { recursive: true });
-    await fs.writeFile(path.join(legacy, 'skills', 's1', 'SKILL.md'), 'v1', 'utf8');
     const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
     const writeFile = vi.spyOn(fs, 'writeFile');
     try {
-      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'EPERM' });
-      // Nothing is ever written straight onto a target path.
+      expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+      // Content only ever reaches a target path complete, through a rename.
       for (const [target] of writeFile.mock.calls) {
         expect(String(target)).toMatch(/\.tmp-/);
       }
@@ -290,14 +287,37 @@ describe('搬家', () => {
       link.mockRestore();
       writeFile.mockRestore();
     }
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe('用户手改的档案');
+    expect(content.config).toEqual(SEED.config);
     const home = botProfileDir(root, 'bot-a');
-    await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
-    expect((await readBotProfileFolder(root, 'bot-a')).userContextSource).toBe('用户手改的档案');
     const leftovers = [...await fs.readdir(home), ...await fs.readdir(path.join(home, 'memories'))]
       .filter((name) => name.includes('.tmp-'));
     expect(leftovers).toEqual([]);
-    // Skills still move into the Home even though seeding could not run.
-    expect(await fs.readFile(path.join(home, 'skills', 's1', 'SKILL.md'), 'utf8')).toBe('v1');
+  });
+
+  it('不支持硬链接且 rename 失败时不留半截目标,下一次补种照常补齐', async () => {
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const realRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('SOUL.md')) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      return realRename(from, to);
+    });
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'EIO' });
+    } finally {
+      rename.mockRestore();
+    }
+    try {
+      await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
+      expect((await fs.readdir(home)).filter((name) => name.includes('.tmp-'))).toEqual([]);
+      expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+    } finally {
+      link.mockRestore();
+    }
+    expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe(SEED.identitySource);
   });
 
   it('SOUL.md 之外的槽写失败时不落 SOUL.md,下一次仍会补齐,而不是把缺失的 USER.md 当成清空', async () => {

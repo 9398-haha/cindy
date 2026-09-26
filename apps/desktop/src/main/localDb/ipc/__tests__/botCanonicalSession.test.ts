@@ -918,7 +918,7 @@ describe('Bot canonical Session lifecycle', () => {
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
   });
 
-  it('keeps the stored identity when the Home cannot be seeded without hard links', async () => {
+  it('seeds a missing SOUL.md from the database on a filesystem without hard links, without deriving', async () => {
     const created = await invoke('local-db:bots:create', {
       id: 'no-hardlinks', name: 'No Hardlinks', identitySource: 'Stored identity',
       userContextSource: 'Stored user context',
@@ -934,11 +934,11 @@ describe('Bot canonical Session lifecycle', () => {
     } finally {
       link.mockRestore();
     }
-    // The database stays authoritative: no version is derived from a Home that could not be seeded.
     expect(await invoke('local-db:bots:get', created.id)).toMatchObject({
       currentVersion: 1, identitySource: 'Stored identity', userContextSource: 'Stored user context',
     });
-    expect(existsSync(join(home, 'SOUL.md'))).toBe(false);
+    expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe('Stored identity');
+    expect(readFileSync(join(home, 'memories', 'USER.md'), 'utf8')).toBe('Stored user context');
   });
 
   it('seeds a never-created Bot Home on an unrelated save without touching an existing one', async () => {
