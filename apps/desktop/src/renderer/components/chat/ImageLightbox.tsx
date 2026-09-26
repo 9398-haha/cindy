@@ -6,11 +6,10 @@
  * - 遮罩：使用 `--overlay-lightbox` 主题 token，保持 lightbox 遮罩语义一致。
  * - 图片：`object-fit: contain`，四周保留 40px 安全边距。
  * - 缩放/平移(手势数学共用 `lightboxGestures`,与 MermaidLightbox 同一套):
- *   - 触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium 合成为带
- *     ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 → 以光标为焦点缩放。
- *   - macOS:双指滑动(不带修饰键的 wheel)在放大后平移,适配态不响应(与
- *     MermaidLightbox 同一惯例)。其它平台普通滚轮不区分修饰键也直接缩放
- *     (Windows 看图器惯例,鼠标用户单手可缩放)。
+ *   - 各平台一致:触控板双指捏合(macOS、Windows 精密触摸板的 pinch 都由 Chromium
+ *     合成为带 ctrlKey 的 wheel 事件)/ Ctrl(⌘)+滚轮 / 鼠标滚轮 → 以光标为焦点缩放;
+ *     触控板双指滑动在放大后平移,适配态不响应。鼠标还是触控板按事件特征推断
+ *     (见 lightboxGestures.classifyWheelSample),判不准时按鼠标处理(缩放)。
  *   - 双击图片:1x ↔ 2x 切换(以双击点为焦点)。
  *   - 放大后左键拖拽平移;松手时若拖动超过阈值,该次 click 不触发关闭。
  *   - 键盘 +/- 步进缩放,0 重置。翻页(←/→ 或箭头按钮)时视口自动重置。
@@ -100,6 +99,7 @@ import {
   LIGHTBOX_WHEEL_IDLE_MS,
   LIGHTBOX_ZOOM_STEP,
   clampScale,
+  createWheelSourceTracker,
   imageLightboxWheelIntent,
   type LightboxViewport,
   normalizeWheelDelta,
@@ -730,16 +730,31 @@ export function ImageLightbox({
 
   // 滚轮 / 触控板。native listener + passive:false 才能 preventDefault,阻止事件穿透
   // 到底下的聊天区,也阻止 Chromium 对 ctrl+wheel 的页面级缩放。路由见
-  // imageLightboxWheelIntent:macOS 双指捏合(Chromium 合成为 ctrlKey=true 的 wheel)
-  // 与 ⌘/Ctrl+滚轮以光标为焦点缩放,双指滑动在放大后平移;其它平台照旧所有滚轮
-  // 都缩放(Windows 看图器惯例)。
+  // imageLightboxWheelIntent(各平台一致):双指捏合(Chromium 合成为 ctrlKey=true 的
+  // wheel)、⌘/Ctrl+滚轮与鼠标滚轮以光标为焦点缩放;触控板双指滑动在放大后平移。
+  // 鼠标 / 触控板按事件特征推断(classifyWheelSample),每段连续滚动只判定一次。
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
+    const trackWheelSource = createWheelSourceTracker();
     const onWheel = (e: globalThis.WheelEvent) => {
       e.preventDefault();
       const current = viewportRef.current;
-      const intent = imageLightboxWheelIntent(e, isMacPlatform(), current.scale);
+      const source =
+        e.ctrlKey || e.metaKey
+          ? 'mouse'
+          : trackWheelSource(
+              {
+                deltaMode: e.deltaMode,
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                shiftKey: e.shiftKey,
+                // 非标准的旧字段(Chromium 仍提供),推断设备类型的关键信号。
+                wheelDeltaY: (e as globalThis.WheelEvent & { wheelDeltaY?: number }).wheelDeltaY,
+              },
+              e.timeStamp,
+            );
+      const intent = imageLightboxWheelIntent(e, source, current.scale);
       if (intent === 'none') return;
       if (intent === 'pan') {
         markWheeling();
