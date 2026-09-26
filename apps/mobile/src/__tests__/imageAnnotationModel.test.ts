@@ -375,7 +375,14 @@ describe('烧录 WebView 脚本(fake DOM 执行)', () => {
   ): FakeRun {
     const run: FakeRun = { posts: [], ops: [], dataUrlCalls: [] };
     const html = buildAnnotationBurnInHtml();
-    const code = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
+    // 只从本模块生成的固定 HTML 里取内联脚本(测试夹具,不是 HTML 过滤)。
+    const scripts: string[] = [];
+    for (let from = html.indexOf('<script>'); from >= 0; from = html.indexOf('<script>', from)) {
+      const end = html.indexOf('</script>', from);
+      scripts.push(html.slice(from + '<script>'.length, end));
+      from = end;
+    }
+    const code = scripts.join('\n');
     const ctx = new Proxy({} as Record<string, unknown>, {
       get: (_target, key: string) => (...args: unknown[]) => { run.ops.push([key, ...args]); },
       set: (_target, key: string, value) => { run.ops.push([`set:${key}`, value]); return true; },
