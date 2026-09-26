@@ -347,6 +347,32 @@ describe('agent-facing managed app update check', () => {
     }
   });
 
+  it('reports an already staged update while offline or when the manifest changes', async () => {
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('darwin');
+    try {
+      expect(await service.checkForUpdate()).toBe('ready');
+      expect(download).toHaveBeenCalledTimes(1);
+      fetchManifest.mockResolvedValueOnce(null).mockResolvedValue(updateManifest('0.0.64'));
+      for (let i = 0; i < 2; i += 1) {
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({
+          status: 'ready', currentVersion: '0.0.64', targetVersion: '0.0.65',
+        });
+      }
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(download).toHaveBeenCalledTimes(1);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
   it('rejects a translocated macOS app without staging a patch', async () => {
     fetchManifest.mockResolvedValue(updateManifest());
     const service = await freshUpdateService('darwin');

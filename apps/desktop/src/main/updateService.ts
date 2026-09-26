@@ -2114,6 +2114,9 @@ export async function checkAppUpdateForAgent(): Promise<{
   if (currentStatus === 'downloading' || currentStatus === 'superseding') {
     return { status: 'downloading', currentVersion, targetVersion: readyVersion };
   }
+  if (currentStatus === 'ready' && readyVersion) {
+    return { status: 'ready', currentVersion, targetVersion: readyVersion };
+  }
   // An Agent check must not stage a patch: checkForUpdate() downloads it and
   // enables the existing auto-relaunch-on-idle path. Read only the manifest;
   // the user can download and install through the built-in update action.
