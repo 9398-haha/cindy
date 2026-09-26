@@ -946,3 +946,89 @@ describe('in-flight 取消(abort 传递)', () => {
   });
 
 });
+
+describe('onAbandoned(自生成输入文件的生命周期回收)', () => {
+  it('上传失败不算放弃:失败卡可重试;移除失败卡才回调一次', async () => {
+    const abandoned = vi.fn();
+    let attempts = 0;
+    const { deps, pendingSnapshots, uploaded } = makeDeps({
+      upload: (c) => {
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new Error('network down')) : Promise.resolve(attachmentFor(c.name));
+      },
+    });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), onAbandoned: abandoned }], { token: 't' });
+    await controller.waitForIdle();
+    expect(abandoned).not.toHaveBeenCalled();
+    const failedCard = pendingSnapshots.at(-1)?.[0];
+    controller.retry(failedCard!.localId, { token: 't2' });
+    await controller.waitForIdle();
+    expect(uploaded).toHaveLength(1);
+    expect(abandoned).not.toHaveBeenCalled(); // 成功走 onUploaded
+
+    const second = vi.fn();
+    const failing = makeDeps({ upload: () => Promise.reject(new Error('network down')) });
+    const other = createMobileLocalAttachmentUploadController(failing.deps);
+    other.enqueue([{ ...candidate('b.jpg'), onAbandoned: second }], { token: 't' });
+    await other.waitForIdle();
+    other.remove(failing.pendingSnapshots.at(-1)![0]!.localId);
+    other.remove(failing.pendingSnapshots.at(-1)?.[0]?.localId ?? 'none');
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('in-flight 被移除:等任务落定后回调(不在传输读取文件期间回收)', async () => {
+    const gate = gatedUpload();
+    const abandoned = vi.fn();
+    const { deps } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), onAbandoned: abandoned }], { token: 't' });
+    await flush();
+    controller.remove('local-attachment-upload-1');
+    expect(abandoned).not.toHaveBeenCalled();
+    gate.release('a.jpg');
+    await flush();
+    expect(abandoned).toHaveBeenCalledTimes(1);
+  });
+
+  it('removeAll / dispose / 退屏后入队 都视为放弃', async () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const { deps } = makeDeps({ upload: () => new Promise(() => undefined) });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([
+      { ...candidate('a.jpg'), onAbandoned: a },
+      { ...candidate('b.jpg'), onAbandoned: b },
+      { ...candidate('c.jpg'), onAbandoned: b },
+    ], { token: 't' });
+    controller.removeAll();
+    await flush();
+    expect(b).toHaveBeenCalled(); // 排队中的 c 立即回调
+    const d = vi.fn();
+    controller.dispose();
+    controller.enqueue([{ ...candidate('d.jpg'), onAbandoned: d }], { token: 't' });
+    expect(d).toHaveBeenCalledTimes(1);
+  });
+
+  it('交接给持久发件箱:提交后才回调(文件已复制),回滚不回调', async () => {
+    const committed = vi.fn();
+    const rolledBack = vi.fn();
+    const { deps } = makeDeps({ upload: () => new Promise(() => undefined) });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), onAbandoned: rolledBack }], { token: new Promise(() => undefined) });
+    const first = controller.beginHandoff();
+    await first.prepare();
+    first.release(false);
+    await flush();
+    expect(rolledBack).not.toHaveBeenCalled();
+    controller.removeAll();
+    const other = createMobileLocalAttachmentUploadController(makeDeps({ upload: () => new Promise(() => undefined) }).deps);
+    other.enqueue([{ ...candidate('b.jpg'), onAbandoned: committed }], { token: new Promise(() => undefined) });
+    const handoff = other.beginHandoff();
+    await handoff.prepare();
+    expect(committed).not.toHaveBeenCalled();
+    handoff.release(true);
+    await flush();
+    expect(committed).toHaveBeenCalledTimes(1);
+  });
+});

@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "这张图片暂不支持标注或转发。",
     "downloadOriginalFailed": "下载原图失败(HTTP {{status}})。",
     "annotationSaveFailed": "标注保存失败",
+    "replacementPending": "这张图片上一次的保存仍在上传，完成后再编辑。",
     "tryAgain": "请重试。",
     "sendToChat": "发送到对话",
     "save": "保存",

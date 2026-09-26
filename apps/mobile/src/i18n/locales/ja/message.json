@@ -159,7 +159,11 @@
     "loadFailed": "画像の読み込みに失敗",
     "retryLoadImage": "画像の読み込みを再試行",
     "retry": "再試行",
-    "closeImage": "画像を閉じる"
+    "closeImage": "画像を閉じる",
+    "discardAnnotationTitle": "注釈を破棄しますか？",
+    "discardAnnotationBody": "保存されていない描画は失われます。",
+    "continueAnnotating": "注釈を続ける",
+    "discardAnnotation": "破棄"
   },
   "queue": {
     "continueSystemInstruction": "未完了のタスクを続行(システム指令)",

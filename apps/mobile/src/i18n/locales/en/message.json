@@ -159,7 +159,11 @@
     "loadFailed": "Image failed to load",
     "retryLoadImage": "Retry loading image",
     "retry": "Retry",
-    "closeImage": "Close image"
+    "closeImage": "Close image",
+    "discardAnnotationTitle": "Discard Annotation?",
+    "discardAnnotationBody": "Your unsaved strokes will be lost.",
+    "continueAnnotating": "Keep Annotating",
+    "discardAnnotation": "Discard"
   },
   "queue": {
     "continueSystemInstruction": "Continue the unfinished task (system instruction)",
