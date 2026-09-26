@@ -5,6 +5,7 @@ import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, isMobileAuthOwn
 import {
   __resetIncomingShareForTest,
   consumeIncomingShareBatch,
+  deleteIncomingSharedFiles,
   incomingShareBatchId,
   selectIncomingShareUploadCandidates,
   stageIncomingShareBatch,
@@ -13,7 +14,7 @@ import {
 } from '@/session/incomingShare';
 
 const convertToJpeg = vi.fn(async (uri: string) => `${uri}.jpg`);
-const deleteAsync = vi.hoisted(() => vi.fn(async () => undefined));
+const deleteAsync = vi.hoisted(() => vi.fn(async (_uri: string, _options: { idempotent: boolean }) => undefined));
 vi.mock('expo-file-system/legacy', () => ({ deleteAsync }));
 
 vi.mock('@/session/pastedImageAttachment', async (importOriginal) => {
@@ -190,6 +191,27 @@ describe('incoming Share Extension payloads', () => {
     })]);
     expect(consumeIncomingShareBatch(secondId)).toBe(true);
     expect(native.clearSharedPayloads).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the mailbox until durable acknowledgement succeeds', () => {
+    const acknowledge = vi.fn().mockImplementationOnce(() => { throw new Error('storage unavailable'); });
+    const batch = stageIncomingShareBatch([payload({})], acknowledge)!;
+    expect(() => consumeIncomingShareBatch(batch.id)).toThrow('storage unavailable');
+    expect(stageIncomingShareBatch([payload({})], vi.fn())).toBe(batch);
+    expect(consumeIncomingShareBatch(batch.id)).toBe(true);
+    expect(consumeIncomingShareBatch(batch.id)).toBe(false);
+    expect(acknowledge).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the receipt directory when cancelling cannot delete the copy', async () => {
+    const directory = 'file:///group/cindy-share-12345678-1234-1234-1234-123456789abc';
+    const uri = `${directory}/report.pdf`;
+    deleteAsync.mockRejectedValueOnce(new Error('busy'));
+    await deleteIncomingSharedFiles([uri]);
+    expect(deleteAsync).toHaveBeenCalledExactlyOnceWith(uri, { idempotent: true });
+    deleteAsync.mockClear();
+    await deleteIncomingSharedFiles([uri]);
+    expect(deleteAsync.mock.calls.map(([uri]) => uri)).toEqual([uri, directory]);
   });
 
   it('never treats remote URLs as local upload/cleanup targets', () => {

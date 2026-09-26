@@ -139,6 +139,24 @@ pnpm --filter mobile test:smoke
 - 模拟器与真机排错：
   [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md)。
 
+## iOS 入站分享的消费与取消
+
+- 分享副本使用每次分享独立的 `cindy-share-<UUID>` 目录。新建页领取前保留原生
+  记录；领取必须先完成持久确认，之后才把附件交给上传管线。
+- 原生记录清除失败时，在该批自有副本目录创建 `.cindy-share-consumed` 空目录作为
+  处理标记。它不包含文件名、正文或账号信息，随原副本回收，不另建全局账本。
+  已处理或经可读目录列表确认不存在的副本不再进入信箱，文件仍存在也不重复导入；
+  主动重新分享同一文件产生新的 UUID，不受旧标记影响。
+- 标记也无法写入时，保留待接收批次并在既有附件错误行说明失败，不能显示可移除附件后
+  又在重启时恢复。取消、正常清理和七天过期清理都先删除文件，再删除包含标记的目录；
+  文件删除失败时必须保留标记。目录暂不可读不能视为文件已删除。
+- 冷启动分享链接先进入首页，由信箱确认待接收内容后跳转，旧启动链接本身不能再次打开
+  新建页。原生异常的具体原因只写无文件内容的诊断状态，不把路径或文件名写入日志。
+
+实现：`src/session/incomingShareNative.ts`、`incomingShare.ts`、`incomingShareCleanup.ts`
+与 `IncomingShareBridge.tsx`。回归：`src/__tests__/incomingShare*.test.ts` 和
+`nativeIntent.test.ts`。上述 TS 层修复不修改原生配置或模块，不需要为此改变 runtime fingerprint。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
 
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
