@@ -273,18 +273,16 @@ describe('搬家', () => {
     expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
   });
 
-  it('不支持硬链接的文件系统退回确认后 rename,不留半截文件,同样只补缺失的文件', async () => {
+  it('不支持硬链接的文件系统退回独占创建,不替换已有文件,不留标记与临时文件', async () => {
     await writeBotProfileFolder(root, 'bot-a', { userContextSource: '用户手改的档案' });
     const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
     const writeFile = vi.spyOn(fs, 'writeFile');
     try {
       expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
-      // Crash-atomic: content is only ever written to temp files and renamed into place.
-      const home = botProfileDir(root, 'bot-a');
+      // Content never lands on a target path through a replacing write.
       for (const [target] of writeFile.mock.calls) {
-        expect(String(target)).toMatch(/\.tmp-/);
+        expect(String(target)).toMatch(/\.tmp-|\.seeding$/);
       }
-      expect((await fs.readdir(home)).filter((name) => name.includes('.tmp-'))).toEqual([]);
     } finally {
       link.mockRestore();
       writeFile.mockRestore();
@@ -293,6 +291,46 @@ describe('搬家', () => {
     expect(content.identitySource).toBe(SEED.identitySource);
     expect(content.userContextSource).toBe('用户手改的档案');
     expect(content.config).toEqual(SEED.config);
+    const home = botProfileDir(root, 'bot-a');
+    const leftovers = [...await fs.readdir(home), ...await fs.readdir(path.join(home, 'memories'))]
+      .filter((name) => name.includes('.tmp-') || name.endsWith('.seeding'));
+    expect(leftovers).toEqual([]);
+  });
+
+  it('不支持硬链接时,检查之后才出现的文件同样不会被替换', async () => {
+    await writeBotProfileFolder(root, 'bot-a', { identitySource: '编辑器刚保存的灵魂' });
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    // Every existence check still misses SOUL.md: it is saved right after each look.
+    const realAccess = fs.access.bind(fs);
+    const access = vi.spyOn(fs, 'access').mockImplementation(async (target, mode) => {
+      if (String(target).endsWith('SOUL.md')) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return realAccess(target, mode);
+    });
+    try {
+      expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(false);
+    } finally {
+      link.mockRestore();
+      access.mockRestore();
+    }
+    expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe('编辑器刚保存的灵魂');
+  });
+
+  it('被中断的无硬链接补种:截断的文件补全,中断后用户改过的原样保留', async () => {
+    const home = botProfileDir(root, 'bot-a');
+    await fs.mkdir(path.join(home, 'memories'), { recursive: true });
+    // SOUL.md was cut off mid-write: a prefix of what the marker says it should be.
+    await fs.writeFile(path.join(home, 'SOUL.md'), SEED.identitySource.slice(0, 3));
+    await fs.writeFile(path.join(home, 'SOUL.md.seeding'), SEED.identitySource);
+    // USER.md was rewritten by the user after the interruption: not a prefix, so it is theirs.
+    await fs.writeFile(path.join(home, 'memories', 'USER.md'), '崩溃后用户写的档案');
+    await fs.writeFile(path.join(home, 'memories', 'USER.md.seeding'), SEED.userContextSource);
+
+    await migrateBotProfileFolder(root, 'bot-a', SEED);
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe('崩溃后用户写的档案');
+    await expect(fs.access(path.join(home, 'SOUL.md.seeding'))).rejects.toBeTruthy();
+    await expect(fs.access(path.join(home, 'memories', 'USER.md.seeding'))).rejects.toBeTruthy();
   });
 
   it('技能从旧目录整体搬进新家,内容与 slug 都不变', async () => {
