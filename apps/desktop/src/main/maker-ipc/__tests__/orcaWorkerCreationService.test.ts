@@ -2738,3 +2738,16 @@ it('revalidates a plan registered during creation preflight and releases the res
   expect(deps.bootstrapSession).not.toHaveBeenCalled();
   expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
 });
+it('checks the resolved creation directory before bootstrap and releases a rejected reservation', async () => {
+  const resolved = path.resolve('resolved-candidate');
+  const validateCreationPlan = vi.fn(async (_params, directory?: string) => {
+    if (directory !== undefined) throw new Error('Directory authorization revoked');
+    return undefined;
+  });
+  const {deps, service} = createDeps({validateCreationPlan, resolveWorkerWorkingDir: vi.fn(async () => resolved)});
+  const params = {leadSessionId:'lead-1',role:'eval',agent:'codex' as const,label:'sample',workingDir:path.resolve('candidate')};
+  await expect(service.createWorker(params)).rejects.toThrow('Directory authorization revoked');
+  expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved);
+  expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
+});

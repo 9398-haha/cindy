@@ -1,4 +1,5 @@
 import { createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
@@ -10326,7 +10327,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await service.get(pluginId, task.taskId);
         return result;
       }
-      case 'setTeamPlan': return service.setTeamPlan(pluginId, request.taskId, request.plan);
+      case 'setTeamPlan': {
+        const epoch = getCurrentDbClientSnapshot();
+        const task = await service.get(pluginId, request.taskId);
+        const cfg = readGhostErrandConfig(pluginId);
+        const assertCurrent = () => {
+          if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(pluginId) || cfg.workingDir !== readGhostErrandConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
+        };
+        for (const item of request.plan.items) await resolvePluginWorkerDirectory({requested:item.workingDir,leadDirectory:task.workingDir,configuredDirectory:cfg.workingDir,isPickedDirectory:dir=>isGhostPickedDir(pluginId,dir),assertCurrent});
+        const current = await service.get(pluginId, request.taskId);
+        assertCurrent();
+        if (current.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during directory validation');
+        return service.setTeamPlan(pluginId, request.taskId, request.plan);
+      }
       case 'releaseWorker': {
         const epoch = getCurrentDbClientSnapshot();
         await service.get(pluginId,request.taskId);
@@ -11379,13 +11392,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     isActiveWorkerStatus,
     readCollaborationSettings,
-    validateCreationPlan: async params => {
+    validateCreationPlan: async (params, resolvedWorkingDir) => {
       const epoch = getCurrentDbClientSnapshot();
       if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable');
       const receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!receipt || receipt.operation !== 'create') return undefined;
-      await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
+      const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+      const cfg = readGhostErrandConfig(receipt.pluginId);
+      const directory = await resolvePluginWorkerDirectory({
+        requested: params.workingDir ?? task.workingDir ?? '', leadDirectory: task.workingDir,
+        configuredDirectory: cfg.workingDir, isPickedDirectory: dir => isGhostPickedDir(receipt.pluginId,dir),
+        assertCurrent: () => {
+          if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(receipt.pluginId) || cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
+        },
+      });
+      if (resolvedWorkingDir !== undefined && directory !== await realpathWorkingDirectory(resolvedWorkingDir)) throw new PluginTaskError('PERMISSION_DENIED','Worker directory changed during creation');
+      const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
+      if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
       // get() waits behind plan registration in the existing receipt queue.
       const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!currentReceipt) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
