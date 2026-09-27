@@ -145,7 +145,6 @@ function InteractionPanelContent({
   planViewerState,
   onPlanViewerStateChange,
   onError,
-  readOnlyReason,
 }: {
   embedded?: boolean;
   safeAreaBottomInset?: number;
@@ -169,7 +168,6 @@ function InteractionPanelContent({
   onActiveRequestIdChange?(requestId: string | null): void;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
-  readOnlyReason?: string | null;
   onError(message: string | null): void;
 }) {
   const styles = useInteractionStyles();
@@ -203,7 +201,6 @@ function InteractionPanelContent({
   const kind = interactionKind(activeInteraction);
   const queuePresentation = buildPendingInteractionQueuePresentation(sortedInteractions, {
     maxVisible: sortedInteractions.length || 1,
-    readOnly: !!readOnlyReason,
   }, mobilePresentationLocalizer);
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
@@ -253,7 +250,7 @@ function InteractionPanelContent({
     gap: touchLayout.cardGap,
     padding: touchLayout.cardPadding,
   };
-  if (readOnlyReason || isSharedTaskPeer(deviceId)) {
+  if (isSharedTaskPeer(deviceId)) {
     return (
       <View style={[styles.root, fillAvailableHeight && styles.rootFill, rootLayoutStyle]} testID="interaction.panel">
         <PendingTaskHeader
@@ -264,8 +261,8 @@ function InteractionPanelContent({
         <View style={[styles.card, cardLayoutStyle]} testID="interaction.readOnlyCard">
           <Text style={styles.kind}>{t('interaction.panel.readOnlyKind')}</Text>
           <Text style={styles.cardTitle}>{t('interaction.panel.readOnlyTitle')}</Text>
-          <Text style={styles.body}>{readOnlyReason ?? t('sharedTask.waitingHost')}</Text>
-          {isSharedTaskPeer(deviceId) && <Text selectable style={styles.body}>{JSON.stringify(activeInteraction.request, null, 2)}</Text>}
+          <Text style={styles.body}>{t('sharedTask.waitingHost')}</Text>
+          <Text selectable style={styles.body}>{JSON.stringify(activeInteraction.request, null, 2)}</Text>
         </View>
       </View>
     );

@@ -267,7 +267,6 @@
     },
     "queue": {
       "count": "{{count}} 个",
-      "readOnlyHint": "协同只读模式，仅展示电脑端请求。",
       "empty": "没有待处理请求",
       "hint": {
         "plan_review": "先看计划，必要时反馈修改，确认后电脑端才继续执行。",

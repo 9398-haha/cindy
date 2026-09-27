@@ -1,5 +1,5 @@
 import { useAuth } from '@/auth/AuthContext';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,7 +11,7 @@ import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscri
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { getRemoteResource, invokeRemoteResourceAction, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
+import { getRemoteResource, invokeRemoteResourceAction, isMobileRemoteCollectionSupported, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
@@ -25,6 +25,12 @@ function firstParam(value: string | string[] | undefined): string {
 }
 
 export default function RemoteResourceResolverScreen() {
+  const params = useLocalSearchParams<{ collectionId?: string | string[] }>();
+  if (!isMobileRemoteCollectionSupported(firstParam(params.collectionId))) return <Redirect href="/devices" />;
+  return <RemoteResourceResolverScreenContent />;
+}
+
+function RemoteResourceResolverScreenContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();

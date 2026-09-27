@@ -22,6 +22,7 @@ import {
   isTransientRemoteError,
 } from '@/features/device-link/refreshRemoteSessions';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
@@ -43,9 +44,34 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unresponsiveDevicesStore.clearAll();
   remoteProjectsStore.clear();
   clearRemoteSessionActivity();
   vi.unstubAllGlobals();
+});
+
+it('keeps cached content and leaves recovery probing to main while a device is unresponsive', async () => {
+  const device = did();
+  const cached = session('cached');
+  remoteProjectsStore.setDeviceSessions(device, 'Host', [cached]);
+  const cachedSnapshot = remoteProjectsStore.getDeviceSessions(device);
+  unresponsiveDevicesStore.apply(device, true);
+  expect(await refreshRemoteDeviceSessions(device)).toBe('gave-up');
+  expect(invoke).not.toHaveBeenCalled();
+  expect(remoteProjectsStore.getDeviceSessions(device)).toEqual(cachedSnapshot);
+  unresponsiveDevicesStore.apply(device, false);
+  invoke.mockResolvedValue([session('fresh')]);
+  expect(await refreshRemoteDeviceSessions(device)).toBe('ok');
+  expect(invoke).toHaveBeenCalledOnce();
+});
+
+it('stops an existing retry chain as soon as main opens the circuit', async () => {
+  const device = did();
+  invoke.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] timeout'));
+  const sleep = vi.fn(async () => { unresponsiveDevicesStore.apply(device, true); });
+  expect(await refreshRemoteDeviceSessions(device, undefined, { sleep })).toBe('gave-up');
+  expect(sleep).toHaveBeenCalledOnce();
+  expect(invoke).toHaveBeenCalledOnce();
 });
 
 function session(id: string, partial: Partial<Session> = {}): Session {

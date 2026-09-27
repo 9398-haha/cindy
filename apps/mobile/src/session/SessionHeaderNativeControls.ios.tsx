@@ -162,6 +162,7 @@ export function SessionHeaderNativeActions({
   onDetails,
   onDesktop,
   onAction,
+  detailsOnly = false,
 }: SessionHeaderNativeActionsProps) {
   const { colors, mode } = useTheme();
   const groupStyle = useNativeGlassGroupStyle();
@@ -175,12 +176,13 @@ export function SessionHeaderNativeActions({
       colorScheme={mode}
       seedColor={colors.textPrimary}
       ignoreSafeArea="all"
-      style={{ width: navigationChrome.target * 3, height: navigationChrome.target }}
+      style={{ width: navigationChrome.target * (detailsOnly ? 1 : 3), height: navigationChrome.target }}
     >
       <HStack
         spacing={0}
         modifiers={groupStyle}
       >
+        {detailsOnly ? null : <>
         <Button
           onPress={onDesktop}
           testID="session.remoteDesktop"
@@ -206,6 +208,7 @@ export function SessionHeaderNativeActions({
         >
           <SessionHeaderIcon icon={Folder} color={colors.textPrimary} />
         </Button>
+        </>}
         <Button
           label={moreLabel}
           systemImage="ellipsis"

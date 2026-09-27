@@ -35,6 +35,8 @@ vi.mock('@/lib/logger', () => ({
 
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
+import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
 
 /** Real hook/store/refresh orchestration with independent controllable peer transports. */
 const peers = ['slow', 'healthy'].map((deviceId) => ({
@@ -72,6 +74,7 @@ const control = (enabled: boolean) =>
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.mocked(prefetchDeviceGitSafetySettings).mockReset();
   listeners = {};
   subscribe.mockReset().mockResolvedValue({});
   invoke
@@ -117,6 +120,23 @@ afterEach(() => {
 });
 
 describe('multi-device recovery lifecycle', () => {
+  it('late catalog completion cannot clear a newer revocation', async () => {
+    const old = deferred<void>();
+    vi.mocked(prefetchDeviceGitSafetySettings).mockImplementation((peer) =>
+      peer === 'slow' ? old.promise : Promise.resolve(),
+    );
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    expect(prefetchDeviceGitSafetySettings).toHaveBeenCalledWith('slow');
+    act(() => listeners.onAccessRevoked({ deviceId: 'slow' }));
+    expect(revokedDevicesStore.has('slow')).toBe(true);
+    old.resolve();
+    await settle();
+    expect(revokedDevicesStore.has('slow')).toBe(true);
+    expect(remoteProjectsStore.hasDevice('slow')).toBe(false);
+    expect(remoteProjectsStore.hasDevice('healthy')).toBe(true);
+  });
+
   it('slow subscription does not delay a healthy peer, and disable cancels queued bootstrap', async () => {
     const slow = deferred<object>();
     subscribe.mockImplementation((peer: string) =>

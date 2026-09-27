@@ -55,7 +55,7 @@ export default function CompanionDirectMessages() {
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   return <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.screen}>
     <SimpleStackHeader title={viewer && peer ? `${viewer.name} ⇄ ${peer.name}` : t('devices.companions.messages')}
-      subtitle={t('devices.companions.readOnly')} onBack={() => goBackGuarded(router)} />
+      onBack={() => goBackGuarded(router)} />
     <ScrollView contentContainerStyle={styles.content} testID="companion.directThread">
       {!online ? <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text> : null}
       {messages.map((message) => {
