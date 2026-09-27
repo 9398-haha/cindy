@@ -209,7 +209,8 @@ export interface OrcaWorkerCreationDeps {
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
   withLeadSendLock?<T>(leadSessionId: string, operation: () => Promise<T>): Promise<T>;
-  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams, resolvedWorkingDir?: string): Promise<number | null | undefined>;
+  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams, resolvedWorkingDir?: string,
+    resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean }): Promise<number | null | undefined>;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -994,7 +995,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       const admit = async () => {
         // Preparation may await providers or remote state. Re-read the plan at
         // the final admission boundary shared with plan registration and input.
-        const latestLimit = await deps.validateCreationPlan?.(params, workingDir);
+        const latestLimit = await deps.validateCreationPlan?.(params, workingDir, resolved);
         settings.workerHardLimit = deps.readCollaborationSettings().workerHardLimit;
         if (latestLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, latestLimit);
         return deps.reserveWorkerCreation({
@@ -1037,7 +1038,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     try {
       // Registration may race the preflight. Once a reservation exists, a new
       // plan cannot be registered; reread any plan that won before reservation.
-      const reservedPlanLimit = await deps.validateCreationPlan?.(params, workingDir);
+      const reservedPlanLimit = await deps.validateCreationPlan?.(params, workingDir, resolved);
       if (reservedPlanLimit != null && reservation.occupiedSlotsBefore >= reservedPlanLimit) {
         return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
       }
