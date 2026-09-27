@@ -10312,23 +10312,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
             await assertIdle();
             const live = maker.getSession(task.taskId);
-            if (live) await live.setPermissionMode(mode);
+            let persisted = false;
             try {
+              if (live) await live.setPermissionMode(mode);
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const saved = await snapshot!.client.tx('bots.persistSessionPermission', {sessionId: task.taskId, mode});
+              persisted = saved.updated;
               if (!saved.updated) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+              if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+              const updatedTask = await service.get(pluginId, task.taskId);
+              if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+              const currentConfig = readGhostErrandConfig(pluginId);
+              if (currentConfig.permissionMode !== cfg.permissionMode) throw new PluginTaskError('PERMISSION_DENIED', 'Permission settings changed');
+              if (mode === 'auto' || clampErrandPermissionMode(currentConfig.permissionMode) === 'plan') writeGhostErrandConfig(pluginId, {...currentConfig, permissionMode: mode});
+              broadcastSessionPatched(task.taskId, {permissionMode: mode});
+              return { granted: true, task: updatedTask };
             } catch (error) {
               if (live) await live.setPermissionMode(task.permissionMode as Parameters<typeof live.setPermissionMode>[0]).catch(() => undefined);
+              if (persisted) await snapshot!.client.tx('bots.persistSessionPermission', {sessionId: task.taskId, mode: task.permissionMode});
               throw error;
             }
-            if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-            await service.get(pluginId, task.taskId);
-            if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-            const currentConfig = readGhostErrandConfig(pluginId);
-            if (currentConfig.permissionMode !== cfg.permissionMode) throw new PluginTaskError('PERMISSION_DENIED', 'Permission settings changed');
-            if (mode === 'auto' || clampErrandPermissionMode(currentConfig.permissionMode) === 'plan') writeGhostErrandConfig(pluginId, {...currentConfig, permissionMode: mode});
-            broadcastSessionPatched(task.taskId, {permissionMode: mode});
-            return { granted: true, task: await service.get(pluginId, task.taskId) };
           });
         } finally { pluginPermissionRequests.delete(pluginId); }
       }

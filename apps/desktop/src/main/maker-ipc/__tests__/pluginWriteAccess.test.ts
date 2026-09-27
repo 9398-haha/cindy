@@ -47,6 +47,31 @@ describe('plugin write confirmation interleavings', () => {
   const f = fixture(); f.live.setPermissionMode.mockImplementationOnce(async () => { f.change({ permissionMode: 'acceptEdits', model: 'new' }); });
   await expect(f.run('auto')).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   expect(f.write).not.toHaveBeenCalled(); expect(f.slots.size).toBe(0);
+  expect(f.live.setPermissionMode).toHaveBeenLastCalledWith('plan');
+  expect(f.epoch.client.tx).toHaveBeenLastCalledWith('bots.persistSessionPermission', {sessionId:'task', mode:'plan'});
+ });
+ it.each(['database', 'lastRead'] as const)('rolls back runtime and stored permission after late %s revocation', async point => {
+  const f=fixture();
+  const revoke=()=>f.change({permissionMode:'acceptEdits',model:'new'});
+  if(point==='database') f.epoch.client.tx.mockImplementationOnce(async()=>{revoke();return {updated:true};});
+  else f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>{revoke();return {taskId:'task',revision:1,permissionMode:'auto'};});
+  await expect(f.run('auto')).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+  expect(f.live.setPermissionMode.mock.calls).toEqual([['auto'],['plan']]);
+  expect(f.epoch.client.tx).toHaveBeenLastCalledWith('bots.persistSessionPermission',{sessionId:'task',mode:'plan'});
+  expect(f.config()).toEqual({permissionMode:'acceptEdits',model:'new'});
+  expect(f.write).not.toHaveBeenCalled();expect(f.slots.size).toBe(0);
+ });
+ it('rolls back a persisted grant if the final ownership read fails', async()=>{
+  const f=fixture();
+  f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
+   .mockRejectedValueOnce(new Error('owner revoked'));
+  await expect(f.run('auto')).rejects.toThrow('owner revoked');
+  expect(f.live.setPermissionMode).toHaveBeenLastCalledWith('plan');
+  expect(f.epoch.client.tx).toHaveBeenLastCalledWith('bots.persistSessionPermission',{sessionId:'task',mode:'plan'});
+  expect(f.write).not.toHaveBeenCalled();
  });
 });
 
