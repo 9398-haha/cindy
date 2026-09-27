@@ -45,7 +45,13 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .from(table).where(and(scope, eq(table.id, after))).limit(1) : [];
       if (after && !cursor) throw new PluginTaskError('INVALID_REQUEST', 'Invalid task cursor');
       return db.drizzle
-        .select()
+        .select({
+          ...getTableColumns(table),
+          // Task listing only needs receipt IDs to read session views. Keep
+          // large creation plans inside SQLite; run listing still reconciles
+          // send payloads and therefore must retain them.
+          payload: operation === 'create' ? sql<string>`''` : table.payload,
+        })
         .from(table)
         .where(
           and(
