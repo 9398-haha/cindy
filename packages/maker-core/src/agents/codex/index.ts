@@ -7339,10 +7339,9 @@ assertRouteCurrent();
         config?.['mcp_servers.cindy_scheduler.enabled'] === false) return null;
 
       const verifyAndRecover = async (): Promise<void> => {
-        const hasScheduler = async (): Promise<boolean> => {
+        const hasScheduler = async (deadline: number): Promise<boolean> => {
           let cursor: string | null = null;
           const seenCursors = new Set<string>();
-          const deadline = Date.now() + 10_000;
           do {
             if (cursor !== null) {
               if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
@@ -7350,7 +7349,7 @@ assertRouteCurrent();
             }
             if (seenCursors.size >= 5) throw new Error('Codex MCP status pagination exceeded five pages');
             const remainingMs = deadline - Date.now();
-            if (remainingMs <= 0) throw new Error('Codex MCP status pagination timed out');
+            if (remainingMs <= 0) return false;
             const status: CodexMcpServerStatusListResponse = await host.request<CodexMcpServerStatusListResponse>(
               Method.McpServerStatusList,
               { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
@@ -7366,7 +7365,7 @@ assertRouteCurrent();
 
         let available: boolean;
         try {
-          available = await hasScheduler();
+          available = await hasScheduler(Date.now() + 10_000);
         } catch (error) {
           // A failed diagnostic must not prevent unrelated work.
           log.warn('scheduler MCP verification failed', {
@@ -7380,14 +7379,22 @@ assertRouteCurrent();
         // The existing refresh path closes this handle if the cold resume cannot
         // be confirmed. Propagate that failure instead of sending on a stale one.
         await ensureContextLimitForNextTurn(undefined, true);
-        try {
-          available = await hasScheduler();
-        } catch (error) {
-          log.warn('scheduler MCP verification after cold resume failed', {
-            threadId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return;
+        const startupDeadline = Date.now() + 10_000;
+        while (!closed && Date.now() < startupDeadline) {
+          try {
+            available = await hasScheduler(startupDeadline);
+          } catch (error) {
+            log.warn('scheduler MCP verification after cold resume failed', {
+              threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+          if (available) return;
+          const remainingMs = startupDeadline - Date.now();
+          if (remainingMs > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(100, remainingMs)));
+          }
         }
         if (!available) {
           log.warn('scheduler MCP remains unavailable after Codex thread cold resume', { threadId });
