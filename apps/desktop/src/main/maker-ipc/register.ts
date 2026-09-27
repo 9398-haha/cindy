@@ -10279,7 +10279,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
         const before = JSON.stringify(cfg);
         const assertIdle = async () => {
-          if (mode === 'acceptEdits' && (await service.listRuns(pluginId, task.taskId)).items.length) throw new PluginTaskError('TASK_BUSY', 'Only an unstarted task can request write access');
+          if (mode === 'acceptEdits') {
+            if ((await service.listRuns(pluginId, task.taskId)).items.length) throw new PluginTaskError('TASK_BUSY', 'Only an unstarted task can request write access');
+            await drainPersistQueue();
+            if (!snapshot || snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+            // Ordinary UI turns have no plugin send receipt. Clearing or rewinding
+            // their messages must not make an already-started task new again.
+            const [input] = await snapshot.client.drizzle.select({id: messages.id}).from(messages)
+              .where(and(eq(messages.sessionId, task.taskId), eq(messages.role, 'user'))).limit(1);
+            const [row] = await snapshot.client.drizzle.select({startedAt: sessions.activeTurnStartedAt, endedAt: sessions.lastTurnEndedAt}).from(sessions)
+              .where(eq(sessions.id, task.taskId)).limit(1);
+            if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+            if (input || row?.startedAt != null || row?.endedAt != null) throw new PluginTaskError('TASK_BUSY', 'Only an unstarted task can request write access');
+          }
           const live = maker.getSession(task.taskId);
           if (live?.isTurnRunning() || live?.getTurnControlSnapshot().pendingInteractionCount || inputCoordinator.getQueueControlSnapshot(task.taskId).pendingQueue.length) throw new PluginTaskError('TASK_BUSY', 'Wait for the current turn before changing permission');
         };
