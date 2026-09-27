@@ -14,6 +14,7 @@ Agent runtime、Cindy Make 工具、Ollama runtime、插件包、Skill 包及更
 - `signal` 取消排队、请求、缓存／续传哈希和重试等待；连接／闲置超时可重试，`timeout.totalMs`
   限制取得下载槽位后的活动时长（含校验和重试等待，不含排队）。业务取消与超时分别返回 `ABORTED` 和 `TIMEOUT`。
 - 默认保留部分文件以续传；一次性安装暂存目录可用 `resume: false`。
+  此模式不创建或写入续传元数据，避免将一次性授权 URL 留在磁盘；失败时删除部分文件。
   调用方只有在下载 Promise 结束后才可 `cleanup()` 或删除暂存目录。
 - 默认校验成功后替换目标，下载失败保留原目标；`existingTarget: 'error'`
   原子地拒绝覆盖已有文件。不要让多个进程共写同一个暂存路径。
