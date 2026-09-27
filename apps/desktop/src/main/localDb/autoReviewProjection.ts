@@ -67,7 +67,7 @@ export function readAutoReviewProjection(
         }
         const review = projector.reviewState([row]);
         if (review.unverified) state.reviewUnverified = true;
-        else
+        if (!review.unverified || review.intent !== '')
           state.reviewIntent = projector.append(
             reset ? '' : state.reviewIntent,
             review.intent as string,
@@ -119,7 +119,7 @@ export function readAutoReviewProjection(
       CREATE TEMP TRIGGER auto_review_project AFTER UPDATE OF revision ON main.auto_review_projections
       WHEN (SELECT depth FROM auto_review_projection_batch) = 0
       BEGIN
-        UPDATE auto_review_projections SET payload = cindy_authority_projection_v1(CASE WHEN OLD.projected_revision = OLD.revision AND OLD.version = 2
+        UPDATE auto_review_projections SET payload = cindy_authority_projection_v1(CASE WHEN OLD.projected_revision = OLD.revision AND OLD.version = 3
           AND json_extract(NEW.payload, '$.appendEvent.role') = 'user'
           AND json_extract(NEW.payload, '$.appendEvent.visible') = 1
           AND json_extract(NEW.payload, '$.appendEvent.createdAt') > json_extract(OLD.payload, '$.lastEventAt')
@@ -136,7 +136,7 @@ export function readAutoReviewProjection(
                 THEN json_extract(m.agent_meta,'$.autoReviewUserText.acceptedAt') ELSE m.created_at END
               ELSE m.created_at END,
               CASE WHEN m.session_id = NEW.lead_id THEN 0 ELSE 1 END, m.rowid)
-        ) END, NEW.session_id, OLD.payload, json_extract(NEW.payload, '$.appendEvent')), projected_revision = NEW.revision, version = 2
+        ) END, NEW.session_id, OLD.payload, json_extract(NEW.payload, '$.appendEvent')), projected_revision = NEW.revision, version = 3
         WHERE session_id = NEW.session_id AND lead_id = NEW.lead_id;
       END`);
   }
@@ -156,13 +156,13 @@ export function readAutoReviewProjection(
     let row = select.get(sessionId, leadId) as Row;
     // First use after upgrade or a legacy writer rebuilds from current evidence
     // inside this transaction. Never fall back to the previous payload.
-    if (row.version !== 2 || row.projected_revision !== row.revision || row.payload === null) {
+    if (row.version !== 3 || row.projected_revision !== row.revision || row.payload === null) {
       db.prepare(
         "UPDATE auto_review_projections SET revision = revision + 1, payload = json_remove(payload, '$.appendEvent') WHERE session_id = ? AND lead_id = ?",
       ).run(sessionId, leadId);
       row = select.get(sessionId, leadId) as Row;
     }
-    if (row.version !== 2 || row.projected_revision !== row.revision || !row.payload)
+    if (row.version !== 3 || row.projected_revision !== row.revision || !row.payload)
       throw new Error('Authorization projection is not synchronized');
     const value = JSON.parse(row.payload) as StoredAutoReviewProjection & {
       reviewUnverified: boolean;

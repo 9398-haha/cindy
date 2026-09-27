@@ -413,7 +413,7 @@ it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as
  const record = {id:'worker',sessionId:'child',label:'one',status:phase === 'alreadyArchived' ? 'archived' : 'done'};
  const query = {from:()=>query,innerJoin:()=>query,where:()=>query,limit:async()=>[record]};
  const epoch = {client:{drizzle:{select:()=>query}}};
- const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,
+ const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,readPluginTaskPlanReceipt,
   orcaWorkers:{},orcaTeams:{},sessions:{},eq:()=>true,and:()=>true,
   createPluginTaskStore:()=>({get:async()=>({payload:JSON.stringify({teamPlan:{items:[{label:'one'}]}})})}),
   readPluginWorkerCompletion:async()=>({row:record,completedAt:1}),orcaTeamService:{archiveWorker}};

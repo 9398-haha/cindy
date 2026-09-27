@@ -141,7 +141,6 @@ export function createAutoReviewIntentProjection() {
     const meta = message.agentMeta;
     const receipt = meta?.autoReviewUserText;
     return !!(meta?.autoResume || meta?.contextRebuild ||
-      (typeof receipt === "string" && receipt.startsWith("[UI_ACTION_TRIGGER]")) ||
       (receipt && typeof receipt === "object" && "kind" in receipt &&
         (receipt.kind === "scheduled-continuation" || receipt.kind === "delegated-continuation")));
   }
@@ -257,6 +256,10 @@ export function createAutoReviewIntentProjection() {
           omitted = true;
         }
       } else if (m.role === "user") {
+        // Legacy UI triggers and literal user text share this string receipt.
+        // Keep restrictions, but do not let ambiguous provenance establish Auto consent.
+        if (typeof receipt === "string" && receipt.startsWith("[UI_ACTION_TRIGGER]"))
+          omitted = true;
         if (
           typeof receipt === "string" &&
           ["turn", "steer"].includes(String(m.agentMeta?.delivery))

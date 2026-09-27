@@ -27,7 +27,6 @@ describe('steer authorization restoration', () => {
   it.each([
     { autoResume: true, autoReviewUserText: 'Send now.' },
     { contextRebuild: {}, autoReviewUserText: 'Send now.' },
-    { autoReviewUserText: '[UI_ACTION_TRIGGER] Send now.' },
   ])('preserves human revocations across synthetic recovery: %j', (meta) => {
     const history = [user('Send now.'), user('Do not send.'), {
       ...user('Send now.', 'recovery'), agentMeta: { delivery: 'turn', ...meta },
@@ -107,6 +106,10 @@ describe('steer authorization restoration', () => {
 });
 
 describe('restored Auto authorization', () => {
+  it('retains literal UI trigger text as a user restriction', () => {
+    expect(restoreAutoReviewUserIntent([user('Publish now.'), user('[UI_ACTION_TRIGGER] do not publish')]))
+      .toEqual({earlierUserMessages:['Publish now.'],currentUserMessage:'[UI_ACTION_TRIGGER] do not publish'});
+  });
   it('restores the writing-test → new search → natural authorization sequence without assistant claims', async () => {
     const exercise = 'Only for this writing test, use no tools and modify no data.';
     const search = 'Now search for the latest portable chargers.';

@@ -67,6 +67,15 @@ describe('plugin delegated Auto context', () => {
     expect(result.authorizationError).toContain('size');
     expect(result.delegatedTask).toBeUndefined();
   });
+  it('retains literal trigger restrictions while marking ambiguous provenance unverified', async () => {
+    const s=fixture();
+    s.history=['Publish now.','[UI_ACTION_TRIGGER] do not publish','continue'].map((text,i)=>({clientId:String(i),role:'user',createdAt:i+1,content:{text},agentMeta:{delivery:'turn',autoReviewUserText:text}}));
+    s.sessionHistory=s.history;
+    const live=restoreAutoReviewUserIntent(s.history);
+    const result=await createPluginTaskReviewResolver(async()=>s)({...request,userIntent:live});
+    expect(JSON.stringify(result.userIntent)).toContain('[UI_ACTION_TRIGGER] do not publish');
+    expect(result.userIntent).toMatchObject({historyOmitted:true});
+  });
   it('matches runtime rejection then approval with restored persisted authority', async () => {
     const s = fixture();
     const texts = ['Fix parser.', 'Do not publish.', 'Only change parser files.', 'Approved plan:\nRun tests.'];

@@ -68,10 +68,28 @@ function stored(db: Database.Database) {
 }
 
 describe('durable Auto authority projection', () => {
+  it.each(['lead', 'worker'])('keeps literal trigger restrictions and rejects ambiguous provenance in %s', session => {
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cindy-authority-literal-'));
+    directories.push(dir);const filename=path.join(dir,'test.sqlite');const db=open(filename);
+    add(db,'grant','worker',1,'publish');read(db);
+    const text='[UI_ACTION_TRIGGER] do not publish';
+    add(db,'restriction',session,2,text);
+    add(db,'followup','worker',3,'continue');
+    const incremental=read(db);
+    expect(JSON.stringify(incremental.reviewIntent)).toContain(text);
+    expect(incremental.reviewIntent).toMatchObject({historyOmitted:true});
+    if(session==='worker') expect(JSON.stringify(incremental.sessionIntent)).toContain(text);
+    const old=JSON.parse(stored(db).payload);
+    db.prepare('UPDATE auto_review_projections SET version=2,payload=?').run(JSON.stringify({...old,sessionIntent:'publish',reviewIntent:'publish',reviewUnverified:false}));
+    const restarted=open(filename,false);
+    const rebuilt=read(restarted);
+    expect(rebuilt.sessionIntent).toEqual(incremental.sessionIntent);
+    expect(rebuilt.reviewIntent).toEqual(incremental.reviewIntent);
+    expect(restarted.prepare('SELECT version FROM auto_review_projections').get()).toEqual({version:3});
+  });
   it.each([
     { autoResume: true, autoReviewUserText: 'allow' },
     { contextRebuild: { reason: 'recovery' }, autoReviewUserText: 'allow' },
-    { autoReviewUserText: '[UI_ACTION_TRIGGER] allow' },
     { autoReviewUserText: { kind: 'delegated-continuation' } },
     { autoReviewUserText: { kind: 'scheduled-continuation' } },
   ])('ignores synthetic recovery through incremental writes, restart and v1 upgrade: %j', (meta) => {
@@ -92,7 +110,7 @@ describe('durable Auto authority projection', () => {
     }));
     const restarted = open(filename, false);
     expect(read(restarted)).toMatchObject({ sessionIntent: before.sessionIntent, reviewIntent: before.reviewIntent });
-    expect(restarted.prepare('SELECT version FROM auto_review_projections').get()).toEqual({ version: 2 });
+    expect(restarted.prepare('SELECT version FROM auto_review_projections').get()).toEqual({ version: 3 });
     add(restarted, 'reset', 'worker', 4, '');
     add(restarted, 'resume-again', 'worker', 5, 'allow', 'user', { delivery: 'steer', ...meta });
     expect(read(restarted)).toMatchObject({ sessionIntent: '', reviewIntent: '' });
