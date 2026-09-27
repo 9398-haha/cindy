@@ -20,11 +20,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  buildRenderItems,
-  collectTurnFinalAssistantClientIds,
-  groupWorkRuns,
-} from '../components/chat/MessageStream';
+import { buildRenderItems, groupWorkRuns } from '../components/chat/MessageStream';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 
 // ── 工厂 ───────────────────────────────────────────────────────────────────
@@ -229,10 +225,9 @@ describe('后台任务自动续跑 — 只有最后一次 seal 是收尾正文',
 
     expect(topLevelMessages).toEqual(['u1', 'final']);
     expect(workGroups(items)).toHaveLength(1);
-    expect(collectTurnFinalAssistantClientIds(messages)).toEqual(new Set(['final']));
   });
 
-  it('更早的交付正文 seal 仍留在组外并保留操作行', () => {
+  it('更早的交付正文 seal 仍留在组外', () => {
     const messages: ChatMessage[] = [
       mkUser('u1'),
       mkTool('work', 'Bash'),
@@ -250,7 +245,48 @@ describe('后台任务自动续跑 — 只有最后一次 seal 是收尾正文',
       .map((item) => item.message.clientId);
 
     expect(topLevelMessages).toEqual(['u1', 'early-report', 'final']);
-    expect(collectTurnFinalAssistantClientIds(messages)).toEqual(new Set(['early-report', 'final']));
+  });
+
+  it('更早 seal 的引言与交付正文作为一段整体留在组外,不被拆开', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1'),
+      mkTool('work', 'Bash'),
+      mkResult('work-result', 'tu-work'),
+      mkAssistant('intro', '先给结论。'),
+      mkAssistant('report', formalSummary, true),
+      mkTool('check', 'Bash'),
+      mkResult('check-result', 'tu-check'),
+      mkAssistant('final', '后台核对也通过了。', true),
+    ];
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+    const topLevelMessages = items
+      .filter((item) => item.type === 'message')
+      .map((item) => item.message.clientId);
+
+    expect(topLevelMessages).toEqual(['u1', 'intro', 'report', 'final']);
+  });
+
+  it('更早 seal 只带图片 / 文件附件和一句短说明时仍留在组外', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1'),
+      mkTool('render', 'Bash'),
+      mkResult('render-result', 'tu-render'),
+      {
+        ...mkAssistant('chart', '图表在这里。', true),
+        images: [{ url: '/chart.png', mimeType: 'image/png', originalName: 'chart.png' }],
+      },
+      mkTool('check', 'Bash'),
+      mkResult('check-result', 'tu-check'),
+      mkAssistant('final', '后台核对也通过了。', true),
+    ];
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+    const topLevelMessages = items
+      .filter((item) => item.type === 'message')
+      .map((item) => item.message.clientId);
+
+    expect(topLevelMessages).toEqual(['u1', 'chart', 'final']);
   });
 
   it('同一 sealed SDK turn 的连续多段正式正文都留在组外', () => {

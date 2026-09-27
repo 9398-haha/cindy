@@ -3,7 +3,6 @@ import {
   buildMessageRenderItems,
   extractTodosFromSourceMessage,
   formatDuration,
-  isDeliveryProseText,
   type MessageRenderAgentTaskItem,
   type MessageRenderItem,
   type MessageRenderOptions,
@@ -166,12 +165,12 @@ export function markTurnFinalAssistants(
 ): void {
   const suppressTailFinalAssistant = isSessionStreaming && hasActiveLoadedTail(normalized);
   let lastCandidate: NormalizedRemoteMessage | null = null;
-  let lastSealed: NormalizedRemoteMessage | null = null;
+  let sealedAnswerFound = false;
   for (const message of normalized) {
     if (message.kind === 'user' && message.label === 'user' && !isSubagentChildMessage(message)) {
-      if (!lastSealed && lastCandidate) lastCandidate.isTurnFinalAssistant = true;
+      if (!sealedAnswerFound && lastCandidate) lastCandidate.isTurnFinalAssistant = true;
       lastCandidate = null;
-      lastSealed = null;
+      sealedAnswerFound = false;
       continue;
     }
     if (
@@ -181,17 +180,12 @@ export function markTurnFinalAssistants(
     ) {
       lastCandidate = message;
       if (message.turnCompleted === true) {
-        // 后台唤醒会让同一 turn 盖多次 seal:只有最后一次是收尾正文,更早的只在
-        // 作为交付正文留在折叠组外时保留操作行(与 groupWorkRuns 同口径)。
-        if (lastSealed && !isDeliveryProseText(lastSealed.body)) {
-          delete lastSealed.isTurnFinalAssistant;
-        }
         message.isTurnFinalAssistant = true;
-        lastSealed = message;
+        sealedAnswerFound = true;
       }
     }
   }
-  if (!lastSealed && lastCandidate && !suppressTailFinalAssistant) {
+  if (!sealedAnswerFound && lastCandidate && !suppressTailFinalAssistant) {
     lastCandidate.isTurnFinalAssistant = true;
   }
 }

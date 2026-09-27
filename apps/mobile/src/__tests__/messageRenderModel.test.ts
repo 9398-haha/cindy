@@ -559,8 +559,21 @@ describe('messageRenderModel', () => {
     it('folds an earlier short sealed reply when a background task auto-continues the user request', () => {
       const items = backgroundContinuation('还有一个后台任务在跑。');
 
-      expect(turnFinalKeys(items)).toEqual(['gate-followup']);
+      // 折进「已工作」后仍是一次 SDK turn 的收尾正文,展开可见其操作行。
+      expect(turnFinalKeys(items)).toEqual(['main-summary', 'gate-followup']);
       expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
+    });
+
+    it('keeps an earlier sealed reply with a markdown image visible across a background auto-continuation', () => {
+      const items = backgroundContinuation('图表如下 ![chart](https://example.com/chart.png)');
+
+      expect(items.map((item) => item.type)).toEqual([
+        'message',
+        'work_group',
+        'message',
+        'work_group',
+        'message',
+      ]);
     });
 
     it('keeps an earlier sealed delivery-prose summary visible across a background auto-continuation', () => {

@@ -231,15 +231,16 @@ function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
  * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
  * 外面只剩 110 字的「已触发通知」)。
  *
- * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
- * 提供,两端不各写一份。
+ * 正文判据(长度 / 块级 markdown 结构 / 内嵌图片)由 maker-shared 的 isDeliveryProseText
+ * 单一提供,两端不各写一份;桌面消息另带 images / files 附件,附件本身就是交付成果。
  */
 function isDeliveryProseItem(it: RenderItem): boolean {
   return (
     it.type === 'message' &&
     it.message.role === 'assistant' &&
     !it.message.systemCardType &&
-    isDeliveryProseText(it.message.content)
+    (Boolean(it.message.images?.length || it.message.files?.length) ||
+      isDeliveryProseText(it.message.content))
   );
 }
 

@@ -459,7 +459,7 @@ describe('collectTurnFinalAssistantClientIds', () => {
     expect(finals.has('a2-draft')).toBe(false);
   });
 
-  it('marks only the last sealed SDK turn when background work auto-continues without a user boundary', () => {
+  it('marks every sealed SDK turn when background work auto-continues without a user boundary', () => {
     const messages = [
       mkUser('u1'),
       { ...mkAssistant('main-summary'), turnCompleted: true },
@@ -467,21 +467,9 @@ describe('collectTurnFinalAssistantClientIds', () => {
       { ...mkAssistant('gate-followup'), turnCompleted: true },
     ];
 
-    expect(collectTurnFinalAssistantClientIds(messages)).toEqual(new Set(['gate-followup']));
-  });
-
-  it('keeps an earlier sealed delivery-prose summary as a turn final', () => {
-    const report = '## 结论\n\n- 第一条\n- 第二条\n- 第三条';
-    const messages = [
-      mkUser('u1'),
-      { ...mkAssistant('main-summary', report), turnCompleted: true },
-      mkTool('gate', 'Bash'),
-      { ...mkAssistant('gate-followup'), turnCompleted: true },
-    ];
-
-    expect(collectTurnFinalAssistantClientIds(messages)).toEqual(
-      new Set(['main-summary', 'gate-followup']),
-    );
+    const finals = collectTurnFinalAssistantClientIds(messages);
+    expect([...finals]).toEqual(expect.arrayContaining(['main-summary', 'gate-followup']));
+    expect(finals.size).toBe(2);
   });
 
   it('does not add an unsealed progress message once the user turn contains sealed answers', () => {
@@ -492,7 +480,9 @@ describe('collectTurnFinalAssistantClientIds', () => {
       { ...mkAssistant('gate-followup'), turnCompleted: true },
     ];
 
-    expect(collectTurnFinalAssistantClientIds(messages)).toEqual(new Set(['gate-followup']));
+    const finals = collectTurnFinalAssistantClientIds(messages);
+    expect([...finals]).toEqual(expect.arrayContaining(['main-summary', 'gate-followup']));
+    expect(finals.has('unsealed-progress')).toBe(false);
   });
 
   it('does not treat steer messages as turn boundaries', () => {

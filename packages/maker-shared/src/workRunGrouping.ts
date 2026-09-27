@@ -166,36 +166,48 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
   adapter: WorkRunGroupingAdapter<TItem, TChild>,
 ): TItem[] | null {
   const answers = new Set<number>();
+  const sealed: number[] = [];
   let lastAnswer = -1;
-  let lastSealed = -1;
   for (let index = 0; index < items.length; index++) {
     if (!adapter.isAnswer(items[index])) continue;
     lastAnswer = index;
-    if (adapter.isSealedAnswer(items[index])) lastSealed = index;
+    if (adapter.isSealedAnswer(items[index])) sealed.push(index);
   }
   if (lastAnswer < 0) return null;
 
-  if (lastSealed >= 0) {
+  if (sealed.length > 0) {
     // Background wake-ups (async agents, background shells) seal several SDK turns under
-    // one user row; only the last seal is the turn's answer. Earlier seals fold like any
-    // progress text unless isArchivable keeps them visible as delivery prose.
-    const sealedIndex = lastSealed;
-    let lastActivity = -1;
-    for (let index = sealedIndex - 1; index >= 0; index--) {
-      if (adapter.isActivity(items[index])) {
-        lastActivity = index;
-        break;
+    // one user row. The last seal is the turn's answer; an earlier seal stays visible only
+    // when its contiguous answer run carries a delivery (a non-archivable answer), and then
+    // the whole run stays together so an intro is never split from its report.
+    let segmentStart = 0;
+    for (const sealedIndex of sealed) {
+      let lastActivity = -1;
+      for (let index = sealedIndex - 1; index >= segmentStart; index--) {
+        if (adapter.isActivity(items[index])) {
+          lastActivity = index;
+          break;
+        }
       }
-    }
-    let answerStart = sealedIndex;
-    while (
-      answerStart > lastActivity + 1 &&
-      adapter.isAnswer(items[answerStart - 1])
-    ) {
-      answerStart--;
-    }
-    for (let index = answerStart; index <= sealedIndex; index++) {
-      if (adapter.isAnswer(items[index])) answers.add(index);
+      let answerStart = sealedIndex;
+      while (
+        answerStart > lastActivity + 1 &&
+        answerStart > segmentStart &&
+        adapter.isAnswer(items[answerStart - 1])
+      ) {
+        answerStart--;
+      }
+      let keep = sealedIndex === sealed[sealed.length - 1];
+      for (let index = answerStart; index <= sealedIndex && !keep; index++) {
+        keep =
+          adapter.isAnswer(items[index]) && !adapter.isArchivable(items[index]);
+      }
+      if (keep) {
+        for (let index = answerStart; index <= sealedIndex; index++) {
+          if (adapter.isAnswer(items[index])) answers.add(index);
+        }
+      }
+      segmentStart = sealedIndex + 1;
     }
   } else {
     if (

@@ -223,6 +223,25 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
     ],
   },
   {
+    name: 'an earlier seal keeps its intro together with the delivery report',
+    events: [
+      user(),
+      tool('read', 1, 2),
+      answer('intro', 3),
+      answer('report', 4, true, '# Report\nThe result'),
+      thinking('next', 5),
+      answer('final', 6, true),
+    ],
+    expected: [
+      ['u'],
+      ['work-read', [['read']]],
+      ['intro'],
+      ['report'],
+      ['work-next', [['next']]],
+      ['final'],
+    ],
+  },
+  {
     name: 'an earlier delivery-prose seal stays visible through continuation',
     events: [
       user(),
