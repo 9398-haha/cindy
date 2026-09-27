@@ -16,11 +16,20 @@ export async function resolvePluginWorkerDirectory(input: {
   input.assertCurrent();
   const resolved = await realpath(input.requested);
   if (!(await stat(resolved)).isDirectory()) throw deny();
+  // Stored Host roots are canonical identities, not aliases to resolve into new grants.
+  const sameDirectory = (a: string, b: string) => isPathInsideDir(a, b) && isPathInsideDir(b, a);
+  const unchangedRoot = async (stored: string) => {
+    const current = await realpath(stored);
+    return sameDirectory(stored, current) ? current : null;
+  };
   let allowed = false;
-  if (input.leadDirectory) allowed = isPathInsideDir(await realpath(input.leadDirectory), resolved);
+  if (input.leadDirectory) {
+    const lead = await unchangedRoot(input.leadDirectory);
+    allowed = lead !== null && isPathInsideDir(lead, resolved);
+  }
   if (!allowed && input.configuredDirectory) {
-    const configured = await realpath(input.configuredDirectory);
-    allowed = isPathInsideDir(configured, resolved) && isPathInsideDir(resolved, configured);
+    const configured = await unchangedRoot(input.configuredDirectory);
+    allowed = configured !== null && sameDirectory(configured, resolved);
   }
   // Pick grants are exact-directory grants, not permission for an arbitrary Library root.
   if (!allowed) allowed = input.isPickedDirectory(resolved);

@@ -51,6 +51,12 @@ export class PluginTaskError extends Error {
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
 }
+/** A live task cannot exercise more authority than the plugin's current setting. */
+export function isPluginTaskPermissionAllowed(taskMode: unknown, configuredMode: unknown): boolean {
+  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'acceptEdits' ? 1 : mode === 'auto' ? 2 : -1;
+  const task = rank(taskMode);
+  return task >= 0 && task <= Math.max(0, rank(configuredMode));
+}
 const fail = (code: string, message: string): never => {
   throw new PluginTaskError(code, message);
 };
@@ -64,6 +70,7 @@ export interface PluginTaskServiceDeps {
   /** Bound to the captured account/database epoch and plugin availability. */
   assertCurrent(): void;
   assertAuthorized(pluginId: string): void;
+  readPermissionMode(pluginId: string): unknown;
   resolveRoute(pluginId: string, route?: PluginTaskRoute): Promise<PluginTaskRoute>;
   createSession(
     pluginId: string,
@@ -114,6 +121,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     const result = fn();
     operations = Promise.all([operations, result.catch(() => undefined)]).then(() => undefined);
     return result;
+  };
+  const assertDispatch = async (pluginId: string, taskId: string) => {
+    const view = await ownTask(pluginId, taskId);
+    deps.assertAuthorized(pluginId);
+    if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
+    if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId)))
+      return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+    return view;
   };
   const save = async (row: PluginTaskReceipt, payload: unknown) => {
     deps.assertCurrent();
@@ -238,6 +253,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       if (!data.teamPlan?.items.some((x: {label:string})=>x.label===label)) return fail('INVALID_REQUEST','Worker is not in team plan');
       await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
     }),
+    assertDispatch,
     get: (pluginId: string, taskId: string) => exclusive(() => ownTask(pluginId, taskId)),
     list: (pluginId: string, after = '', limit = 50) =>
       exclusive(async () => {
@@ -263,12 +279,13 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         );
         if (previous)
           return { run: JSON.parse(previous.payload) as PluginTaskRun, dispatch: false };
-        if (view.permissionMode === 'bypassPermissions') return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+        if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId))) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
         if (view.status !== 'active')
           return fail('TASK_BUSY', 'Archived tasks cannot accept input');
         if (view.revision !== request.expectedRevision)
           return fail('REVISION_CONFLICT', 'Task configuration changed');
         await deps.resolveRoute(pluginId, view.resolvedConfig);
+        await assertDispatch(pluginId, view.taskId);
         const runId = id();
         const run: PluginTaskRun = {
           runId,
@@ -290,7 +307,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       // Never hold the receipt lock while entering Session dispatch/control. The
       // coordinator awaits accept() before vendor dispatch under its own lock.
       try {
-        deps.assertAuthorized(pluginId);
+        await assertDispatch(pluginId, prepared.run.taskId);
         const outcome = await deps.dispatch(
           pluginId,
           prepared.run.taskId,
@@ -372,14 +389,16 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           }
           const view = await ownTask(row.pluginId, taskId);
           if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
-          if (view.permissionMode === 'bypassPermissions') return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+          if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(row.pluginId))) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
           if (hash(view.resolvedConfig) !== hash(run.acceptedConfig))
             return fail('ROUTE_UNAVAILABLE', 'Accepted route changed before dispatch');
           await deps.resolveRoute(row.pluginId, run.acceptedConfig);
+          await assertDispatch(row.pluginId, taskId);
           run.inputClientIds = [...new Set([...(run.inputClientIds ?? []), item.clientId])];
           run.execution = execution;
           run.status = 'running';
           await save(row, run);
+          await assertDispatch(row.pluginId, taskId);
         }
       }),
     settle: (

@@ -1,4 +1,4 @@
-import { assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
@@ -10161,6 +10161,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      readPermissionMode: pluginId => readGhostErrandConfig(pluginId).permissionMode,
       assertTeamPlanUnstarted: async taskId => {
         assertCurrent();
         const workers = await snapshot.client.drizzle.select({id:orcaWorkers.id}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(eq(orcaTeams.leadSessionId,taskId)).limit(1);
@@ -10193,7 +10194,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       dispatch: async (pluginId, taskId, clientId, text) => {
         assertPlugin(pluginId);
-        const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId, message: text, forceQueue: true, onAccepted: () => assertPlugin(pluginId) });
+        const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId, message: text, forceQueue: true, onAccepted: async () => { assertPlugin(pluginId); await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId); assertPlugin(pluginId); } });
         await awaitAgentInputQueueSnapshotPersistence(taskId);
         assertCurrent();
         return outcome;
@@ -10275,7 +10276,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const task = await service.get(pluginId, request.taskId);
         const mode = request.mode ?? 'acceptEdits';
         const cfg = readGhostErrandConfig(pluginId);
-        if (mode === 'acceptEdits' ? task.permissionMode !== 'plan' : task.permissionMode === 'auto' && cfg.permissionMode === 'auto') return { granted: true, task };
+        if (isPluginTaskPermissionAllowed(task.permissionMode, cfg.permissionMode) && (mode === 'acceptEdits' ? task.permissionMode === 'acceptEdits' || task.permissionMode === 'auto' : task.permissionMode === 'auto')) return { granted: true, task };
         if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
         const before = JSON.stringify(cfg);
         const assertIdle = async () => {

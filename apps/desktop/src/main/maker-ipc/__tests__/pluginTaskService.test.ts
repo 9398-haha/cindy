@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createPluginTaskService,
+  isPluginTaskPermissionAllowed,
   type PluginTaskReceipt,
   type PluginTaskStore,
   type PluginTaskServiceDeps,
@@ -54,6 +55,7 @@ function fixture() {
   const execution = { instanceId: 'native', generation: 1 };
   const deps: PluginTaskServiceDeps = {
     store,
+    readPermissionMode: () => 'auto',
     assertAuthorized: () => {
       if (!current) throw new Error('Owner changed');
     },
@@ -64,7 +66,7 @@ function fixture() {
     now: () => 1,
     resolveRoute: vi.fn(async (_, r) => r ?? route),
     createSession: vi.fn(async (_, taskId, title, resolvedConfig) => {
-      tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active' });
+      tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active', permissionMode: 'plan' });
     }),
     readSession: async (id) => copy(tasks.get(id) ?? null),
     dispatch: vi.fn(async () => ({ ok: true })),
@@ -376,4 +378,46 @@ it('a rejected operation does not poison subsequent drain', async () => {
  f.deps.cancel = async () => 'cancelled';
  await expect(f.service.cancel('p', run.runId)).resolves.toMatchObject({status:'cancelled'});
  await f.service.drain();
+});
+
+
+describe('current plugin dispatch authority', () => {
+  it.each(['plan', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
+    const modes = ['plan', 'acceptEdits', 'auto'];
+    for (const mode of [...modes, 'bypassPermissions', 'unknown', undefined]) {
+      expect(isPluginTaskPermissionAllowed(mode, configured)).toBe(modes.includes(mode!) && modes.indexOf(mode!) <= modes.indexOf(configured));
+    }
+    expect(isPluginTaskPermissionAllowed('auto', undefined)).toBe(false);
+  });
+  it.each(['before', 'route', 'insert'])('blocks a new dispatch after revocation at %s', async point => {
+    const f = fixture(), task = await f.create();
+    f.tasks.get(task.taskId)!.permissionMode = 'auto';
+    let mode = 'auto'; f.deps.readPermissionMode = () => mode;
+    if (point === 'before') mode = 'plan';
+    if (point === 'route') f.deps.resolveRoute = async () => { mode = 'plan'; return f.route; };
+    if (point === 'insert') {
+      const insert = f.deps.store.insert;
+      f.deps.store.insert = async row => { await insert(row); mode = 'plan'; };
+    }
+    const attempt = f.service.send('p', {taskId:task.taskId,expectedRevision:task.revision,requestKey:'new',text:'input'});
+    if (point === 'insert') await expect(attempt).resolves.toMatchObject({status:'reconciling'});
+    else await expect(attempt).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    expect(f.deps.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(['before', 'route', 'save'])('blocks queued acceptance after revocation at %s and keeps cancel available', async point => {
+    const f = fixture(), run = await f.send();
+    f.tasks.get(run.taskId)!.permissionMode = 'auto';
+    let mode = 'auto'; f.deps.readPermissionMode = () => mode;
+    if (point === 'before') mode = 'plan';
+    if (point === 'route') f.deps.resolveRoute = async () => { mode = 'plan'; return f.route; };
+    if (point === 'save') {
+      const save = f.deps.store.save;
+      f.deps.store.save = async row => { await save(row); mode = 'plan'; };
+    }
+    await expect(f.service.accept(run.taskId,{clientId:run.inputMessageId},f.execution)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    // Same-key retries observe the existing receipt; they never reopen dispatch.
+    const calls = vi.mocked(f.deps.dispatch).mock.calls.length;
+    await f.send(); expect(f.deps.dispatch).toHaveBeenCalledTimes(calls);
+    await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
+  });
 });

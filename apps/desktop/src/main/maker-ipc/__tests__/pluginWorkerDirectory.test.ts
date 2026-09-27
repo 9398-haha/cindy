@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rename, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
@@ -38,4 +38,20 @@ describe('plugin Worker directory authorization', () => {
     await expect(resolvePluginWorkerDirectory({requested:root,leadDirectory:root,isPickedDirectory:()=>false,assertCurrent})).rejects.toThrow('Account changed');
     expect(assertCurrent).toHaveBeenCalledTimes(2);
   });
+});
+
+
+it.each(['configuredDirectory', 'leadDirectory'] as const)('does not retarget a stored %s grant through a replacement link', async key => {
+ const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'plugin-root-identity-')));
+ try {
+  const selected=path.join(root,'selected'), other=path.join(root,'other');
+  await mkdir(selected);await mkdir(other);
+  const input={requested:selected,[key]:selected,isPickedDirectory:()=>false,assertCurrent:()=>{}};
+  expect(await resolvePluginWorkerDirectory(input)).toBe(selected);
+  await rename(selected,path.join(root,'old'));await symlink(other,selected,'junction');
+  await expect(resolvePluginWorkerDirectory(input)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+  await expect(resolvePluginWorkerDirectory({...input,requested:other})).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+  // An independent exact pick can still authorize that real target.
+  expect(await resolvePluginWorkerDirectory({...input,isPickedDirectory:dir=>dir===other})).toBe(other);
+ } finally {await rm(root,{recursive:true,force:true});}
 });

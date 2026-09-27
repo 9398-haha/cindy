@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { withSessionRestartLock, withSendToSessionLock, sendToSessionLocks } from '../sendToSessionLock.js';
-import { PluginTaskError } from '../pluginTaskService.js';
+import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
 
 // Execute the real switch branch with controlled Host boundaries.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
@@ -21,7 +21,7 @@ function fixture() {
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
- const deps = { withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: { getQueueControlSnapshot: () => ({ pendingQueue: [] }) }, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
+ const deps = { isPluginTaskPermissionAllowed, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: { getQueueControlSnapshot: () => ({ pendingQueue: [] }) }, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
  const run = new Function(...Object.keys(deps), js)(...Object.values(deps));
  return { run: (mode = 'acceptEdits') => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }), service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
@@ -122,3 +122,18 @@ describe('first plugin write approval checks actual task history', () => {
   release(); await result;
   await withSendToSessionLock('task', send); expect(send).toHaveBeenCalledOnce();
  });
+
+
+it.each(['bypassPermissions', 'auto', 'acceptEdits'])('does not report %s as granted after plugin authority is lowered', async permissionMode => {
+ const f = fixture();
+ f.service.get.mockImplementation(async () => ({taskId:'task',revision:1,permissionMode}));
+ f.dialog.showMessageBox.mockResolvedValue({response:1});
+ await expect(f.run()).resolves.toMatchObject({granted:false});
+ expect(f.dialog.showMessageBox).toHaveBeenCalledOnce();
+ expect(f.live.setPermissionMode).not.toHaveBeenCalled();
+});
+it.each(['acceptEdits', 'auto'])('reuses an effective %s grant without another confirmation',async permissionMode=>{
+ const f=fixture();f.change({permissionMode});
+ f.service.get.mockImplementation(async()=>({taskId:'task',revision:1,permissionMode}));
+ await expect(f.run()).resolves.toMatchObject({granted:true});expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+});
