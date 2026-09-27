@@ -2,11 +2,34 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
+import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
+
+it.each(['Do not publish.', '', undefined])('keeps live authority through the final delegated steer boundary: %j', async previous => {
+  const start = source.indexOf('await sess.steer(steerPayload as never, {');
+  expect(start).toBeGreaterThan(0);
+  const end = source.indexOf('\n      });', start) + '\n      });'.length;
+  const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
+    'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION',
+    compile(`return (async () => { ${source.slice(start, end)} })();`));
+  const invoke = async (delegated: boolean) => {
+    let result;
+    const steer = vi.fn(async (content: string, options: SendOptions) => {
+      result = appendAutoReviewUserIntent(previous, content, options);
+    });
+    await deliver({ steer }, 'Publish now', { [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}) }, {}, 'Old persisted permission',
+      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION);
+    expect(steer).toHaveBeenCalledOnce();
+    return result;
+  };
+  expect(await invoke(true)).toEqual(previous ?? 'Old persisted permission');
+  expect(await invoke(false)).toEqual('Old persisted permission');
+});
 
 it('restores human authorization for both live and cold internal delegated sends', () => {
   for(const target of ['live','session']) {
