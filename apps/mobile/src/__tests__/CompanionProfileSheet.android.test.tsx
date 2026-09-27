@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   sheet: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
-  close: vi.fn(), closed: vi.fn(), automation: vi.fn(), search: vi.fn(), created: vi.fn(),
+  close: vi.fn(), closed: vi.fn(), search: vi.fn(), created: vi.fn(),
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'android' }, StyleSheet: { create: (v: unknown) => v, hairlineWidth: 1 }, Alert: { alert: h.alert }, Image: () => null,
@@ -17,7 +17,7 @@ vi.mock('react-native', () => ({
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-id' }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'Clock3', 'FileText', 'Hand', 'History', 'Info', 'Link2', 'Settings2', 'Sparkles']
+vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'FileText', 'Hand', 'History', 'Info', 'Link2', 'Settings2', 'Sparkles']
   .map(name => [name, Object.assign(() => null, { displayName: name })])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
@@ -68,7 +68,7 @@ async function type(label: string, value: string) {
 }
 async function render() {
   await act(async () => root.render(createElement(CompanionProfileSheet, { visible: true, resource: resource as any, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true,
-    onClose: h.close, onClosed: h.closed, onOpenSearch: h.search, onOpenAutomation: h.automation })));
+    onClose: h.close, onClosed: h.closed, onOpenSearch: h.search })));
   await settle();
 }
 beforeEach(() => {
@@ -86,19 +86,20 @@ it('lays out the iOS identity, entry groups, icons and host-ordered management a
   expect(avatar.closest('button')).toBeNull();
   expect(container.textContent).toContain('Cindy'); expect(container.textContent).not.toContain('Teammate on Mac');
   const rows = buttons().map(node => node.dataset.testid ?? '').filter(id => /^companionProfile\.[a-z]+$/.test(id));
-  expect(rows).toEqual(['profile', 'memory', 'models', 'skills', 'automation', 'artifacts', 'search', 'permissions'].map(id => `companionProfile.${id}`));
+  expect(rows).toEqual(['profile', 'memory', 'models', 'skills', 'artifacts', 'search', 'permissions'].map(id => `companionProfile.${id}`));
   const icons = Object.fromEntries(rows.map(id => [id.split('.')[1], byTest(id)!.dataset.icon]));
   // 图标与桌面 BotsHomeView 同一动作同一 lucide 图标(mobile-design-guide §6)。
-  expect(icons).toMatchObject({ profile: 'Info', memory: 'Brain', models: 'Sparkles', skills: 'Settings2', automation: 'Clock3', artifacts: 'FileText', search: 'History', permissions: 'Hand' });
+  expect(icons).toMatchObject({ profile: 'Info', memory: 'Brain', models: 'Sparkles', skills: 'Settings2', artifacts: 'FileText', search: 'History', permissions: 'Hand' });
   expect(new Set(Object.values(icons)).size).toBe(rows.length);
   const actions = buttons().filter(node => node.dataset.testid?.startsWith('companionProfile.action.'));
   expect(actions.map(node => [node.dataset.testid, node.dataset.destructive])).toEqual([['companionProfile.action.delete', 'true'], ['companionProfile.action.restart', 'false']]);
 });
 
-it('hands automation and search to the owner like iOS, without closing first', async () => {
+it('keeps automation absent and hands search to the owner like iOS, without closing first', async () => {
   await render();
-  await press(byTest('companionProfile.automation')); await press(byTest('companionProfile.search'));
-  expect(h.automation).toHaveBeenCalledOnce(); expect(h.search).toHaveBeenCalledOnce(); expect(h.close).not.toHaveBeenCalled();
+  expect(byTest('companionProfile.automation')).toBeNull();
+  await press(byTest('companionProfile.search'));
+  expect(h.search).toHaveBeenCalledOnce(); expect(h.close).not.toHaveBeenCalled();
 });
 
 it('renders confirmation fields for any confirmed action, not only delete', async () => {

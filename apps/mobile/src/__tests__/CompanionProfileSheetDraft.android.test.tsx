@@ -54,7 +54,7 @@ const profilePanel = (disabled = false) => ({ id: 'profile', values: { name: 'Ci
 let root: Root | undefined;
 async function render(online = true) {
   root ??= createRoot(document.createElement('div'));
-  await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online, onClose: h.close, onOpenSearch() {}, onOpenAutomation() {} } as any)));
+  await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online, onClose: h.close, onOpenSearch() {} } as any)));
 }
 async function openProfile() {
   // 与 iOS 相同,个人资料从首页「个人资料」行进入。

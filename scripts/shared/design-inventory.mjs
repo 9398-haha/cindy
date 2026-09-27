@@ -1402,7 +1402,6 @@ export function mobileCatalogSurfaces() {
     ['chat.sharing', '共享任务邀请与成员', ['shared-session.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
-    ['automations', '自动化', ['automations/[deviceId].tsx']],
     ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx']],
     ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
@@ -1428,6 +1427,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
   const excluded = new Map([
     ['_layout.tsx', 'layout; visible mounted feedback is a separate overlay surface'],
     ['+native-intent.ts', 'native intent routing; no screen'],
+    ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);

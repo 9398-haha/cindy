@@ -29,7 +29,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const resource = { ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, display: { title: 'Cindy' }, links: [], revision: 'v1' };
 const panel = { id: 'profile', values: { name: 'Cindy' }, action: { id: 'grant', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] } };
 let root: Root | undefined;
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {}, onOpenAutomation() {} }))); }
+async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {} }))); }
 beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 it('keeps the draft and page when saving during dismissal fails', async () => {

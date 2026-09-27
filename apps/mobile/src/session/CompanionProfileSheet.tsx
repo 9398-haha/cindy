@@ -3,7 +3,7 @@ import { useRouter } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
 import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Brain, Camera, Clock3, FileText, Hand, History, Info, Link2, Settings2, Sparkles } from 'lucide-react-native';
+import { Brain, Camera, FileText, Hand, History, Info, Link2, Settings2, Sparkles } from 'lucide-react-native';
 import { resolveRemoteText, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
@@ -43,7 +43,6 @@ export interface CompanionProfileSheetProps {
   online: boolean;
   onDeleted?: () => void;
   onOpenSearch: () => void;
-  onOpenAutomation: () => void;
 }
 /** Identity-keyed content prevents previous-account drafts and reads from surviving a switch. */
 export function CompanionProfileSheet(props: CompanionProfileSheetProps) {
@@ -54,7 +53,7 @@ export function CompanionProfileSheet(props: CompanionProfileSheetProps) {
 
 /** One navigation host, with real host reads, draft guards and in-surface confirmations. */
 function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
-  const { visible, resource, collectionId, deviceId, deviceName, online, onClose, onOpenSearch, onOpenAutomation } = props;
+  const { visible, resource, collectionId, deviceId, deviceName, online, onClose, onOpenSearch } = props;
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const pendingTask = useRef<string | null>(null);
@@ -335,7 +334,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     onConfirm={confirm}
     onRetry={retry} onDiscard={discardDraft}
     onEditor={id => void openEditor(id)} onEditorPanel={selectEditorPanel}
-    onSearch={onOpenSearch} onAutomation={onOpenAutomation} /></>;
+    onSearch={onOpenSearch} /></>;
 
   // Android mirrors the iOS page map, entry order and save rules; only the surface is platform-drawn.
   const save = (target: ProfilePanel, blocked: boolean) => <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy,
@@ -355,7 +354,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       <Text accessibilityRole="header" numberOfLines={2} style={styles.name}>{name}</Text>
     </View>
     <View style={styles.group}>{row('profile', Info)}{row('memory', Brain)}{row('models', Sparkles)}{row('skills', Settings2)}</View>
-    <View style={styles.group}>{row('automation', Clock3, onOpenAutomation)}{row('artifacts', FileText)}{row('search', History, onOpenSearch)}{row('permissions', Hand)}</View>
+    <View style={styles.group}>{row('artifacts', FileText)}{row('search', History, onOpenSearch)}{row('permissions', Hand)}</View>
     {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
     {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
     {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
