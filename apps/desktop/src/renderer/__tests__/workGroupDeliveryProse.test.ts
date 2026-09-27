@@ -152,6 +152,14 @@ describe('交付正文不被收尾动作顶进「已工作 Xs」', () => {
     expect(topLevelMessageIds(items)).toEqual(['u1', 'brief', 'wrap']);
   });
 
+  it('内嵌 raw HTML <img> 的短正文平铺', () => {
+    const pictured = '缩略图:<img src="https://example.com/thumb.png" width="150">';
+
+    const items = groupWorkRuns(buildRenderItems(briefThenNotifyTurn(pictured)).items, false);
+
+    expect(topLevelMessageIds(items)).toEqual(['u1', 'brief', 'wrap']);
+  });
+
   it('带图片 / 文件附件的短正文平铺', () => {
     const messages = briefThenNotifyTurn('报告在附件里。').map((message) =>
       message.clientId === 'brief'
@@ -185,6 +193,14 @@ describe('进度旁白仍然折进「已工作 Xs」', () => {
     );
 
     expect(topLevelMessageIds(items)).toEqual(['u1', 'wrap']);
+  });
+
+  it('不带 src 的 img 或自定义 <img-wrapper> 元素不算图片,仍折叠', () => {
+    for (const body of ['说明里提到 <img> 标签。', '<img-wrapper src="https://example.com/a.png">']) {
+      const items = groupWorkRuns(buildRenderItems(briefThenNotifyTurn(body)).items, false);
+
+      expect(topLevelMessageIds(items)).toEqual(['u1', 'wrap']);
+    }
   });
 
   it('只有 2 项列表的旁白不算交付,仍折叠', () => {

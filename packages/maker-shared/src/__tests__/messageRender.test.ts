@@ -204,7 +204,7 @@ describe('message render shared model', () => {
     expect(todo.todos).toEqual([{ content: 'Implement', status: 'completed', activeForm: undefined }]);
   });
 
-  function backgroundContinuation(mainSummary: string): MessageRenderItem<FixtureSource>[] {
+  function backgroundContinuation(mainSummary: string): MessageRenderItem<FixtureMessage>[] {
     return buildMessageRenderItems([
       message({ kind: 'user', source: source('user', 'start', 1), body: 'start', label: 'user' }),
       message({

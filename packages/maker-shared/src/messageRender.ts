@@ -1611,14 +1611,19 @@ const MARKDOWN_LIST_ITEM_RE = /^[ \t]{0,3}(?:[-*+][ \t]+|\d{1,3}[.)][ \t]+)\S/gm
 /** 列表要 ≥3 项才算交付结构:「我要做两件事」这类旁白也会顺手列两条。 */
 const DELIVERY_PROSE_MIN_LIST_ITEMS = 3;
 
-/** 正文里的 markdown 图片:配一句短说明发出的图也是交付成果。 */
+/**
+ * 正文里的图片:配一句短说明发出的图也是交付成果。两端渲染器都支持 `![alt](url)` 与
+ * 带 src 的单个 raw HTML `<img>`(桌面 remarkHtmlImages、手机 messageMarkdown)。
+ * 只决定是否折叠,偶尔多认(如代码块里的 <img>)只会多显示一条,方向安全。
+ */
 const MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\([^)\s]+(?:\s[^)]*)?\)/;
+const HTML_IMAGE_RE = /<img(?=[\s/>])[^<>]*\ssrc\s*=\s*["']?[^\s"'<>]+[^<>]*>/i;
 
 /**
  * 这段 assistant 正文是不是「交付内容」(而非进度旁白)。
  *
  * 判据刻意与位置无关:长度达阈值,或带块级 markdown 结构(标题 / 表格 /
- * ≥3 项列表),或内嵌 markdown 图片。两端共用这一份口径,不各自实现。
+ * ≥3 项列表),或内嵌图片。两端共用这一份口径,不各自实现。
  */
 export function isDeliveryProseText(text: string): boolean {
   const trimmed = text.trim();
@@ -1626,7 +1631,7 @@ export function isDeliveryProseText(text: string): boolean {
   if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
   if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
   if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
-  if (MARKDOWN_IMAGE_RE.test(trimmed)) return true;
+  if (MARKDOWN_IMAGE_RE.test(trimmed) || HTML_IMAGE_RE.test(trimmed)) return true;
   // /g 正则不用 test():lastIndex 会在调用之间残留。
   const listItems = trimmed.match(MARKDOWN_LIST_ITEM_RE);
   return (listItems?.length ?? 0) >= DELIVERY_PROSE_MIN_LIST_ITEMS;
