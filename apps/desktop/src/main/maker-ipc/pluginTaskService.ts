@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
+import { isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import {
   isSameSessionExecution,
   queuedInputBelongsTo,
@@ -46,6 +47,15 @@ export class PluginTaskError extends Error {
     super(message);
     this.name = 'PluginTaskError';
   }
+}
+/** Bounds legacy receipts before parsing; oversized authority never becomes a missing plan. */
+export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; settledLabels?: string[]; route?: PluginTaskRoute; [key: string]: unknown } {
+  if (typeof payload !== 'string' || payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS)
+    throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
+  const data = JSON.parse(payload);
+  if (data.teamPlan !== undefined && !isPluginTeamPlanWithinBudget(data.teamPlan))
+    throw new PluginTaskError('INVALID_REQUEST', 'Team plan exceeds the supported size');
+  return data;
 }
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
@@ -236,9 +246,10 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         return ownTask(pluginId, taskId);
       }),
     setTeamPlan: (pluginId: string, taskId: string, plan: PluginTeamPlan) => exclusive(async () => {
+      if (!isPluginTeamPlanWithinBudget(plan)) return fail('INVALID_REQUEST', 'Team plan exceeds the supported size');
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
-      const data = JSON.parse(row.payload);
+      const data = readPluginTaskPlanReceipt(row.payload);
       if (data.teamPlan && hash(data.teamPlan) !== hash(plan)) {
         return fail('IDEMPOTENCY_CONFLICT', 'Team plan is immutable');
       }
@@ -254,7 +265,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     settleWorkerLabel: (pluginId: string, taskId: string, label: string) => exclusive(async () => {
       await ownTask(pluginId,taskId);
       const row = (await deps.store.get(taskId))!;
-      const data = JSON.parse(row.payload);
+      const data = readPluginTaskPlanReceipt(row.payload);
       if (!data.teamPlan?.items.some((x: {label:string})=>x.label===label)) return fail('INVALID_REQUEST','Worker is not in team plan');
       await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
     }),

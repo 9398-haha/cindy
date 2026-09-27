@@ -1,5 +1,6 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
+import { isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
 import { hasPluginTaskApproval } from './taskCapability.js';
 
 export const PLUGIN_TASK_OPERATIONS = [
@@ -69,6 +70,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (kind === 'releaseWorker' && (!requires('workerId') || !Number.isSafeInteger(value.completedAt) || (value.completedAt as number) <= 0)) return false;
   if (kind === 'setTeamPlan') {
     const p = value.plan;
+    if (!isPluginTeamPlanWithinBudget(p)) return false;
     if (!object(p) || Object.keys(p).some(k => !['concurrency','items','task'].includes(k)) ||
         (p.concurrency !== null && (!Number.isSafeInteger(p.concurrency) || (p.concurrency as number) < 1)) ||
         !Array.isArray(p.items) || !p.items.length || p.items.length > 1000) return false;

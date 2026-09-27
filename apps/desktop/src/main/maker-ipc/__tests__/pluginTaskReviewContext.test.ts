@@ -59,6 +59,14 @@ function fixture(): PluginReviewSnapshot {
   };
 }
 describe('plugin delegated Auto context', () => {
+  it.each([false,true])('rejects oversized stored plans without legacy fallback (worker=%s)', async worker => {
+    const s=fixture();
+    if (!worker) delete s.worker;
+    s.plan!.items=Array.from({length:200},(_,i)=>({...s.plan!.items[0]!,label:'w'+i,task:'x'.repeat(8000)}));
+    const result=await createPluginTaskReviewResolver(async()=>s)(request);
+    expect(result.authorizationError).toContain('size');
+    expect(result.delegatedTask).toBeUndefined();
+  });
   it('uses persisted bounded evidence, rejects live drift and keys cached decisions by revision', async () => {
     const s = fixture();
     s.projection = { revision: 7, sessionIntent: 'Worker restriction', reviewIntent: 'Lead and Worker restrictions' };

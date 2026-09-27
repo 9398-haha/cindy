@@ -1,5 +1,5 @@
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
-import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, readPluginTaskPlanReceipt, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -10455,7 +10455,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await service.get(pluginId,request.taskId);
           if (!record) throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
           const planReceipt = await createPluginTaskStore(epoch.client).get(request.taskId);
-          const plan = planReceipt ? JSON.parse(planReceipt.payload).teamPlan : undefined;
+          const plan = planReceipt ? readPluginTaskPlanReceipt(planReceipt.payload).teamPlan : undefined;
           if (plan && !plan.items.some((item: {label: string}) => item.label === record.label)) throw new PluginTaskError('INVALID_REQUEST', 'Worker is not in team plan');
           const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
           if (!row || row.status === 'deleted') throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
@@ -10496,7 +10496,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const reservations = team.workflow ? await epoch.client.drizzle.select({id:orcaWorkerCreationReservations.id}).from(orcaWorkerCreationReservations).where(and(eq(orcaWorkerCreationReservations.teamId,team.workflow.workflow_id),gte(orcaWorkerCreationReservations.expiresAt,Date.now()))) : [];
         const occupiedSlots=workers.length+reservations.length;
         const planRow = await createPluginTaskStore(epoch.client).get(request.taskId);
-        const plan = planRow ? JSON.parse(planRow.payload).teamPlan : undefined;
+        const plan = planRow ? readPluginTaskPlanReceipt(planRow.payload).teamPlan : undefined;
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
         await service.get(pluginId,request.taskId);
         const hardLimit = Math.min(readCollaborationSettings().workerHardLimit, plan?.concurrency ?? Infinity);
@@ -11573,7 +11573,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // while directory/receipt reads or the existing reservation were pending.
       assertPluginWorkerAutoAuthorized(receipt.pluginId, currentTask);
       if (cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
-      const data = JSON.parse(currentReceipt.payload);
+      const data = readPluginTaskPlanReceipt(currentReceipt.payload);
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
       const item = data.teamPlan.items.find((x: {label:string})=>x.label===params.label);
       if (!item || data.settledLabels?.includes(params.label)) throw new PluginTaskError('INVALID_REQUEST','Worker is not pending in the registered plan');
@@ -13099,7 +13099,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const projection = await epoch.client.tx('authorization.readProjection', { sessionId, leadId });
     if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
     const config = readGhostErrandConfig(receipt.pluginId);
-    const data = JSON.parse(receipt.payload);
+    const data = readPluginTaskPlanReceipt(receipt.payload);
     const approvalRevision = pluginTaskAuthorizationRevision(receipt.pluginId);
     return {
       pluginId: receipt.pluginId,

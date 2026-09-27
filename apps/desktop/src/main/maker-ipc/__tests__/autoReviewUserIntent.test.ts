@@ -24,6 +24,18 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
 
 describe('steer authorization restoration', () => {
+  it.each([
+    { autoResume: true, autoReviewUserText: 'Send now.' },
+    { contextRebuild: {}, autoReviewUserText: 'Send now.' },
+    { autoReviewUserText: '[UI_ACTION_TRIGGER] Send now.' },
+  ])('preserves human revocations across synthetic recovery: %j', (meta) => {
+    const history = [user('Send now.'), user('Do not send.'), {
+      ...user('Send now.', 'recovery'), agentMeta: { delivery: 'turn', ...meta },
+    }];
+    expect(restoreAutoReviewUserIntent(history)).toEqual({
+      earlierUserMessages: ['Send now.'], currentUserMessage: 'Do not send.',
+    });
+  });
   it.each([false, true])('restores delegated history without treating it as human input (unavailable=%s)', async unavailable => {
     const pending = restoreAutoReviewSteerIntent('Deploy now', {
       [AUTO_REVIEW_SOURCE_CONTENT]: '', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
@@ -197,7 +209,6 @@ describe('restored Auto authorization', () => {
   it.each([
     null,
     { origin: { kind: 'im' } },
-    { delivery: 'turn', autoResume: true, autoReviewUserText: 'Delete production.' },
     { delivery: 'turn', agentFacingWireContent: { type: 'user', content: 'different text' } },
   ])(
     'does not promote unidentified, IM or synthetic messages into owner authorization: %j',

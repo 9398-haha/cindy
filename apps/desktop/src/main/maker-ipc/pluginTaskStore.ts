@@ -1,4 +1,5 @@
-import { and, asc, eq, gt, or } from 'drizzle-orm';
+import { and, asc, eq, gt, or, getTableColumns, sql } from 'drizzle-orm';
+import { PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { pluginTaskRequests } from '../localDb/schema.js';
 import type { PluginTaskStore } from './pluginTaskService.js';
@@ -8,7 +9,15 @@ import { PluginTaskError } from './pluginTaskService.js';
 export function createPluginTaskStore(db: DbClient): PluginTaskStore {
   const table = pluginTaskRequests;
   return {
-    get: async (id) => (await db.drizzle.select().from(table).where(eq(table.id, id)).limit(1))[0],
+    get: async (id) => {
+      // Do not transfer oversized legacy payloads to Main for each Auto action.
+      const [row] = await db.drizzle.select({ ...getTableColumns(table),
+        payload: sql<string>`CASE WHEN length(${table.payload}) <= ${PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS} THEN ${table.payload} ELSE NULL END`,
+      }).from(table).where(eq(table.id, id)).limit(1);
+      if (row && (typeof row.payload !== 'string' || row.payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS))
+        throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
+      return row;
+    },
     find: async (pluginId, operation, targetId, requestKey) =>
       (
         await db.drizzle

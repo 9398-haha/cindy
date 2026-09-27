@@ -6,11 +6,25 @@ import {
   isPluginTaskPermissionAllowed,
   PluginTaskError,
   assertPluginTaskResult,
+  readPluginTaskPlanReceipt,
   type PluginTaskReceipt,
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
 import type { PluginTaskView } from '../../../shared/pluginTasks.js';
+import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+
+it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
+  const f=fixture(), task=await f.create();
+  const before=structuredClone(f.rows.get(task.taskId)!);
+  const plan={concurrency:2,items:Array.from({length:200},(_,i)=>({label:'w'+i,workingDir:'/answer',route:f.route,task:'x'.repeat(8000)}))};
+  await expect(f.service.setTeamPlan('p',task.taskId,plan)).rejects.toMatchObject({code:'INVALID_REQUEST'});
+  expect(f.rows.get(task.taskId)).toEqual(before);
+  for (const payload of [' '.repeat(PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS+1), JSON.stringify({teamPlan:{task:'x'.repeat(PLUGIN_TEAM_PLAN_MAX_JSON_CHARS)}})])
+    expect(()=>readPluginTaskPlanReceipt(payload)).toThrow('size');
+  f.rows.get(task.taskId)!.payload=JSON.stringify({teamPlan:plan});
+  await expect(f.service.settleWorkerLabel('p',task.taskId,'w0')).rejects.toMatchObject({code:'INVALID_REQUEST'});
+});
 
 function fixture() {
   let seq = 0;

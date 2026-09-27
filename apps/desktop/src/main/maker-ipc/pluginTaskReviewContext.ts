@@ -7,6 +7,7 @@ import {
   type AutoReviewUserIntent,
 } from '@cindy/maker-core';
 import type { PluginTeamPlan, PluginTaskRoute } from '../../shared/pluginTasks.js';
+import { isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
 import type { StoredAutoReviewProjection } from '../localDb/autoReviewProjection.js';
 import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
@@ -65,6 +66,7 @@ export function createPluginTaskReviewResolver(
       return denied('Plugin or task Auto authorization is no longer active.');
     }
     const plan = snapshot.plan;
+    if (plan && !isPluginTeamPlanWithinBudget(plan)) return denied('Team plan exceeds the supported size; automatic authorization is blocked.');
     const item = snapshot.worker
       ? plan?.items.find((x) => x.label === snapshot.worker!.label)
       : undefined;

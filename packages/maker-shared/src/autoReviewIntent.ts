@@ -136,10 +136,21 @@ export function createAutoReviewIntentProjection() {
     );
   }
 
+  function isSynthetic(message: AutoReviewHistoryMessage): boolean {
+    if (message.role !== "user") return false;
+    const meta = message.agentMeta;
+    const receipt = meta?.autoReviewUserText;
+    return !!(meta?.autoResume || meta?.contextRebuild ||
+      (typeof receipt === "string" && receipt.startsWith("[UI_ACTION_TRIGGER]")) ||
+      (receipt && typeof receipt === "object" && "kind" in receipt &&
+        (receipt.kind === "scheduled-continuation" || receipt.kind === "delegated-continuation")));
+  }
+
   function restoreAutoReviewUserIntent(
     history: readonly AutoReviewHistoryMessage[],
     current?: { clientId: string; content: unknown; authoredText?: string },
   ): AutoReviewUserIntent {
+    history = history.filter((message) => !isSynthetic(message));
     let intent: AutoReviewUserIntent = "";
     let replayed = false;
     const latest = current
@@ -169,16 +180,6 @@ export function createAutoReviewIntentProjection() {
         continue;
       }
       if (message.role !== "user") continue;
-      // Host-originated scheduled turns are execution context, never new owner consent.
-      // Keep intervening human restrictions; do not let repeated heartbeats erase them.
-      // Use the protected receipt, not origin (which the renderer can edit).
-      const receipt = message.agentMeta?.autoReviewUserText as
-        Record<string, unknown> | undefined;
-      if (
-        receipt?.kind === "scheduled-continuation" ||
-        receipt?.kind === "delegated-continuation"
-      )
-        continue;
       // An already-persisted retry is the same input, not a second authorization.
       if (current && message.clientId === current.clientId) {
         if (message.agentMeta?.autoReviewUserText !== latest) return "";
@@ -190,10 +191,7 @@ export function createAutoReviewIntentProjection() {
       // Old rows without Host-captured text cannot safely restore authorization.
       if (
         typeof text !== "string" ||
-        !["turn", "steer"].includes(String(meta?.delivery)) ||
-        meta?.autoResume ||
-        meta?.contextRebuild ||
-        text.startsWith("[UI_ACTION_TRIGGER]")
+        !["turn", "steer"].includes(String(meta?.delivery))
       ) {
         intent = "";
         continue;
@@ -209,6 +207,7 @@ export function createAutoReviewIntentProjection() {
     history: readonly AutoReviewHistoryMessage[],
     historyComplete = true,
   ): { intent: AutoReviewUserIntent; unverified: boolean } {
+    history = history.filter((message) => !isSynthetic(message));
     let intent: AutoReviewUserIntent = "";
     let omitted = !historyComplete;
     const eventTime = (m: AutoReviewHistoryMessage): number => {
@@ -264,13 +263,7 @@ export function createAutoReviewIntentProjection() {
         ) {
           if (readAutoReviewUserText(m.content) === null) intent = "";
           intent = appendAutoReviewUserIntent(intent, receipt);
-        } else if (!(
-          receipt &&
-          typeof receipt === "object" &&
-          "kind" in receipt &&
-          (receipt.kind === "scheduled-continuation" ||
-            receipt.kind === "delegated-continuation")
-        )) {
+        } else {
           omitted = true;
         }
       }
@@ -299,6 +292,7 @@ export function createAutoReviewIntentProjection() {
     readText: readAutoReviewUserText,
     restore: restoreAutoReviewUserIntent,
     ambiguousAnswers,
+    isSynthetic,
     reviewState,
     withOmission,
     review: (history: readonly AutoReviewHistoryMessage[], complete = true) => {
