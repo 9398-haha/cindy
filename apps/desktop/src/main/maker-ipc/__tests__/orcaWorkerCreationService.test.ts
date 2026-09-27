@@ -2750,7 +2750,7 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
   const {deps, service} = createDeps({validateCreationPlan, resolveWorkerWorkingDir: vi.fn(async () => resolved)});
   const params = {leadSessionId:'lead-1',role:'eval',agent:'codex' as const,label:'sample',workingDir:path.resolve('candidate')};
   await expect(service.createWorker(params)).rejects.toThrow('Directory authorization revoked');
-  expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved);
+  expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved, expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd' }));
   expect(deps.bootstrapSession).not.toHaveBeenCalled();
   expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
 });
@@ -2758,10 +2758,13 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
 describe('production plugin Auto admission after reservation', () => {
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  const callback = source.slice(source.indexOf('    validateCreationPlan: async (params, resolvedWorkingDir) => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
+  const callback = source.slice(source.indexOf('    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute) => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
   const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-  it.each([false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy'].map(point => ({ planned, point }))))('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
+  it.each([
+    ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy'].map(point => ({ planned, point }))),
+    ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan'].map(point => ({ planned: true, point })),
+  ])('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
     let reserved = false;
     let mode = 'auto';
     let taskMode = 'auto';
@@ -2771,7 +2774,9 @@ describe('production plugin Auto admission after reservation', () => {
     const epoch = { client: {} };
     const revoke = () => { mode = 'acceptEdits'; };
     const task = () => ({ revision: 1, permissionMode: taskMode, workingDir: path.resolve('repo') });
-    const receipt = { pluginId: 'plugin', operation: 'create', payload: JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [{ label: 'sample', route: { agentKind: 'codex' } }] } } : {}) };
+    const planItem = { label: 'sample', workingDir: path.resolve(point === 'canonical-directory' ? 'alias' : point === 'different-directory' ? 'other' : 'repo'), route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: point === 'normalized-fast' } };
+    const payload = () => JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [planItem] } } : {});
+    const receipt = { pluginId: 'plugin', operation: 'create', payload: payload() };
     const depsForCallback = {
       getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 4 && point === 'receipt') revoke(); return receipt; } }),
@@ -2784,25 +2789,37 @@ describe('production plugin Auto admission after reservation', () => {
       readGhostErrandConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
       isPluginTaskAuthorized: () => enabled,
       resolvePluginWorkerDirectory: async () => { if (reserved && point === 'directory') revoke(); return path.resolve('repo'); },
-      realpathWorkingDirectory: async () => path.resolve('repo'),
+      realpathWorkingDirectory: async (dir: string) => dir === path.resolve('other') ? dir : path.resolve('repo'),
       isGhostPickedDir: () => false,
       PluginTaskError,
     };
     const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
     const { deps, service } = createDeps({ validateCreationPlan });
+    if (point === 'normalized-fast') {
+      const models = deps.getAvailableModels;
+      deps.getAvailableModels = agent => models(agent).map(model => ({ ...model, supportsFastMode: false }));
+    }
     const reserve = deps.reserveWorkerCreation;
     deps.reserveWorkerCreation = vi.fn(async input => {
       const result = await reserve(input); reserved = true;
       if (point === 'reservation') revoke();
       if (point === 'disabled') enabled = false;
+      if (point === 'changed-plan') {
+        planItem.route.model = 'gpt-5.4';
+        receipt.payload = payload();
+      }
       return result;
     });
-    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: 'sample', workerPermissionMode: 'auto' });
-    if (point === 'healthy') {
+    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: 'sample', workerPermissionMode: 'auto',
+      ...(point === 'explicit-match' ? { model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fast: false, workingDir: path.resolve('repo') } : {}),
+      ...(point === 'different-model' ? { model: 'gpt-5.4' } : {}),
+      ...(point === 'normalized-fast' ? { fast: true } : {}),
+    });
+    if (['healthy', 'explicit-match', 'canonical-directory'].includes(point)) {
       await expect(result).resolves.toMatchObject({ ok: true });
       expect(deps.bootstrapSession).toHaveBeenCalledOnce();
     } else {
-      await expect(result).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      await expect(result).rejects.toMatchObject({ code: ['different-model', 'different-directory', 'normalized-fast', 'changed-plan'].includes(point) ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
       expect(deps.bootstrapSession).not.toHaveBeenCalled();
     }
     expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);

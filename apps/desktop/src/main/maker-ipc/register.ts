@@ -11691,7 +11691,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     isActiveWorkerStatus,
     readCollaborationSettings,
-    validateCreationPlan: async (params, resolvedWorkingDir) => {
+    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute) => {
       const epoch = getCurrentDbClientSnapshot();
       if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable');
       const receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
@@ -11711,18 +11711,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // get() waits behind plan registration in the existing receipt queue.
       const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!currentReceipt) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+      const data = JSON.parse(currentReceipt.payload);
+      const item = data.teamPlan?.items.find((x: {label:string})=>x.label===params.label);
+      const plannedDirectory = item && resolvedRoute
+        ? await realpathWorkingDirectory(item.workingDir) : undefined;
       const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
       // Last admission check also covers no-plan plugin tasks and revocation
       // while directory/receipt reads or the existing reservation were pending.
       assertPluginWorkerAutoAuthorized(receipt.pluginId, currentTask);
       if (cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
-      const data = JSON.parse(currentReceipt.payload);
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
-      const item = data.teamPlan.items.find((x: {label:string})=>x.label===params.label);
       if (!item || data.settledLabels?.includes(params.label)) throw new PluginTaskError('INVALID_REQUEST','Worker is not pending in the registered plan');
       const route = item.route;
-      if (params.workingDir!==item.workingDir || params.model!==route.model || params.providerId!==route.providerId || params.effort!==route.effort || params.fast!==route.fastMode || params.agent!==(route.agentKind==='cc'?'claude-code':route.agentKind)) throw new PluginTaskError('INVALID_REQUEST','Worker configuration differs from registered plan');
+      // Defaults and provider capabilities are resolved by the creation service.
+      // Compare that exact spawn route at the post-reservation admission check.
+      if (resolvedRoute && (directory!==plannedDirectory || resolvedRoute.model!==route.model || resolvedRoute.providerId!==route.providerId || resolvedRoute.effort!==route.effort || resolvedRoute.fastMode!==route.fastMode || params.agent!==(route.agentKind==='cc'?'claude-code':route.agentKind))) throw new PluginTaskError('INVALID_REQUEST','Worker configuration differs from registered plan');
       return data.teamPlan.concurrency;
     },
     getLeadSessionRow: async (leadSessionId) => {

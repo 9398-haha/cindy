@@ -208,7 +208,8 @@ export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
-  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams, resolvedWorkingDir?: string): Promise<number | null | undefined>;
+  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams, resolvedWorkingDir?: string,
+    resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean }): Promise<number | null | undefined>;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -1026,7 +1027,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     try {
       // Registration may race the preflight. Once a reservation exists, a new
       // plan cannot be registered; reread any plan that won before reservation.
-      const reservedPlanLimit = await deps.validateCreationPlan?.(params, workingDir);
+      const reservedPlanLimit = await deps.validateCreationPlan?.(params, workingDir, resolved);
       if (reservedPlanLimit != null && reservation.occupiedSlotsBefore >= reservedPlanLimit) {
         return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
       }
