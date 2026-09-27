@@ -885,6 +885,7 @@ import {
   readModelContextLimit,
   writeModelContextLimitsWithRefresh,
 } from '../maker-host/model-context-limit-store.js';
+import { refreshAnthropicModelsFromProbe } from '../maker-host/model-discovery/anthropic.js';
 import { refreshOpenAiMediaModels } from '../maker-host/model-discovery/openai-media.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
@@ -5652,9 +5653,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
         refreshXd: options.refreshXdGatewayModels,
-        // Claude 订阅清单只由 Claude Code 会话 init 的 SDK 捕获刷新(Cindy 不带订阅凭证
-        // 请求 Anthropic),这里没有可主动拉取的通道。
-        refreshAnthropic: async () => true,
+        // Claude 订阅清单来自 Claude Code SDK:用本机 CLI 的登录读一次 supportedModels
+        // (Cindy 不带订阅凭证请求 Anthropic,也不发送消息)。
+        refreshAnthropic: refreshAnthropicModelsFromProbe,
         refreshOpenAi: () =>
           maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' }),
         refreshOpenAiMedia: refreshOpenAiMediaModels,

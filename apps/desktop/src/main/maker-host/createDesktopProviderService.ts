@@ -68,7 +68,12 @@ import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
 } from './codex-model-discovery.js';
-import { loadAnthropicModelsFromDiskCache } from './model-discovery/anthropic.js';
+import {
+  hasAnthropicDiscoveredModels,
+  loadAnthropicModelsFromDiskCache,
+  refreshAnthropicModelsFromProbe,
+  requestAnthropicModelProbe,
+} from './model-discovery/anthropic.js';
 import {
   clearXaiDiscoveredModels,
   loadXaiModelsFromDiskCache,
@@ -926,8 +931,12 @@ function refreshAnthropicCatalogAfterClaim(): Promise<void> {
 
   const flight = (async () => {
     // 启动期的磁盘清单加载可能因尚未绑定而早退,认领后补一次;失败保留已有目录,
-    // 不把连接态读取整条打穿。之后由会话 init 的 SDK 捕获刷新(Cindy 不带订阅凭证拉清单)。
+    // 不把连接态读取整条打穿。成员只来自 SDK 清单:有缓存时后台刷新即可;没有缓存时
+    // 要等主动读取完成,否则 waitForDiscovery 的调用方(Orca 路由、定时任务解析)会拿到
+    // 空目录。读取失败同样不打穿连接态读取。
     await loadAnthropicModelsFromDiskCache().catch(() => undefined);
+    if (hasAnthropicDiscoveredModels()) requestAnthropicModelProbe();
+    else await refreshAnthropicModelsFromProbe().catch(() => false);
   })();
   anthropicClaimDiscoveryInflight = flight;
   const clear = () => {
@@ -1013,7 +1022,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
           hasClaudeNativeLoginUnbound,
           () => {
             // 启动期的 loadAnthropicModelsFromDiskCache 因当时未绑定而早退了:认领成功时
-            // 把上次成功的清单摆出来,否则只剩 Registry presence(PR #548 review)。
+            // 把上次成功的清单摆出来并主动读一次最新清单(PR #548 review)。
             return refreshAnthropicCatalogAfterClaim();
           },
           waitForDiscovery === true,
