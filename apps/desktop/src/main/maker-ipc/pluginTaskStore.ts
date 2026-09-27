@@ -1,7 +1,8 @@
-import { and, asc, eq, gt } from 'drizzle-orm';
+import { and, asc, eq, gt, or } from 'drizzle-orm';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { pluginTaskRequests } from '../localDb/schema.js';
 import type { PluginTaskStore } from './pluginTaskService.js';
+import { PluginTaskError } from './pluginTaskService.js';
 
 /** Captures the DB handle once, so a delayed operation never switches accounts. */
 export function createPluginTaskStore(db: DbClient): PluginTaskStore {
@@ -23,20 +24,30 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
           )
           .limit(1)
       )[0],
-    list: (pluginId, operation, targetId, after, limit) =>
-      db.drizzle
+    list: async (pluginId, operation, targetId, after, limit) => {
+      const scope = and(
+        eq(table.pluginId, pluginId),
+        eq(table.operation, operation as 'create' | 'send'),
+        targetId === null ? undefined : eq(table.targetId, targetId),
+      );
+      // Keep the existing opaque receipt-ID cursor, resolving its ordering key
+      // within the same plugin and target without loading its payload.
+      const [cursor] = after ? await db.drizzle.select({ createdAt: table.createdAt })
+        .from(table).where(and(scope, eq(table.id, after))).limit(1) : [];
+      if (after && !cursor) throw new PluginTaskError('INVALID_REQUEST', 'Invalid task cursor');
+      return db.drizzle
         .select()
         .from(table)
         .where(
           and(
-            eq(table.pluginId, pluginId),
-            eq(table.operation, operation as 'create' | 'send'),
-            targetId === null ? undefined : eq(table.targetId, targetId),
-            gt(table.id, after),
+            scope,
+            cursor ? or(gt(table.createdAt, cursor.createdAt),
+              and(eq(table.createdAt, cursor.createdAt), gt(table.id, after))) : undefined,
           ),
         )
-        .orderBy(asc(table.id))
-        .limit(limit),
+        .orderBy(asc(table.createdAt), asc(table.id))
+        .limit(limit);
+    },
     forSession: (taskId) =>
       db.drizzle
         .select()

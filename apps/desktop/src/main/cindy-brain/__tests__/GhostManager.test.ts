@@ -308,6 +308,19 @@ describe('hashApprovedSkillContent · item.dir 路径段校验', () => {
 });
 
 describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => {
+  it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
+    await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
+    await manager.migrateLegacyApprovalsOnce();
+    const old = manager.list()[0];
+    expect(old).toMatchObject({enabled:true, manifest:{agent:{tasks}}, approval:{state:'approved'}});
+    expect(old.taskCapabilityApproved).toBeUndefined();
+    if (old.approval.state !== 'approved') throw new Error('fixture not approved');
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => true)).toBe(false);
+    await manager.setEnabled('hello', false);
+    await manager.setEnabled('hello', true);
+    expect(manager.list()[0]).toMatchObject({enabled:true,manifest:{agent:{tasks}},approval:old.approval});
+    expect(manager.list()[0].taskCapabilityApproved).toBeUndefined();
+  });
   it('keeps legacy tasks data inert, persists only explicit approval, and preserves it through enable and update', async () => {
     const manifest = {...goodManifest(), slots:['tool','agent'], agent:{tasks:true}};
     await writeLegacyInstall('hello', manifest);
