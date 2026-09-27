@@ -1,6 +1,25 @@
 import { ghostPermissionItems, type InstalledGhost } from '../../shared/ghost.js';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
 
+/** One automatic attempt per owner/install identity. Only Host UI may retry. */
+export class PluginTaskApprovalGate {
+  private readonly attempts = new Map<string, { identity: string; pending: boolean }>();
+
+  async request(id: string, identity: string, explicit: boolean, attempt: () => Promise<boolean>): Promise<boolean> {
+    const previous = this.attempts.get(id);
+    if (previous?.pending || (previous?.identity === identity && !explicit)) return false;
+    const state = { identity, pending: true };
+    this.attempts.set(id, state);
+    try {
+      const approved = await attempt();
+      if (approved && this.attempts.get(id) === state) this.attempts.delete(id);
+      return approved;
+    } finally {
+      state.pending = false;
+    }
+  }
+}
+
 export function hasPluginTaskApproval(ghost: InstalledGhost | null | undefined): boolean {
   return (
     ghost?.enabled === true &&

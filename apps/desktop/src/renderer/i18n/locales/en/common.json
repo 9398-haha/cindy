@@ -5366,6 +5366,7 @@
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
+        "agentTasksRequest": "Review task permission",
         "agentTasks": "Can create and manage its own Cindy tasks",
         "agentTasksDetail": "Can send messages, read results and stop its own executions. Tasks remain visible to you. Uses this plugin’s AI settings and may incur model charges; does not grant access to other tasks.",
         "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",

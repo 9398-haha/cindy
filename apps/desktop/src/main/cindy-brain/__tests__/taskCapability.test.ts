@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensurePluginTaskApproval, hasPluginTaskApproval } from '../taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginTaskApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
@@ -21,6 +21,29 @@ const legacy = () =>
   }) as InstalledGhost;
 
 describe('explicit task capability approval', () => {
+  it.each(['denied', 'timeout', 'error'] as const)('suppresses serial automatic prompts after %s until Host retry', async outcome => {
+    const gate = new PluginTaskApprovalGate();
+    const attempt = vi.fn(async () => { if (outcome === 'error') throw new Error('no UI'); return false; });
+    await gate.request('p', 'owner:revision', false, attempt).catch(() => false);
+    for (let i = 0; i < 20; i++) expect(await gate.request('p', 'owner:revision', false, attempt)).toBe(false);
+    expect(attempt).toHaveBeenCalledOnce();
+    const retry = vi.fn(async () => true);
+    expect(await gate.request('p', 'owner:revision', true, retry)).toBe(true);
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  it('does not bypass pending confirmation, and isolates owner/revision and plugin identities', async () => {
+    const gate = new PluginTaskApprovalGate();
+    let finish!: (value: boolean) => void;
+    const first = gate.request('p', 'owner:r1', false, () => new Promise(resolve => { finish = resolve; }));
+    const other = vi.fn(async () => false);
+    expect(await gate.request('p', 'owner:r1', true, other)).toBe(false);
+    expect(other).not.toHaveBeenCalled();
+    finish(false); await first;
+    await gate.request('q', 'owner:r1', false, other);
+    await gate.request('p', 'owner:r2', false, other);
+    await gate.request('p', 'new-owner:r2', false, other);
+    expect(other).toHaveBeenCalledTimes(3);
+  });
   it('does not treat a preserved unknown declaration as consent', async () => {
     const ghost = legacy();
     const handler = vi.fn();

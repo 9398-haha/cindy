@@ -10338,10 +10338,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'startTeam': {
         const epoch = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
+        const assertActive = (status: string) => {
+          if (status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot start a team');
+        };
+        assertActive(task.status);
         if (task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
         const result = await startOrcaTeamForCaller(task.taskId, undefined, async () => {
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
           const fresh = await service.get(pluginId, task.taskId);
+          assertActive(fresh.status);
           if (fresh.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during confirmation');
         });
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
