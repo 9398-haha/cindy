@@ -112,6 +112,7 @@ import { getDeviceLinkStatus } from '../device-link/index.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
+  isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
   type AgentInputClearBoundaryOpts,
@@ -643,6 +644,7 @@ import {
 } from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
+import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -5369,6 +5371,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   });
 
+  // 后台命令输出尾部(只读)。任务卡展开区据此显示「最近输出」与最后写入时间。
+  // 入参只有 (sessionId, taskId):输出路径取自该活跃会话仍在运行的后台任务登记
+  // (SDK task_started 的 output_file),调用方(renderer / device-link 控制端)无法
+  // 指定任意路径。任务已终态、会话不活跃 → unavailable。SSH 远程工作区会话的 CLI
+  // 跑在远端,output_file 写在远端,本机读必落空 → 同样 unavailable。
+  ipcMain.handle(
+    MAKER_INVOKE.READ_BACKGROUND_TASK_OUTPUT_TAIL,
+    async (event, sessionId: unknown, taskId: unknown) => {
+      // 本机调用只接受已登记的顶层 Cindy 窗口;device-link 隧道调用由 dispatch 层鉴权。
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+      if (typeof sessionId !== 'string' || !sessionId) {
+        return { ok: false, reason: 'forbidden' } as const;
+      }
+      try {
+        const active = maker.listActiveSessions().find((x) => x.id === sessionId);
+        const live = active && !active.remoteHostId ? maker.getSession(sessionId) : undefined;
+        return await readSessionBackgroundTaskOutputTail(live, taskId);
+      } catch {
+        return { ok: false, reason: 'read_failed' } as const;
+      }
+    },
+  );
+
   // workflow 逐 agent 进度树(只读)。从活跃会话拿 workDir + sdkSessionId → 推导 Claude Code
   // workflows 记录目录 → 按 taskId 匹配 wf_*.json 解析成 {phases, agents[]}。数据源是 SDK 内部
   // 产物(无公开契约):找不到会话 / 未拿到 sdkSessionId / 目录不存在 / 文件损坏一律返回 null,
@@ -8782,6 +8807,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       : withCindyMakeProjectUse(app.getPath('userData'), session.workDir, dispatch);
   }
 
+  /**
+   * 来源标签用的发送方身份快照：任务标题，以及该任务所属伙伴（有则标签显示伙伴名）。
+   * 读失败只降级为无标题 / 按普通任务显示，不影响投递。
+   */
+  async function readSenderIdentity(
+    sessionId: string | undefined,
+  ): Promise<{ dispatcherSessionTitle?: string | null; dispatcherBot?: { id: string; name: string } | null }> {
+    if (!sessionId) return {};
+    try {
+      const [row] = await getDbClient()
+        .drizzle.select({
+          title: sessions.title,
+          botId: botSessionLinks.botId,
+          botName: botProfiles.displayName,
+        })
+        .from(sessions)
+        .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!row) return {};
+      return {
+        dispatcherSessionTitle: row.title,
+        dispatcherBot: row.botId ? { id: row.botId, name: row.botName || row.botId } : null,
+      };
+    } catch {
+      return {};
+    }
+  }
+
   async function sendToSessionInternal(params: {
     targetSessionId?: string;
     message: string;
@@ -8822,6 +8877,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     } = params;
     const queuedOrigin = sessionQueueOriginForDispatcher({
       dispatcherSessionId,
+      ...(await readSenderIdentity(origin ? undefined : dispatcherSessionId)),
       message,
       explicitOrigin: origin,
     });
@@ -9595,6 +9651,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         meta,
         files: params.files,
         ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
+        origin: sessionQueueOriginForDispatcher({
+          dispatcherSessionId: params.dispatcherSessionId,
+          ...(await readSenderIdentity(params.dispatcherSessionId)),
+          message: params.message,
+        }),
       });
       const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
@@ -10366,6 +10427,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!link) return fallback;
       const worker = (await listWorkersByLead(link.leadSessionId)).find((w) => w.id === workerId);
       return worker?.role ?? fallback;
+    },
+    resolveWorkerSessionLink: async (workerId) => {
+      const link = await getWorkerLink({ workerId });
+      return link ? { leadSessionId: link.leadSessionId, workerSessionId: link.workerSessionId } : null;
     },
     isSessionRunningError,
     log,
@@ -12049,7 +12114,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         persistedContent: message,
         clientId: queuedMessageId,
         meta,
-        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+        origin: sessionQueueOriginForDispatcher({
+          dispatcherSessionId: callerSessionId,
+          ...(await readSenderIdentity(callerSessionId)),
+          message,
+        }),
       });
     },
     steerQueuedMessage: async (sessionId, item, expectedTurn) => {
@@ -12412,11 +12481,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : undefined;
       const originKind =
         origin && typeof origin === 'object' ? (origin as { kind?: unknown }).kind : undefined;
-      // Scheduler prompts are automatic inputs, not fresh human intervention. They may
-      // share the coordinator persistence path with composer messages, but must not recharge
-      // the interrupted-turn episode budget and defeat its hard upper bound.
-      const isAutomaticPrompt =
-        originKind === 'scheduler' || originKind === 'goal' || originKind === 'orca';
+      // Automatic inputs (scheduler / goal / Orca / tool-sent session messages) are not fresh
+      // human intervention. They may share the coordinator persistence path with composer
+      // messages, but must not recharge the interrupted-turn episode budget and defeat its
+      // hard upper bound.
+      const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
       silentStopAutoResumeGuard.noteUserSend(sessionId);
       if (!isAutomaticPrompt) interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
     }

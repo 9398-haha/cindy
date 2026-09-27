@@ -65,6 +65,7 @@ import {
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
+  isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   parseAgentInputToolLoopDetails,
   projectionRetryText,
@@ -978,10 +979,9 @@ function isSchedulerOriginItem(item: AgentInputQueuedMessage | null | undefined)
   return item?.origin?.kind === 'scheduler';
 }
 
-/** Orca and scheduler inputs are automation, not a fresh human intervention. */
+/** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  const kind = item?.origin?.kind;
-  return kind === 'scheduler' || kind === 'orca';
+  return isAutomaticInputOriginKind(item?.origin?.kind);
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
@@ -6283,6 +6283,9 @@ export class AgentInputCoordinator {
             uuid: active.messageUuid,
             ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
             ...(item.autoReviewUserText !== undefined ? { autoReviewUserText: item.autoReviewUserText } : {}),
+            // 与 drain 派发落库（makerSendTransaction）同口径：工具 / Orca / 自动化注入的
+            // steer 也要保留来源，接收方才能渲染来源标签。
+            ...(item.origin ? { origin: item.origin } : {}),
             sdkSessionId,
             delivery: active.delivery,
             ...(transcriptParentUuid ? { transcriptParentUuid } : {}),

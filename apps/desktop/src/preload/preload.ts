@@ -5891,6 +5891,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       taskId: string,
     ): Promise<import('../shared/workflow-progress').WorkflowProgress | null> =>
       ipcRenderer.invoke('maker:get-workflow-progress', sessionId, taskId),
+    readBackgroundTaskOutputTail: (
+      sessionId: string,
+      taskId: string,
+    ): Promise<import('../shared/backgroundTaskOutput').BackgroundTaskOutputTailResult> =>
+      ipcRenderer.invoke('maker:background-task:output-tail', sessionId, taskId),
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     setProviderPresentation: (input: {
@@ -7504,6 +7509,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       getHistory: (opts?: {
         days?: number | 'all';
         modelDays?: number | 'all';
+        /** 'local' (默认) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
+        device?: string;
         forceRefresh?: boolean;
       }): Promise<unknown> => ipcRenderer.invoke('maker:usage:history', opts),
       /** Claude USD 推送 (per-turn, agentKind=claude-code 时订阅它)。 */
