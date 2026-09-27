@@ -4310,13 +4310,13 @@
       "defaults": {
         "title": "New Conversation Configuration",
         "channelDescriptions": {
-          "feishu": "New Feishu conversations use this Agent and model. Send /new in an existing DM to apply it.",
+          "feishu": "New Feishu conversations use this Agent and model. Existing sessions switch over on their next message unless their model was changed manually.",
           "slack": "New Slack threads use this Agent and model.",
-          "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
-          "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
-          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
-          "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it.",
-          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
+          "discord": "New Discord conversations use this Agent and model. Existing sessions switch over on their next message unless their model was changed manually.",
+          "wechat": "New WeChat conversations use this Agent, model, and permission mode. Existing sessions switch to this Agent and model on their next message unless their model was changed manually; send /new in an existing chat to apply the permission mode.",
+          "telegram": "New Telegram conversations use this Agent and model. Existing sessions switch over on their next message unless their model was changed manually.",
+          "dingtalk": "New DingTalk conversations use this Agent and model. Existing sessions switch over on their next message unless their model was changed manually.",
+          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Existing sessions switch to this Agent and model on their next message unless their model was changed manually; send /new in an existing chat to apply the permission mode."
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent does not support per-message permission confirmations on this channel; messages cannot be processed. Switch to Claude Code or Codex.",

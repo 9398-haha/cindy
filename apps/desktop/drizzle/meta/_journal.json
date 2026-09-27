@@ -834,6 +834,13 @@
       "when": 1790517291835,
       "tag": "0118_cynical_thunderball",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "6",
+      "when": 1790535750822,
+      "tag": "0119_hard_vindicator",
+      "breakpoints": true
     }
   ]
 }

@@ -190,6 +190,12 @@ export const sessions = sqliteTable(
     imBotContextId: text('im_bot_context_id'),
     imUserId: text('im_user_id'),
     /**
+     * 个人 IM 渠道任务「跟随渠道默认」的记录(JSON,见 im/shared/channelDefaultRoute.ts)。
+     * 渠道建任务 / `/new` / 跟随切换成功时写入;当前路由与记录不一致 = 用户单独改过。
+     * NULL = 无记录(非 IM 任务或本列上线前建的任务)。
+     */
+    imDefaultRoute: text('im_default_route'),
+    /**
      * 本 session 创建时是否注入了 project-context 知识（来自 .cindy/project-knowledge/）。
      * 仅在创建瞬间由 main IPC 写入；后续不变。
      * Render 端用此字段决定 sidebar stripe / chat header chip 显示。
