@@ -63,6 +63,9 @@ Renderer 只接收阶段、进度、设备码和固定 GitHub 授权地址，不
 
 登录前后及插件探测共用 `gh api --hostname github.com user --silent` 检查当前活动账号，兼容不支持 `auth status --active` 的旧版 gh，也避免失效备用账号干扰；只消费退出码，不读取账号响应或 token。成功后清除 token 和 PR 缓存，
 通过 `git-context:github-connected` 立即刷新顶栏及侧栏。缓存代数隔离登录前的在途响应。
+宿主管理的检查、登录和取 token 共用 `ghAccountEnv()`，仅在子进程环境中移除
+`GH_TOKEN` / `GITHUB_TOKEN`（含 Windows 大小写变体），统一使用 gh 保存的本机账号；
+保留代理与配置目录，不修改全局环境或 Agent 终端的 token。回归见 `githubSetupActiveAccount.test.ts`。
 安装／登录 IPC 仅限受信本机主窗口，不开放给共享任务或 device-link；SSH／手机远程查看
 继续使用被控端现有 PR 查询和刷新通道，不会误操作控制端的 GitHub 账号。
 
