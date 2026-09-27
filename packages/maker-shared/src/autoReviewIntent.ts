@@ -152,6 +152,7 @@ export function createAutoReviewIntentProjection() {
     history = history.filter((message) => !isSynthetic(message));
     let intent: AutoReviewUserIntent = "";
     let replayed = false;
+    let omitted = false;
     const latest = current
       ? (current.authoredText ?? readAutoReviewUserText(current.content))
       : null;
@@ -186,6 +187,8 @@ export function createAutoReviewIntentProjection() {
       }
       const meta = message.agentMeta;
       const text = meta?.autoReviewUserText;
+      if (typeof text === "string" && text.startsWith("[UI_ACTION_TRIGGER]"))
+        omitted = true;
       // delivery/wire alone are not authorship proof: plugin rewrites have the same shape.
       // Old rows without Host-captured text cannot safely restore authorization.
       if (
@@ -198,9 +201,9 @@ export function createAutoReviewIntentProjection() {
       if (readAutoReviewUserText(message.content) === null) intent = "";
       intent = appendAutoReviewUserIntent(intent, text);
     }
-    if (replayed || !current) return intent;
+    if (replayed || !current) return withOmission(intent, omitted);
     if (readAutoReviewUserText(current.content) === null) intent = "";
-    return latest !== null ? appendAutoReviewUserIntent(intent, latest) : "";
+    return withOmission(latest !== null ? appendAutoReviewUserIntent(intent, latest) : "", omitted);
   }
   function reviewState(
     history: readonly AutoReviewHistoryMessage[],

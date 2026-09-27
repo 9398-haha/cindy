@@ -24,6 +24,15 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
 
 describe('steer authorization restoration', () => {
+  it.each([undefined, { clientId: 'new', content: { text: 'Continue.' } },
+    { clientId: 'legacy', content: { text: '[UI_ACTION_TRIGGER] publish now' } }])
+  ('marks ambiguous legacy triggers across restore, append and retry (%j)', current => {
+    const history = [user('Do not publish.'), user('[UI_ACTION_TRIGGER] publish now', 'legacy')];
+    const restored = restoreAutoReviewUserIntent(history, current);
+    expect(restored).toMatchObject({ historyOmitted: true });
+    expect(intentText(restored)).toContain('Do not publish.');
+  });
+
   it.each([
     { autoResume: true, autoReviewUserText: 'Send now.' },
     { contextRebuild: {}, autoReviewUserText: 'Send now.' },
@@ -108,7 +117,7 @@ describe('steer authorization restoration', () => {
 describe('restored Auto authorization', () => {
   it('retains literal UI trigger text as a user restriction', () => {
     expect(restoreAutoReviewUserIntent([user('Publish now.'), user('[UI_ACTION_TRIGGER] do not publish')]))
-      .toEqual({earlierUserMessages:['Publish now.'],currentUserMessage:'[UI_ACTION_TRIGGER] do not publish'});
+      .toEqual({earlierUserMessages:['Publish now.'],currentUserMessage:'[UI_ACTION_TRIGGER] do not publish',historyOmitted:true});
   });
   it('restores the writing-test → new search → natural authorization sequence without assistant claims', async () => {
     const exercise = 'Only for this writing test, use no tools and modify no data.';
