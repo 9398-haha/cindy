@@ -10320,6 +10320,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         const before = JSON.stringify(cfg);
         const assertIdle = async () => {
+          await inputCoordinator.ensureQueueRestored(task.taskId);
+          assertRequestCurrent();
+          if (!inputCoordinator.isQueueRestored(task.taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task queue is restoring', true);
           if (mode === 'acceptEdits') {
             if ((await service.listRuns(pluginId, task.taskId)).items.length) throw new PluginTaskError('TASK_BUSY', 'Only an unstarted task can request write access');
             await drainPersistQueue();
@@ -10338,7 +10341,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
         pluginPermissionRequests.add(pluginId);
         try {
-          await assertIdle();
+          await withSessionRestartLock(task.taskId, assertIdle);
           assertRequestCurrent();
           // Busy/preflight failures have not asked the user anything; do not consume an attempt.
           return await pluginWriteAccessGate.request(JSON.stringify([pluginId, task.taskId]), identity, mode, explicitWriteAccess, async () => {

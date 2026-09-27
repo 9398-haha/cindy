@@ -21,15 +21,40 @@ function fixture() {
  const task = { taskId: 'task', revision: 1, permissionMode: 'plan' };
  const service = { get: vi.fn(async () => task), listRuns: vi.fn(async () => ({ items: [] })), completeOperation: vi.fn(async <T>(operation: () => Promise<T>) => operation()) };
  const live = { isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async () => {}) };
+ const queue = { ensureQueueRestored: vi.fn(async (_id: string) => {}), isQueueRestored: vi.fn((_id: string) => true), getQueueControlSnapshot: vi.fn((_id: string) => ({ pendingQueue: [] as string[] })) };
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
- const deps = { isPluginTaskPermissionAllowed, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: { getQueueControlSnapshot: () => ({ pendingQueue: [] }) }, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
+ const deps = { isPluginTaskPermissionAllowed, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
  const allDeps = {...deps, pluginWriteAccessGate:gate, pluginWriteAccessIdentity:()=>identity};
  const run = new Function(...Object.keys(allDeps), js)(...Object.values(allDeps));
- return { run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
+ return { run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('plugin write confirmation interleavings', () => {
+ it.each(['acceptEdits', 'auto'])('restores a cold durable queue before %s confirmation under the send lock', async mode => {
+  const f=fixture();
+  f.queue.ensureQueueRestored.mockImplementation(async()=>{
+   expect(sendToSessionLocks.has('task')).toBe(true);
+   f.queue.getQueueControlSnapshot.mockReturnValue({pendingQueue:['persisted-input']});
+  });
+  await expect(f.run(mode)).rejects.toMatchObject({code:'TASK_BUSY'});
+  expect(f.dialog.showMessageBox).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();
+ });
+ it('fails closed on incomplete restoration and retries preflight without consuming consent',async()=>{
+  const f=fixture();f.queue.isQueueRestored.mockReturnValueOnce(false);
+  await expect(f.run()).rejects.toMatchObject({code:'HOST_NOT_READY'});
+  expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+  await expect(f.run()).resolves.toMatchObject({granted:true});
+ });
+ it('rechecks restored queue after confirmation before committing permission',async()=>{
+  const f=fixture();f.dialog.showMessageBox.mockImplementationOnce(async()=>{
+   f.queue.ensureQueueRestored.mockImplementationOnce(async()=>{f.queue.getQueueControlSnapshot.mockReturnValue({pendingQueue:['late-input']});});
+   return {response:0};
+  });
+  await expect(f.run()).rejects.toMatchObject({code:'TASK_BUSY'});
+  expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();
+ });
+
  it('remembers refusal across modes and repeats, and only Host retry opens the original confirmation',async()=>{
   const f=fixture();f.dialog.showMessageBox.mockResolvedValueOnce({response:1});
   await expect(f.run()).resolves.toEqual({granted:false});

@@ -250,7 +250,7 @@ export class GhostInstallReceiptStore {
    */
   async write(
     receipt: GhostInstallReceipt,
-    options: { skillSourceDir?: string; requireSkillSnapshot?: boolean } = {},
+    options: { skillSourceDir?: string; requireSkillSnapshot?: boolean; assertCurrent?: () => void } = {},
   ): Promise<void> {
     const validated = validateReceipt(receipt, receipt.id);
     if (!validated.ok)
@@ -296,7 +296,13 @@ export class GhostInstallReceiptStore {
         flag: 'wx',
         mode: 0o600,
       });
-      await fs.promises.rename(temp, target);
+      if (options.assertCurrent) {
+        // No event-loop gap between owner validation and publishing approval.
+        options.assertCurrent();
+        fs.renameSync(temp, target);
+      } else {
+        await fs.promises.rename(temp, target);
+      }
     } catch (error) {
       throw error;
     } finally {

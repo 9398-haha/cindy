@@ -1988,7 +1988,15 @@ export class GhostManager {
           approval.receipt.manifest.agent?.tasks !== true ||
           !this.list().some(ghost => ghost.manifest.id === id && ghost.enabled)) return false;
       if (approval.receipt.taskCapabilityApproved !== true) {
-        await this.receiptStore.write({ ...approval.receipt, taskCapabilityApproved: true });
+        const expired = new Error('Task capability approval owner changed');
+        try {
+          await this.receiptStore.write({ ...approval.receipt, taskCapabilityApproved: true }, {
+            assertCurrent: () => { if (!isCurrent()) throw expired; },
+          });
+        } catch (error) {
+          if (error === expired) return false;
+          throw error;
+        }
       }
       return isCurrent();
     });

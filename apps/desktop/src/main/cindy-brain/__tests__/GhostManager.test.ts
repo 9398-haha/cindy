@@ -341,6 +341,24 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     const updated = await manager.update(pkg, {expectedInstalledApproval:ghostInstallApprovalToken(old.approval)});
     expect(updated).toHaveProperty('ghost.taskCapabilityApproved', true);
   });
+  it('does not publish task approval when owner changes during receipt preparation', async () => {
+    await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks:true}});
+    await manager.migrateLegacyApprovalsOnce();
+    const old = manager.list()[0];
+    if (old.approval.state !== 'approved') throw new Error('fixture not approved');
+    let current = true;
+    const write = fs.promises.writeFile.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      await write(file, data, options);
+      if (String(file).endsWith('.tmp') && String(data).includes('"taskCapabilityApproved": true')) current = false;
+    });
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => current)).toBe(false);
+    spy.mockRestore();
+    expect(manager.list()[0].taskCapabilityApproved).toBeUndefined();
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => true)).toBe(true);
+    expect(manager.list()[0].taskCapabilityApproved).toBe(true);
+  });
+
   /** 带 skill 槽的旧布局清单 + 配套 SKILL.md(frontmatter 与声明逐字一致)。 */
   const legacySkillManifest = (id = 'skilled'): Record<string, unknown> => ({
     ...goodManifest(id),
