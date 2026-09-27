@@ -42,6 +42,7 @@
     }
   },
   "upload": {
+    "shareReceiveFailed": "Couldn't finish receiving the shared files. Free up storage, then reopen this screen to retry.",
     "emptyFile": "This file is empty and can't be sent as an attachment.",
     "fileTooLarge": "The file exceeds {{size}} MB and can't be sent as an attachment for now.",
     "cancelled": "Attachment upload cancelled.",

@@ -778,8 +778,13 @@ export default function NewRemoteSessionScreen() {
   const isShareTargetFocused = useIsFocused();
   useEffect(() => {
     if (!isShareTargetFocused || !auth.isAuthenticated || !incomingShareBatch
-      || getMobileAuthOwner().accountId !== auth.user?.id
-      || !consumeIncomingShareBatch(incomingShareBatch.id)) return;
+      || getMobileAuthOwner().accountId !== auth.user?.id) return;
+    try {
+      if (!consumeIncomingShareBatch(incomingShareBatch.id)) return;
+    } catch {
+      setAttachmentError(i18n.t('composer.upload.shareReceiveFailed'));
+      return;
+    }
     const selection = selectIncomingShareUploadCandidates(incomingShareBatch.payloads);
     const remainingSlots = Math.max(
       0,
