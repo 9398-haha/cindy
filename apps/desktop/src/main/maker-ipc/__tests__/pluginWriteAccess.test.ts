@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
+import { withSessionRestartLock, withSendToSessionLock, sendToSessionLocks } from '../sendToSessionLock.js';
 import { PluginTaskError } from '../pluginTaskService.js';
 
 // Execute the real switch branch with controlled Host boundaries.
@@ -20,7 +21,7 @@ function fixture() {
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
- const deps = { drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: { getQueueControlSnapshot: () => ({ pendingQueue: [] }) }, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
+ const deps = { withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: { getQueueControlSnapshot: () => ({ pendingQueue: [] }) }, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
  const run = new Function(...Object.keys(deps), js)(...Object.values(deps));
  return { run: (mode = 'acceptEdits') => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }), service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
@@ -68,3 +69,31 @@ describe('first plugin write approval checks actual task history', () => {
   await expect(g.run()).rejects.toThrow('storage unavailable');expect(g.dialog.showMessageBox).not.toHaveBeenCalled();
  });
 });
+
+ it('rechecks under the shared lock after an earlier sender completes', async () => {
+  const f = fixture(); let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+  let sender: Promise<void>;
+  f.dialog.showMessageBox.mockImplementationOnce(async () => {
+   sender = withSendToSessionLock('task', async () => { entered(); await barrier; f.history.endedAt = 1; });
+   await started;
+   return { response: 0 };
+  });
+  const result = expect(f.run()).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await vi.waitFor(() => expect(sendToSessionLocks.has('task')).toBe(true));
+  expect(f.live.setPermissionMode).not.toHaveBeenCalled();
+  release(); await result; await sender!;
+ });
+ it('keeps send fenced through runtime permission persistence and releases after rejection', async () => {
+  const f = fixture(); let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  f.epoch.client.tx.mockImplementationOnce(async () => { await barrier; throw new Error('persist failed'); });
+  const result = expect(f.run()).rejects.toThrow('persist failed');
+  await vi.waitFor(() => expect(f.epoch.client.tx).toHaveBeenCalled());
+  const send = vi.fn(async () => {});
+  await expect(withSendToSessionLock('task', send)).rejects.toThrow('restart');
+  expect(send).not.toHaveBeenCalled();
+  release(); await result;
+  await withSendToSessionLock('task', send); expect(send).toHaveBeenCalledOnce();
+ });

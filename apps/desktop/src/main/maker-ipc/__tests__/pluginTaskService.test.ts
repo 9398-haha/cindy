@@ -345,3 +345,35 @@ it('drains terminal receipt writes before the owner database closes', async () =
   f.switchOwner();
   expect(JSON.parse(f.rows.get(run.runId)!.payload)).toMatchObject({status: 'completed', outputMessageId: 'answer'});
 });
+
+it.each(['send', 'cancel'] as const)('drain waits for the full %s operation including native callbacks', async kind => {
+ const f = fixture(); const task = await f.create();
+ const old = kind === 'cancel' ? await f.send() : null;
+ let release!: () => void;
+ const barrier = new Promise<void>(resolve => { release = resolve; });
+ let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+ f.deps.dispatch = async (_p, taskId, inputMessageId) => {
+  entered(); await barrier;
+  await f.service.accept(taskId, {clientId: inputMessageId}, f.execution);
+  return {ok: false};
+ };
+ f.deps.cancel = async () => { entered(); await barrier; return 'cancelled'; };
+ const operation = kind === 'send'
+  ? f.service.send('p', {taskId:task.taskId, requestKey:'new', expectedRevision:task.revision, text:'hello'})
+  : f.service.cancel('p', old!.runId);
+ await started;
+ let drained = false; const drain = f.service.drain().then(() => { drained = true; });
+ await new Promise(resolve => setTimeout(resolve, 0)); expect(drained).toBe(false);
+ release(); const [run] = await Promise.all([operation, drain]);
+ f.switchOwner();
+ expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe(kind === 'send' ? 'running' : 'cancelled');
+});
+it('a rejected operation does not poison subsequent drain', async () => {
+ const f = fixture(), run = await f.send();
+ f.deps.cancel = async () => { throw new Error('native stop failed'); };
+ await expect(f.service.cancel('p', run.runId)).rejects.toThrow('native stop failed');
+ await f.service.drain();
+ f.deps.cancel = async () => 'cancelled';
+ await expect(f.service.cancel('p', run.runId)).resolves.toMatchObject({status:'cancelled'});
+ await f.service.drain();
+});

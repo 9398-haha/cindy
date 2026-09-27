@@ -107,6 +107,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     tail = result.catch(() => undefined);
     return result;
   };
+  // Drain spans the entire dispatch/control operation, without holding the receipt
+  // mutex while native dispatch calls accept()/settle() back into this service.
+  let operations: Promise<unknown> = Promise.resolve();
+  const completeOperation = <T>(fn: () => Promise<T>): Promise<T> => {
+    const result = fn();
+    operations = Promise.all([operations, result.catch(() => undefined)]).then(() => undefined);
+    return result;
+  };
   const save = async (row: PluginTaskReceipt, payload: unknown) => {
     deps.assertCurrent();
     row.payload = JSON.stringify(payload);
@@ -171,8 +179,11 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
   return {
     /** Account teardown awaits already accepted writes before closing this DB. */
     drain: async () => {
-      let pending: Promise<unknown>;
-      do { pending = tail; await pending; } while (pending !== tail);
+      let pending: Promise<unknown>, active: Promise<unknown>;
+      do {
+        pending = tail; active = operations;
+        await Promise.all([pending, active]);
+      } while (pending !== tail || active !== operations);
     },
     create: (
       pluginId: string,
@@ -242,7 +253,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     send: async (
       pluginId: string,
       request: { taskId: string; requestKey: string; expectedRevision: number; text: string },
-    ): Promise<PluginTaskRun> => {
+    ): Promise<PluginTaskRun> => completeOperation(async () => {
       const prepared = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
         const fingerprint = hash([request.text, request.expectedRevision]);
@@ -304,7 +315,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         }
         return run;
       });
-    },
+    }),
     getRun: async (pluginId: string, runId: string) =>
       reconcile(await exclusive(() => ownRun(pluginId, runId))),
     listRuns: async (pluginId: string, taskId: string, after = '', limit = 50) => {
@@ -317,7 +328,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       deps.assertAuthorized(pluginId);
       return { items, nextCursor: rows.length === limit ? rows.at(-1)!.id : null };
     },
-    cancel: async (pluginId: string, runId: string): Promise<PluginTaskRun> => {
+    cancel: (pluginId: string, runId: string): Promise<PluginTaskRun> => completeOperation(async () => {
       const prepared = await exclusive(async () => {
         const row = await ownRun(pluginId, runId);
         const run = JSON.parse(row.payload) as PluginTaskRun;
@@ -344,7 +355,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         await save(row, run);
         return run;
       });
-    },
+    }),
     /** Awaited before vendor dispatch. Aliases are native recovery provenance, never caller input. */
     accept: (taskId: string, item: OwnedQueuedInput, execution: SessionExecutionIdentity) =>
       exclusive(async () => {
