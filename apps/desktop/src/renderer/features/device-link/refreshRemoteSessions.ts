@@ -23,6 +23,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { readSessionBatch, isSessionListRow as isRemoteSessionListSession } from '@/lib/sessionBatchRead';
 import { remoteProjectsStore, type RemoteSessionStatus } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
+import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
@@ -195,6 +196,9 @@ export async function refreshRemoteDeviceSessions(
   name?: string,
   opts: RefreshOptions = {},
 ): Promise<RefreshResult> {
+  // The main-process probe owns recovery while the circuit is open. Preserve
+  // the mirror and avoid starting another listing/retry chain in every window.
+  if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
   const status = opts.status ?? 'active';
   const taskKey = refreshTaskKey(deviceId, status);
   const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
@@ -343,6 +347,7 @@ async function runRefreshRemoteDeviceSessions(
   let timeoutAttempts = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
     try {
@@ -400,6 +405,7 @@ async function runRefreshRemoteDeviceSessions(
       }
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
       if (opts.scope === 'schedule' || opts.scope === 'both') {
+        if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
         try {
           const raw = await window.electronAPI.deviceLink.invoke(
             deviceId,

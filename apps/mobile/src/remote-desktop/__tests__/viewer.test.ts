@@ -128,10 +128,12 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       : undefined,
     cancelVideoFrameCallback: (key: number) => videoFrames.delete(key),
   });
+  const dataChannel = { readyState: 'open', bufferedAmount: 0, send: vi.fn(), close() {} };
   class Peer {
+    connectionState = 'connected';
     localDescription = { sdp: "offer" };
     createDataChannel() {
-      return { close() {} };
+      return dataChannel;
     }
     addTransceiver() {}
     async createOffer() {
@@ -187,6 +189,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     cancelAnimationFrame: (key: number) => frames.delete(key),
   });
   return {
+    dataChannel,
     messages,
     elements,
     bgDraws,
@@ -345,6 +348,68 @@ describe("remote desktop viewport", () => {
     v.send({ type: 'nativeTouchpad', tap: true });
     v.flush();
     expect(v.messages.flatMap(m => m.events ?? [])).toHaveLength(beforeTap);
+  });
+  it('drops expired queued clicks after a slow acknowledgement and requires fresh control intent', () => {
+    const v = viewer();
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'first' }] });
+    const abandoned = v.messages.filter((m) => m.type === 'input').at(-1)!;
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'stale' }] });
+    v.frame(2_001);
+    v.flush();
+    expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+    v.flush();
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'ignored' }] });
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([{ kind: 'text', text: 'first' }]);
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'fresh' }] });
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: 'text', text: 'first' }, { kind: 'text', text: 'fresh' },
+    ]);
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'next' }] });
+    v.send({ type: 'ack', epoch: abandoned.epoch, sequence: abandoned.sequence });
+    v.flush();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(2);
+    v.ack();
+    v.flush();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(3);
+  });
+  it('does not overtake congested data-channel input through the relay', () => {
+    const v = viewer(true);
+    v.send({ type: 'init', epoch: 'one', width: 1920, height: 1080 });
+    v.playVideo();
+    v.send({ type: 'control', enabled: true });
+    v.dataChannel.bufferedAmount = 16384;
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'queued' }] });
+    expect(v.dataChannel.send).not.toHaveBeenCalled();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
+    v.dataChannel.bufferedAmount = 0;
+    v.flush();
+    expect(v.dataChannel.send).toHaveBeenCalledOnce();
+    expect(JSON.parse(v.dataChannel.send.mock.calls[0][0]).events).toEqual([{ kind: 'text', text: 'queued' }]);
+    v.dataChannel.bufferedAmount = 16384;
+    v.send({ type: 'events', events: [{ kind: 'text', text: 'expired' }] });
+    v.frame(2001);
+    v.flush();
+    v.dataChannel.bufferedAmount = 0;
+    v.flush();
+    expect(v.dataChannel.send).toHaveBeenCalledOnce();
+    expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
+  });
+  it('does not replay a batch through the relay if a data-channel send throws', () => {
+    const v = viewer(true);
+    v.send({ type: 'init', epoch: 'one', width: 1920, height: 1080 });
+    v.playVideo();
+    v.send({ type: 'control', enabled: true });
+    v.dataChannel.bufferedAmount = 16384;
+    v.send({ type: 'events', events: Array.from({ length: 32 }, () => ({ kind: 'text', text: 'old' })) });
+    v.dataChannel.send.mockImplementationOnce(() => { throw new Error('channel closed'); });
+    v.dataChannel.bufferedAmount = 0;
+    v.flush();
+    v.flush();
+    expect(v.dataChannel.send).toHaveBeenCalledOnce();
+    expect(v.messages.filter((m) => m.type === 'input')).toHaveLength(0);
+    expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
   });
   it.each([0, 59])(
     "fits between the top safe area (%s) and toolbar with correct touch coordinates",

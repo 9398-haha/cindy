@@ -181,13 +181,14 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
     expect(source).toContain('|| permissionSheetOpen');
     // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
-    // (MobilePermissionPickerList 由本 screen 直挂 SheetSurface);
+    // (两端都经 NativePermissionSheet:点选先关浮窗,关闭完成后再生效);
     // 浮窗打开时仍属于 composer 激活态,不能因输入框失焦把底排收起。
     // 2026-08:模型药丸改到左侧组(权限/计划右侧),避免发送/停止出现时横向跳动。
     // ModelPickerSheet 的 header 权限入口隐藏(hidePermissionTrigger),不再双入口。
     expect(source).not.toContain('testID="session.composerPermissionButton"');
     expect(source).toContain('testID="session.permissionIndicator"');
-    expect(source).toContain('<MobilePermissionPickerList');
+    expect(source).toContain('<NativePermissionSheet');
+    expect(source).not.toContain('<MobilePermissionPickerList');
     expect(source).toContain('hidePermissionTrigger');
     expect(source).toContain('setPermissionSheetOpen(false)');
     expect(source).toContain('testID="session.composerModelButton"');
@@ -325,7 +326,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('if (!visualOpenSearch) return;');
     expect(source).toContain('setSearchOpen(true);');
     expect(source).toContain('if (visualSearchQuery !== null) setSearchQuery(visualSearchQuery);');
-    expect(source).toContain('autoFocus={MOBILE_VISUAL_MOCK_ENABLED && visible}');
+    // 任务内搜索两端打开即聚焦(与 iOS SessionSearchNative 一致),不再只限视觉演示包。
+    expect(source).toContain('autoFocus={visible}');
     expect(composerInputSource).toContain('autoFocus={visualFocusComposer}');
     expect(composerInputSource).toContain('cursorColor={colors.inputCaret}');
     expect(composerInputSource).toContain('selectionColor={colors.inputCaret}');

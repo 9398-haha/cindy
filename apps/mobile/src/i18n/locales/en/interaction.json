@@ -267,7 +267,6 @@
     },
     "queue": {
       "count": "{{count}} requests",
-      "readOnlyHint": "Collaboration is read-only; requests from the computer are shown here.",
       "empty": "No pending requests",
       "hint": {
         "plan_review": "Review the plan and request changes if needed. The computer continues only after approval.",

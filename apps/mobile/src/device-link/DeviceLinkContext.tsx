@@ -241,6 +241,17 @@ export function subscribeRemoteFavoritesChanged(listener: (deviceId: string) => 
   remoteFavoritesChangedListeners.add(listener);
   return () => { remoteFavoritesChangedListeners.delete(listener); };
 }
+/**
+ * 被控端 `maker:orca:worker-changed`(payload `{leadSessionId}`)。只在控制端持有
+ * `session:<leadSessionId>` topic 时送达(会话页聚焦期间);收到后按 Lead 重拉 Worker 列表。
+ */
+const remoteOrcaWorkerChangedListeners = new Set<(deviceId: string, leadSessionId: string) => void>();
+export function subscribeRemoteOrcaWorkerChanged(
+  listener: (deviceId: string, leadSessionId: string) => void,
+): () => void {
+  remoteOrcaWorkerChangedListeners.add(listener);
+  return () => { remoteOrcaWorkerChangedListeners.delete(listener); };
+}
 const remoteBotChangedListeners = new Set<(deviceId: string, channel: string, payload: unknown) => void>();
 export function subscribeRemoteBotChanges(listener: (deviceId: string, channel: string, payload: unknown) => void): () => void {
   remoteBotChangedListeners.add(listener);
@@ -934,6 +945,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     clientRef.current = client;
     const catalogRefresh = createDeviceCatalogRefresh({
       connectionEpoch: () => connectionEpochRef.current,
+      canRead: (deviceId) => client === clientRef.current
+        && client.getStatus() === 'online'
+        && !backgroundReleaseInFlightRef.current
+        && !unresponsiveDevicesStore.has(deviceId)
+        && !revokedDevicesStore.has(deviceId)
+        && presenceAvailableByDeviceRef.current.get(deviceId) !== false,
       readProviders: (deviceId) => sendInvokeWithAccessHandling<DeviceProvidersPayload>(
         client, deviceId, 'maker:provider:list',
         [{ capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] }],
@@ -942,6 +959,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         client, deviceId, 'maker:get-capabilities', [agent],
       ),
     });
+    const rehydrate = (deviceId?: string) => {
+      catalogRefresh.wake(deviceId);
+      return rehydrateWithClient(client, deviceId);
+    };
     mobileDebugLog('debug', 'device-link', 'runtime identity', {
       commit: /^[a-f0-9]{7,40}$/i.test(process.env.EXPO_PUBLIC_XDT_GIT_COMMIT ?? '')
         ? process.env.EXPO_PUBLIC_XDT_GIT_COMMIT : 'unknown',
@@ -1013,7 +1034,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       setConnectionEpoch(connectionEpochRef.current);
       resetRemoteProjectOrderPushFence();
       restorePendingReplyLinks(client);
-      void rehydrateWithClient(client);
+      void rehydrate();
       // A new controller receives only presence deltas. Read the roster once so
       // an already-offline host is known even when opening directly into history.
       void readDeviceList().catch(() => undefined);
@@ -1029,7 +1050,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         remoteSubscribedTopicsRef.current,
         noteSessionLiveStreamsInterrupted,
       );
-      if (shouldRecover) void rehydrateWithClient(client, deviceId);
+      if (shouldRecover) void rehydrate(deviceId);
     });
     const applyPresence = (snap: PresenceSnapshot) => {
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
@@ -1098,7 +1119,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // ≠ 对方重新授权或本机用户主动重开(对方结束链路后一直在线是常态)。
       // 解除点只有:transport-timeout / 新连接代际 / 显式 openLink 成功
       // (见 linkClose.ts 的具名 lift 入口)。
-      if (presence.recovered) void rehydrateWithClient(client, snap.deviceId);
+      if (presence.recovered) void rehydrate(snap.deviceId);
     };
     const offPresence = client.onPresenceChanged(applyPresence);
     rosterConsumerRef.current = () => {
@@ -1174,7 +1195,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           // (markRemoteResponseEvidence 的证据链只在命中可推翻的 offline
           // verdict 时才顺带清 timer,覆盖不了无 verdict 的 stale 路径。)
           clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
-          if (shouldRecover) void rehydrateWithClient(client, deviceId);
+          if (shouldRecover) void rehydrate(deviceId);
         } else {
           forcedPeerRecoveryIntentRef.current.cancel(deviceId);
         }
@@ -1218,7 +1239,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         )
       ));
       clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
-      if (shouldRecover) void rehydrateWithClient(client, deviceId);
+      if (shouldRecover) void rehydrate(deviceId);
       return shouldRecover;
     });
     client.start();
@@ -1242,7 +1263,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
 
       clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
-      void rehydrateWithClient(client, deviceId);
+      void rehydrate(deviceId);
     });
 
     // 熔断状态变化触发 rehydrate:unresponsive 集合的新增与移除都各触发一次
@@ -1264,7 +1285,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       }
       lastUnresponsiveSnapshot = next;
       for (const deviceId of changedDeviceIds) {
-        void rehydrateWithClient(client, deviceId);
+        void rehydrate(deviceId);
       }
     });
 
@@ -1310,7 +1331,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         restorePendingReplyLinks(client, resumingFromBackground);
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
-        void rehydrateWithClient(client);
+        void rehydrate();
       }
       if (next === 'background') {
         diagnostics.background();
@@ -1611,6 +1632,12 @@ export function routeFrame(env: Envelope, handlers: {
   }
   if (push.channel === 'maker:agents:changed') {
     handlers.onAgentsChanged?.(env.src);
+    return;
+  }
+  if (push.channel === 'maker:orca:worker-changed') {
+    const leadSessionId = (push.payload as { leadSessionId?: unknown } | null)?.leadSessionId;
+    if (typeof leadSessionId !== 'string' || !leadSessionId) return;
+    for (const listener of remoteOrcaWorkerChangedListeners) listener(env.src, leadSessionId);
     return;
   }
   if (push.channel === 'maker:bot-delegation:changed' || push.channel === 'maker:bot-direct-message:changed') {

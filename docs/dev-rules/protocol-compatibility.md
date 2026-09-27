@@ -13,6 +13,17 @@
 
 ## 电脑互联的消息文件与历史变更
 
+跨电脑任务复制使用同账号业务通道 `maker:task-copy`，受信 Renderer 使用 `task-copy:request`。
+不开放裸导入、数据库或路径写入；共享访客不准入。该通道与旧 `maker:task-migration` 交接协议
+隔离，旧端拒绝时提示升级，不退回旧交接协议或控制端执行。新端也不接收旧协议的 activate。
+源任务和文件保留可用，自动任务及消息渠道不转移。数据复用 peer 附件与 OSS；复制记录及目标回执
+仅用于幂等重试，不管理源任务执行权。写请求不进入自动重试白名单，无需服务端变更。
+`preflight` 检查目标实时资源；文件描述可为单附件或有序分段附件，每段复用已有协议和校验，
+复制不设固定总量上限。整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
+`receive.files.additionalWorkspaces` 沿用同一文件描述，manifest 记录成员到目录的映射。
+双方必须支持复制通道；收到整组能力声明才发送团队，不尝试部分导入。
+范围、恢复与源目录保护见 [同机移动与跨电脑复制任务](../product-rules/task-device-migration.md)。
+
 设备互联生成文件沿用远端文件服务的 stat 与修改时间，控制端按被控端消息时间窗校验命令产物；
 仅有文件存在、缺失时间戳或读取失败不构成命令产物证据。不增加 relay 协议字段。
 SSH 保持仅展示经过存在性复核的工具产物，不把 Desktop 消息时间与 SSH 主机文件时间比较。
@@ -472,3 +483,7 @@ canonical 主任务时，宿主额外追加 `resourceCollectionId=teammates&reso
 该块后带 `query` 重读同一资源。旧控制端不声明也不传 `query`，列表页原样可用；旧主机忽略 `query`，也不
 提供记忆页面，新手机显示原有升级提示。未新增 channel、relay 类型、allowlist、权限、数据库迁移或
 Mobile 原生 fingerprint 输入，服务端无需改动。
+
+任务迁移业务通道的 `move-project` action 在任务所属宿主复用项目移动校验与更新，
+仅接受任务 ID 和明确的目录（null 表示移到对话）。不开放远程 sessions 原始 patch；
+旧宿主拒绝未知 action，不回退到控制端本机执行。

@@ -1,4 +1,55 @@
 {
+  "taskMove": {
+    "upgradeComputer": "This computer’s Cindy version does not support moving tasks. Update Cindy on “{{name}}” to use this feature.",
+    "sourceProjects": "Projects on the task’s computer",
+    "otherComputers": "Copy to another computer",
+    "offline": "Offline",
+    "loading": "Loading…",
+    "retry": "Could not load. Retry",
+    "moved": "Task moved",
+    "failed": "Could not move the task. Stop it, check the destination directory and retry."
+  },
+  "taskMigration": {
+    "title": "Copy to another computer…",
+    "description": "Create an independent copy on the destination computer. The original task and files stay here.",
+    "bindingsNotice": "Automations and messaging connections stay on the source computer and are not copied.",
+    "limits": "Both computers need this feature and remote control enabled. Stop tasks using this directory first. Available disk space and memory on the destination are checked before transfer. The destination uses its own model settings; Cindy sign-in credentials and machine settings are not transferred.",
+    "device": "Destination computer",
+    "project": "Destination location",
+    "newFolder": "Creates a new folder without overwriting existing files.",
+    "defaultFolder": "Cindy’s default location",
+    "noDevices": "No available computers. Connect another computer and enable remote control on both computers.",
+    "background": "You can close this window and reopen it from the task menu. If interrupted, retry the same copy.",
+    "openTarget": "Open task on destination",
+    "close": "Close",
+    "cancel": "Cancel copy",
+    "retry": "Retry copy",
+    "start": "Copy task",
+    "failed": "Could not complete the copy. Source files are kept. Check both computers and retry.",
+    "stages": {
+      "preparing": "Preparing a snapshot…",
+      "transferring": "Transferring and checking files…",
+      "complete": "Copy complete. The original task and files are kept.",
+      "cancelled": "Copy cancelled.",
+      "receiving": "Receiving files…",
+      "active": "Task is ready on this computer."
+    },
+    "errors": {
+      "MIGRATION_TASK_RUNNING": "Stop the task before copying it.",
+      "MIGRATION_SHARED_DIRECTORY_BUSY": "Another task is using this directory. Stop it before retrying.",
+      "MIGRATION_TASK_UNSUPPORTED": "This task's type or current state does not support copying to another computer.",
+      "MIGRATION_NO_MEMORY": "Not enough available memory to process the complete task history. Free up memory and retry.",
+      "MIGRATION_INCOMPLETE_CONTEXT": "The complete task history is unavailable. Copy stopped to avoid losing context.",
+      "MIGRATION_EXTERNAL_LINK": "The project contains links outside this directory or unsupported link chains. Source files are unchanged.",
+      "MIGRATION_REQUIRES_REPOSITORY_ROOT": "For Git projects, the task directory must be the repository root.",
+      "MIGRATION_SUBMODULE_UNSUPPORTED": "Projects with Git submodules cannot be copied yet.",
+      "MIGRATION_NO_SPACE": "Not enough space on the destination computer.",
+      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "The destination has no available model for this task’s engine. Connect a provider there first.",
+      "MIGRATION_UNSUPPORTED": "Update both computers to a version that supports task copy.",
+      "MIGRATION_TASK_QUEUED": "This task has queued messages. Finish or remove them before copying it.",
+      "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy."
+    }
+  },
   "sharedTask": {
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
@@ -7911,6 +7962,102 @@
       "empty": "There are no messages to view yet.",
       "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks"
     },
+    "groupChat": {
+      "memberSeparator": ", ",
+      "memberCount_one": "{{count}} teammate",
+      "memberCount_other": "{{count}} teammates",
+      "nameLabel": "Group Name",
+      "waitingConfirm": "{{name}} is waiting for your go-ahead",
+      "loadFailedTitle": "Couldn’t Load This Group Chat",
+      "loadFailedDescription": "Cindy can’t read this group chat right now. Try again, or go back to Teammates.",
+      "unavailableTitle": "This Group Chat Is No Longer Available",
+      "unavailableDescription": "It may have been deleted. Go back to Teammates to open another group chat or teammate.",
+      "sidebar": {
+        "title": "Group Chats",
+        "empty": "No messages yet",
+        "preview": "{{name}}: {{text}}",
+        "previewYou": "You: {{text}}",
+        "waiting": "Waiting for your go-ahead"
+      },
+      "create": {
+        "title": "New Group Chat",
+        "description": "Put a few teammates in one group. Say something and they’ll chime in together.",
+        "namePlaceholder": "e.g. Weekend Trip",
+        "nameRequired": "Enter a group name",
+        "membersLabel": "Choose Teammates",
+        "selectedCount_one": "{{count}} selected, up to {{max}}",
+        "selectedCount_other": "{{count}} selected, up to {{max}}",
+        "minMembers": "Choose at least {{min}} teammates",
+        "notEnoughBots": "You need at least {{min}} available teammates to start a group chat. Add a teammate first.",
+        "submit": "Create Group Chat",
+        "failed": "Couldn’t create the group chat. Try again in a moment."
+      },
+      "memberStatus": {
+        "paused": "Paused",
+        "unavailable": "Unavailable"
+      },
+      "mention": {
+        "all": "Everyone",
+        "allHint": "Everyone replies",
+        "label": "Mention a teammate"
+      },
+      "composer": {
+        "label": "Group chat message",
+        "placeholder": "Say something to the group. @ a teammate to have only them reply…",
+        "noMembers": "No teammates here can reply right now. Add one in group settings.",
+        "tooLong": "This message is too long. The limit is {{max}} characters.",
+        "sendFailed": "Message not sent. Try again in a moment.",
+        "stopFailed": "Couldn’t stop this round. Try again.",
+        "stop": "Stop This Round"
+      },
+      "timeline": {
+        "loadEarlier": "Show Earlier Messages",
+        "loadEarlierFailed": "Couldn’t load earlier messages. Try again.",
+        "emptyTitle": "No messages in this group yet",
+        "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
+        "roundEnded": "Teammates are done",
+        "continue": "Continue Discussion",
+        "continueFailed": "Couldn’t continue the discussion. Try again."
+      },
+      "notice": {
+        "memberFailed": "{{name}} couldn’t reply this time",
+        "memberTimeout": "{{name}} took too long to reply and was skipped this time",
+        "memberUnavailable": "{{name}} is unavailable and didn’t speak this time"
+      },
+      "settings": {
+        "open": "Group Settings",
+        "title": "Group Settings",
+        "members": "Members",
+        "remove": "Remove",
+        "removeNamed": "Remove {{name}} from the group",
+        "minMembers": "A group chat needs at least {{min}} teammates",
+        "maxMembers": "Up to {{max}}",
+        "noMoreBots": "No other teammates are available to add",
+        "nameSaveFailed": "Couldn’t save the group name. The previous name was kept.",
+        "membersSaveFailed": "Couldn’t update members. Try again.",
+        "replyMode": "When No One Is @Mentioned",
+        "replyModeAll": "Anyone Can Reply",
+        "replyModeMentioned": "Only @Mentioned Reply",
+        "replyModeNote": "Teammates with nothing to add stay quiet. Each round runs up to 3 passes and 10 messages, then waits for you to click “Continue Discussion”.",
+        "replyModeSaveFailed": "Couldn’t save the reply setting. Try again.",
+        "delete": "Delete Group Chat",
+        "deleteNote": "Only this group chat and its messages are deleted. The teammates, their memory, and their private chats aren’t affected.",
+        "deleteConfirmTitle": "Delete “{{name}}”?",
+        "deleteFailed": "Couldn’t delete the group chat. Try again in a moment.",
+        "speakingMode": "Speaking order",
+        "speakingModeAuto": "Automatic",
+        "speakingModeSequential": "One at a time",
+        "speakingModeAutoNote": "Without @mentions or with @Everyone, teammates think at the same time in the first pass, then reply one after another. Mentioned teammates answer in the order you mentioned them.",
+        "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
+        "speakingModeSaveFailed": "Couldn't save the speaking order. Try again."
+      },
+      "errors": {
+        "memberLimit": "A group chat needs 2–6 teammates",
+        "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+        "notFound": "This group chat no longer exists",
+        "hostNotReady": "Cindy is still getting ready. Try again in a moment."
+      }
+    },
     "joined": {
       "today": "Joined today",
       "yesterday": "Joined yesterday",
@@ -10332,8 +10479,8 @@
         "pin": "Pin",
         "unpin": "Unpin",
         "archived": "Archived",
-        "moveToProject": "Move to project",
-        "moveToProjectHeading": "Select project",
+        "moveToProject": "Move task",
+        "moveToProjectHeading": "Projects on this computer",
         "browseProjectFolder": "Choose project folder",
         "moveToDialogue": "Move to Chat",
         "noProjects": "No recent projects",

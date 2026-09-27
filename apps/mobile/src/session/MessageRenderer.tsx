@@ -3780,6 +3780,7 @@ function MessageBubble({
             if (id === 'more') {
               return (
                 <NativePullDownMenu
+                  disabled={disabled && !forkBusy}
                   actions={messageMenu.map((item) => ({
                     image: item.image,
                     destructive: item.destructive,
