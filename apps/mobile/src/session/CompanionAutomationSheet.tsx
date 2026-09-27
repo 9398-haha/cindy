@@ -1,7 +1,7 @@
 import { iconSize } from '@/theme';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
-import { ChevronRight, Clock3, Plus } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Clock3, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { randomUUID } from 'expo-crypto';
 import type { RemoteResource } from '@cindy/device-link';
@@ -200,8 +200,8 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
     }
     finally { if (operationGeneration.current === operation) { inFlight.current = false; if (current.current.identity === scope) setBusy(false); } }
   };
-  const button = (label: string, onPress: () => void, destructive = false, disabled = false) => (
-    <Pressable accessibilityRole="button" accessibilityState={{ disabled: disabled || busy }} disabled={disabled || busy} onPress={onPress} style={[styles.row, (disabled || busy) && styles.disabled]}>
+  const button = (label: string, onPress: () => void, destructive = false, disabled = false, testID?: string) => (
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled: disabled || busy }} disabled={disabled || busy} onPress={onPress} style={[styles.row, (disabled || busy) && styles.disabled]} testID={testID}>
       <Text style={[styles.label, destructive && { color: colors.destructive }]}>{label}</Text>
     </Pressable>
   );
@@ -216,12 +216,14 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       <ChevronRight size={iconSize.sm} color={colors.textTertiary} />
     </Pressable>
   );
-  const field = (label: string, value: string, onChangeText: (value: string) => void, multiline = false) => (
-    <View style={styles.field}><Text style={styles.secondary}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChangeText} editable={!busy} multiline={multiline} style={[styles.input, multiline && styles.multiline]} /></View>
+  // Same input traits as the iOS fields: commands keep their literal case, numbers use the number pad.
+  const field = (label: string, value: string, onChangeText: (value: string) => void, { multiline = false, literal = false, numeric = false } = {}) => (
+    <View style={styles.field}><Text style={styles.secondary}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChangeText} editable={!busy} multiline={multiline}
+      {...(literal ? { autoCapitalize: 'none' as const, autoCorrect: false } : {})} {...(numeric ? { keyboardType: 'number-pad' as const } : {})} style={[styles.input, multiline && styles.multiline]} /></View>
   );
   const updateTrigger = (index: number, value: RoutineTrigger) => setDraft((d) => d && ({ ...d, triggers: d.triggers.map((item, i) => i === index ? value : item) }));
   const choose = (label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void) =>
-    <CompanionChoice {...{ label, value, options, onChange }} disabled={busy || !online} />;
+    <View style={styles.choice}><CompanionChoice {...{ label, value, options, onChange }} disabled={busy || !online} /></View>;
   const confirmDelete = () => Alert.alert(tr('deleteTitle'), tr('deleteBody'), [{ text: tr('cancel'), style: 'cancel' }, { text: tr('delete'), style: 'destructive', onPress: () => void act('routine-delete') }]);
   if (Platform.OS === 'ios') return <CompanionAutomationNativeView
     {...{ visible, online, busy, loading, dirty, error, selected, draftGeneration, resource, items, detail, draft }}
@@ -229,11 +231,11 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
     onOpen={open} onRetry={() => void load()} onAct={action => void act(action)} onDelete={confirmDelete} />;
   return <CompanionSheet visible={visible} onClose={() => leave(onClose)} preventDismiss={dirty || busy}
       title={selected ? draft?.name || tr('new') : t('devices.companionProfile.automation')}
-      onBack={selected ? () => leave(() => open(null)) : undefined} testID="companion.automationSheet"
-      footer={selected && detail?.editable ? button(tr('save'), () => void act(selected === 'new' ? 'routine-create' : 'routine-save'), false, !online || !dirty || loading || !getRoutineActionId(resource, selected === 'new' ? 'routine-create' : 'routine-save')) : undefined}>
-      {!online ? <Text style={styles.error}>{tr('offline')}</Text> : null}
+      onBack={selected ? () => leave(() => open(null)) : undefined} testID="companion.automationSheet">
+      {/* Offline is a state, not a failure: secondary text like iOS. */}
+      {!online ? <Text style={[styles.note, styles.field]}>{tr('offline')}</Text> : null}
       {error ? <View style={styles.field}><Text selectable style={styles.error}>{error}</Text>{button(tr('retry'), () => void load(), false, !online)}</View> : null}
-      {loading ? <ActivityIndicator color={colors.textSecondary} style={styles.field} /> : null}
+      {loading ? <ActivityIndicator accessibilityLabel={t('devices.resources.loading')} color={colors.textSecondary} style={styles.field} /> : null}
       {!selected ? <>
         {items.some((r) => r.activity) ? <View style={styles.group}><Text style={styles.heading}>{tr('inProgress')}</Text>{items.filter((r) => r.activity).map(row)}</View> : null}
         {items.some((r) => !r.activity) ? <View style={styles.group}><Text style={styles.heading}>{tr('scheduled')}</Text>{items.filter((r) => !r.activity).map(row)}</View> : null}
@@ -243,17 +245,21 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
         {draft && detail.editable ? <>
           {field(tr('name'), draft.name, (name) => setDraft({ ...draft, name }))}
           <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('enabled')}</Text><Switch accessibilityLabel={tr('enabled')} disabled={busy} value={draft.enabled} onValueChange={(enabled) => setDraft({ ...draft, enabled })} trackColor={{ true: colors.textSecondary }} /></View>
-          {field(tr('instructions'), draft.prompt, (prompt) => setDraft({ ...draft, prompt }), true)}
-          {detail?.supportsPreRunCheck ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} onPress={() => setAdvancedOpen(!advancedOpen)} style={styles.row}><Text style={styles.label}>{tr('advanced')}</Text></Pressable> : null}
+          {field(tr('instructions'), draft.prompt, (prompt) => setDraft({ ...draft, prompt }), { multiline: true })}
+          {detail?.supportsPreRunCheck ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} onPress={() => setAdvancedOpen(!advancedOpen)} style={styles.row} testID="companion.automation.advanced">
+            <Text style={[styles.label, styles.flex]}>{tr('advanced')}</Text>
+            {advancedOpen ? <ChevronDown size={iconSize.sm} color={colors.textTertiary} /> : <ChevronRight size={iconSize.sm} color={colors.textTertiary} />}
+          </Pressable> : null}
           {detail?.supportsPreRunCheck && advancedOpen ? <View style={styles.group}>
             <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('quiet')}</Text><Switch accessibilityLabel={tr('quiet')} disabled={busy} value={draft.silentWhenIdle ?? false} onValueChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} trackColor={{ true: colors.textSecondary }} /></View>
             <Text style={styles.secondary}>{tr('quietHint')}</Text>
-            {field(tr('checkCommand'), draft.preRunHook?.command ?? '', (command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null }), true)}
+            {field(tr('checkCommand'), draft.preRunHook?.command ?? '', (command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null }), { multiline: true, literal: true })}
             <Text style={styles.secondary}>{tr('checkHint')}</Text>
-            {draft.preRunHook ? field(tr('timeoutMs'), draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs), (value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } })) : null}
+            {draft.preRunHook ? field(tr('timeoutMs'), draft.preRunHook.timeoutMs === undefined ? '' : String(draft.preRunHook.timeoutMs), (value) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs: value ? Number(value) : undefined } }), { numeric: true }) : null}
           </View> : null}
-          <Text style={styles.heading}>{tr('triggers')}</Text>
+          {/* One titled group per trigger, as the iOS form sections. */}
           {draft.triggers.map((trigger, index) => <View key={`${draftGeneration}:${trigger.id}`} style={styles.group}>
+            <Text style={styles.heading}>{tr('triggers')}</Text>
             {choose(tr('triggerType'), trigger.kind, ['cron', 'interval', 'event'].map((value) => ({ value, label: tr(value) })), (kind) => updateTrigger(index, kind === 'interval' ? { id: trigger.id, kind, intervalMs: 3_600_000 } : kind === 'event' ? { id: trigger.id, kind, sourceId: '', eventType: '', filters: [] } : { id: trigger.id, kind: 'cron', expression: '0 9 * * *', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }))}
             {trigger.kind === 'cron' ? <RoutineCronFields trigger={trigger} onChange={(value) => updateTrigger(index, value)} disabled={busy} /> : trigger.kind === 'interval' ? <NumberField key={trigger.id} label={tr('minutes')} value={trigger.intervalMs / 60_000} onChange={(value) => updateTrigger(index, { ...trigger, intervalMs: value * 60_000 })} disabled={busy} /> : <>
               {choose(tr('source'), trigger.sourceId, detail.sources.map((s) => ({ value: s.id, label: s.name })), (sourceId) => updateTrigger(index, { ...trigger, sourceId, eventType: '', filters: [] }))}
@@ -270,6 +276,8 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
           </View>)}
           {draft.triggers.length < 32 ? button(tr('addTrigger'), () => setDraft({ ...draft, triggers: [...draft.triggers, { id: randomUUID(), kind: 'interval', intervalMs: 3_600_000 }] })) : null}
         </> : <Text style={styles.empty}>{tr('largeDefinition')}</Text>}
+        {/* Save sits in the form after the triggers, before run and history, like iOS. */}
+        {detail.editable ? button(tr('save'), () => void act(selected === 'new' ? 'routine-create' : 'routine-save'), false, !online || !dirty || loading || !getRoutineActionId(resource, selected === 'new' ? 'routine-create' : 'routine-save'), 'companion.automation.save') : null}
         {selected !== 'new' ? <View style={styles.group}>
           {getRoutineActionId(resource, 'routine-run') ? button(tr(dirty ? 'saveAndRun' : 'run'), () => void act('routine-run'), false, loading || !online || detail.history.some((r) => r.status === 'running' || r.status === 'queued')) : null}
           <Text style={styles.heading}>{tr('history')}</Text>
@@ -288,32 +296,36 @@ function RoutineCronFields({ trigger, onChange, disabled }: {
   const { colors } = useTheme();
   const { preset, hour, minute, day, changePreset, changeHour, changeMinute, changeDay } = useRoutineCronFields(trigger, onChange);
   const select = (label: string, value: string, options: { id: string; title: string }[], action: (id: string) => void) =>
-    <CompanionChoice label={label} value={value} options={options.map(option => ({ value: option.id, label: option.title }))} onChange={action} disabled={disabled} />;
+    <View style={styles.choice}><CompanionChoice label={label} value={value} options={options.map(option => ({ value: option.id, label: option.title }))} onChange={action} disabled={disabled} /></View>;
   return <>
     {select(tr('repeat'), preset, ['hourly','daily','weekdays','weekly','monthly','custom'].map((id) => ({ id, title: tr(id) })), changePreset)}
     {preset === 'monthly' ? select(tr('monthDay'), day, Array.from({ length: 31 }, (_, i) => ({ id: String(i + 1), title: String(i + 1) })), changeDay) : null}
     {preset === 'weekly' ? select(tr('weekday'), day, Array.from({ length: 7 }, (_, i) => ({ id: String(i), title: tr(`day${i}`) })), changeDay) : null}
     {preset !== 'custom' ? <View style={styles.row}>
       <Text style={[styles.label, styles.flex]}>{tr('time')}</Text>
-      {preset !== 'hourly' ? <><TextInput accessibilityLabel={tr('hour')} keyboardType="number-pad" maxLength={2} value={hour} editable={!disabled} onChangeText={changeHour} style={[styles.input, styles.clockInput]} /><Text style={styles.label}>:</Text></> : null}
-      <TextInput accessibilityLabel={tr('minute')} keyboardType="number-pad" maxLength={2} value={minute} editable={!disabled} onChangeText={changeMinute} style={[styles.input, styles.clockInput]} />
-    </View> : <View style={styles.field}><Text style={styles.secondary}>{tr('cronExpression')}</Text><TextInput accessibilityLabel={tr('cronExpression')} value={trigger.expression} editable={!disabled} onChangeText={(expression) => onChange({ ...trigger, expression })} style={styles.input} /></View>}
-    <View style={styles.field}><Text style={styles.secondary}>{tr('timezone')}</Text><TextInput accessibilityLabel={tr('timezone')} value={trigger.timezone} editable={!disabled} onChangeText={(timezone) => onChange({ ...trigger, timezone })} autoCapitalize="none" style={styles.input} /></View>
+      {/* Number pad without a length cap, as iOS; out-of-range values are caught by draft validation. */}
+      {preset !== 'hourly' ? <><TextInput accessibilityLabel={tr('hour')} keyboardType="number-pad" value={hour} editable={!disabled} onChangeText={changeHour} style={[styles.input, styles.clockInput]} /><Text style={styles.label}>:</Text></> : null}
+      <TextInput accessibilityLabel={tr('minute')} keyboardType="number-pad" value={minute} editable={!disabled} onChangeText={changeMinute} style={[styles.input, styles.clockInput]} />
+    </View> : <View style={styles.field}><Text style={styles.secondary}>{tr('cronExpression')}</Text><TextInput accessibilityLabel={tr('cronExpression')} value={trigger.expression} editable={!disabled} onChangeText={(expression) => onChange({ ...trigger, expression })} autoCapitalize="none" autoCorrect={false} style={styles.input} /></View>}
+    <View style={styles.field}><Text style={styles.secondary}>{tr('timezone')}</Text><TextInput accessibilityLabel={tr('timezone')} value={trigger.timezone} editable={!disabled} onChangeText={(timezone) => onChange({ ...trigger, timezone })} autoCapitalize="none" autoCorrect={false} style={styles.input} /></View>
   </>;
 }
 function NumberField({ label, value, onChange, disabled }: { label: string; value: number; onChange(value: number): void; disabled: boolean }) {
   const [text, setText] = useState(String(value));
   const styles = useThemedStyles(makeStyles);
-  return <View style={styles.field}><Text style={styles.secondary}>{label}</Text><TextInput accessibilityLabel={label} keyboardType="numeric" editable={!disabled} value={text} onChangeText={(next) => { setText(next); onChange(Number(next)); }} style={styles.input} /></View>;
+  return <View style={styles.field}><Text style={styles.secondary}>{label}</Text><TextInput accessibilityLabel={label} keyboardType="number-pad" editable={!disabled} value={text} onChangeText={(next) => { setText(next); onChange(Number(next)); }} style={styles.input} /></View>;
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   flex: { flex: 1 }, row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 48, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   label: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary }, secondary: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, color: colors.textSecondary },
   heading: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold, color: colors.textTertiary, margin: spacing.md },
   field: { gap: spacing.sm, marginHorizontal: spacing.md, marginVertical: spacing.sm },
+  // Picker rows share the field inset so labels line up with the inputs above and below.
+  choice: { marginHorizontal: spacing.md },
   group: { marginVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   input: { minHeight: 44, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.pill, fontSize: typeScale.body },
   clockInput: { width: 64, textAlign: 'center' },
   multiline: { minHeight: 112, textAlignVertical: 'top', borderRadius: radius.control }, empty: { margin: spacing.lg, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, color: colors.textSecondary },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   error: { color: colors.statusError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }, disabled: { opacity: 0.45 },
 });

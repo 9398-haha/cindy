@@ -198,8 +198,6 @@ import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
-import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
-import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
   SessionMenuSheet,
@@ -563,7 +561,6 @@ import {
   findMobileMessageSearchHits,
   nextMessageSearchIndex,
   normalizeMessageSearchIndex,
-  type MobileMessageSearchHit,
 } from '@/session/messageSearch';
 import {
   buildSearchLoadEarlierAction,
@@ -1242,14 +1239,6 @@ export default function SessionScreen() {
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   // 权限模式独立浮窗(composer 左侧图标钮点开,与模型浮窗同属 composer 激活态)。
   const [permissionSheetOpen, setPermissionSheetOpen] = useState(false);
-  const [permissionSheetSnap, setPermissionSheetSnap] = useState<ContextSheetSnap>('half');
-  const permissionSheetHeights = useMemo(
-    () => computeContextSheetSnapHeights({
-      safeAreaTopInset: insets.top,
-      screenHeight: windowDimensions.height,
-    }),
-    [insets.top, windowDimensions.height],
-  );
   // 已建会话的模型浮窗可先浏览另一 Agent；只改此浏览态不触碰会话，选模型才登记 intent。
   const [modelSheetAgentKind, setModelSheetAgentKind] = useState<MobileSessionAgentKind>('claude-code');
   const [attachments, setAttachments] = useState<RemoteSerializedAttachment[]>([]);
@@ -2850,6 +2839,14 @@ export default function SessionScreen() {
     () => Math.ceil(bottomOverlayContentHeight),
     [bottomOverlayContentHeight],
   );
+  // Android 输入区与顶栏一样半透明:整块挂到根浮层盖在常驻消息层上。伙伴对话保持实底。
+  const androidFrostedComposer = Platform.OS === 'android' && !companionChat;
+  // 浮层不在键盘避让容器里,按容器缩高后的实际高度摆放,输入框才会被键盘照旧顶上去。
+  const [keyboardAreaHeight, setKeyboardAreaHeight] = useState<number | null>(null);
+  const handleKeyboardAreaLayout = useCallback((event: LayoutChangeEvent) => {
+    const next = Math.round(event.nativeEvent.layout.height);
+    setKeyboardAreaHeight((current) => (current === next ? current : next));
+  }, []);
 
   const applyComposerDocument = useCallback((
     value: ComposerDocument,
@@ -6632,7 +6629,6 @@ export default function SessionScreen() {
         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
         onPress={() => {
           setModelSheetOpen(false);
-          setPermissionSheetSnap('half');
           setPermissionSheetOpen(true);
         }}
         style={[
@@ -8865,7 +8861,19 @@ export default function SessionScreen() {
         {Platform.OS === 'ios' ? (
           <SessionHeaderNativeBlur height={Math.max(topOverlayHeight, insets.top + 44) + spacing.xxl} />
         ) : null}
+        <SessionChromeLayer
+          hiddenFromAccessibility={sessionListDrawerOverlayMounted}
+          left={paneLayout.detail.x}
+          viewport={detailViewport}
+          width={paneLayout.detail.width}
+        >
         <View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">
+          {/* Android 顶栏与首页顶栏同一底:半透明 surface + 模糊,消息从下面滚过时能透出一点。 */}
+          {Platform.OS !== 'ios' && !companionChat ? (
+            <View pointerEvents="none" style={StyleSheet.absoluteFill} testID="session.chromeFrost">
+              <BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />
+            </View>
+          ) : null}
           <View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && { backgroundColor: colors.surface }]}>
             {headerNode}
 
@@ -8891,6 +8899,7 @@ export default function SessionScreen() {
             ) : null}
           </View>
         </View>
+        </SessionChromeLayer>
         {sharedTaskExit.dialog}
         {currentSession ? (
           <SessionMenuSheet
@@ -8950,7 +8959,6 @@ export default function SessionScreen() {
           />
         ) : null}
         <SessionSearchSheet
-          activeHit={activeSearchHit}
           activeIndex={activeSearchIndex}
           hasOlderMessages={hasOlderMessages && !isScheduleDetail}
           hitCount={searchHits.length}
@@ -9135,38 +9143,18 @@ export default function SessionScreen() {
             visible={modelSheetOpen && canUseRemoteSessionControls}
           />
         ) : null}
-        {/* 权限模式独立浮窗(composer 权限图标钮点开;列表复用 MobilePermissionPickerList,
-            选择走 confirmFullAccessChange + maker:set-permission-mode 后关浮窗)。 */}
+        {/* 权限模式独立浮窗(composer 权限图标钮点开)。两端同一语义:点选先关浮窗,关闭完成后
+            再走 confirmFullAccessChange + maker:set-permission-mode。 */}
         {currentSession && runtimeOptions ? (
-          Platform.OS === 'ios' ? (<NativePermissionSheet visible={permissionSheetOpen && canUseRemoteSessionControls} onClose={() => setPermissionSheetOpen(false)}
- activeMode={displayPermissionMode} disabled={controlBusy || !canUseRemoteSessionControls} onSelect={selectSessionPermissionMode}
- options={runtimeOptions.permissionOptions} testID="session.permissionSheet" />) : (<SheetModal
-            backdropTestID="session.permissionSheet.backdrop"
-            onBackdropPress={() => setPermissionSheetOpen(false)}
-            onRequestClose={() => setPermissionSheetOpen(false)}
+          <NativePermissionSheet
             visible={permissionSheetOpen && canUseRemoteSessionControls}
-          >
-            <SheetSurface
-              bottomInset={insets.bottom}
-              heights={permissionSheetHeights}
-              onClose={() => setPermissionSheetOpen(false)}
-              onSnapChange={setPermissionSheetSnap}
-              snap={permissionSheetSnap}
-              testID="session.permissionSheet"
-              title={t('models.picker.permissionTitle')}
-            >
-              <MobilePermissionPickerList
-                activeMode={displayPermissionMode}
-                disabled={controlBusy || !canUseRemoteSessionControls}
-                onSelect={(mode) => {
-                  selectSessionPermissionMode(mode);
-                  setPermissionSheetOpen(false);
-                }}
-                options={runtimeOptions.permissionOptions}
-                testID="session.permissionSheet.option"
-              />
-            </SheetSurface>
-          </SheetModal>)
+            onClose={() => setPermissionSheetOpen(false)}
+            activeMode={displayPermissionMode}
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            onSelect={selectSessionPermissionMode}
+            options={runtimeOptions.permissionOptions}
+            testID="session.permissionSheet"
+          />
         ) : null}
         {composerPreviewUrl && composerGalleryImages.length > 0 ? (
           // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
@@ -9216,8 +9204,10 @@ export default function SessionScreen() {
                   key={auth.accountGeneration}
                   activeKey={JSON.stringify([deviceId, sessionId])}
                   ready={topOverlayHeight > 0 && (historyView.snapshot.ready || messageListItems.length > 0 || (!loading && !syncingWhileEmpty))}
-                  topInset={topOverlayHeight}
-                  bottomInset={bottomOverlayHeight}
+                  // Android 的常驻消息层画在页面之上;顶栏经 SessionChromeLayer 盖在它上面,
+                  // 所以消息层从顶部开始绘制,滚动时能透过半透明顶栏看到。
+                  topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}
+                  bottomInset={androidFrostedComposer ? 0 : bottomOverlayHeight}
                   interactive={!sessionListDrawerOverlayMounted}>
 
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
@@ -9350,6 +9340,18 @@ export default function SessionScreen() {
             inset={nativeShellLayout.keyboardBottomInset}
           />
         ) : null}
+        {Platform.OS === 'android' ? (
+          // 量出键盘避让容器的实际可用高度,供挂到根浮层的输入区对齐(见 SessionChromeLayer)。
+          <View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />
+        ) : null}
+        <SessionChromeLayer
+          enabled={androidFrostedComposer}
+          height={keyboardAreaHeight ?? windowDimensions.height}
+          hiddenFromAccessibility={sessionListDrawerOverlayMounted}
+          left={paneLayout.detail.x}
+          viewport={detailViewport}
+          width={paneLayout.detail.width}
+        >
         {!isSharedTaskAccessRevoked && <View
           pointerEvents="box-none"
           testID="session.bottomViewport"
@@ -9373,6 +9375,7 @@ export default function SessionScreen() {
           pointerEvents="box-none"
           style={[
             styles.sessionBottomLayer,
+            androidFrostedComposer && styles.sessionBottomFrosted,
             // The outer viewport owns reservation clipping; keep the held card
             // attached to its original responder for release/cancel delivery.
             sessionOperationLayout.composerSlot === 'editable' && { overflow: 'visible' },
@@ -9389,6 +9392,12 @@ export default function SessionScreen() {
           ]}
           testID="session.bottomLayer"
         >
+          {androidFrostedComposer ? (
+            // 与顶栏同一底:半透明 surface + 模糊,消息从输入区下面滚过时能透出一点。
+            <View pointerEvents="none" style={StyleSheet.absoluteFill} testID="session.composerFrost">
+              <BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />
+            </View>
+          ) : null}
           <View
             pointerEvents="box-none"
             style={[
@@ -9671,6 +9680,7 @@ export default function SessionScreen() {
           </View>
         </View>
         </View>}
+        </SessionChromeLayer>
       </ComposerKeyboardAvoidingView>
       </PaneViewportProvider>
 
@@ -9711,6 +9721,46 @@ export default function SessionScreen() {
         ) : null}
       </MessageHistoryOverlay>
     </View>
+  );
+}
+
+/**
+ * 任务顶栏的挂载层。iOS 常驻消息挂在路由里,顶栏原地渲染即可。Android 的常驻消息层由根节点
+ * 画在页面之上,顶栏要经 MessageHistoryOverlay 放到它上面(与任务抽屉同一通道),消息才能
+ * 从半透明顶栏下面滚过;按详情区的横向位置对齐,抽屉打开时同样从读屏树里摘掉。
+ * 底部输入区同理:外框高度取键盘避让容器的实际高度,键盘弹起时输入框照旧被顶上去。
+ */
+function SessionChromeLayer({
+  children,
+  enabled = true,
+  height,
+  hiddenFromAccessibility,
+  left,
+  viewport,
+  width,
+}: {
+  children: ReactNode;
+  /** 关掉时原地渲染(如伙伴对话的输入区保持实底,不需要盖在消息层上)。 */
+  enabled?: boolean;
+  /** 外框高度;底部输入区按键盘避让后的可用高度摆放,顶栏不传,由内容撑开。 */
+  height?: number;
+  hiddenFromAccessibility: boolean;
+  left: number;
+  viewport: { height: number; width: number; x: number; y: number };
+  width: number;
+}) {
+  if (Platform.OS !== 'android' || !enabled) return <>{children}</>;
+  return (
+    <MessageHistoryOverlay>
+      <View
+        importantForAccessibility={hiddenFromAccessibility ? 'no-hide-descendants' : 'auto'}
+        pointerEvents="box-none"
+        style={{ height, left, position: 'absolute', top: 0, width }}
+      >
+        {/* 浮层挂在根节点,要把详情区的视口重新提供给顶栏。 */}
+        <PaneViewportProvider value={viewport}>{children}</PaneViewportProvider>
+      </View>
+    </MessageHistoryOverlay>
   );
 }
 
@@ -9792,10 +9842,9 @@ function SessionHeaderBar({
     : null;
   const actionProjection = overview ? projectMobileSessionActions(overview.actions) : null;
   // queue 入口已退役:排队消息 inline 到消息流(InlineQueueSection),不再有独立面板。
+  // 两端顶栏右侧同为「远程桌面、文件、更多」;搜索从「更多 → 任务详情」进入(ios-native-design §2、§4)。
   const headerActions = (actionProjection?.primaryActions ?? [])
-    .filter((action) => action.id !== 'settings'
-      && action.id !== 'queue'
-      && (!messageOnly || action.id === 'search' || action.id === 'files'));
+    .filter((action) => action.id === 'files');
   const actionHandlers = {
     files: onOpenFiles,
     queue: () => undefined,
@@ -9974,14 +10023,14 @@ function SessionHeaderBar({
             testID={SESSION_ACTION_TEST_IDS[action.id]}
           />
         ))}
-        {!messageOnly ? <SessionHeaderIconButton
-          accessibilityLabel={t('session.screen.openSessionMenu')}
+        <SessionHeaderIconButton
+          accessibilityLabel={t('session.menu.details')}
           active={false}
           disabled={!currentSession}
           icon={Ellipsis}
           onPress={currentSession ? onOpenSettings : undefined}
           testID="session.controlsToggle"
-        /> : null}
+        />
       </View>}
     </View>
   );
@@ -10937,7 +10986,6 @@ function SessionComposerInput({
 }
 
 function SessionSearchSheet({
-  activeHit,
   activeIndex,
   hasOlderMessages,
   hitCount,
@@ -10951,7 +10999,6 @@ function SessionSearchSheet({
   sheetMaxHeight,
   visible,
 }: {
-  activeHit: MobileMessageSearchHit | null;
   activeIndex: number;
   hasOlderMessages: boolean;
   hitCount: number;
@@ -10976,11 +11023,15 @@ function SessionSearchSheet({
     loading: loadingEarlier,
     query,
   });
+  // 两端同一套计数文案；命中内容直接在原消息处定位，不再重复展示预览（ios-native-design §5）。
+  const counter = normalizedQuery
+    ? hasHits ? `${activeIndex + 1} / ${hitCount}` : '0 / 0'
+    : t('session.screen.searchEnterKeyword');
   if (Platform.OS === 'ios') {
     return <SessionSearchNative
       visible={visible}
       query={query}
-      counter={normalizedQuery ? hasHits ? `${activeIndex + 1} / ${hitCount}` : '0 / 0' : t('session.screen.searchEnterKeyword')}
+      counter={counter}
       hasHits={hasHits}
       loadEarlier={loadEarlierAction}
       onChangeQuery={onChangeQuery}
@@ -11011,23 +11062,35 @@ function SessionSearchSheet({
           </View>
         </View>
         <View style={styles.searchPanel} testID="session.searchPanel">
-          <TextInput
-            accessibilityLabel={t('session.screen.searchPlaceholder')}
-            autoCapitalize="none"
-            autoCorrect={false}
-            autoFocus={MOBILE_VISUAL_MOCK_ENABLED && visible}
-            onChangeText={onChangeQuery}
-            placeholder={t('session.screen.searchPlaceholder')}
-            placeholderTextColor={colors.textPlaceholder}
-            style={styles.searchInput}
-            testID="session.searchInput"
-            value={query}
-          />
+          <View style={styles.searchInputRow}>
+            <TextInput
+              accessibilityLabel={t('session.screen.searchPlaceholder')}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus={visible}
+              onChangeText={onChangeQuery}
+              placeholder={t('session.screen.searchPlaceholder')}
+              placeholderTextColor={colors.textPlaceholder}
+              returnKeyType="search"
+              style={styles.searchInput}
+              testID="session.searchInput"
+              value={query}
+            />
+            {query ? (
+              <Pressable
+                accessibilityLabel={t('devices.detail.search.clearA11y')}
+                accessibilityRole="button"
+                onPress={() => onChangeQuery('')}
+                style={({ pressed }) => [styles.searchClearButton, pressed && styles.searchClearButtonPressed]}
+                testID="session.searchClearButton"
+              >
+                <X color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+              </Pressable>
+            ) : null}
+          </View>
           <View style={styles.searchToolbar}>
             <Text style={styles.searchCounter} testID="session.searchCounter">
-              {normalizedQuery
-                ? hasHits ? `${activeIndex + 1}/${hitCount}` : '0/0'
-                : t('session.screen.searchEnterKeyword')}
+              {counter}
             </Text>
             <View style={styles.searchButtons}>
               <RouteActionButton
@@ -11050,13 +11113,6 @@ function SessionSearchSheet({
               </RouteActionButton>
             </View>
           </View>
-          {activeHit ? (
-            <Text style={styles.searchPreview} numberOfLines={2} testID="session.searchPreview">
-              {activeHit.label}: {activeHit.preview}
-            </Text>
-          ) : normalizedQuery ? (
-            <Text style={styles.searchPreview} testID="session.searchPreview">{t('session.screen.searchNoMatch')}</Text>
-          ) : null}
           {loadEarlierAction.visible ? (
             <RouteActionButton
               accessibilityLabel={loadEarlierAction.accessibilityLabel}
@@ -11578,7 +11634,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 0,
     top: 0,
     zIndex: 10,
-    backgroundColor: Platform.OS === 'ios' ? 'transparent' : colors.surface,
+    backgroundColor: 'transparent',
   },
   sessionChromeContent: {
     width: '100%',
@@ -11599,6 +11655,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sessionBottomContent: {
     alignSelf: 'center',
     width: '100%',
+  },
+  sessionBottomFrosted: {
+    backgroundColor: 'transparent',
   },
   sessionBottomFloating: {
     backgroundColor: 'transparent',
@@ -11746,16 +11805,31 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
-  searchInput: {
+  searchInputRow: {
+    alignItems: 'center',
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    minHeight: 44,
+    paddingLeft: spacing.md,
+  },
+  searchInput: {
     color: colors.textPrimary,
+    flex: 1,
     fontSize: typeScale.body,
     minHeight: 42,
-    paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
+  },
+  searchClearButton: {
+    alignItems: 'center',
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  searchClearButtonPressed: {
+    opacity: 0.72,
   },
   searchToolbar: {
     alignItems: 'center',
@@ -11779,14 +11853,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
-    height: 34,
+    height: 44,
     justifyContent: 'center',
-    width: 34,
-  },
-  searchPreview: {
-    color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
+    width: 44,
   },
   searchLoadEarlierButton: {
     alignItems: 'center',

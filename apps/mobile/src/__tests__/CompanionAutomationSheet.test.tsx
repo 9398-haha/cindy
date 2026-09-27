@@ -8,7 +8,7 @@ import { emptyRoutineDefinition, type RoutineDefinition } from '../session/compa
 const h = vi.hoisted(() => ({
   read: vi.fn(), invoke: vi.fn(), openLink: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn(), changed: vi.fn(), close: vi.fn(),
   alert: vi.fn(), account: 1, foreground: null as null | ((state: string) => void), nativeWrites: vi.fn(),
-  definition: null as any, revision: 0, existing: false, now: 0, uuid: 0, perform: vi.fn(), sheet: null as any, platform: 'ios',
+  definition: null as any, revision: 0, existing: false, now: 0, uuid: 0, perform: vi.fn(), sheet: null as any, platform: 'ios', preRun: false, legacySheet: null as any,
   history: [] as { id: string; status: string; createdAt: number }[],
 }));
 vi.mock('react-i18next', () => { const t = (key: string) => key.split('.').at(-1)!; return { useTranslation: () => ({ t, i18n: { language: 'en' } }) }; });
@@ -21,22 +21,26 @@ vi.mock('react-native', () => ({
   useWindowDimensions: () => ({ width: 402, height: 874 }), Alert: { alert: h.alert },
   AppState: { addEventListener: (_name: string, fn: any) => { h.foreground = fn; return { remove() {} }; } },
 }));
-vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => <span>{children}</span>, TextInput: (p: any) => {
+vi.mock('@/components/AppText', () => ({ Text: ({ children, style }: any) => <span data-color={[style].flat(Infinity).filter(Boolean).reduce((color: string | undefined, item: any) => item.color ?? color, undefined)}>{children}</span>, TextInput: (p: any) => {
   if (h.platform === 'ios') throw new Error('iOS automation must not mount the RN input path');
-  return <input aria-label={p.accessibilityLabel} value={p.value} disabled={p.editable === false} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />;
+  return <input aria-label={p.accessibilityLabel} value={p.value} disabled={p.editable === false} maxLength={p.maxLength} data-keyboard={p.keyboardType ?? 'default'}
+    data-autocapitalize={p.autoCapitalize ?? 'sentences'} data-autocorrect={String(p.autoCorrect ?? true)} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />;
 } }));
-vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, Clock3: () => null, Plus: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronDown: () => <i data-chevron="down" />, ChevronRight: () => <i data-chevron="right" />, Clock3: () => null, Plus: () => null }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `creation-request-${++h.uuid}` }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.account }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink, subscribe: h.subscribe, unsubscribe: h.unsubscribe, onRemoteResourceChanged: h.changed, connectionEpoch: 1 }) }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: (...args: any[]) => h.read(...args), invokeRemoteResourceAction: (...args: any[]) => h.invoke(...args) }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: (error: Error) => error.message }));
-vi.mock('@/theme', () => ({ iconSize: { action: 20, lg: 24, xs: 12 }, spacing: { xs: 4, sm: 8, md: 12 }, useTheme: () => ({ mode: 'light', colors: {} }), useThemedStyles: () => ({}) }));
+vi.mock('@/theme', () => ({ iconSize: { action: 20, lg: 24, xs: 12 }, spacing: { xs: 4, sm: 8, md: 12 }, useTheme: () => ({ mode: 'light', colors: {} }),
+  // Styles resolve to token names so rendered colours are observable.
+  useThemedStyles: (make: (colors: unknown) => unknown) => make(new Proxy({}, { get: (_target, key) => String(key) })) }));
 vi.mock('../session/CompanionChoice', () => ({ CompanionChoice: () => null }));
-vi.mock('../session/CompanionSheet', () => ({ CompanionSheet: ({ children, footer }: any) => {
+vi.mock('../session/CompanionSheet', () => ({ CompanionSheet: (props: any) => {
   if (h.platform === 'ios') throw new Error('legacy automation sheet mounted');
-  return <div>{children}{footer}</div>;
+  h.legacySheet = props;
+  return <div data-testid="legacy-sheet">{props.children}{props.footer}</div>;
 } }));
 vi.mock('../session/CompanionAutomationNativeView', async () => import('../session/CompanionAutomationNativeView.ios'));
 vi.mock('../session/ComposerSheet', async () => import('../session/ComposerSheet.ios'));
@@ -84,7 +88,7 @@ function resource(id: string) {
   }));
   return { ref: { collectionId: 'routines', kind: 'routine', id }, display: { title: 'Automations' }, links: [], revision: String(revision),
     actions: Object.values(operationActions).map(id => ({ id, label: 'Action' })), blocks: [{ primitive: selected ? 'routine-detail' : 'routine-list', data: selected
-      ? { id: existing ? 'rule' : null, revision, editable: true, input: h.definition, sources: [{ id: 'mail', name: 'Mail', status: 'ready', events: [{ type: 'received', name: 'Received', fields: ['sender', 'subject'] }] }], history: h.history, operationActions }
+      ? { id: existing ? 'rule' : null, revision, editable: true, input: h.definition, supportsPreRunCheck: h.preRun, sources: [{ id: 'mail', name: 'Mail', status: 'ready', events: [{ type: 'received', name: 'Received', fields: ['sender', 'subject'] }] }], history: h.history, operationActions }
       : { items: h.existing ? [{ id: 'rule', name: 'Existing', enabled: true, revision: h.revision, triggers: [] }] : [], operationActions } }] };
 }
 async function render(online = true) { await act(async () => root.render(<CompanionAutomationSheet visible online={online} onClose={h.close} botId="bot" collectionId="routines" deviceId="host" deviceName="Mac" />)); }
@@ -94,7 +98,7 @@ async function click(label: string) { await act(async () => { const button = [..
 async function select(label: string, value: string) { await act(async () => { const node = container.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!; node.value = value; node.dispatchEvent(new Event('change', { bubbles: true })); }); }
 async function open() { await render(); await click('new'); }
 beforeEach(() => {
-  vi.resetAllMocks(); h.account = 1; h.revision = 0; h.existing = false; h.now = 0; h.uuid = 0; h.platform = 'ios'; h.definition = emptyRoutineDefinition();
+  vi.resetAllMocks(); h.account = 1; h.revision = 0; h.existing = false; h.now = 0; h.uuid = 0; h.platform = 'ios'; h.definition = emptyRoutineDefinition(); h.preRun = false; h.legacySheet = null;
   h.history = [];
   grants.clear(); grantId = 0;
   h.changed.mockReturnValue(() => {}); h.openLink.mockResolvedValue(undefined);
@@ -474,4 +478,40 @@ it('keeps a successful save committed when the following run fails', async () =>
   await click('run');
   expect(h.perform.mock.calls.map(([request]) => request.actionId)).toEqual(['routine-save', 'routine-run', 'routine-run']);
   expect(h.perform.mock.calls[2][0].input.revision).toBe(2);
+});
+
+it('lays out the Android form like iOS: titled triggers, in-form save, disclosure chevron and literal or numeric inputs', async () => {
+  h.platform = 'android'; h.existing = true; h.revision = 1; h.preRun = true;
+  h.definition = { ...emptyRoutineDefinition(), name: 'Existing', prompt: 'Check', preRunHook: { command: 'git status', timeoutMs: 5000 }, triggers: [
+    { id: 'daily', kind: 'cron', expression: '0 9 * * *', timezone: 'UTC' }, { id: 'hourly', kind: 'interval', intervalMs: 3_600_000 },
+  ] } satisfies RoutineDefinition;
+  await render(); await click('Existing');
+  expect(h.legacySheet.footer).toBeUndefined();
+  const save = container.querySelector<HTMLButtonElement>('[data-testid="companion.automation.save"]')!;
+  expect(save.textContent).toBe('save');
+  // Save follows the last trigger control and precedes run / history, as the iOS sections do.
+  const addTrigger = [...container.querySelectorAll('button')].find(node => node.textContent === 'addTrigger')!;
+  const run = [...container.querySelectorAll('button')].find(node => node.textContent === 'run')!;
+  expect(addTrigger.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(save.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect([...container.querySelectorAll('span')].filter(node => node.textContent === 'triggers')).toHaveLength(2);
+  const advanced = container.querySelector<HTMLButtonElement>('[data-testid="companion.automation.advanced"]')!;
+  expect(advanced.querySelector('[data-chevron="right"]')).not.toBeNull();
+  await act(async () => { advanced.click(); });
+  expect(advanced.querySelector('[data-chevron="down"]')).not.toBeNull();
+  for (const label of ['checkCommand', 'timezone']) {
+    expect(input(label).dataset.autocapitalize).toBe('none'); expect(input(label).dataset.autocorrect).toBe('false');
+  }
+  for (const label of ['timeoutMs', 'hour', 'minute', 'minutes']) expect(input(label).dataset.keyboard).toBe('number-pad');
+  for (const label of ['hour', 'minute']) expect(input(label).hasAttribute('maxlength')).toBe(false);
+  // Without a length cap, an over-long value is still rejected before any write.
+  await type('hour', '123'); await click('save');
+  expect(h.invoke).not.toHaveBeenCalled(); expect(container.textContent).toContain('invalid');
+});
+
+it('keeps the Android offline notice out of the error colour', async () => {
+  h.platform = 'android';
+  await render(false);
+  const notice = [...container.querySelectorAll('span')].find(node => node.textContent === 'offline')!;
+  expect(notice.dataset.color).toBe('textSecondary');
 });

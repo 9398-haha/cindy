@@ -686,9 +686,7 @@ function DeviceDetailScreenContent() {
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={deviceName}
           title={automationScopeName ?? t('devices.detail.automationScope.title')}
           titleTestID="deviceDetail.title"
         />
@@ -765,9 +763,7 @@ function DeviceDetailScreenContent() {
             testID: 'deviceDetail.newSessionButton',
           }}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.projectScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={`${projectWorkingDir} · ${deviceName}`}
           title={projectName ?? deviceName}
           titleTestID="deviceDetail.title"
         />
@@ -886,11 +882,7 @@ function DeviceDetailScreenContent() {
           testID: 'deviceDetail.newSessionButton',
         }}
         backTestID="deviceDetail.backButton"
-        eyebrow="Remote Device"
         onBack={() => goBackGuarded(router)}
-        subtitle={projectWorkingDir
-          ? t('devices.detail.subtitle.deviceActive', { deviceName, count: filterCounts.active })
-          : t('devices.detail.subtitle.activeAndProjects', { count: filterCounts.active, projects: filterCounts.projectCount })}
         title={projectName ?? deviceName}
         titleTestID="deviceDetail.title"
       />

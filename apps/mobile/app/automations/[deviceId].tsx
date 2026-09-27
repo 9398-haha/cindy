@@ -835,9 +835,7 @@ export default function AutomationsScreen() {
           testID: 'automations.createButton',
         }}
         backTestID="automations.backButton"
-        eyebrow="Remote Automations"
         onBack={() => goBackGuarded(router)}
-        subtitle={t('devices.automations.subtitle', { active: overview.activeCount, total: overview.totalCount })}
         title={deviceName}
         titleTestID="automations.title"
       />

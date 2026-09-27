@@ -127,8 +127,9 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     expect(iosTitle).toContain("{title}");
     expect(iosTitle).not.toContain("eyebrow");
     expect(iosTitle).not.toContain("subtitle");
-    expect(simpleHeader).toContain("eyebrow={eyebrow}");
-    expect(simpleHeader).toContain("subtitle={subtitle}");
+    // Android 自绘 ScreenHeader 跟随 iOS:同样不显示 eyebrow / subtitle。
+    expect(simpleHeader).not.toContain("eyebrow={eyebrow}");
+    expect(simpleHeader).not.toContain("subtitle={subtitle}");
   });
 
   it("keeps Android fallback sheets and Maestro header anchors", () => {
@@ -176,6 +177,8 @@ describe("iOS chrome presenters stay on the system menu path", () => {
     );
     expect(automations).toContain("<SimpleStackHeader");
     expect(automations).toContain('backTestID="automations.backButton"');
+    expect(automations).not.toContain('eyebrow=');
+    expect(deviceDetail).not.toContain('eyebrow=');
     expect(deviceDetail).toContain("<SimpleStackHeader");
     expect(deviceDetail).toContain('backTestID="deviceDetail.backButton"');
     expect(deviceDetail).toContain("<SessionOptionsPresenter");

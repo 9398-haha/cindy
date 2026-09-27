@@ -8,7 +8,7 @@
  * 内容由页面以 ContextSheetGroup / ContextSheetRow / ContextSheetFooterButton 组装，
  * 会话页与新建会话页共用本组件（同 MobileComposerInputRow 的共享约定）。
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react-native';
 import {
@@ -41,6 +41,9 @@ export interface ContextSheetProps {
   testID?: string;
 }
 
+/** 系统选择器要等面板真正关闭后再呈现，避免叠在面板上（与 iOS ContextSheet 同一语义）。 */
+const DismissAction = createContext<(action: () => void) => void>((action) => action());
+
 export function ContextSheet({
   visible,
   onClose,
@@ -59,10 +62,14 @@ export function ContextSheet({
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [snap, setSnap] = useState<ContextSheetSnap>('half');
+  const pendingAfterClose = useRef<(() => void) | null>(null);
 
-  // 每次重新打开都回到 half 档（与 Cursor 行为一致）。
+  // 每次重新打开都回到 half 档（与 Cursor 行为一致）；关闭动画中途重开时丢弃上次挂起的
+  // 选择器动作，避免之后普通关闭时误弹相册 / 相机 / 文件。
   useEffect(() => {
-    if (visible) setSnap('half');
+    if (!visible) return;
+    setSnap('half');
+    pendingAfterClose.current = null;
   }, [visible]);
 
   // memo 保持对象身份稳定,避免每次 render 触发 useContextSheetDrag 的吸附 effect 重跑。
@@ -72,34 +79,46 @@ export function ContextSheet({
   }), [insets.top, windowHeight]);
 
   return (
-    <SheetModal
-      backdropTestID={testID ? `${testID}.backdrop` : undefined}
-      keyboardAvoiding
-      keyboardAvoidingBehavior={keyboardAvoidingBehavior}
-      onBackdropPress={onClose}
-      // Android 返回键 / iOS 关闭手势:两段式(对齐 ModelPickerSheet / SessionMenuSheet 的
-      // handleRequestClose 语义)。子视图状态由页面持有,onBack 即「回一级」——目标模式表单 /
-      // 截图列表(传了 onBack)按返回先回根视图不丢草稿,根视图(无 onBack)才整关。
-      onRequestClose={onBack ?? onClose}
-      visible={visible}
+    <DismissAction.Provider
+      value={(action) => {
+        pendingAfterClose.current = action;
+        onClose();
+      }}
     >
-      <SheetSurface
-        backAccessibilityLabel={t('interaction.contextSheet.backAccessibility')}
-        bottomInset={insets.bottom}
-        footer={footer}
-        heights={heights}
-        onBack={onBack}
-        onClose={onClose}
-        onSnapChange={setSnap}
-        snap={snap}
-        testID={testID}
-        title={title}
+      <SheetModal
+        backdropTestID={testID ? `${testID}.backdrop` : undefined}
+        keyboardAvoiding
+        keyboardAvoidingBehavior={keyboardAvoidingBehavior}
+        onBackdropPress={onClose}
+        onClosed={() => {
+          const action = pendingAfterClose.current;
+          pendingAfterClose.current = null;
+          action?.();
+        }}
+        // Android 返回键 / iOS 关闭手势:两段式(对齐 ModelPickerSheet / SessionMenuSheet 的
+        // handleRequestClose 语义)。子视图状态由页面持有,onBack 即「回一级」——目标模式表单 /
+        // 截图列表(传了 onBack)按返回先回根视图不丢草稿,根视图(无 onBack)才整关。
+        onRequestClose={onBack ?? onClose}
+        visible={visible}
       >
-        {media}
-        {children}
-        {error ? <Text style={{ color: colors.errorText }}>{error}</Text> : null}
-      </SheetSurface>
-    </SheetModal>
+        <SheetSurface
+          backAccessibilityLabel={t('interaction.contextSheet.backAccessibility')}
+          bottomInset={insets.bottom}
+          footer={footer}
+          heights={heights}
+          onBack={onBack}
+          onClose={onClose}
+          onSnapChange={setSnap}
+          snap={snap}
+          testID={testID}
+          title={title}
+        >
+          {media}
+          {children}
+          {error ? <Text style={{ color: colors.errorText }}>{error}</Text> : null}
+        </SheetSurface>
+      </SheetModal>
+    </DismissAction.Provider>
   );
 }
 
@@ -133,7 +152,7 @@ function flattenChildren(children: ReactNode): ReactNode[] {
 }
 
 export interface ContextSheetRowProps {
-  /** Dismiss the iOS sheet before presenting a system picker. */
+  /** Dismiss the sheet before presenting a system picker. */
   dismissBeforePress?: boolean;
   icon: ReactNode;
   label: string;
@@ -149,6 +168,7 @@ export interface ContextSheetRowProps {
 }
 
 export function ContextSheetRow({
+  dismissBeforePress = false,
   icon,
   label,
   onPress,
@@ -161,6 +181,7 @@ export function ContextSheetRow({
 }: ContextSheetRowProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   const { colors } = useTheme();
+  const dismiss = useContext(DismissAction);
   return (
     <Pressable
       accessibilityHint={accessibilityHint}
@@ -168,7 +189,7 @@ export function ContextSheetRow({
       accessibilityRole="button"
       accessibilityState={{ disabled: disabled || busy }}
       disabled={disabled || busy}
-      onPress={onPress}
+      onPress={() => (dismissBeforePress ? dismiss(onPress) : onPress())}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed, disabled && styles.rowDisabled]}
       testID={testID}
     >

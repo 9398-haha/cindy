@@ -320,7 +320,6 @@ import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
-import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -573,9 +572,8 @@ export default function NewRemoteSessionScreen() {
   }, [workspacePickerOpen, measureWorkspacePicker]);
   // 模型浮窗(ContextSheet 同款 Modal;新建页权限已提为独立选择器,浮窗只留模型)。
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
-  // 权限模式独立浮窗(composer 工具条权限药丸点开;列表复用 MobilePermissionPickerList)。
+  // 权限模式独立浮窗(composer 工具条权限药丸点开;面板自持档位,见 NativePermissionSheet)。
   const [permissionSheetOpen, setPermissionSheetOpen] = useState(false);
-  const [permissionSheetSnap, setPermissionSheetSnap] = useState<ContextSheetSnap>('half');
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   // 被控端 runtime 已注册的 agent 集合(null = 未拉到 → fail-open 不过滤入口)。据此过滤新建
   // agent 选项:被控端 Pi 二进制缺失时其 agent map 无 pi,但模型目录仍投影 Pi,不过滤会让用户
@@ -2463,7 +2461,6 @@ export default function NewRemoteSessionScreen() {
     setAgentPickerOpen(false);
     setModelSheetOpen(false);
     setWorktreeBranchSheetOpen(false);
-    setPermissionSheetSnap('half');
     setPermissionSheetOpen(true);
   }, []);
 
@@ -6362,37 +6359,17 @@ export default function NewRemoteSessionScreen() {
         testID="newSession.modelSheet"
         visible={modelSheetOpen}
       />
-      {/* 权限模式独立浮窗:composer 权限药丸点开;列表复用 MobilePermissionPickerList,
-          选择走 selectPermissionMode(含 Full access 确认弹层 + per-agent 记忆)后关浮窗。 */}
-      {Platform.OS === 'ios' ? (<NativePermissionSheet visible={permissionSheetOpen} onClose={() => setPermissionSheetOpen(false)}
- activeMode={displayPermissionMode} disabled={creating} onSelect={selectPermissionMode}
- options={runtimeOptions.permissionOptions} testID="newSession.permissionSheet" />) : (<SheetModal
-        backdropTestID="newSession.permissionSheet.backdrop"
-        onBackdropPress={() => setPermissionSheetOpen(false)}
-        onRequestClose={() => setPermissionSheetOpen(false)}
+      {/* 权限模式独立浮窗:composer 权限药丸点开。两端同一语义:点选先关浮窗,关闭完成后再走
+          selectPermissionMode(含 Full access 确认弹层 + per-agent 记忆)。 */}
+      <NativePermissionSheet
         visible={permissionSheetOpen}
-      >
-        <SheetSurface
-          bottomInset={safeAreaInsets.bottom}
-          heights={permissionSheetHeights}
-          onClose={() => setPermissionSheetOpen(false)}
-          onSnapChange={setPermissionSheetSnap}
-          snap={permissionSheetSnap}
-          testID="newSession.permissionSheet"
-          title={t('models.picker.permissionTitle')}
-        >
-          <MobilePermissionPickerList
-            activeMode={displayPermissionMode}
-            disabled={creating}
-            onSelect={(mode) => {
-              selectPermissionMode(mode);
-              setPermissionSheetOpen(false);
-            }}
-            options={runtimeOptions.permissionOptions}
-            testID="newSession.permissionSheet.option"
-          />
-        </SheetSurface>
-      </SheetModal>)}
+        onClose={() => setPermissionSheetOpen(false)}
+        activeMode={displayPermissionMode}
+        disabled={creating}
+        onSelect={selectPermissionMode}
+        options={runtimeOptions.permissionOptions}
+        testID="newSession.permissionSheet"
+      />
       {composerPreviewUrl && composerGalleryImages.length > 0 ? (
         // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
         // annotation:托盘图可圈点标注 / 再编辑,保存后烧录替换附件重新上传。
