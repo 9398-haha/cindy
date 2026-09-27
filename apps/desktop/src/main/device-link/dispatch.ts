@@ -3782,7 +3782,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] Remote authorization unavailable' } }; }
   }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
-    try { return { ok: true, result: await requestRemoteDesktop(src, payload.args?.[0]) }; }
+    try { return { ok: true, result: await timing.measure('handler', () => requestRemoteDesktop(src, payload.args?.[0])) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
   }
 
