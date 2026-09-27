@@ -112,6 +112,8 @@ export function readAutoReviewProjection(
         }, 0),
       });
     });
+    // Ambiguous trigger receipts use full replay. Once history is omitted, only
+    // a canonical text-only event can use the string append fast path.
     // The source query is evaluated by SQLite, not a reentrant database call
     // inside the UDF. Both summaries and the transcript commit or roll back together.
     db.exec(`CREATE TEMP TABLE IF NOT EXISTS auto_review_projection_batch(depth INTEGER NOT NULL);
@@ -122,6 +124,16 @@ export function readAutoReviewProjection(
         UPDATE auto_review_projections SET payload = cindy_authority_projection_v1(CASE WHEN OLD.projected_revision = OLD.revision AND OLD.version = 3
           AND json_extract(NEW.payload, '$.appendEvent.role') = 'user'
           AND json_extract(NEW.payload, '$.appendEvent.visible') = 1
+          AND (coalesce(CASE WHEN json_valid(OLD.payload) THEN json_extract(OLD.payload, '$.sessionIntent.historyOmitted') ELSE NULL END, 0) = 0
+            OR CASE WHEN json_valid(json_extract(NEW.payload, '$.appendEvent.agentMeta')) THEN
+              json_type(json_extract(NEW.payload, '$.appendEvent.agentMeta'), '$.autoReviewUserText') = 'text'
+              AND json_extract(json_extract(NEW.payload, '$.appendEvent.agentMeta'), '$.delivery') IN ('turn','steer')
+              AND json_extract(NEW.payload, '$.appendEvent.content') = json_object('text',
+                json_extract(json_extract(NEW.payload, '$.appendEvent.agentMeta'), '$.autoReviewUserText'))
+              ELSE 0 END)
+          AND coalesce(CASE WHEN json_valid(json_extract(NEW.payload, '$.appendEvent.agentMeta'))
+            THEN substr(json_extract(json_extract(NEW.payload, '$.appendEvent.agentMeta'), '$.autoReviewUserText'), 1, 19)
+            ELSE NULL END, '') <> '[UI_ACTION_TRIGGER]'
           AND json_extract(NEW.payload, '$.appendEvent.createdAt') > (CASE WHEN json_valid(OLD.payload) THEN json_extract(OLD.payload, '$.lastEventAt') ELSE NULL END)
           THEN NULL ELSE (
           SELECT json_group_array(json_object('sessionId', session_id, 'clientId', client_id,

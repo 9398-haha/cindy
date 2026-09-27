@@ -113,13 +113,21 @@ describe('durable Auto authority projection', () => {
     const incremental=read(db);
     expect(JSON.stringify(incremental.reviewIntent)).toContain(text);
     expect(incremental.reviewIntent).toMatchObject({historyOmitted:true});
-    if(session==='worker') expect(JSON.stringify(incremental.sessionIntent)).toContain(text);
+    if(session==='worker') {
+      expect(JSON.stringify(incremental.sessionIntent)).toContain(text);
+      expect(incremental.sessionIntent).toMatchObject({historyOmitted:true});
+    }
+    db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?,?,NULL)').run(
+      'resource', 'worker', 'resource', 'user', JSON.stringify({text:'use this file',files:[{}]}),
+      4, JSON.stringify({delivery:'turn',autoReviewUserText:'use this file'}));
+    const afterResource = read(db);
+    if(session==='worker') expect(afterResource.sessionIntent).toMatchObject({historyOmitted:true});
     const old=JSON.parse(stored(db).payload);
     db.prepare('UPDATE auto_review_projections SET version=2,payload=?').run(JSON.stringify({...old,sessionIntent:'publish',reviewIntent:'publish',reviewUnverified:false}));
     const restarted=open(filename,false);
     const rebuilt=read(restarted);
-    expect(rebuilt.sessionIntent).toEqual(incremental.sessionIntent);
-    expect(rebuilt.reviewIntent).toEqual(incremental.reviewIntent);
+    expect(rebuilt.sessionIntent).toEqual(afterResource.sessionIntent);
+    expect(rebuilt.reviewIntent).toEqual(afterResource.reviewIntent);
     expect(restarted.prepare('SELECT version FROM auto_review_projections').get()).toEqual({version:3});
   });
   it.each([
