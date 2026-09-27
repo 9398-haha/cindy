@@ -1,3 +1,4 @@
+import { createAutoReviewIntentProjection, type AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
 import type { AgentKind, UserMessage } from '../../types/common.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
@@ -542,23 +543,9 @@ export async function resolveAutoReviewDecision(
   };
 }
 
-/** Structured only by the Host. User text is never parsed as an authorization envelope. */
-export type AutoReviewUserIntent = string | {
-  readonly earlierUserMessages: readonly string[];
-  readonly currentUserMessage: string;
-  /** Omitted history may contain standing restrictions; never silently treat it as unrestricted. */
-  readonly historyOmitted?: true;
-};
-
-const MAX_USER_INTENT_CHARS = 2_000;
-const OMITTED_USER_INTENT = 'User message omitted because it exceeds the review budget; it cannot establish authorization.';
-
-function compactCurrentUserIntent(text: string, maxChars = MAX_USER_INTENT_CHARS): string {
-  const normalized = text.trim();
-  if (normalized.length <= maxChars) return normalized;
-  return OMITTED_USER_INTENT;
-}
-
+export type { AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
+const intentProjection = createAutoReviewIntentProjection();
+const compactCurrentUserIntent = intentProjection.compact;
 function userIntentText(content: UserMessage['content']): string {
   return (typeof content === 'string'
     ? content
@@ -574,17 +561,7 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
 }
 
 /** Enforce the budget without interpreting strings as Host-generated structure. */
-export function normalizeAutoReviewUserIntent(intent: AutoReviewUserIntent): AutoReviewUserIntent {
-  if (typeof intent === 'string') return compactCurrentUserIntent(intent);
-  const currentUserMessage = compactCurrentUserIntent(intent.currentUserMessage);
-  const candidate = { earlierUserMessages: [...intent.earlierUserMessages], currentUserMessage,
-    ...(intent.historyOmitted ? { historyOmitted: true as const } : {}) };
-  if (currentUserMessage !== OMITTED_USER_INTENT && JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS) return candidate;
-  // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
-  const omitted = { earlierUserMessages: [], currentUserMessage, historyOmitted: true as const };
-  return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS ? omitted
-    : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
-}
+export const normalizeAutoReviewUserIntent = intentProjection.normalize;
 
 /** Preserve chronological user messages; scope is assessed, never assumed permanent. */
 export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | undefined, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
@@ -599,11 +576,7 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | unde
   const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
   // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
   const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
-  if (!latest || hasAttachments || previous === undefined || previous === '') return compactCurrentUserIntent(latest);
-  const earlierUserMessages = typeof previous === 'string'
-    ? [previous] : [...previous.earlierUserMessages, previous.currentUserMessage];
-  return normalizeAutoReviewUserIntent({ earlierUserMessages, currentUserMessage: latest,
-    ...(typeof previous !== 'string' && previous.historyOmitted ? { historyOmitted: true as const } : {}) });
+  return intentProjection.append(hasAttachments ? '' : previous, latest);
 }
 
 /** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */

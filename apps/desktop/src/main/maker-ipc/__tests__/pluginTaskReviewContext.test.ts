@@ -59,6 +59,18 @@ function fixture(): PluginReviewSnapshot {
   };
 }
 describe('plugin delegated Auto context', () => {
+  it('uses persisted bounded evidence, rejects live drift and keys cached decisions by revision', async () => {
+    const s = fixture();
+    s.projection = { revision: 7, sessionIntent: 'Worker restriction', reviewIntent: 'Lead and Worker restrictions' };
+    const resolve = createPluginTaskReviewResolver(async () => s);
+    const current = { ...request, userIntent: 'Worker restriction' };
+    const first = await resolve(current);
+    expect(first.userIntent).toBe('Lead and Worker restrictions');
+    expect(first.authorizationError).toBeUndefined();
+    expect((await resolve({ ...current, userIntent: 'Unpersisted grant' })).authorizationError).toContain('not synchronized');
+    s.projection.revision++;
+    expect((await resolve(current)).delegatedTask?.authorizationRevision).not.toBe(first.delegatedTask?.authorizationRevision);
+  });
   it.each([120, 1200])('matches %i persisted short inputs across budget cycles without accepting an unpersisted steer', async count => {
     const s = fixture();
     s.history = [];

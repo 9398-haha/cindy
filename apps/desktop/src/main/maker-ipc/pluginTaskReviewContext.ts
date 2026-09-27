@@ -1,13 +1,14 @@
+import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import {
-  appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   type AutoReviewRequest,
   type AutoReviewUserIntent,
 } from '@cindy/maker-core';
 import type { PluginTeamPlan, PluginTaskRoute } from '../../shared/pluginTasks.js';
-import { readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import type { StoredAutoReviewProjection } from '../localDb/autoReviewProjection.js';
+import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
 export interface PluginReviewSnapshot {
   pluginId: string;
@@ -22,66 +23,13 @@ export interface PluginReviewSnapshot {
   history: AutoReviewHistoryMessage[];
   sessionHistory: AutoReviewHistoryMessage[];
   historyComplete: boolean;
+  projection?: StoredAutoReviewProjection;
 }
 
 /** Only Host-captured authored text counts. Missing legacy receipts never imply missing restrictions. */
+const intentProjection = createAutoReviewIntentProjection();
 export function pluginReviewUserIntent(snapshot: PluginReviewSnapshot): AutoReviewUserIntent {
-  let intent: AutoReviewUserIntent = '';
-  let omitted = !snapshot.historyComplete;
-  const eventTime = (m: AutoReviewHistoryMessage): number => {
-    const receipt = m.agentMeta?.autoReviewUserText;
-    if ((m.role === 'ask_user' || m.role === 'plan_review') && receipt && typeof receipt === 'object'
-      && 'acceptedAt' in receipt && typeof receipt.acceptedAt === 'number' && Number.isFinite(receipt.acceptedAt)) {
-      return receipt.acceptedAt;
-    }
-    return m.createdAt ?? 0;
-  };
-  const times = new Set<number>();
-  for (const m of [...snapshot.history].sort((a, b) => eventTime(a) - eventTime(b))) {
-    const receipt = m.agentMeta?.autoReviewUserText;
-    // Empty authored receipts reset earlier resource consent and need ordering too.
-    const authored = typeof receipt === 'string' || (receipt && typeof receipt === 'object'
-      && 'text' in receipt && typeof receipt.text === 'string');
-    if (authored) {
-      const at = eventTime(m);
-      if (!Number.isFinite(at) || at <= 0 || times.has(at)) omitted = true;
-      times.add(at);
-    }
-    if (m.role === 'ask_user' || m.role === 'plan_review') {
-      // A card answer can constrain the task, but an unanswered card grants nothing.
-      if (
-        receipt &&
-        typeof receipt === 'object' &&
-        'text' in receipt &&
-        typeof receipt.text === 'string' &&
-        'acceptedAt' in receipt && typeof receipt.acceptedAt === 'number' && Number.isFinite(receipt.acceptedAt)
-      ) {
-        if (receipt.text) intent = appendAutoReviewUserIntent(intent, receipt.text);
-      } else {
-        // Legacy/unverified cards may contain restrictions; absence is not consent.
-        omitted = true;
-      }
-    } else if (m.role === 'user') {
-      if (
-        typeof receipt === 'string' &&
-        ['turn', 'steer'].includes(String(m.agentMeta?.delivery))
-      ) {
-        if (readAutoReviewUserText(m.content) === null) intent = '';
-        intent = appendAutoReviewUserIntent(intent, receipt);
-      } else if (!(
-        receipt &&
-        typeof receipt === 'object' &&
-        'kind' in receipt &&
-        (receipt.kind === 'scheduled-continuation' || receipt.kind === 'delegated-continuation')
-      )) {
-        omitted = true;
-      }
-    }
-  }
-  if (!omitted) return intent;
-  return typeof intent === 'string'
-    ? { earlierUserMessages: [], currentUserMessage: intent, historyOmitted: true }
-    : { ...intent, historyOmitted: true };
+  return intentProjection.review(snapshot.history, snapshot.historyComplete);
 }
 
 /** Scope comes from the authenticated plugin receipt, never Lead/Worker prose or tool arguments. */
@@ -93,7 +41,7 @@ export function createPluginTaskReviewResolver(
     if (!request.sessionId) return base;
     const snapshot = await load(request.sessionId);
     if (!snapshot) return base;
-    const userIntent = pluginReviewUserIntent(snapshot);
+    const userIntent = snapshot.projection?.reviewIntent ?? pluginReviewUserIntent(snapshot);
     const denied = (reason: string): AutoReviewRequest => ({
       ...base,
       userIntent,
@@ -104,7 +52,7 @@ export function createPluginTaskReviewResolver(
     // restrictions. Preserve order/repetition and empty resource resets; text
     // membership cannot distinguish a repeated revocation from an older grant.
     if (JSON.stringify(normalizeAutoReviewUserIntent(request.userIntent)) !==
-      JSON.stringify(restoreAutoReviewUserIntent(snapshot.sessionHistory))) {
+      JSON.stringify(snapshot.projection?.sessionIntent ?? restoreAutoReviewUserIntent(snapshot.sessionHistory))) {
       return denied('Current user instructions are not synchronized with task history; automatic authorization is blocked.');
     }
     if (
@@ -156,6 +104,7 @@ export function createPluginTaskReviewResolver(
       .update(
         JSON.stringify([
           snapshot.revision,
+          snapshot.projection?.revision,
           snapshot.pluginId,
           snapshot.session,
           snapshot.lead,
