@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ghostNetworkHostMatches, type InstalledGhost } from '../../shared/ghost.js';
-import type { DownloadOptions, DownloadResult } from '../downloader/index.js';
+import type { DownloadOptions, DownloadRequest, DownloadResult } from '../downloader/index.js';
+import { DownloadError } from '../downloader/types.js';
+import { guardedOutboundFetch } from '../maker-host/outbound-fetch.js';
 import { PluginDownloadCache } from './downloadCache.js';
 
 /** Verified public artifacts, in the requesting plugin's host-managed cache only. */
@@ -169,6 +171,14 @@ export class PluginDownloadSlot {
           throw Error('Download URL is outside declared HTTPS hosts');
       };
       validateUrl(p.url);
+      const isUrlAllowed = (raw: string) => {
+        try {
+          validateUrl(raw);
+          return true;
+        } catch {
+          return false;
+        }
+      };
       const fingerprint = JSON.stringify([p.url, p.sha256, p.bytes]);
       const existing = this.active.get(key);
       if (existing) {
@@ -218,15 +228,24 @@ export class PluginDownloadSlot {
           const watch = setInterval(() => {
             if (!current()) controller.abort();
           }, 250);
+          // Plugin-supplied URLs: one SSRF-guarded hop at a time (DNS pinning, HTTPS only,
+          // no ambient cookies), re-checking the owner before every connection.
+          const request: DownloadRequest = (url, init) =>
+            guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {
+              controller.signal.throwIfAborted();
+              // A revoked owner is final: do not let the downloader retry this hop.
+              if (!isUrlAllowed(url))
+                throw new DownloadError('URL_POLICY', 'Download URL is not allowed');
+            });
           try {
             const result = await this.deps.download({
-              streaming: true,
               url: p.url as string,
               targetPath,
               sha256: p.sha256 as string,
               expectedSize: p.bytes as number,
               maxBytes: p.bytes as number,
-              validateUrl,
+              isUrlAllowed,
+              request,
               signal: controller.signal,
               logger: { debug() {}, info() {}, warn() {}, error() {} },
               onProgress: (e) => emit({ phase: 'downloading', ...e }),

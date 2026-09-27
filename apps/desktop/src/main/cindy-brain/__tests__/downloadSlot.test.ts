@@ -2,6 +2,8 @@ import { it, expect, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+const guarded = vi.hoisted(() => ({ fetch: vi.fn() }));
+vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: guarded.fetch }));
 import { PluginDownloadSlot } from '../downloadSlot';
 import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
@@ -125,8 +127,10 @@ it('restricts redirects, rejects arbitrary paths and isolates owner delivery', a
     send: (_, e) => events.push(e),
     download: async (o) => {
       calls++;
-      expect(() => o.validateUrl!('https://evil.invalid/file')).toThrow();
-      expect(() => o.validateUrl!('http://github.com/file')).toThrow();
+      expect(o.isUrlAllowed!('https://evil.invalid/file')).toBe(false);
+      expect(o.isUrlAllowed!('http://github.com/file')).toBe(false);
+      expect(o.isUrlAllowed!('https://github.com/other')).toBe(true);
+      expect(o.request).toBeTypeOf('function');
       o.onProgress?.({ loaded: 1, total: 2, percent: 50, speedBps: 1 });
       scope = 'b';
       return {
@@ -306,5 +310,58 @@ it('hands opaque receipts only to the owning Node call and preserves legacy para
     await fs.unlink(alias);
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+it('sends plugin downloads through the SSRF guard without credentials and stops for a revoked owner', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-download-test-')));
+  let enabled = true;
+  const ghost = {
+    get enabled() {
+      return enabled;
+    },
+    approval: {},
+    manifest: { node: {}, network: { hosts: ['github.com'] } },
+  } as unknown as InstalledGhost;
+  const release = vi.fn(async () => {});
+  const dispatchChecks: Array<() => void> = [];
+  guarded.fetch.mockReset().mockImplementation(async (_url: string, _init: RequestInit, check: () => void) => {
+    dispatchChecks.push(check);
+    check();
+    return { response: new Response('ok'), release };
+  });
+  const slot = new PluginDownloadSlot({
+    root: (id) => path.join(root, id),
+    scope: () => 'a',
+    getGhost: () => ghost,
+    send: () => {},
+    download: async (o) => {
+      const init = { method: 'GET', redirect: 'manual' as const };
+      const sent = await o.request!('https://github.com/file', init);
+      expect(sent).toMatchObject({ release });
+      expect(guarded.fetch).toHaveBeenCalledWith(
+        'https://github.com/file',
+        { ...init, credentials: 'omit' },
+        expect.any(Function),
+      );
+      enabled = false;
+      // Owner revoked between DNS resolution and dispatch: final, not a retryable NETWORK error.
+      expect(() => dispatchChecks[0]()).toThrow(expect.objectContaining({ code: 'URL_POLICY' }));
+      throw new Error('stop');
+    },
+  });
+  try {
+    expect(
+      await slot.handle('p', {
+        kind: 'start',
+        id: 'g',
+        url: 'https://github.com/file',
+        sha256: 'a'.repeat(64),
+        bytes: 2,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(guarded.fetch).toHaveBeenCalledOnce();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

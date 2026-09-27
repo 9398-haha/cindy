@@ -14,7 +14,10 @@ SHA-256 与精确字节数必填，单文件最大 2 GiB。目标由宿主管理
 缓存由账号、插件、请求身份隔离；id 相同且内容相同可复用经校验的文件。
 每账号总预算 4 GiB（含在途预留及每项 64 KiB 管理空间），按最近使用回收；下载中和 Node 借用中的文件不淘汰。
 缓存满且没有可回收空间时失败。卸载回收该插件缓存；重启后凭据失效，可重新 start 取凭据。
-下载使用独立队列和逐块写盘，不占用宿主更新队列，支持重试/续传。
+下载使用独立队列（`createDownloader()`），不占用宿主更新队列；传输复用统一下载器的逐块写盘
+（写完一块才拉下一块）、重试与续传。插件提供的 URL 通过下载器的 `request` 注入点走
+`guardedOutboundFetch`：单跳、DNS 固定、仅 HTTPS、不带 Cookie，每次连接前复核调用方与声明主机；
+调用方失效属于终局拒绝（`URL_POLICY`），不按网络错误重试。
 
 通过 onHostMessage 订阅：
 `{type:'event',name:'download-progress',data:{id,phase,loaded,total,speedBps}}`。
