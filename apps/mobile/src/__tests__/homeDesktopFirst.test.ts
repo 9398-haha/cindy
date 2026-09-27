@@ -343,7 +343,7 @@ describe('mobile home desktop-first surface', () => {
 
     // E5M 状态色设计定稿(2026-07-17):teal 族 #00D9C5 → #19D2C1,statusReady 随 awaiting 同步。
     expect(tokenSource).toContain("statusReady: '#19D2C1'");
-    expect(tokenSource).toContain("homeListFab: '#ECEDEF'");
+    expect(tokenSource).toContain("homeListFab: '#E6E6E6'");
     expect(tokenSource).not.toContain(`${removedListTokenPrefix}Background`);
     expect(tokenSource).not.toContain(`${removedListTokenPrefix}Divider`);
     expect(primitivesSource).toContain('tone === \'ready\' && styles.statusDotReady');
@@ -433,8 +433,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('saveDeviceIdentityCache(result.cache)');
     expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke,');
     expect(source).toContain('replaceSessionScheduleIndexEntries(');
-    expect(source).toContain("invoke<unknown[]>(device.deviceId, 'maker:list-active', [");
-    expect(source).toContain("{ summary: true }");
+    expect(source).toContain("invoke<unknown>(device.deviceId, 'maker:list-active', [");
+    expect(source).toContain("{ summary: true, snapshotVersion: 2 }");
     expect(source).toContain('if (isOptionalActiveSessionSnapshotError(err)) return null;');
     expect(source).toContain('function isOptionalActiveSessionSnapshotError(error: unknown): boolean');
     expect(source).toContain('if (isAccessRevokedError(error) || isDeviceOfflineError(error)) return false;');
@@ -557,7 +557,7 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
     expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
-    expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned || !!sharedRole;');
+    expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');

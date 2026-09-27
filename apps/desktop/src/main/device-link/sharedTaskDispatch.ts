@@ -49,7 +49,7 @@ const sessionReads = new Set([
   'local-db:messages:around', 'local-db:messages:around-client-id',
   'local-db:messages:estimatedSessionValue', 'maker:input:get-projection',
   'maker:session-in-turn', 'maker:session-background-activity',
-  'maker:session-background-tasks:list', 'maker:get-context-usage',
+  'maker:session-background-tasks:list', 'maker:background-task:output-tail', 'maker:get-context-usage',
   'maker:get-pending-interactions', 'maker:get-session-agent-switch-intent',
 ]);
 const inputEdits = new Set(['maker:input:update-text', 'maker:input:update-content', 'maker:input:set-edit-lock']);
@@ -163,6 +163,8 @@ export function assertSharedTaskInvoke(
 /** Synchronous last-mile gate, including batches, delayed pushes and offline replay. */
 export function captureSharedTaskPush(source: string, channel: string, payload: unknown): (() => boolean) | null {
   if (!isSharedTaskPeer(source)) return () => true;
+  // Turn-change reads/actions are same-account only; do not expose an unusable guest card.
+  if (channel === 'maker:turn-change-set:updated') return null;
   const capture = captureSharedTaskPeer(source);
   if (!capture || !capture.authorize('events.subscribe')) return null;
   const sessionId = capture.author.sessionId;
