@@ -68,6 +68,41 @@ function stored(db: Database.Database) {
 }
 
 describe('durable Auto authority projection', () => {
+  it.each(['insert', 'answer', 'delete', 'clear', 'rewind'])(
+    'keeps %s writes and rebuilds evidence after corrupt summaries with live and legacy connections',
+    (operation) => {
+      for (const live of [true, false]) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-corrupt-projection-'));
+        directories.push(dir);
+        const filename = path.join(dir, 'test.sqlite');
+        const db = open(filename);
+        add(db, 'grant', 'worker', 1, 'allow');
+        add(db, 'restriction', 'worker', 2, 'deny');
+        add(db, 'answer', 'worker', 0, 'question', 'ask_user', {});
+        read(db);
+        db.prepare("UPDATE auto_review_projections SET payload='{broken'").run();
+        const writer = live ? db : open(filename, false);
+        expect(() => {
+          writer.transaction(() => {
+            if (operation === 'insert') add(writer, 'latest', 'worker', 4, 'never publish');
+            if (operation === 'answer') writer.prepare('UPDATE messages SET agent_meta=? WHERE id=?').run(
+              JSON.stringify({autoReviewUserText:{text:'never publish',acceptedAt:4}}), 'answer');
+            if (operation === 'delete') writer.prepare("DELETE FROM messages WHERE id='grant'").run();
+            if (operation === 'clear') writer.prepare("UPDATE sessions SET cleared_at=1 WHERE id='worker'").run();
+            if (operation === 'rewind') writer.prepare("UPDATE messages SET rewind_at=4 WHERE id='grant'").run();
+          })();
+        }).not.toThrow();
+        if (!live) expect(stored(writer).revision).not.toBe(stored(writer).projected_revision);
+        const restored = read(writer);
+        expect(JSON.stringify(restored.sessionIntent)).toContain('deny');
+        if (operation === 'insert' || operation === 'answer')
+          expect(JSON.stringify(restored.sessionIntent)).toContain('never publish');
+        else expect(JSON.stringify(restored.sessionIntent)).not.toContain('allow');
+        expect(stored(writer).revision).toBe(stored(writer).projected_revision);
+      }
+    },
+  );
+
   it.each(['lead', 'worker'])('keeps literal trigger restrictions and rejects ambiguous provenance in %s', session => {
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cindy-authority-literal-'));
     directories.push(dir);const filename=path.join(dir,'test.sqlite');const db=open(filename);

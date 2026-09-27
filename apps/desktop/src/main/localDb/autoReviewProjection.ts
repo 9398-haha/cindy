@@ -122,7 +122,7 @@ export function readAutoReviewProjection(
         UPDATE auto_review_projections SET payload = cindy_authority_projection_v1(CASE WHEN OLD.projected_revision = OLD.revision AND OLD.version = 3
           AND json_extract(NEW.payload, '$.appendEvent.role') = 'user'
           AND json_extract(NEW.payload, '$.appendEvent.visible') = 1
-          AND json_extract(NEW.payload, '$.appendEvent.createdAt') > json_extract(OLD.payload, '$.lastEventAt')
+          AND json_extract(NEW.payload, '$.appendEvent.createdAt') > (CASE WHEN json_valid(OLD.payload) THEN json_extract(OLD.payload, '$.lastEventAt') ELSE NULL END)
           THEN NULL ELSE (
           SELECT json_group_array(json_object('sessionId', session_id, 'clientId', client_id,
             'role', role, 'content', content, 'createdAt', created_at, 'agentMeta', agent_meta))
@@ -158,7 +158,7 @@ export function readAutoReviewProjection(
     // inside this transaction. Never fall back to the previous payload.
     if (row.version !== 3 || row.projected_revision !== row.revision || row.payload === null) {
       db.prepare(
-        "UPDATE auto_review_projections SET revision = revision + 1, payload = json_remove(payload, '$.appendEvent') WHERE session_id = ? AND lead_id = ?",
+        "UPDATE auto_review_projections SET revision = revision + 1, payload = CASE WHEN json_valid(payload) THEN json_remove(payload, '$.appendEvent') ELSE NULL END WHERE session_id = ? AND lead_id = ?",
       ).run(sessionId, leadId);
       row = select.get(sessionId, leadId) as Row;
     }
@@ -227,7 +227,7 @@ export function batchAutoReviewProjection<T>(
         .depth === 0
     ) {
       db.prepare(
-        "UPDATE auto_review_projections SET revision=revision, payload=json_remove(payload,'$.appendEvent') WHERE projected_revision != revision",
+        "UPDATE auto_review_projections SET revision=revision, payload=CASE WHEN json_valid(payload) THEN json_remove(payload,'$.appendEvent') ELSE NULL END WHERE projected_revision != revision",
       ).run();
     }
     return result;
