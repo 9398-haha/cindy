@@ -5222,8 +5222,10 @@ function OrcaCollabCard({ card, screenWidth, blockKey }: {
   const { accountGeneration } = useAuth();
   // Remember manual expansions using the
   // existing bounded block store, including across native route reconstruction.
+  // Key prefix orca-expanded- (not the old orca-toggled-): dispatch cards used to default open, so a
+  // remembered legacy toggle meant "collapsed"; never reinterpret it as "expanded".
   const [expanded, toggleExpanded] = useFoldableExpandedState(
-    `orca-toggled-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
+    `orca-expanded-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
   );
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
