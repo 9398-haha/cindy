@@ -192,6 +192,9 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     return run;
   };
   return {
+    // Host-only native lifecycle work shares send/cancel's drain. Do not use
+    // exclusive here: native close callbacks may enqueue receipt writes.
+    completeOperation,
     /** Account teardown awaits already accepted writes before closing this DB. */
     drain: async () => {
       let pending: Promise<unknown>, active: Promise<unknown>;

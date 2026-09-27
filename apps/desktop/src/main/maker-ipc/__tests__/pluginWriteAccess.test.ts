@@ -16,7 +16,7 @@ function fixture() {
  const drain = vi.fn(async()=>{});
  const epoch = { client: { tx: vi.fn(async () => ({ updated: true })), drizzle: {select} } };
  const task = { taskId: 'task', revision: 1, permissionMode: 'plan' };
- const service = { get: vi.fn(async () => task), listRuns: vi.fn(async () => ({ items: [] })) };
+ const service = { get: vi.fn(async () => task), listRuns: vi.fn(async () => ({ items: [] })), completeOperation: vi.fn(async <T>(operation: () => Promise<T>) => operation()) };
  const live = { isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async () => {}) };
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
@@ -26,6 +26,21 @@ function fixture() {
  return { run: (mode = 'acceptEdits') => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }), service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('plugin write confirmation interleavings', () => {
+ it('tracks the permission commit only after confirmation and includes rollback', async () => {
+  const f=fixture();let answer!:()=>void;
+  f.dialog.showMessageBox.mockImplementationOnce(()=>new Promise(resolve=>{answer=()=>resolve({response:0});}));
+  const operation=f.run();const rejected=expect(operation).rejects.toThrow('write failed');
+  await vi.waitFor(()=>expect(f.dialog.showMessageBox).toHaveBeenCalledOnce());
+  expect(f.service.completeOperation).not.toHaveBeenCalled();
+  let release!:()=>void;const rollback=new Promise<void>(resolve=>{release=resolve;});
+  f.epoch.client.tx.mockRejectedValueOnce(new Error('write failed'));
+  f.live.setPermissionMode.mockImplementationOnce(async()=>{}).mockImplementationOnce(()=>rollback);
+  answer();await vi.waitFor(()=>expect(f.live.setPermissionMode).toHaveBeenCalledTimes(2));
+  expect(f.service.completeOperation).toHaveBeenCalledOnce();
+  let finished=false;const tracked=f.service.completeOperation.mock.results[0]!.value.then(()=>{finished=true;},()=>{finished=true;});
+  await Promise.resolve();expect(finished).toBe(false);
+  release();await Promise.all([rejected,tracked]);expect(finished).toBe(true);
+ });
  it('owns the existing slot across idle checks and releases it on failure', async () => {
   const f = fixture(); let reject!: (e: Error) => void;
   f.service.listRuns.mockImplementationOnce(() => new Promise((_, r) => { reject = r; }));

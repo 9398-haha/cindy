@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import {
   createPluginTaskService,
   isPluginTaskPermissionAllowed,
+  PluginTaskError,
+  assertPluginTaskResult,
   type PluginTaskReceipt,
   type PluginTaskStore,
   type PluginTaskServiceDeps,
@@ -370,6 +374,75 @@ it.each(['send', 'cancel'] as const)('drain waits for the full %s operation incl
  f.switchOwner();
  expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe(kind === 'send' ? 'running' : 'cancelled');
 });
+it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as const)('drains the real releaseWorker branch through %s', async phase => {
+ const f = fixture();
+ let release!: () => void, entered!: () => void;
+ const barrier = new Promise<void>(resolve => { release = resolve; });
+ const started = new Promise<void>(resolve => { entered = resolve; });
+ const pause = async () => { entered(); await barrier; };
+ const service = {...f.service,
+  get: vi.fn(async () => { if (phase === 'validation') await pause(); return {taskId:'lead'}; }),
+  settleWorkerLabel: vi.fn(async () => {
+   if (phase === 'settlement' || phase === 'alreadyArchived') await pause();
+   // Native completion enqueues work on the real receipt tail. Holding that
+   // tail across archive would deadlock this callback.
+   await f.create();
+  }),
+ };
+ const archiveWorker = vi.fn(async ({beforeArchive}: {beforeArchive: () => Promise<void>}) => {
+  await beforeArchive();
+  if (phase === 'archive' || phase === 'failure') await pause();
+  if (phase === 'failure') throw new Error('archive failed');
+  await f.create();
+  return {ok:true};
+ });
+ const record = {id:'worker',sessionId:'child',label:'one',status:phase === 'alreadyArchived' ? 'archived' : 'done'};
+ const query = {from:()=>query,innerJoin:()=>query,where:()=>query,limit:async()=>[record]};
+ const epoch = {client:{drizzle:{select:()=>query}}};
+ const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,
+  orcaWorkers:{},orcaTeams:{},sessions:{},eq:()=>true,and:()=>true,
+  createPluginTaskStore:()=>({get:async()=>({payload:JSON.stringify({teamPlan:{items:[{label:'one'}]}})})}),
+  readPluginWorkerCompletion:async()=>({row:record,completedAt:1}),orcaTeamService:{archiveWorker}};
+ const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+ const branch = source.slice(source.indexOf("      case 'releaseWorker': {"),source.indexOf("      case 'getTeam': {"));
+ const js = ts.transpileModule(`return async function(pluginId, request) { switch(request.kind) { ${branch} } }`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ const run = new Function(...Object.keys(deps),js)(...Object.values(deps));
+ const operation = run('p',{kind:'releaseWorker',taskId:'lead',workerId:'worker',completedAt:1});
+ const result = phase === 'failure' ? expect(operation).rejects.toThrow('archive failed') : expect(operation).resolves.toMatchObject({ok:true});
+ await started;
+ let drained = false;
+ const drain = f.service.drain().then(()=>{drained=true;});
+ await new Promise(resolve=>setTimeout(resolve,0));
+ expect(drained).toBe(false);
+ release(); await Promise.all([result,drain]);
+ expect(service.settleWorkerLabel).toHaveBeenCalledTimes(phase === 'failure' ? 0 : 1);
+ expect(archiveWorker).toHaveBeenCalledTimes(phase === 'alreadyArchived' ? 0 : 1);
+ await f.service.drain();
+ f.switchOwner();
+});
+
+it.each([false, true])('team start drain excludes confirmation and includes native completion (failure=%s)', async fails => {
+ const f = fixture();
+ let confirm!: () => void, finish!: () => void, entered!: () => void;
+ const dialog = new Promise<void>(resolve=>{confirm=resolve;});
+ const native = new Promise<void>(resolve=>{finish=resolve;});
+ const started = new Promise<void>(resolve=>{entered=resolve;});
+ const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+ const helper = source.slice(source.indexOf('  const startOrcaTeamForCaller ='),source.indexOf('  const pluginPermissionRequests ='));
+ const deps = {assertLeadCollabProjectEnabled:async()=>{},getWorkerPermissionModeFromCreationPrefs:()=> 'auto',
+  t:(key:string)=>key,orcaWorkerPermissionConfirmBridge:{request:()=>dialog},
+  startOrcaTeamWithPermissionGate:async (params:unknown, handlers:{startTeam:(params:unknown)=>Promise<unknown>})=>{await dialog;return handlers.startTeam(params);},
+  orcaLifecycleService:{startTeam:async()=>{entered();await native;await f.create();if(fails)throw new Error('failed');return {ok:true};}}};
+ const js = ts.transpileModule(`${helper}\nreturn startOrcaTeamForCaller;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ const run = new Function(...Object.keys(deps),js)(...Object.values(deps));
+ const operation = run('lead',undefined,async()=>{},f.service.completeOperation);
+ await f.service.drain(); // An unanswered dialog must not block logout.
+ confirm();await started;
+ let drained=false;const drain=f.service.drain().then(()=>{drained=true;});
+ await new Promise(resolve=>setTimeout(resolve,0));expect(drained).toBe(false);
+ finish();expect(await operation).toMatchObject({ok:!fails});await drain;
+});
+
 it('a rejected operation does not poison subsequent drain', async () => {
  const f = fixture(), run = await f.send();
  f.deps.cancel = async () => { throw new Error('native stop failed'); };

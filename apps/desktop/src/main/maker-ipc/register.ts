@@ -10230,7 +10230,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
     return pluginTasks;
   };
-  const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: () => Promise<void>) => {
+  const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: () => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
       try {
         await assertLeadCollabProjectEnabled(leadSessionId);
         return await startOrcaTeamWithPermissionGate(
@@ -10242,7 +10242,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 title: t('newChat.chatInput.fullAccessConfirmation.title'),
                 description: `${t('newChat.chatInput.fullAccessConfirmation.description')} ${t('newChat.chatInput.fullAccessConfirmation.note')}`,
               }),
-            startTeam: async (params) => { await assertCurrent?.(); return orcaLifecycleService.startTeam(params); },
+            startTeam: async (params) => {
+              const start = async () => { await assertCurrent?.(); return orcaLifecycleService.startTeam(params); };
+              // Track only admitted native work, never the permission dialog.
+              return completeOperation ? completeOperation(start) : start();
+            },
           },
         );
       } catch (err) {
@@ -10307,7 +10311,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
           if (result.response !== 0) return { granted: false };
           // Reuse the existing non-bailing runtime mutation fence; do not hold it over the dialog.
-          return await withSessionRestartLock(task.taskId, async () => {
+          return await service.completeOperation(() => withSessionRestartLock(task.taskId, async () => {
             if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
@@ -10333,7 +10337,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               if (persisted) await snapshot!.client.tx('bots.persistSessionPermission', {sessionId: task.taskId, mode: task.permissionMode});
               throw error;
             }
-          });
+          }));
         } finally { pluginPermissionRequests.delete(pluginId); }
       }
       case 'startTeam': {
@@ -10349,7 +10353,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const fresh = await service.get(pluginId, task.taskId);
           assertActive(fresh.status);
           if (fresh.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during confirmation');
-        });
+        }, service.completeOperation);
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
         await service.get(pluginId, task.taskId);
         assertPluginTaskResult(result, 'Collaboration could not be started');
@@ -10369,34 +10373,36 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return service.setTeamPlan(pluginId, request.taskId, request.plan);
       }
       case 'releaseWorker': {
-        const epoch = getCurrentDbClientSnapshot();
-        await service.get(pluginId,request.taskId);
-        if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable',true);
-        const [record] = await epoch.client.drizzle.select({id:orcaWorkers.id,sessionId:orcaWorkers.sessionId,label:orcaWorkers.label}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(and(eq(orcaWorkers.id,request.workerId),eq(orcaTeams.leadSessionId,request.taskId))).limit(1);
-        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
-        await service.get(pluginId,request.taskId);
-        if (!record) throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
-        const planReceipt = await createPluginTaskStore(epoch.client).get(request.taskId);
-        const plan = planReceipt ? JSON.parse(planReceipt.payload).teamPlan : undefined;
-        if (plan && !plan.items.some((item: {label: string}) => item.label === record.label)) throw new PluginTaskError('INVALID_REQUEST', 'Worker is not in team plan');
-        const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
-        if (!row || row.status === 'deleted') throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
-        const validate = async () => {
+        return service.completeOperation(async () => {
+          const epoch = getCurrentDbClientSnapshot();
+          await service.get(pluginId,request.taskId);
+          if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable',true);
+          const [record] = await epoch.client.drizzle.select({id:orcaWorkers.id,sessionId:orcaWorkers.sessionId,label:orcaWorkers.label}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(and(eq(orcaWorkers.id,request.workerId),eq(orcaTeams.leadSessionId,request.taskId))).limit(1);
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
           await service.get(pluginId,request.taskId);
-          const [worker] = await epoch.client.drizzle.select({status:orcaWorkers.status}).from(orcaWorkers).where(eq(orcaWorkers.id,record.id)).limit(1);
-          const {row: fresh, completedAt} = await readPluginWorkerCompletion(epoch, record.sessionId, worker?.status ?? 'unknown');
-          if (!fresh || fresh.status === 'deleted' || completedAt === null || completedAt !== request.completedAt) throw new PluginTaskError('STALE_REVISION','Worker has no matching successful completion');
-        };
-        if (row.status === 'archived') {
-          await validate();
-          if (plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
-          return {ok:true,workerId:record.id};
-        }
-        const result = await orcaTeamService.archiveWorker({callerLeadSessionId:request.taskId,workerId:record.id,onlyIfIdle:true,beforeArchive:validate});
-        assertPluginTaskResult(result, 'Worker could not be released');
-        if (result.ok && plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
-        return result;
+          if (!record) throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
+          const planReceipt = await createPluginTaskStore(epoch.client).get(request.taskId);
+          const plan = planReceipt ? JSON.parse(planReceipt.payload).teamPlan : undefined;
+          if (plan && !plan.items.some((item: {label: string}) => item.label === record.label)) throw new PluginTaskError('INVALID_REQUEST', 'Worker is not in team plan');
+          const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,record.sessionId)).limit(1);
+          if (!row || row.status === 'deleted') throw new PluginTaskError('TASK_NOT_FOUND','Worker not found');
+          const validate = async () => {
+            if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+            await service.get(pluginId,request.taskId);
+            const [worker] = await epoch.client.drizzle.select({status:orcaWorkers.status}).from(orcaWorkers).where(eq(orcaWorkers.id,record.id)).limit(1);
+            const {row: fresh, completedAt} = await readPluginWorkerCompletion(epoch, record.sessionId, worker?.status ?? 'unknown');
+            if (!fresh || fresh.status === 'deleted' || completedAt === null || completedAt !== request.completedAt) throw new PluginTaskError('STALE_REVISION','Worker has no matching successful completion');
+          };
+          if (row.status === 'archived') {
+            await validate();
+            if (plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
+            return {ok:true,workerId:record.id};
+          }
+          const result = await orcaTeamService.archiveWorker({callerLeadSessionId:request.taskId,workerId:record.id,onlyIfIdle:true,beforeArchive:validate});
+          assertPluginTaskResult(result, 'Worker could not be released');
+          if (result.ok && plan) await service.settleWorkerLabel(pluginId,request.taskId,record.label!);
+          return result;
+        });
       }
       case 'getTeam': {
         const epoch = getCurrentDbClientSnapshot();
