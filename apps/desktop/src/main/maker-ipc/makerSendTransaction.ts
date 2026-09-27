@@ -1551,6 +1551,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         uuid: so.messageUuid,
                         ...(so.origin?.kind === 'scheduler'
                           ? { autoReviewUserText: { kind: 'scheduled-continuation' } }
+                          : so[AUTO_REVIEW_DELEGATED_CONTINUATION]
+                            ? { autoReviewUserText: { kind: 'delegated-continuation' } }
                           : trustedUserText !== undefined ? { autoReviewUserText: trustedUserText } : {}),
                         sdkSessionId: persistUserMessage.sdkSessionId,
                         ...(persistUserMessage.delivery

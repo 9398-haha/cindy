@@ -298,6 +298,20 @@ describe('local-db:messages:list cursor', () => {
     } finally { sqlite.close(); }
   });
 
+  it('replays complete authorization history while retaining clear and rewind boundaries', async () => {
+    const sqlite = createDb();
+    try {
+      for(let i=0;i<130;i++) insertCostMessage(sqlite,{id:`human-${i}`,role:'user',createdAt:i+1,
+        agentMeta:{autoReviewUserText:`no-${i}`,delivery:'steer'}});
+      expect(await listMessagesForAgentHandoff('s1',null,undefined,'authorization')).toHaveLength(130);
+      sqlite.prepare('INSERT OR REPLACE INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1',20);
+      sqlite.prepare('UPDATE messages SET rewind_at = 1000 WHERE id = ?').run('human-129');
+      const rows=await listMessagesForAgentHandoff('s1',null,undefined,'authorization');
+      expect(rows).toHaveLength(109);expect(rows[0]?.clientId).toBe('human-20');expect(rows.at(-1)?.clientId).toBe('human-128');
+      expect(await listMessagesForAgentHandoff('s1',100,undefined,'authorization')).toHaveLength(100);
+    } finally { sqlite.close(); }
+  });
+
   it('selects a recently answered old card before limiting authorization history', async () => {
     const sqlite = createDb();
     try {

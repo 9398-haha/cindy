@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import type { AutoReviewRequest } from '@cindy/maker-core';
+import { appendAutoReviewUserIntent, type AutoReviewRequest, type AutoReviewUserIntent } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import {
   createPluginTaskReviewResolver,
@@ -59,6 +59,21 @@ function fixture(): PluginReviewSnapshot {
   };
 }
 describe('plugin delegated Auto context', () => {
+  it.each([120, 1200])('matches %i persisted short inputs across budget cycles without accepting an unpersisted steer', async count => {
+    const s = fixture();
+    s.history = [];
+    let live: AutoReviewUserIntent = '';
+    for (let i = 0; i < count; i++) {
+      const text = `no-${i}`;
+      live = appendAutoReviewUserIntent(live, text);
+      s.history.push({clientId:String(i),role:'user',createdAt:i+1,content:{text},agentMeta:{delivery:'steer',autoReviewUserText:text}});
+    }
+    s.sessionHistory = s.history;
+    const resolve = createPluginTaskReviewResolver(async () => s);
+    expect((await resolve({...request,userIntent:live})).authorizationError).toBeUndefined();
+    expect((await resolve({...request,userIntent:appendAutoReviewUserIntent(live,'Stop now')})).authorizationError).toContain('not synchronized');
+    expect((await resolve({...request,userIntent:''})).authorizationError).toContain('not synchronized');
+  });
   it.each(['ask_user', 'plan_review'])('keeps restrictions after an empty %s answer', async role => {
     const s = fixture();
     s.history = [

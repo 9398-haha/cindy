@@ -13059,7 +13059,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const readAutoReviewHistory = async (sessionId: string) => {
     await drainPersistQueue();
-    return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
+    return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
   };
   setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {
     const epoch = getCurrentDbClientSnapshot();
@@ -13112,7 +13112,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(link ? { worker: { label: link.label ?? '', activeTeam: link.teamStatus === 'active' } } : {}),
       history: histories.flat().filter(m => ['user','ask_user','plan_review'].includes(m.role)),
       sessionHistory: histories[historySessionIds.indexOf(sessionId)]!,
-      historyComplete: histories.every(h => h.length < 100),
+      historyComplete: true,
     };
   }));
 
