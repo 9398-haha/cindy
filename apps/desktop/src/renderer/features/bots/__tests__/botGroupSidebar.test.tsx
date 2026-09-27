@@ -12,6 +12,11 @@ vi.mock('@/hooks/useProviderOnboarding', () => ({
 vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
   ConnectProviderCard: () => null,
 }));
+// The shared creation entry reads the owner for import; this sidebar test does
+// not mount the application authentication/provider runtime.
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ dataOwnerId: 'owner' }),
+}));
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
