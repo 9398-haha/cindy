@@ -3612,9 +3612,9 @@ async function withClient(
   if (opts.authorityProjection) {
     const db = new Database(dbPath);
     try {
-      db.exec(fs.readFileSync(path.resolve('drizzle/0119_auto_review_projections.sql'), 'utf8'));
+      db.exec(fs.readFileSync(path.resolve('drizzle/0120_auto_review_projections.sql'), 'utf8'));
       const module = { exports: {} as { run?: (db: Database.Database) => void } };
-      new Function('module', fs.readFileSync(path.resolve('drizzle/scripts/0119_auto_review_projections.ts'), 'utf8'))(module);
+      new Function('module', fs.readFileSync(path.resolve('drizzle/scripts/0120_auto_review_projections.ts'), 'utf8'))(module);
       module.exports.run!(db);
     } finally { db.close(); }
   }

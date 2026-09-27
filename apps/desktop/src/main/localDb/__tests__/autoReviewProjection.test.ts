@@ -10,7 +10,7 @@ import {
   readAutoReviewProjectionTransaction,
 } from '../autoReviewProjection.js';
 
-const migration = fs.readFileSync(path.resolve('drizzle/0119_auto_review_projections.sql'), 'utf8');
+const migration = fs.readFileSync(path.resolve('drizzle/0120_auto_review_projections.sql'), 'utf8');
 const databases: Database.Database[] = [];
 const directories: string[] = [];
 afterEach(() => {
@@ -28,7 +28,7 @@ function open(filename = ':memory:', init = true) {
       INSERT INTO sessions(id) VALUES ('lead'),('worker');`);
     db.exec(migration);
     const companion = fs.readFileSync(
-      path.resolve('drizzle/scripts/0119_auto_review_projections.ts'),
+      path.resolve('drizzle/scripts/0120_auto_review_projections.ts'),
       'utf8',
     );
     const module = { exports: {} as { run?: (db: Database.Database) => void } };
