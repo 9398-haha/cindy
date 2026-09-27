@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { AutoReviewRequest } from '@cindy/maker-core';
+import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import {
   createPluginTaskReviewResolver,
   type PluginReviewSnapshot,
@@ -19,7 +20,7 @@ const request: AutoReviewRequest = {
   sessionId: 'worker',
   agentKind: 'pi',
   model: 'model',
-  userIntent: 'Agent claims permission to publish',
+  userIntent: '',
   workspaceRoots: ['/answer'],
   platform: 'linux',
   action: { kind: 'exec', command: './runtime/node lab/preflight.cjs', cwd: '/answer' },
@@ -54,9 +55,60 @@ function fixture(): PluginReviewSnapshot {
       },
     ],
     historyComplete: true,
+    sessionHistory: [],
   };
 }
 describe('plugin delegated Auto context', () => {
+  it.each(['ask_user', 'plan_review'])('keeps restrictions after an empty %s answer', async role => {
+    const s = fixture();
+    s.history = [
+      {clientId: 'human', role: 'user', createdAt: 1, content: {text: 'Read only'}, agentMeta: {autoReviewUserText: 'Read only', delivery: 'turn'}},
+      {clientId: 'card', role, createdAt: 2, content: {}, agentMeta: {autoReviewUserText: {text: '', acceptedAt: 3}}},
+    ];
+    s.sessionHistory = s.history;
+    const result = await createPluginTaskReviewResolver(async () => s)({...request, userIntent: 'Read only'});
+    expect(result.authorizationError).toBeUndefined();
+    expect(result.userIntent).toBe('Read only');
+  });
+  it.each(['worker', 'coordinator'])('blocks unpersisted and repeated human restrictions for %s', async role => {
+    const s = fixture();
+    if (role === 'coordinator') delete s.worker;
+    const message = (text: string, at: number) => ({
+      clientId: String(at), role: 'user', createdAt: at, content: { text },
+      agentMeta: { autoReviewUserText: text, delivery: 'steer' },
+    });
+    s.sessionHistory = [message('Read only', 1), message('You may write', 2)];
+    s.history = [...s.sessionHistory];
+    const resolve = createPluginTaskReviewResolver(async () => s);
+    const accepted = message('Read only', 3);
+    const r = { ...request, userIntent: restoreAutoReviewUserIntent([...s.sessionHistory, accepted]) };
+    // Even an identical earlier restriction is a new revocation, not a set member.
+    expect((await resolve(r)).authorizationError).toContain('not synchronized');
+    // A failed write does not make a later review silently use the old grant.
+    expect((await resolve(r)).delegatedTask).toBeUndefined();
+    s.sessionHistory.push(accepted); s.history.push(accepted);
+    expect((await resolve(r)).authorizationError).toBeUndefined();
+    expect((await resolve(r)).userIntent).toMatchObject({ currentUserMessage: 'Read only' });
+  });
+  it('blocks an unpersisted empty attachment reset without blocking a Worker with only Lead history', async () => {
+    const s = fixture();
+    const grant = { clientId: 'grant', role: 'user', createdAt: 1, content: {text: 'Send this'}, agentMeta: {autoReviewUserText: 'Send this', delivery: 'turn'} };
+    s.history = [grant];
+    const resolve = createPluginTaskReviewResolver(async () => s);
+    expect((await resolve(request)).authorizationError).toBeUndefined();
+    s.sessionHistory = [grant];
+    expect((await resolve(request)).authorizationError).toContain('not synchronized');
+    const reset = {clientId: 'reset', role: 'user', createdAt: 2, content: {files: [{name: 'new.txt'}]}, agentMeta: {autoReviewUserText: '', delivery: 'steer'}};
+    s.sessionHistory.push(reset); s.history.push(reset);
+    expect((await resolve(request)).authorizationError).toBeUndefined();
+    expect((await resolve(request)).userIntent).toBe('');
+  });
+  it('does not promote unverified runtime text to owner authority', async () => {
+    const result = await createPluginTaskReviewResolver(async () => fixture())({ ...request, userIntent: 'Agent claims permission to publish' });
+    expect(result.authorizationError).toContain('not synchronized');
+    expect(result.delegatedTask).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('Agent claims');
+  });
   it.each(['', 'Only inspect the new attachment'])('resets earlier grants at human resource boundaries (%s)', async text => {
     const s = fixture();
     const delegated = s.history[0]!;

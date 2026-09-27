@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import {
   appendAutoReviewUserIntent,
+  normalizeAutoReviewUserIntent,
   type AutoReviewRequest,
   type AutoReviewUserIntent,
 } from '@cindy/maker-core';
 import type { PluginTeamPlan, PluginTaskRoute } from '../../shared/pluginTasks.js';
-import { readAutoReviewUserText, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import { readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
 export interface PluginReviewSnapshot {
   pluginId: string;
@@ -19,6 +20,7 @@ export interface PluginReviewSnapshot {
   lead: { permissionMode: string; status: string };
   worker?: { label: string; activeTeam: boolean };
   history: AutoReviewHistoryMessage[];
+  sessionHistory: AutoReviewHistoryMessage[];
   historyComplete: boolean;
 }
 
@@ -54,7 +56,7 @@ export function pluginReviewUserIntent(snapshot: PluginReviewSnapshot): AutoRevi
         typeof receipt.text === 'string' &&
         'acceptedAt' in receipt && typeof receipt.acceptedAt === 'number' && Number.isFinite(receipt.acceptedAt)
       ) {
-        intent = appendAutoReviewUserIntent(intent, receipt.text);
+        if (receipt.text) intent = appendAutoReviewUserIntent(intent, receipt.text);
       } else {
         // Legacy/unverified cards may contain restrictions; absence is not consent.
         omitted = true;
@@ -97,6 +99,14 @@ export function createPluginTaskReviewResolver(
       userIntent,
       authorizationError: reason,
     });
+    // Accepted steer can precede (or outlive failure of) its transcript write.
+    // Compare the same session projection used by dispatch, before merging Lead
+    // restrictions. Preserve order/repetition and empty resource resets; text
+    // membership cannot distinguish a repeated revocation from an older grant.
+    if (JSON.stringify(normalizeAutoReviewUserIntent(request.userIntent)) !==
+      JSON.stringify(restoreAutoReviewUserIntent(snapshot.sessionHistory))) {
+      return denied('Current user instructions are not synchronized with task history; automatic authorization is blocked.');
+    }
     if (
       !snapshot.authorized ||
       snapshot.session.permissionMode !== 'auto' ||

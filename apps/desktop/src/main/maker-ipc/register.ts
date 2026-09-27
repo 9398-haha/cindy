@@ -13093,7 +13093,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!session || !lead || !session.workingDir) throw new Error('Delegated task unavailable');
     const agentKind = session.agentKind === 'cc' ? 'cc' : session.agentKind === 'pi' ? 'pi' : session.agentKind === 'codex' ? 'codex' : null;
     if (!agentKind) throw new Error('Delegated task route unavailable');
-    const histories = await Promise.all([...new Set([leadId, sessionId])].map(readAutoReviewHistory));
+    const historySessionIds = [...new Set([leadId, sessionId])];
+    const histories = await Promise.all(historySessionIds.map(readAutoReviewHistory));
     if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
     const config = readGhostErrandConfig(receipt.pluginId);
     const data = JSON.parse(receipt.payload);
@@ -13110,6 +13111,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       lead: { permissionMode: lead.permissionMode, status: lead.status },
       ...(link ? { worker: { label: link.label ?? '', activeTeam: link.teamStatus === 'active' } } : {}),
       history: histories.flat().filter(m => ['user','ask_user','plan_review'].includes(m.role)),
+      sessionHistory: histories[historySessionIds.indexOf(sessionId)]!,
       historyComplete: histories.every(h => h.length < 100),
     };
   }));
