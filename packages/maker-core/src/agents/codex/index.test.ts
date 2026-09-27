@@ -10033,7 +10033,7 @@ describe('CodexAgent MCP thread context hooks', () => {
 
   it('cold-resumes the same Codex thread when its configured scheduler MCP is missing', async () => {
     const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-    const agent = new CodexAgent(createDeps());
+    const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST PRODUCT PROMPT' }));
     let resumeCount = 0;
     const host = installFakeHost(agent, (method, params) => {
       if (method === Method.ThreadResume) {
@@ -10054,14 +10054,18 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const handle = await agent.startSession({
       sessionId: 'session-scheduler-recovery', resumeSessionId: threadId,
-      model: 'gpt-5.4', workingDir: '/repo',
+      model: 'gpt-5.4', workingDir: '/repo', userPrompt: 'USER PROMPT',
     });
     const originalSubscription = host.subscribeThread.mock.results[0]!.value;
     expect(originalSubscription.release).toHaveBeenCalledOnce();
     expect(host.subscribeThread).toHaveBeenCalledTimes(2);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
-    const coldResume = host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)[1]![1];
+    const coldResume = host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)[1]![1] as {
+      threadId: string; config: Record<string, unknown>; developerInstructions?: string;
+    };
     expect(coldResume).toMatchObject({ threadId, config: { 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' } });
+    expect(coldResume.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(coldResume.developerInstructions).toContain('USER PROMPT');
     const checksBeforeSend = host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).length;
     await handle.send({ type: 'user', content: 'Create the heartbeat.' });
     expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(checksBeforeSend);
