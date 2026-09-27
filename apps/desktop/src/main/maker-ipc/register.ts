@@ -9423,6 +9423,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ...(params.autoReviewUserText ? {
               [AUTO_REVIEW_SOURCE_CONTENT]: '',
               [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId)),
+            [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const,
             } : {}),
             planMode: false,
             onAccepted: persistUserMessage,
@@ -9537,6 +9538,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...(params.autoReviewUserText ? {
             [AUTO_REVIEW_SOURCE_CONTENT]: '',
             [AUTO_REVIEW_USER_INTENT]: restoreAutoReviewUserIntent(await readAutoReviewHistory(targetSessionId)),
+            [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const,
           } : {}),
           planMode: false,
           onAccepted: persistUserMessage,

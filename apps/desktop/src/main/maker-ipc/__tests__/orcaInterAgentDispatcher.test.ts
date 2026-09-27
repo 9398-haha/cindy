@@ -1,5 +1,5 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
-import { AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, appendAutoReviewUserIntent, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -173,7 +173,7 @@ describe('Orca lead/worker dispatcher', () => {
         content:
           '[From Orca Lead]\nImplement feature\n\n---\n(Bridge note: your worker_id for tool calls is worker-1.)',
       },
-      expect.objectContaining({ throwOnStartFailure: true }),
+      expect.objectContaining({ throwOnStartFailure: true, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }),
     );
   });
 
@@ -780,4 +780,16 @@ describe('Orca lead/worker dispatcher', () => {
     } as AgentInputQueuedMessage);
     expect(accepted).not.toHaveBeenCalled();
   });
+});
+
+it.each(['Do not publish', ''])('ordinary live continuation retains the last accepted intent %j', async live => {
+  const h = createHarness();
+  h.liveSession.send.mockImplementation(async (message, opts) => {
+    expect(opts?.[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    expect(appendAutoReviewUserIntent(live, message.content, opts)).toBe(live);
+    await opts?.onAccepted?.();
+    return {accepted:true};
+  });
+  const result=await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({targetSessionId:'target-session',rawContent:'Publish now',source:'lead',senderLabel:'Lead',meta:{source:'orca',context:'ordinary-live'}});
+  expect(result.ok).toBe(true);
 });

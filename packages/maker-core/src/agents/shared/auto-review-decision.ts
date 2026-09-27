@@ -1,5 +1,5 @@
 import type { AgentKind, UserMessage } from '../../types/common.js';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
@@ -587,7 +587,9 @@ export function normalizeAutoReviewUserIntent(intent: AutoReviewUserIntent): Aut
 }
 
 /** Preserve chronological user messages; scope is assessed, never assumed permanent. */
-export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | undefined, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+  // A continuation is not a new human input. A live empty reset is authoritative too.
+  if (sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION] && previous !== undefined) return normalizeAutoReviewUserIntent(previous);
   // The authenticated Host snapshot already includes this input; never append it twice.
   if (sendOpts?.[AUTO_REVIEW_USER_INTENT] !== undefined) {
     return normalizeAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
@@ -597,7 +599,7 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent, conte
   const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
   // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
   const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
-  if (!latest || hasAttachments || previous === '') return compactCurrentUserIntent(latest);
+  if (!latest || hasAttachments || previous === undefined || previous === '') return compactCurrentUserIntent(latest);
   const earlierUserMessages = typeof previous === 'string'
     ? [previous] : [...previous.earlierUserMessages, previous.currentUserMessage];
   return normalizeAutoReviewUserIntent({ earlierUserMessages, currentUserMessage: latest,

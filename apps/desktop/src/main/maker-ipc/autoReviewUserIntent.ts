@@ -1,10 +1,10 @@
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, appendAutoReviewUserIntent, extractAutoReviewUserIntent } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, appendAutoReviewUserIntent, extractAutoReviewUserIntent } from '@cindy/maker-core';
 import type { AutoReviewUserIntent, SendOptions, UserMessage } from '@cindy/maker-core';
 import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
 /** Main-only projection of a protected delegated receipt; never accepted from wire input. */
-export const AUTO_REVIEW_DELEGATED_CONTINUATION = Symbol('autoReviewDelegatedContinuation');
+export { AUTO_REVIEW_DELEGATED_CONTINUATION };
 
 /** Existing transcript projection, already filtered by the database's clear/rewind boundary. */
 export interface AutoReviewHistoryMessage {

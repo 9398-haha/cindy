@@ -2,7 +2,7 @@ import {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
@@ -678,6 +678,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
       throwOnStartFailure: true,
       [AUTO_REVIEW_SOURCE_CONTENT]: '',
       [AUTO_REVIEW_USER_INTENT]: humanIntent,
+      [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
       onAccepted: async () => {
         // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
         await deps.createDbMessage(session.id, {
