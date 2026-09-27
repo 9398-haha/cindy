@@ -63,11 +63,10 @@ describe('mobile localized presentation refresh', () => {
     expect(source).toContain('[i18nInstance.language, selectedSessions]');
   });
 
-  it('rebuilds remote and collaboration notices when the language changes', () => {
+  it('rebuilds remote notices when the language changes', () => {
     const source = read('app/sessions/[sessionId].tsx');
 
     expect(source).toContain('[connectionError, i18nInstance.language]');
-    expect(source.match(/\[currentSession\?\.orcaRole, i18nInstance\.language\]/g)).toHaveLength(2);
   });
 
   it('keeps new-task authentication errors raw until render time', () => {

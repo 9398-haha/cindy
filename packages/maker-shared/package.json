@@ -40,6 +40,7 @@
     "./message-presentation": "./src/messagePresentation.ts",
     "./message-search": "./src/messageSearch.ts",
     "./message-window": "./src/messageWindow.ts",
+    "./orca-team": "./src/orcaTeam.ts",
     "./mobile-home": "./src/mobileHome.ts",
     "./payload-summary": "./src/payloadSummary.ts",
     "./project-order-sync": "./src/projectOrderSync.ts",

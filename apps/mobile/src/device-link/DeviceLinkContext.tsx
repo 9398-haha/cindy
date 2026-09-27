@@ -241,6 +241,17 @@ export function subscribeRemoteFavoritesChanged(listener: (deviceId: string) => 
   remoteFavoritesChangedListeners.add(listener);
   return () => { remoteFavoritesChangedListeners.delete(listener); };
 }
+/**
+ * 被控端 `maker:orca:worker-changed`(payload `{leadSessionId}`)。只在控制端持有
+ * `session:<leadSessionId>` topic 时送达(会话页聚焦期间);收到后按 Lead 重拉 Worker 列表。
+ */
+const remoteOrcaWorkerChangedListeners = new Set<(deviceId: string, leadSessionId: string) => void>();
+export function subscribeRemoteOrcaWorkerChanged(
+  listener: (deviceId: string, leadSessionId: string) => void,
+): () => void {
+  remoteOrcaWorkerChangedListeners.add(listener);
+  return () => { remoteOrcaWorkerChangedListeners.delete(listener); };
+}
 const remoteBotChangedListeners = new Set<(deviceId: string, channel: string, payload: unknown) => void>();
 export function subscribeRemoteBotChanges(listener: (deviceId: string, channel: string, payload: unknown) => void): () => void {
   remoteBotChangedListeners.add(listener);
@@ -1621,6 +1632,12 @@ export function routeFrame(env: Envelope, handlers: {
   }
   if (push.channel === 'maker:agents:changed') {
     handlers.onAgentsChanged?.(env.src);
+    return;
+  }
+  if (push.channel === 'maker:orca:worker-changed') {
+    const leadSessionId = (push.payload as { leadSessionId?: unknown } | null)?.leadSessionId;
+    if (typeof leadSessionId !== 'string' || !leadSessionId) return;
+    for (const listener of remoteOrcaWorkerChangedListeners) listener(env.src, leadSessionId);
     return;
   }
   if (push.channel === 'maker:bot-delegation:changed' || push.channel === 'maker:bot-direct-message:changed') {
