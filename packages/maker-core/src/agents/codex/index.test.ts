@@ -30450,6 +30450,29 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
+  it('keeps rejected plan restrictions in the implementation reviewer', async () => {
+    const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+    const host = installTurnHost(agent);
+    const handle = await startPlanSession(agent, host, 'session-plan-rejection-intent');
+    await handle.setPermissionMode!('auto');
+    let response = 0;
+    handle.setInteractionResolver(async () => response++ === 0
+      ? { kind: 'plan_review', behavior: 'deny', reason: 'Do not publish.' }
+      : { kind: 'plan_review', behavior: 'allow' });
+    await handle.send({ type: 'user', content: 'Fix parser.' });
+    runPlanTurn(host, 'turn-1', 'draft');
+    await vi.waitFor(() => expect(turnStartCalls(host)).toHaveLength(2));
+    runPlanTurn(host, 'turn-2', 'Run tests.');
+    await vi.waitFor(() => expect(turnStartCalls(host)).toHaveLength(3));
+    const handlers = host.getThreadHandlers();
+    await handlers!.commandExecutionApproval!({ threadId: 'start-thread-id', turnId: 'turn-3', itemId: 'test', command: 'npm test', cwd: '/repo' });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: {
+      earlierUserMessages: ['Fix parser.', 'Do not publish.'], currentUserMessage: 'Approved plan:\nRun tests.',
+    } }));
+    await handle.close();
+  });
+
   it('stays in plan mode and sends the feedback as a revision turn on deny with reason', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installTurnHost(agent);

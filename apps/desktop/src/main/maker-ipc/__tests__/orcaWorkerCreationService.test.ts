@@ -2773,12 +2773,13 @@ describe('production plugin Auto admission after reservation', () => {
     const task = () => ({ revision: 1, permissionMode: taskMode, workingDir: path.resolve('repo') });
     const receipt = { pluginId: 'plugin', operation: 'create', payload: JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [{ label: 'sample', route: { agentKind: 'codex' } }] } } : {}) };
     const depsForCallback = {
+      readPluginTaskPlanReceipt: JSON.parse,
       getCurrentDbClientSnapshot: () => epoch,
-      createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 4 && point === 'receipt') revoke(); return receipt; } }),
+      createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 6 && point === 'receipt') revoke(); return receipt; } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
         ++taskReads;
-        if (taskReads === 4 && point === 'final-task') revoke();
-        if (taskReads === 4 && point === 'task-mode') taskMode = 'plan';
+        if (taskReads === 6 && point === 'final-task') revoke();
+        if (taskReads === 6 && point === 'task-mode') taskMode = 'plan';
         return task();
       } }),
       readGhostErrandConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),

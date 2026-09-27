@@ -1326,6 +1326,25 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
+  it('retains remote plan rejection restrictions through approval', async () => {
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict: 'allow' }));
+    let response = 0;
+    const { handle, onApprovalRequest } = await startRemoteSession(() => 'prompt', {
+      permissionMode: 'auto', reviewAutoPermissionAction: review,
+      attachResolver: () => response++ === 0
+        ? { kind: 'plan_review', behavior: 'deny', reason: 'Do not publish.' }
+        : { kind: 'plan_review', behavior: 'allow' },
+    });
+    await handle.send({ type: 'user', content: 'Fix parser.' });
+    await onApprovalRequest({ requestId: 'reject', kind: 'plan_review', plan: 'draft' });
+    await onApprovalRequest({ requestId: 'approve', kind: 'plan_review', plan: 'Run tests.' });
+    await onApprovalRequest({ requestId: 'tool', kind: 'permission', toolName: 'Bash', input: { command: 'npm test' } });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: {
+      earlierUserMessages: ['Fix parser.', 'Do not publish.'], currentUserMessage: 'Approved plan:\nRun tests.',
+    } }));
+    await handle.close();
+  });
+
   /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
   async function startRemoteSession(
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,

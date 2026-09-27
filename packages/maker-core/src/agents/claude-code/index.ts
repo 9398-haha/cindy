@@ -2310,6 +2310,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (decision.behavior === 'deny') {
           if (!decision.dismissed) {
             appendActiveCapabilitySelectionText(decision.reason);
+            if (decision.reason?.trim()) setAutoReviewIntent(appendAutoReviewUserIntent(planRequestAutoReviewIntent, decision.reason));
           }
           return { behavior: 'deny', message: decision.reason ?? 'plan rejected by user' };
         }
@@ -3629,6 +3630,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 ));
               } else if (!decision.dismissed) {
                 appendActiveCapabilitySelectionText(decision.reason);
+                if (decision.reason?.trim()) setAutoReviewIntent(appendAutoReviewUserIntent(planRequestAutoReviewIntent, decision.reason));
               }
               return {
                 kind: 'plan_review',

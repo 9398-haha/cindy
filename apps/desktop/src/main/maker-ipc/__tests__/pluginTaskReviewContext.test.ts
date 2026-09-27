@@ -67,6 +67,19 @@ describe('plugin delegated Auto context', () => {
     expect(result.authorizationError).toContain('size');
     expect(result.delegatedTask).toBeUndefined();
   });
+  it('matches runtime rejection then approval with restored persisted authority', async () => {
+    const s = fixture();
+    const texts = ['Fix parser.', 'Do not publish.', 'Only change parser files.', 'Approved plan:\nRun tests.'];
+    s.history = texts.map((text, i) => ({ clientId: String(i), role: i ? 'plan_review' : 'user', createdAt: i + 1,
+      content: { text }, agentMeta: { delivery: 'turn', autoReviewUserText: i ? { text, acceptedAt: i + 10 } : text } }));
+    s.sessionHistory = s.history;
+    let live: AutoReviewUserIntent = '';
+    for (const text of texts) live = appendAutoReviewUserIntent(live, text);
+    expect(restoreAutoReviewUserIntent(s.history)).toEqual(live);
+    const resolver = createPluginTaskReviewResolver(async () => s);
+    expect((await resolver({ ...request, userIntent: live })).authorizationError).toBeUndefined();
+    expect((await resolver({ ...request, userIntent: appendAutoReviewUserIntent('Fix parser.', texts[3]!) })).authorizationError).toContain('not synchronized');
+  });
   it('uses persisted bounded evidence, rejects live drift and keys cached decisions by revision', async () => {
     const s = fixture();
     s.projection = { revision: 7, sessionIntent: 'Worker restriction', reviewIntent: 'Lead and Worker restrictions' };
