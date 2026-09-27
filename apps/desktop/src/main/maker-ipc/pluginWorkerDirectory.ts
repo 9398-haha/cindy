@@ -23,7 +23,7 @@ export async function resolvePluginWorkerDirectory(input: {
     allowed = isPathInsideDir(configured, resolved) && isPathInsideDir(resolved, configured);
   }
   // Pick grants are exact-directory grants, not permission for an arbitrary Library root.
-  if (!allowed) allowed = input.isPickedDirectory(resolved) || input.isPickedDirectory(input.requested);
+  if (!allowed) allowed = input.isPickedDirectory(resolved);
   input.assertCurrent();
   if (!allowed) throw deny();
   return resolved;

@@ -7,6 +7,19 @@ import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
 describe('plugin Worker directory authorization', () => {
   const roots: string[] = [];
   afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root,{recursive:true,force:true}))); });
+  it('binds picked grants to the selected real target, not a replaceable alias', async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'plugin-picked-'))); roots.push(root);
+    const selected = path.join(root, 'selected'), other = path.join(root, 'other'), alias = path.join(root, 'alias');
+    await mkdir(selected); await mkdir(other); await mkdir(path.join(selected, 'child'));
+    await symlink(selected, alias, 'junction');
+    const input = {requested: alias, isPickedDirectory: (dir: string) => dir === selected, assertCurrent: () => {}};
+    expect(await resolvePluginWorkerDirectory(input)).toBe(selected);
+    await expect(resolvePluginWorkerDirectory({...input, requested: path.join(selected, 'child')})).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
+    await rm(alias); await symlink(other, alias, 'junction');
+    await expect(resolvePluginWorkerDirectory(input)).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
+    // Legacy alias-only records cannot prove the originally selected target.
+    await expect(resolvePluginWorkerDirectory({...input, isPickedDirectory: dir => dir === alias})).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
+  });
   it('allows the task and its real children, configured or picked roots, without granting Library', async () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(),'plugin-dirs-'))); roots.push(root);
     const dirs = ['task','task/child','task-other','configured','picked','library'];
