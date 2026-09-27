@@ -6703,6 +6703,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:set-effort', sessionId, effort),
     setPermissionMode: (sessionId: string, mode: string): Promise<void> =>
       ipcRenderer.invoke('maker:set-permission-mode', sessionId, mode),
+    getPluginWriteAccessRecovery: (sessionId: string): Promise<{available: boolean}> =>
+      ipcRenderer.invoke('maker:get-plugin-write-access-recovery', sessionId),
+    retryPluginWriteAccess: (sessionId: string): Promise<{granted: boolean; mode?: 'acceptEdits' | 'auto'}> =>
+      ipcRenderer.invoke('maker:retry-plugin-write-access', sessionId),
     setFastMode: (sessionId: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke('maker:set-fast-mode', sessionId, enabled),
     setThinkingEnabled: (sessionId: string, enabled: boolean): Promise<void> =>

@@ -3916,6 +3916,8 @@ const r = await cindy.agent.requestSchedule({
 
 \`\`\`js
 // requestWriteAccess({taskId, mode: 'auto'}) 请求宿主原生确认，不能替用户确认。
+// 拒绝或失败后，同一账号代际/安装修订/任务在当前宿主进程不再自动弹窗（更换 mode 也不重置）。
+// 用户可从本机任务权限菜单“重新确认插件写权限”恢复原请求；插件不能清除拒绝记录。
 // 省略 mode 保留 acceptEdits；Auto 插件主任务的 Worker 使用 Auto，不改全局权限。
 
 const task = await cindy.tasks.create({ requestKey: 'experiment-1-create', title: 'My evaluation' });

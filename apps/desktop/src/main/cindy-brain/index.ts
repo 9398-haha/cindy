@@ -1770,6 +1770,12 @@ export function getInstalledGhostName(id: string): string | null {
   return findAvailableGhost(id)?.manifest.name ?? null;
 }
 
+/** Host-only identity for permission attempts; never a plugin-provided revision. */
+export function getPluginTaskInstallRevision(id: string): string | null {
+  const ghost = findAvailableGhost(id);
+  return hasPluginTaskApproval(ghost) ? ghostInstallApprovalToken(ghost?.approval) : null;
+}
+
 let nodeRuntimeBrokerSingleton: GhostNodeRuntimeBroker | null = null;
 let nodeRuntimeStartAttemptContextReader: (() => NodeRuntimeStartAttemptContext) | null = null;
 const nodeRuntimeAppRunId = (() => {

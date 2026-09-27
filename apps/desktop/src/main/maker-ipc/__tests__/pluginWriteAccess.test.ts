@@ -3,12 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { withSessionRestartLock, withSendToSessionLock, sendToSessionLocks } from '../sendToSessionLock.js';
 import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
+import { PluginWriteAccessGate } from '../pluginWriteAccessGate.js';
 
 // Execute the real switch branch with controlled Host boundaries.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
-const js = ts.transpileModule(`return async function(pluginId, request) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function fixture() {
+ let identity = 'owner-epoch-install';
+ const gate = new PluginWriteAccessGate();
  let cfg: Record<string, unknown> = { permissionMode: 'plan', model: 'old' };
  const history = { input: false, startedAt: null as number | null, endedAt: null as number | null };
  const messages = {id:'message-id',sessionId:'session-id',role:'role'}, sessions = {id:'session-id',activeTurnStartedAt:'started',lastTurnEndedAt:'ended'};
@@ -22,10 +25,34 @@ function fixture() {
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
  const deps = { isPluginTaskPermissionAllowed, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: { getQueueControlSnapshot: () => ({ pendingQueue: [] }) }, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
- const run = new Function(...Object.keys(deps), js)(...Object.values(deps));
- return { run: (mode = 'acceptEdits') => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }), service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
+ const allDeps = {...deps, pluginWriteAccessGate:gate, pluginWriteAccessIdentity:()=>identity};
+ const run = new Function(...Object.keys(allDeps), js)(...Object.values(allDeps));
+ return { run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('plugin write confirmation interleavings', () => {
+ it('remembers refusal across modes and repeats, and only Host retry opens the original confirmation',async()=>{
+  const f=fixture();f.dialog.showMessageBox.mockResolvedValueOnce({response:1});
+  await expect(f.run()).resolves.toEqual({granted:false});
+  await expect(f.run('auto')).resolves.toEqual({granted:false});
+  await expect(f.run()).resolves.toEqual({granted:false});
+  expect(f.gate.recoverable(JSON.stringify(['plugin','task']),'owner-epoch-install')).toBe('acceptEdits');
+  expect(f.dialog.showMessageBox).toHaveBeenCalledOnce();expect(f.write).not.toHaveBeenCalled();
+  await expect(f.run('acceptEdits',true)).resolves.toMatchObject({granted:true});
+  expect(f.dialog.showMessageBox).toHaveBeenCalledTimes(2);
+ });
+ it('retains failed confirmation suppression, then permits a new owner/install identity',async()=>{
+  const f=fixture();f.dialog.showMessageBox.mockRejectedValueOnce(new Error('dialog unavailable'));
+  await expect(f.run()).rejects.toThrow('dialog unavailable');
+  await expect(f.run()).resolves.toEqual({granted:false});
+  f.identity('new-owner-install');
+  await expect(f.run()).resolves.toMatchObject({granted:true});
+  expect(f.dialog.showMessageBox).toHaveBeenCalledTimes(2);
+ });
+ it('rejects an install change while permission UI was open',async()=>{
+  const f=fixture();f.dialog.showMessageBox.mockImplementationOnce(async()=>{f.identity('replacement');return {response:0};});
+  await expect(f.run()).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+  expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.write).not.toHaveBeenCalled();
+ });
  it('tracks the permission commit only after confirmation and includes rollback', async () => {
   const f=fixture();let answer!:()=>void;
   f.dialog.showMessageBox.mockImplementationOnce(()=>new Promise(resolve=>{answer=()=>resolve({response:0});}));

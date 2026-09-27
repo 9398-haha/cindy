@@ -8689,6 +8689,7 @@
         "openSettings": "前往設定"
       },
       "permissionSwitchFailed": "權限模式切換失敗，已保留原設定",
+      "retryPluginWriteAccess": "重新確認插件寫入權限",
       "fullAccessConfirmation": {
         "title": "開啟 Full access？",
         "description": "Full access 會關閉工作區沙箱並跳過常規審批，Cindy 無需詢問即可：",

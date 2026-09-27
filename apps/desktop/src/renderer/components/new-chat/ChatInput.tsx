@@ -171,6 +171,7 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
+import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
 import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import {
@@ -8951,6 +8952,7 @@ export function ChatInput({
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
                 <PermissionSelector
+                  footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}

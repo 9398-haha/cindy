@@ -6123,6 +6123,8 @@ interface ElectronAPI {
     // effort/mode 透传 string —— 合法值由 maker capabilities 决定, vite-env 不重复枚举
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     setPermissionMode: (sessionId: string, mode: string) => Promise<void>;
+    getPluginWriteAccessRecovery: (sessionId: string) => Promise<{available: boolean}>;
+    retryPluginWriteAccess: (sessionId: string) => Promise<{granted: boolean; mode?: 'acceptEdits' | 'auto'}>;
     setFastMode: (sessionId: string, enabled: boolean) => Promise<void>;
     setThinkingEnabled: (sessionId: string, enabled: boolean) => Promise<void>;
     /** 计划模式一级开关(与 permissionMode 正交); DB 持久化由调用方另调 sessionService.update({ planModeEnabled }) */

@@ -8691,6 +8691,7 @@
         "openSettings": "Open Settings"
       },
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
+      "retryPluginWriteAccess": "Confirm plugin write permission again",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
         "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",

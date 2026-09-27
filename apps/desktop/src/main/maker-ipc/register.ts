@@ -1,10 +1,11 @@
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
+import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
-import { setPluginTaskHandler, isPluginTaskAuthorized } from '../cindy-brain/index.js';
-import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
+import { setPluginTaskHandler, isPluginTaskAuthorized, getPluginTaskInstallRevision } from '../cindy-brain/index.js';
+import type { PluginTaskRoute, PluginTaskRequest } from '../../shared/pluginTasks.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { createBotMessageTransport } from './botMessageTransport.js';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
@@ -10164,6 +10165,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       readPermissionMode: pluginId => readGhostErrandConfig(pluginId).permissionMode,
       assertTeamPlanUnstarted: async taskId => {
         assertCurrent();
+        await drainPersistQueue();
+        assertCurrent();
+        const [input] = await snapshot.client.drizzle.select({id: messages.id}).from(messages).where(and(eq(messages.sessionId, taskId), eq(messages.role, 'user'))).limit(1);
+        const [task] = await snapshot.client.drizzle.select({startedAt: sessions.activeTurnStartedAt, endedAt: sessions.lastTurnEndedAt}).from(sessions).where(eq(sessions.id, taskId)).limit(1);
+        assertCurrent();
+        if (input || task?.startedAt != null || task?.endedAt != null) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before sending input');
         const workers = await snapshot.client.drizzle.select({id:orcaWorkers.id}).from(orcaWorkers).innerJoin(orcaTeams,eq(orcaWorkers.teamId,orcaTeams.id)).where(eq(orcaTeams.leadSessionId,taskId)).limit(1);
         const reservations = await snapshot.client.drizzle.select({id:orcaWorkerCreationReservations.id}).from(orcaWorkerCreationReservations).innerJoin(orcaTeams,eq(orcaWorkerCreationReservations.teamId,orcaTeams.id)).where(and(eq(orcaTeams.leadSessionId,taskId),gte(orcaWorkerCreationReservations.expiresAt,Date.now()))).limit(1);
         assertCurrent();
@@ -10277,6 +10284,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
   };
   const pluginPermissionRequests = new Set<string>();
+  const pluginWriteAccessGate = new PluginWriteAccessGate();
+  const pluginWriteAccessIdentity = (pluginId: string) => {
+    const owner = getCurrentDbClientSnapshot();
+    const revision = getPluginTaskInstallRevision(pluginId);
+    if (!owner || !revision) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task approval unavailable');
+    return JSON.stringify([owner.userId, owner.clientEpoch, revision]);
+  };
   // Projection and release consume the same host-stamped completion evidence.
   const readPluginWorkerCompletion = async (epoch: NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>, sessionId: string, status: string) => {
     const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
@@ -10288,7 +10302,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
     return {row, completedAt: pluginWorkerCompletedAt({status, working:flow.isWorking, queued:flow.queuedCount, paused:flow.queuePaused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor})};
   };
-  setPluginTaskHandler(async (pluginId, request) => {
+  const handlePluginTask = async (pluginId: string, request: PluginTaskRequest, explicitWriteAccess = false, assertCallerCurrent = () => {}): Promise<unknown> => {
     const service = pluginTaskServiceForCurrentOwner!();
     switch (request.kind) {
       case 'requestWriteAccess': {
@@ -10296,8 +10310,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const task = await service.get(pluginId, request.taskId);
         const mode = request.mode ?? 'acceptEdits';
         const cfg = readGhostErrandConfig(pluginId);
+        assertCallerCurrent();
         if (isPluginTaskPermissionAllowed(task.permissionMode, cfg.permissionMode) && (mode === 'acceptEdits' ? task.permissionMode === 'acceptEdits' || task.permissionMode === 'auto' : task.permissionMode === 'auto')) return { granted: true, task };
         if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
+        const identity = pluginWriteAccessIdentity(pluginId);
+        const assertRequestCurrent = () => {
+          assertCallerCurrent();
+          if (snapshot !== getCurrentDbClientSnapshot() || identity !== pluginWriteAccessIdentity(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', 'Permission request identity changed');
+        };
         const before = JSON.stringify(cfg);
         const assertIdle = async () => {
           if (mode === 'acceptEdits') {
@@ -10319,6 +10339,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         pluginPermissionRequests.add(pluginId);
         try {
           await assertIdle();
+          assertRequestCurrent();
+          // Busy/preflight failures have not asked the user anything; do not consume an attempt.
+          return await pluginWriteAccessGate.request(JSON.stringify([pluginId, task.taskId]), identity, mode, explicitWriteAccess, async () => {
           const result = await dialog.showMessageBox({
             type: 'question', title: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoTitle' : 'pluginTaskWriteAccess.title'),
             message: t(mode === 'auto' ? 'pluginTaskWriteAccess.autoMessage' : 'pluginTaskWriteAccess.message').replace('{{name}}', getInstalledGhostName(pluginId) ?? pluginId),
@@ -10328,20 +10351,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (result.response !== 0) return { granted: false };
           // Reuse the existing non-bailing runtime mutation fence; do not hold it over the dialog.
           return await service.completeOperation(() => withSessionRestartLock(task.taskId, async () => {
+            assertRequestCurrent();
             if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
             await assertIdle();
+            assertRequestCurrent();
             const live = maker.getSession(task.taskId);
             let persisted = false;
             try {
               if (live) await live.setPermissionMode(mode);
+              assertRequestCurrent();
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const saved = await snapshot!.client.tx('bots.persistSessionPermission', {sessionId: task.taskId, mode});
               persisted = saved.updated;
               if (!saved.updated) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const updatedTask = await service.get(pluginId, task.taskId);
+              assertRequestCurrent();
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const currentConfig = readGhostErrandConfig(pluginId);
               if (currentConfig.permissionMode !== cfg.permissionMode) throw new PluginTaskError('PERMISSION_DENIED', 'Permission settings changed');
@@ -10354,6 +10381,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               throw error;
             }
           }));
+          });
         } finally { pluginPermissionRequests.delete(pluginId); }
       }
       case 'startTeam': {
@@ -10375,7 +10403,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertPluginTaskResult(result, 'Collaboration could not be started');
         return result;
       }
-      case 'setTeamPlan': {
+      case 'setTeamPlan': return withSendToSessionLock(request.taskId, async () => {
         const epoch = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
         const cfg = readGhostErrandConfig(pluginId);
@@ -10387,7 +10415,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         if (current.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during directory validation');
         return service.setTeamPlan(pluginId, request.taskId, request.plan);
-      }
+      });
       case 'releaseWorker': {
         return service.completeOperation(async () => {
           const epoch = getCurrentDbClientSnapshot();
@@ -10475,7 +10503,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'cancel': return service.cancel(pluginId, request.runId);
       default: throw new PluginTaskError('UNSUPPORTED_CAPABILITY', 'Task operation is unavailable');
     }
-  });
+  };
+  setPluginTaskHandler(handlePluginTask);
+
+  // Local task UI only. The plugin and device-link protocols have no recovery operation.
+  const pluginWriteAccessFromHost = async (event: Electron.IpcMainInvokeEvent, taskId: unknown, retry: boolean) => {
+    if (isDeviceLinkInvoke()) throwIpcError('PERMISSION_DENIED', 'Local task UI required');
+    assertTrustedAppRendererEvent(event);
+    if (typeof taskId !== 'string' || !taskId || taskId.length > 128) throwIpcError('INVALID_PARAMS', 'taskId required');
+    const owner = getCurrentDbClientSnapshot();
+    if (!owner) throwIpcError('INTERNAL', 'Task storage unavailable');
+    const frame = event.senderFrame;
+    const assertCallerCurrent = () => {
+      if (owner !== getCurrentDbClientSnapshot() || event.sender.isDestroyed() || event.senderFrame !== frame) throwIpcError('PERMISSION_DENIED', 'Task UI changed');
+      assertTrustedAppRendererEvent(event);
+    };
+    const receipt = await createPluginTaskStore(owner.client).get(taskId);
+    assertCallerCurrent();
+    if (!receipt || receipt.operation !== 'create') return { granted: false, available: false };
+    try {
+      await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId, taskId);
+      assertCallerCurrent();
+      const identity = pluginWriteAccessIdentity(receipt.pluginId);
+      const mode = pluginWriteAccessGate.recoverable(JSON.stringify([receipt.pluginId, taskId]), identity);
+      if (!retry || !mode) return { granted: false, available: !!mode };
+      const result = await handlePluginTask(receipt.pluginId, {type:'tasks-request', kind:'requestWriteAccess', taskId, mode}, true, () => {
+        assertCallerCurrent();
+        if (identity !== pluginWriteAccessIdentity(receipt.pluginId)) throwIpcError('PERMISSION_DENIED', 'Plugin installation changed');
+      }) as {granted: boolean};
+      return { granted: result.granted, available: !result.granted, mode };
+    } catch {
+      throwIpcError('PERMISSION_DENIED', 'Plugin write permission could not be confirmed');
+    }
+  };
+  ipcMain.handle('maker:get-plugin-write-access-recovery', (event, taskId: unknown) => pluginWriteAccessFromHost(event, taskId, false));
+  ipcMain.handle('maker:retry-plugin-write-access', (event, taskId: unknown) => pluginWriteAccessFromHost(event, taskId, true));
 
   setGhostErrandRunner(
     createGhostErrandRunner({
