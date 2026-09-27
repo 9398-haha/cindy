@@ -534,14 +534,14 @@ describe('messageRenderModel', () => {
       expect(turnFinalKeys(items)).toEqual(['a1-final', 'a2-final']);
     });
 
-    it('marks every sealed SDK turn when a background task auto-continues the user request', () => {
-      const items = buildMobileMessageRenderItems([
+    function backgroundContinuation(mainSummary: string) {
+      return buildMobileMessageRenderItems([
         message({ id: 'u1', role: 'user', content: { text: 'q' }, createdAt: at(1) }),
         toolUse('main-work', 'Read', { file_path: '/repo/a.ts' }, 2),
         message({
           id: 'main-summary',
           role: 'assistant',
-          content: '正式总结',
+          content: mainSummary,
           agentMeta: { turnCompleted: true },
           createdAt: at(3),
         }),
@@ -554,6 +554,17 @@ describe('messageRenderModel', () => {
           createdAt: at(5),
         }),
       ]);
+    }
+
+    it('folds an earlier short sealed reply when a background task auto-continues the user request', () => {
+      const items = backgroundContinuation('还有一个后台任务在跑。');
+
+      expect(turnFinalKeys(items)).toEqual(['gate-followup']);
+      expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
+    });
+
+    it('keeps an earlier sealed delivery-prose summary visible across a background auto-continuation', () => {
+      const items = backgroundContinuation('## 正式总结\n\n- 第一条\n- 第二条\n- 第三条');
 
       expect(turnFinalKeys(items)).toEqual(['main-summary', 'gate-followup']);
       expect(items.map((item) => item.type)).toEqual([

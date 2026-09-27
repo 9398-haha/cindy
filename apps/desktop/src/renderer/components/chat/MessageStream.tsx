@@ -68,6 +68,7 @@ import {
   findMessageTodoInsertions,
   getLatestMessageTodoState,
   isAgentPlanToolName,
+  isDeliveryProseText,
   isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
@@ -909,7 +910,9 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
       continue;
     }
     if (isCompletedAssistantMessage(message)) {
-      out.add(message.clientId);
+      // 后台唤醒会让同一 user turn 盖多次 seal:只有最后一次是收尾正文,更早的
+      // 只在作为交付正文留在折叠组外时保留操作行(与 groupWorkRuns 同口径)。
+      if (!sealedAnswerFound || isDeliveryProseText(message.content)) out.add(message.clientId);
       sealedAnswerFound = true;
       pendingLegacyFallback = null;
       continue;

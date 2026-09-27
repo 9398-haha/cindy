@@ -167,35 +167,35 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
 ): TItem[] | null {
   const answers = new Set<number>();
   let lastAnswer = -1;
+  let lastSealed = -1;
   for (let index = 0; index < items.length; index++) {
     if (!adapter.isAnswer(items[index])) continue;
     lastAnswer = index;
-    if (adapter.isSealedAnswer(items[index])) answers.add(index);
+    if (adapter.isSealedAnswer(items[index])) lastSealed = index;
   }
   if (lastAnswer < 0) return null;
 
-  if (answers.size > 0) {
-    let segmentStart = 0;
-    for (const sealedIndex of [...answers]) {
-      let lastActivity = -1;
-      for (let index = sealedIndex - 1; index >= segmentStart; index--) {
-        if (adapter.isActivity(items[index])) {
-          lastActivity = index;
-          break;
-        }
+  if (lastSealed >= 0) {
+    // Background wake-ups (async agents, background shells) seal several SDK turns under
+    // one user row; only the last seal is the turn's answer. Earlier seals fold like any
+    // progress text unless isArchivable keeps them visible as delivery prose.
+    const sealedIndex = lastSealed;
+    let lastActivity = -1;
+    for (let index = sealedIndex - 1; index >= 0; index--) {
+      if (adapter.isActivity(items[index])) {
+        lastActivity = index;
+        break;
       }
-      let answerStart = sealedIndex;
-      while (
-        answerStart > lastActivity + 1 &&
-        answerStart > segmentStart &&
-        adapter.isAnswer(items[answerStart - 1])
-      ) {
-        answerStart--;
-      }
-      for (let index = answerStart; index <= sealedIndex; index++) {
-        if (adapter.isAnswer(items[index])) answers.add(index);
-      }
-      segmentStart = sealedIndex + 1;
+    }
+    let answerStart = sealedIndex;
+    while (
+      answerStart > lastActivity + 1 &&
+      adapter.isAnswer(items[answerStart - 1])
+    ) {
+      answerStart--;
+    }
+    for (let index = answerStart; index <= sealedIndex; index++) {
+      if (adapter.isAnswer(items[index])) answers.add(index);
     }
   } else {
     if (
