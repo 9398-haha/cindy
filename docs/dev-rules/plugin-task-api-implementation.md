@@ -6,7 +6,7 @@
 
 - `capabilities/create/list/get/send/getRun/listRuns/readMessages/cancel`。
 - create 可传 isolatedWorkspace:true，由宿主分配独立空作答目录；返回本任务 workingDir 与 permissionMode，插件不能覆盖权限。
-- 创建用户可见的普通本地 Session；工作目录及权限来自用户配置，不接受插件传入绕过权限、任意目录或另一插件身份。
+- 创建用户可见的普通本地 Session；工作目录及权限来自用户配置，不接受插件传入绕过权限、任意目录或另一插件身份。普通任务创建前复用 Worker 的目录身份判据：配置路径必须仍为原规范路径，改链、缺失或非目录拒绝；异步解析后复核账号、tasks 批准及配置。缺省/isolatedWorkspace 仍由宿主分配目录，旧 errand 路径不变。旧别名配置没有原目标证据，不自动授权当前目标；这不解决校验后的目录置换窗口。
 - 发送走普通输入协调器，使用持久 requestKey 去重和稳定输入 ID；重复请求不会再次启动模型。
 - 指定 provider、model、effort、Fast 必须通过当前目录核验；派发前再次核验，不静默 fallback。
 - 回执独立落库，区分任务、输入执行及原生执行代次；原生终态按 instanceId + generation 结算，不以 idle 或最后一条 assistant 消息猜测完成。

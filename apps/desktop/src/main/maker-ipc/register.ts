@@ -10172,11 +10172,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createSession: async (pluginId, taskId, title, route, isolatedWorkspace) => {
         assertPlugin(pluginId);
         const cfg = readGhostErrandConfig(pluginId);
+        const configurationIsCurrent = () => {
+          const current = readGhostErrandConfig(pluginId);
+          return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode;
+        };
+        const workingDir = !isolatedWorkspace && cfg.workingDir
+          ? await resolvePluginWorkerDirectory({
+              requested: cfg.workingDir, configuredDirectory: cfg.workingDir,
+              isPickedDirectory: () => false,
+              assertCurrent: () => {
+                assertPlugin(pluginId);
+                if (!configurationIsCurrent()) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task configuration changed');
+              },
+            })
+          : undefined;
+        assertPlugin(pluginId);
+        if (!configurationIsCurrent()) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task configuration changed');
         await createGhostErrandSession({
           ghostId: pluginId, sessionId: taskId, title, ...route,
           permissionMode: clampErrandPermissionMode(cfg.permissionMode),
-          ...(!isolatedWorkspace && cfg.workingDir ? { workingDir: cfg.workingDir } : {}),
-          shouldContinue: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId),
+          ...(workingDir ? { workingDir } : {}),
+          shouldContinue: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId) && configurationIsCurrent(),
           notifySessionCreated: ({ sessionId, workdir }) => {
             notifyGhostSessionEvent('created', { sessionId, workdir });
             broadcastSessionCreated(sessionId);
