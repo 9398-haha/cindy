@@ -896,6 +896,9 @@ describe('Codex official OAuth host isolation', () => {
 
 describe('CodexAgent spawn configuration', () => {
   it('holds account session recovery until the MCP bridge replacement is ready', async () => {
+    MockCodexTransport.onCreate = transport => transport.setMockResponse(Method.McpServerStatusList, {
+      result: { data: [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null },
+    });
     let endpoint = 'http://127.0.0.1:51359/mcp/cindy_scheduler';
     const prepare = vi.fn(async () => {
       const frozenEndpoint = endpoint;
@@ -10054,12 +10057,14 @@ describe('CodexAgent MCP thread context hooks', () => {
       model: 'gpt-5.4', workingDir: '/repo',
     });
     const originalSubscription = host.subscribeThread.mock.results[0]!.value;
-    await handle.send({ type: 'user', content: 'Create the heartbeat.' });
     expect(originalSubscription.release).toHaveBeenCalledOnce();
     expect(host.subscribeThread).toHaveBeenCalledTimes(2);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
     const coldResume = host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)[1]![1];
     expect(coldResume).toMatchObject({ threadId, config: { 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' } });
+    const checksBeforeSend = host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).length;
+    await handle.send({ type: 'user', content: 'Create the heartbeat.' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(checksBeforeSend);
     expect(host.request.mock.calls.map(([method]) => method).lastIndexOf(Method.McpServerStatusList))
       .toBeLessThan(host.request.mock.calls.findIndex(([method]) => method === Method.TurnStart));
     await handle.close();
@@ -10085,9 +10090,53 @@ describe('CodexAgent MCP thread context hooks', () => {
       sessionId: 'session-scheduler-available', resumeSessionId: threadId,
       model: 'gpt-5.4', workingDir: '/repo',
     });
+    const checksBeforeSend = host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).length;
     await handle.send({ type: 'user', content: 'Continue.' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(checksBeforeSend);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     expect(host.subscribeThread).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('rechecks scheduler MCP on the next task resume after a transient status error', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps());
+    let checks = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      if (method === Method.McpServerStatusList) {
+        if (++checks === 1) throw new Error('temporary status failure');
+        return { data: [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      }
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const first = await agent.startSession({ sessionId: 'scheduler-retry', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(checks).toBe(1);
+    await first.close();
+    const second = await agent.startSession({ sessionId: 'scheduler-retry', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(checks).toBe(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    await second.close();
+  });
+
+  it('bounds scheduler MCP status pagination when Codex repeats a cursor', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      if (method === Method.McpServerStatusList) return { data: [], nextCursor: 'repeated' };
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const handle = await agent.startSession({ sessionId: 'scheduler-cursor', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     await handle.close();
   });
 

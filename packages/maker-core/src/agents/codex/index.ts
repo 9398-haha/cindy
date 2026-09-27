@@ -7331,11 +7331,8 @@ assertRouteCurrent();
     // The host-level MCP probe can be green while a loaded thread still has an
     // older per-thread catalog. Codex ignores MCP config on a loaded-thread
     // resume; the release + cold resume above is required to add the server.
-    let schedulerMcpChecked = false;
-    const ensureSchedulerMcpForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
-      // A brand-new thread may still be connecting its MCPs before the first
-      // turn. Wait until it has a saved rollout so recovery can preserve it.
-      if (schedulerMcpChecked || reviewMode || !threadMayHaveRollout) return null;
+    const ensureSchedulerMcpForResumedThread = (): Promise<void> | null => {
+      if (reviewMode || !threadMayHaveRollout) return null;
       const config = currentThreadWorkspaceConfig().config;
       if ((typeof config?.['mcp_servers.cindy_scheduler.url'] !== 'string' &&
           typeof config?.['mcp_servers.cindy_scheduler.command'] !== 'string') ||
@@ -7344,11 +7341,20 @@ assertRouteCurrent();
       const verifyAndRecover = async (): Promise<void> => {
         const hasScheduler = async (): Promise<boolean> => {
           let cursor: string | null = null;
+          const seenCursors = new Set<string>();
+          const deadline = Date.now() + 10_000;
           do {
+            if (cursor !== null) {
+              if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
+              seenCursors.add(cursor);
+            }
+            if (seenCursors.size >= 5) throw new Error('Codex MCP status pagination exceeded five pages');
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) throw new Error('Codex MCP status pagination timed out');
             const status: CodexMcpServerStatusListResponse = await host.request<CodexMcpServerStatusListResponse>(
               Method.McpServerStatusList,
               { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
-              { timeoutMs: 10_000 },
+              { timeoutMs: remainingMs },
             );
             const scheduler = status.data.find((server) => server.name === 'cindy_scheduler');
             if (scheduler && Object.hasOwn(scheduler.tools, 'list_tools') &&
@@ -7363,32 +7369,26 @@ assertRouteCurrent();
           available = await hasScheduler();
         } catch (error) {
           // A failed diagnostic must not prevent unrelated work.
-          schedulerMcpChecked = true;
           log.warn('scheduler MCP verification failed', {
             threadId,
             error: error instanceof Error ? error.message : String(error),
           });
           return;
         }
-        if (available) {
-          schedulerMcpChecked = true;
-          return;
-        }
+        if (available) return;
         log.warn('expected scheduler MCP is missing from Codex thread; cold-resuming', { threadId });
         // The existing refresh path closes this handle if the cold resume cannot
         // be confirmed. Propagate that failure instead of sending on a stale one.
-        await ensureContextLimitForNextTurn(signal, true);
+        await ensureContextLimitForNextTurn(undefined, true);
         try {
           available = await hasScheduler();
         } catch (error) {
-          schedulerMcpChecked = true;
           log.warn('scheduler MCP verification after cold resume failed', {
             threadId,
             error: error instanceof Error ? error.message : String(error),
           });
           return;
         }
-        schedulerMcpChecked = true;
         if (!available) {
           log.warn('scheduler MCP remains unavailable after Codex thread cold resume', { threadId });
         }
@@ -13080,8 +13080,6 @@ assertRouteCurrent();
           if (contextRefresh) await contextRefresh;
           const profileRefresh = ensureWorkspacePermissionProfileForNextTurn(sendOpts?.signal);
           if (profileRefresh) await profileRefresh;
-          const schedulerRefresh = ensureSchedulerMcpForNextTurn(sendOpts?.signal);
-          if (schedulerRefresh) await schedulerRefresh;
           turnWorkspaceConfig = currentTurnWorkspaceConfig();
           // A stale-daemon retry must hydrate the exact thread-level profile
           // that matches this turn, not mutable settings changed while the
@@ -14582,6 +14580,10 @@ assertRouteCurrent();
       },
     };
 
+    if (opts.resumeSessionId && threadMayHaveRollout) {
+      const schedulerRefresh = ensureSchedulerMcpForResumedThread();
+      if (schedulerRefresh) await schedulerRefresh;
+    }
     return handle;
   }
 
