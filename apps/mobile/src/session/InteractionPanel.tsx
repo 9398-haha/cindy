@@ -1,6 +1,7 @@
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
@@ -76,7 +77,7 @@ import {
   buildInteractionTouchLayout,
   type InteractionTouchLayout,
 } from '@/session/interactionTouchLayout';
-import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { remoteSessionStore, useRemoteDeviceIdentity } from '@/session/remoteSessionStore';
 import type { PendingInteraction } from '@/session/types';
 import { fontWeight, iconStroke, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, radius, spacing, typeScale } from '@/theme/tokens';
@@ -592,6 +593,7 @@ function InteractionItem({
       : null;
     return (
       <PluginSetupCard
+        deviceId={deviceId}
         busy={busy}
         cancel={cancelDecision
           ? {
@@ -1046,7 +1048,7 @@ function AskUserQuestionCard({
                 autoFocus
                 onChangeText={setCustomInput}
                 placeholder={t('interaction.panel.customAnswerPlaceholder')}
-                placeholderTextColor={colors.textTertiary}
+                placeholderTextColor={colors.textPlaceholder}
                 style={styles.inlineInput}
                 testID="interaction.ask.customInput"
                 value={customInput}
@@ -1089,7 +1091,7 @@ function AskUserQuestionCard({
             autoFocus
             onChangeText={setCustomInput}
             placeholder={t('interaction.panel.answerInput')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.inlineInput}
             testID="interaction.ask.textInput"
             value={customInput}
@@ -1344,7 +1346,7 @@ function PlanReviewCard({
                   multiline
                   onChangeText={setPlanText}
                   placeholder={t('interaction.panel.planEditorPlaceholder')}
-                  placeholderTextColor={colors.textTertiary}
+                  placeholderTextColor={colors.textPlaceholder}
                   style={[
                     styles.planEditor,
                     fillAvailableHeight
@@ -1453,7 +1455,7 @@ function PlanReviewCard({
               multiline
               onChangeText={setFeedback}
               placeholder={t('interaction.panel.planFeedbackPlaceholder')}
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               style={styles.planFeedbackInput}
               testID="interaction.plan.feedbackInput"
               value={feedback}
@@ -1498,27 +1500,29 @@ function PlanReviewCard({
  * 手机端做不了配置动作(Secret 输入与 OAuth 必须留在被控端,见
  * docs/dev-rules/plugin-security-and-authoring.md §4 与 desktop 的
  * interactionResolveOrigin),所以这张卡的价值全在「看懂」:哪个插件、卡在哪一步、
- * 为什么失败、回电脑端要做什么。动作只有取消。
+ * 为什么失败、回电脑端要做什么。可进入目标电脑的远程桌面或取消请求。
  */
-export function PluginSetupMessageContent({ request, busy, onCancel }: {
-  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void;
+export function PluginSetupMessageContent({ request, busy, onCancel, deviceId }: {
+  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void; deviceId?: string;
 }) {
   const { width } = useWindowDimensions();
   const { t } = useTranslation();
   return <CompanionInteractionContext.Provider value>
-    <PluginSetupCard item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
+    <PluginSetupCard deviceId={deviceId} item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
       busy={busy} touchLayout={buildInteractionTouchLayout({ screenWidth: width, actionCount: 1 })}
       cancel={onCancel ? { label: t('interaction.panel.cancelRequest'), accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'), onPress: onCancel } : null} />
   </CompanionInteractionContext.Provider>;
 }
 
 function PluginSetupCard({
+  deviceId,
   busy,
   cancel,
   item,
   requestId,
   touchLayout,
 }: {
+  deviceId?: string;
   busy: boolean;
   cancel: { accessibilityLabel: string; label: string; onPress(): void } | null;
   item: PendingInteraction;
@@ -1576,6 +1580,9 @@ function PluginSetupCard({
       {presentation.terminal ? null : (
         <Text style={styles.pluginSetupFootnote}>{t('interaction.pluginSetup.completeOnDesktop')}</Text>
       )}
+      {!presentation.terminal && deviceId && !isSharedTaskPeer(deviceId) ? (
+        <PluginSetupRemoteDesktopButton deviceId={deviceId} busy={busy} />
+      ) : null}
       {cancel ? (
         <View style={actionsStyle(styles, touchLayout)}>
           <ResolveButton
@@ -1592,6 +1599,21 @@ function PluginSetupCard({
       ) : null}
     </View>
   );
+}
+
+/** Navigation only: authorization and credentials stay in the computer's own UI. */
+function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; busy: boolean }) {
+  const push = useGuardedPush();
+  const devices = useRemoteDeviceIdentity();
+  const styles = useInteractionStyles();
+  const { t } = useTranslation();
+  const deviceName = devices.find(device => device.deviceId === deviceId)?.name || deviceId;
+  const label = t('interaction.pluginSetup.remoteDesktop');
+  return <InteractionTouchButton accessibilityLabel={label} disabled={busy}
+    style={styles.primaryButton} testID="interaction.pluginSetup.remoteDesktop"
+    onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } })}>
+    <Text style={styles.primaryText}>{label}</Text>
+  </InteractionTouchButton>;
 }
 
 /** 运行中的步骤:与桌面同语义,用 Heart Orange 表示「正在进行」。 */
@@ -1807,8 +1829,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
   companionEvidence: { gap: spacing.sm },
   companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
-  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
+  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
     borderBottomColor: colors.border,
@@ -1839,14 +1861,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   taskEyebrow: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   taskTitle: {
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -1862,6 +1886,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   taskCountText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   taskCollapseButton: {
@@ -1879,6 +1904,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   taskCollapseText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   card: {
@@ -1910,14 +1936,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   kind: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   pageText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     flexShrink: 0,
   },
   cardTitle: {
@@ -1959,12 +1987,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   collapsedInteractionTitle: {
     color: colors.textPrimary,
     flexShrink: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -1972,11 +2002,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
   },
   body: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupIcon: {
@@ -1990,8 +2021,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   pluginSetupGroupHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStep: {
@@ -2014,33 +2045,35 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     // 颜色随 phase 内联(已完成 statusReady / 进行中 statusAccent / 其余 textTertiary)。
     flexShrink: 0,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pluginSetupStepBody: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStepAction: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStepError: {
     color: colors.errorText,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupFootnote: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   askHeaderKind: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   askQuestion: {
@@ -2082,7 +2115,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   permissionEvidenceDetail: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   permissionToolPill: {
@@ -2091,6 +2124,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flexShrink: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     maxWidth: 112,
     overflow: 'hidden',
@@ -2101,7 +2135,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingTop: spacing.sm,
   },
@@ -2120,11 +2154,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   permissionRiskLabel: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   permissionRiskText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   permissionCodeBlock: {
@@ -2184,11 +2219,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   optionTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   optionDescription: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: spacing.xs,
   },
@@ -2196,6 +2232,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontStyle: 'italic',
   },
   customInputRow: {
@@ -2239,6 +2276,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   inlineButtonText: {
     color: colors.ctaText,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   planReviewStack: {
@@ -2278,6 +2316,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -2302,12 +2341,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 0,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   planViewerHint: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   planToolbar: {
@@ -2346,8 +2387,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   planOutlineLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     paddingHorizontal: spacing.xs,
   },
   planOutlineChip: {
@@ -2368,6 +2410,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   planOutlineChipText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     maxWidth: 144,
   },
@@ -2377,7 +2420,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   planOutlineMore: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     paddingHorizontal: spacing.sm,
   },
   planPreview: {
@@ -2396,8 +2440,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   planText: {
     color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
   },
   planEditor: {
     backgroundColor: colors.surface,
@@ -2406,7 +2450,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     minHeight: 176,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -2447,6 +2491,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.regular,
     minWidth: 0,
   },
@@ -2461,6 +2506,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     minWidth: 0,
   },
   planFeedbackEditorRow: {
@@ -2507,6 +2553,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   primaryText: {
     color: colors.ctaText,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   primaryTextDisabled: {
@@ -2524,6 +2571,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   secondaryText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pressed: {
@@ -2539,10 +2587,10 @@ const makeCompanionStyles = (colors: ThemeColors) => {
   return {
     ...base,
     root: { ...base.root, borderBottomWidth: 0, paddingHorizontal: 0, paddingVertical: spacing.sm },
-    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption },
+    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     taskCollapseButton: { ...base.taskCollapseButton, borderWidth: 0, paddingHorizontal: spacing.sm },
-    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary },
-    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary },
+    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary, fontWeight: fontWeight.medium },
+    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary, fontWeight: fontWeight.medium },
     compactCardHeader: { ...base.compactCardHeader, minHeight: 0, flexWrap: 'wrap' as const },
     compactCardTitleWrap: { ...base.compactCardTitleWrap, flexDirection: 'column' as const, alignItems: 'flex-start' as const },
     compactCardTitle: { ...base.compactCardTitle, flex: 0, flexShrink: 1 },
