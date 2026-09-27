@@ -11415,6 +11415,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCatalog: getActiveCatalog,
     });
 
+  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { permissionMode?: string }) => {
+    if (!isPluginTaskAuthorized(pluginId) || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
+      throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
+    }
+  };
+
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
     getActiveTeamByLead,
     listWorkersByLead,
@@ -11427,6 +11433,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!receipt || receipt.operation !== 'create') return undefined;
       const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
+      assertPluginWorkerAutoAuthorized(receipt.pluginId, task);
       const cfg = readGhostErrandConfig(receipt.pluginId);
       const directory = await resolvePluginWorkerDirectory({
         requested: params.workingDir ?? task.workingDir ?? '', leadDirectory: task.workingDir,
@@ -11436,11 +11443,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
       });
       if (resolvedWorkingDir !== undefined && directory !== await realpathWorkingDirectory(resolvedWorkingDir)) throw new PluginTaskError('PERMISSION_DENIED','Worker directory changed during creation');
-      const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
-      if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
       // get() waits behind plan registration in the existing receipt queue.
       const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!currentReceipt) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
+      const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
+      if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
+      // Last admission check also covers no-plan plugin tasks and revocation
+      // while directory/receipt reads or the existing reservation were pending.
+      assertPluginWorkerAutoAuthorized(receipt.pluginId, currentTask);
+      if (cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
       const data = JSON.parse(currentReceipt.payload);
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
       const item = data.teamPlan.items.find((x: {label:string})=>x.label===params.label);
@@ -11556,9 +11567,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId, leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
       // Plugin tasks never inherit an unrelated global Full access preference.
-      if (task.permissionMode !== 'auto' || readGhostErrandConfig(receipt.pluginId).permissionMode !== 'auto') {
-        throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
-      }
+      assertPluginWorkerAutoAuthorized(receipt.pluginId, task);
       return 'auto';
     },
     setWorkerPermissionMode: applyWorkerPermissionModePreference,

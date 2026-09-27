@@ -1,4 +1,7 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import { PluginTaskError } from '../pluginTaskService.js';
 import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -2750,4 +2753,58 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
   expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved);
   expect(deps.bootstrapSession).not.toHaveBeenCalled();
   expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
+});
+
+describe('production plugin Auto admission after reservation', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
+  const callback = source.slice(source.indexOf('    validateCreationPlan: async (params, resolvedWorkingDir) => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
+  const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  it.each([false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy'].map(point => ({ planned, point }))))('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
+    let reserved = false;
+    let mode = 'auto';
+    let taskMode = 'auto';
+    let enabled = true;
+    let receiptReads = 0;
+    let taskReads = 0;
+    const epoch = { client: {} };
+    const revoke = () => { mode = 'acceptEdits'; };
+    const task = () => ({ revision: 1, permissionMode: taskMode, workingDir: path.resolve('repo') });
+    const receipt = { pluginId: 'plugin', operation: 'create', payload: JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [{ label: 'sample', route: { agentKind: 'codex' } }] } } : {}) };
+    const depsForCallback = {
+      getCurrentDbClientSnapshot: () => epoch,
+      createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 4 && point === 'receipt') revoke(); return receipt; } }),
+      pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
+        ++taskReads;
+        if (taskReads === 4 && point === 'final-task') revoke();
+        if (taskReads === 4 && point === 'task-mode') taskMode = 'plan';
+        return task();
+      } }),
+      readGhostErrandConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
+      isPluginTaskAuthorized: () => enabled,
+      resolvePluginWorkerDirectory: async () => { if (reserved && point === 'directory') revoke(); return path.resolve('repo'); },
+      realpathWorkingDirectory: async () => path.resolve('repo'),
+      isGhostPickedDir: () => false,
+      PluginTaskError,
+    };
+    const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
+    const { deps, service } = createDeps({ validateCreationPlan });
+    const reserve = deps.reserveWorkerCreation;
+    deps.reserveWorkerCreation = vi.fn(async input => {
+      const result = await reserve(input); reserved = true;
+      if (point === 'reservation') revoke();
+      if (point === 'disabled') enabled = false;
+      return result;
+    });
+    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: 'sample', workerPermissionMode: 'auto' });
+    if (point === 'healthy') {
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    }
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
+  });
 });
