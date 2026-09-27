@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "This image can't be annotated or forwarded.",
     "downloadOriginalFailed": "Could not download the original image (HTTP {{status}}).",
     "annotationSaveFailed": "Could not save annotation",
+    "replacementPending": "Your last change to this image hasn't finished uploading. Wait for it to finish, or retry or remove it above the input, then edit again.",
     "tryAgain": "Try again.",
     "sendToChat": "Send to Chat",
     "save": "Save",

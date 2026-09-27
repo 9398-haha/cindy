@@ -3981,6 +3981,7 @@ export default function NewRemoteSessionScreen() {
     // 生效,读 state 会拿到「入队前」旧值绕过上限(review P1)。
     getRemainingAttachmentSlots: () =>
       MOBILE_MAX_ATTACHMENTS - attachmentsRef.current.length - getPendingUploadCount(),
+    getAttachment: (attachmentId) => attachmentsRef.current.find((item) => item.id === attachmentId),
   });
   composerAnnotationsRef.current = composerAnnotations;
 

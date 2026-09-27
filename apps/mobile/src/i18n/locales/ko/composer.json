@@ -19,6 +19,7 @@
     "imageNotAnnotatable": "이 이미지는 주석이나 전달을 지원하지 않습니다.",
     "downloadOriginalFailed": "원본 이미지를 다운로드하지 못했습니다(HTTP {{status}}).",
     "annotationSaveFailed": "주석을 저장하지 못했습니다",
+    "replacementPending": "이 이미지의 이전 변경 사항이 아직 업로드되지 않았습니다. 완료될 때까지 기다리거나 입력창 위에서 다시 시도하거나 삭제한 후 편집하세요.",
     "tryAgain": "다시 시도하세요.",
     "sendToChat": "대화로 보내기",
     "save": "저장",
