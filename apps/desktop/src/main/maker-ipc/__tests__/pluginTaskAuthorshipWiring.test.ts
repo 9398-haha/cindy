@@ -79,11 +79,11 @@ it('builds a durable queued plugin input without promoting plugin text to user i
   expect(await build(base)).not.toHaveProperty('autoReviewUserText');
 });
 
-it.each(['empty', 'user', 'worker', 'reserved', 'unavailable'])('seals initial plans against persisted activity: %s', async state => {
+it.each(['empty', 'user', 'worker', 'reserved', 'started', 'ended', 'unavailable'])('seals initial plans against persisted activity: %s', async state => {
   const start = source.indexOf('assertTeamPlanUnstarted: async taskId => {');
   const end = source.indexOf('\n      createSession:', start);
   const property = source.slice(start, end).trim().replace(/,$/, '');
-  const tables = ['messages', 'orcaWorkers', 'orcaTeams', 'orcaWorkerCreationReservations'];
+  const tables = ['messages', 'sessions', 'orcaWorkers', 'orcaTeams', 'orcaWorkerCreationReservations'];
   const records = Object.fromEntries(tables.map(name => [name, { name }]));
   let drained = false;
   const snapshot = { client: { drizzle: { select: () => {
@@ -94,6 +94,11 @@ it.each(['empty', 'user', 'worker', 'reserved', 'unavailable'])('seals initial p
       async limit() {
         expect(drained).toBe(true);
         if (state === 'unavailable') throw new Error('unavailable');
+        if (table.name === 'sessions') {
+          if (state === 'started') return [{ startedAt: 1, endedAt: null }];
+          if (state === 'ended') return [{ startedAt: null, endedAt: 1 }];
+          return [{ startedAt: null, endedAt: null }];
+        }
         const populated = { user: 'messages', worker: 'orcaWorkers', reserved: 'orcaWorkerCreationReservations' }[state];
         return table.name === populated ? [{ id: 'existing' }] : [];
       },
