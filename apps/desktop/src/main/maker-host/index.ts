@@ -1,3 +1,6 @@
+import { createCompanionImportProvider } from '../bot-import/importProvider.js';
+import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
+import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { cindyMakeManager } from '../cindy-make/manager.js';
@@ -408,7 +411,7 @@ export function setAutoReviewContextResolver(resolver: AutoReviewDelegate['prepa
   autoReviewContextResolver = resolver;
 }
 
-const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissionReviewer({
+export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
@@ -1161,6 +1164,8 @@ export function getMaker(): Maker {
     // 因此这里必须用具名 const 保住引用(不能内联 spread 出临时数组)。
     const claudeMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      createCompanionConnectionsProvider(),
+      createCompanionImportProvider(),
       orcaWorkerBridgeProvider,
       cindyMakeProvider,
     ];
@@ -1172,6 +1177,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
@@ -1472,6 +1478,8 @@ export function getMaker(): Maker {
     });
     const codexMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      createCompanionConnectionsProvider(),
+      createCompanionImportProvider(),
       orcaWorkerBridgeProvider,
       cindyMakeProvider,
     ];
@@ -1497,6 +1505,7 @@ export function getMaker(): Maker {
         ?? 'default';
     };
     const codexAgent = new CodexAgent({
+      resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
@@ -2234,6 +2243,8 @@ export function getMaker(): Maker {
     // 原地 splice 同步进 capabilities(PiAgent 每次 startSession 现读)。
     const piMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      createCompanionConnectionsProvider(),
+      createCompanionImportProvider(),
       orcaWorkerBridgeProvider,
       cindyMakeProvider,
     ];

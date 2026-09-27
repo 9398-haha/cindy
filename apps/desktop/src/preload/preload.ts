@@ -1,3 +1,4 @@
+import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import { FAVORITE_HOST_READY, FAVORITE_HOST_REQUEST, FAVORITE_HOST_REPLY, FAVORITE_HOST_CHANGED, type ModelFavoritesHostApi } from '../shared/modelFavoritesSync';
@@ -1038,6 +1039,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => { ipcRenderer.removeListener(FAVORITE_HOST_REQUEST, receive); };
     },
   } satisfies ModelFavoritesHostApi,
+  companionImport: {
+    sources: () => ipcRenderer.invoke('companion-import', 'sources'),
+    preview: (sourceId: string) => ipcRenderer.invoke('companion-import', 'preview', sourceId),
+    start: (selection: CompanionImportSelection) => ipcRenderer.invoke('companion-import', 'start', selection),
+    status: (requestId: string) => ipcRenderer.invoke('companion-import', 'status', requestId),
+  } satisfies CompanionImportApi,
   routines: {
     list: (botId: string) => ipcRenderer.invoke('routines:list', botId),
     save: (botId: string, input: RoutineInput, id?: string) => ipcRenderer.invoke('routines:save', botId, input, id),
