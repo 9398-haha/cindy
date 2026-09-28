@@ -19,6 +19,26 @@ it('switches credentials in the existing selection and keeps bulk selection unam
   expect(toggleCompanionImportEntries(entries, personal, all, false)).toEqual([]);
 });
 
+it.each([false, true])('handles 100,000-entry bulk selection with bounded input reads (%s)', checked => {
+  const catalog: CompanionImportEntry[] = Array.from({ length: 100_000 }, (_, index) => ({
+    id: `entry-${index}`, name: `Entry ${index}`, category: index < 50_000 ? 'memory' : 'connections', selected: true,
+    ...(index < 50_000 ? {} : { exclusiveWith: [`entry-${index ^ 1}`] }),
+  }));
+  const all = catalog.map(entry => entry.id);
+  let reads = 0;
+  // Count input work instead of using a machine-dependent timing threshold.
+  const requested = new Proxy(all, { get(target, property, receiver) {
+    if (typeof property === 'string' && /^\d+$/.test(property) && ++reads > all.length * 4) throw Error('Bulk selection repeatedly rescanned its input');
+    return Reflect.get(target, property, receiver);
+  } });
+  const current = checked ? ['keep-first', 'keep-last'] : ['keep-first', ...all, 'keep-last'];
+  expect(toggleCompanionImportEntries(catalog, current, requested, checked)).toEqual(
+    checked ? ['keep-first', 'keep-last', ...all.slice(0, 50_000)] : ['keep-first', 'keep-last'],
+  );
+  expect(all).toEqual(catalog.map(entry => entry.id));
+  expect(current).toEqual(checked ? ['keep-first', 'keep-last'] : ['keep-first', ...all, 'keep-last']);
+});
+
 it.each([false, true])('negotiates compact selections only when the host advertises support (%s)', async supported => {
   const many = Array.from({ length: 2100 }, (_, index) => ({ id: `memory-${index}`, name: `Memory ${index}`, category: 'memory' as const, selected: true }));
   const preview: CompanionImportPreview = { id: 'preview', source: { id: 'source', name: 'Ada', kind: 'hermes' }, name: 'Ada', entries: many, ...(supported ? { selectionRanges: true as const } : {}) };

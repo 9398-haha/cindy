@@ -116,15 +116,17 @@ export function areCompanionImportEntriesSelected(entries: CompanionImportEntry[
 
 /** Reuse the existing checkboxes; bulk selection never guesses a credential account. */
 export function toggleCompanionImportEntries(entries: CompanionImportEntry[], current: string[], ids: string[], checked: boolean): string[] {
-  if (!checked) return current.filter(id => !ids.includes(id));
+  const requested = new Set(ids);
+  if (!checked) return current.filter(id => !requested.has(id));
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   if (ids.length === 1) {
     const conflicts = new Set(byId.get(ids[0]!)?.exclusiveWith ?? []);
     return [...new Set([...current.filter(id => !conflicts.has(id)), ...ids])];
   }
+  const selected = new Set(current);
   return [...new Set([...current, ...ids.filter(id => {
     const conflicts = byId.get(id)?.exclusiveWith ?? [];
-    return !conflicts.some(other => current.includes(other) || ids.includes(other));
+    return !conflicts.some(other => selected.has(other) || requested.has(other));
   })])];
 }
 
