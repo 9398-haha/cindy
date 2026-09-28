@@ -90,12 +90,16 @@ export async function listCompanionImportSources(controller: string): Promise<Co
 }
 
 /** Keep at most one preview per controller, four total, within one snapshot byte budget. */
-function retainPreview(id: string, entry: Owned<ImportSnapshot>) {
-  previews.delete(id);
+async function retainPreview(id: string, entry: Owned<ImportSnapshot>, assertOwner: () => void, refresh = false) {
   let bytes = Buffer.byteLength(JSON.stringify({ ...entry.value, items: undefined }));
-  const reserve = (size: number) => { bytes += size; };
-  reserveSnapshotItems(entry.value.items, { reserve, reserveFile: reserve });
+  const reserve = (size: number) => {
+    bytes += size;
+    if (bytes > MAX_SNAPSHOT_BYTES) throw new CompanionImportError('SOURCE_SNAPSHOT_TOO_LARGE');
+  };
+  await reserveSnapshotItems(entry.value.items, { reserve, reserveFile: reserve }, assertOwner);
   if (bytes > MAX_SNAPSHOT_BYTES) throw new CompanionImportError('SOURCE_SNAPSHOT_TOO_LARGE');
+  if (refresh && previews.get(id) !== entry) return;
+  previews.delete(id);
   prune(previews);
   for (const [key, prior] of previews) if (prior.controller === entry.controller) previews.delete(key);
   let total = [...previews.values()].reduce((sum, preview) => sum + preview.bytes, 0);
@@ -118,7 +122,7 @@ export async function previewCompanionImport(sourceId: string, controller: strin
     scope.assert();
   }
   const id = randomUUID();
-  retainPreview(id, { owner: scope.scope, controller, value: snapshot, createdAt: Date.now() });
+  await retainPreview(id, { owner: scope.scope, controller, value: snapshot, createdAt: Date.now() }, scope.assert);
   const secrets = previewImportRedactions(snapshot.items);
   const redact = (text: string) => redactEnvironmentValues(text, secrets);
   return { id, selectionRanges: true, selectionChunks: true, source: { id: sourceId, kind: source.kind, name: redact(source.name) }, name: redact(source.name),
@@ -586,7 +590,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   };
   const transferDeps: TransferDeps = {
     assertOwner: scope.assert,
-    validateItems(items) {
+    async validateItems(items) {
       // Repaired manifests can reveal credentials that were unavailable at preview time.
       for (const value of Object.values(selectedImportRedactions(items))) {
         if (knownValues.has(value)) continue;
@@ -595,7 +599,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       }
       // Capturing lazily selected resources may grow even a rejected selection.
       const cached = previews.get(selection.previewId);
-      if (cached?.value === snapshot) retainPreview(selection.previewId, cached);
+      if (cached?.value === snapshot) await retainPreview(selection.previewId, cached, scope.assert, true);
       for (const item of items.filter(item => item.view.category === 'skills' && !item.captureIssue)) {
         try {
           const slug = skillSlug(item);

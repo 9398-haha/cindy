@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { encodeEnvironment, decodeEnvironment } from './environmentJson.js';
+import { visitSnapshotJson } from './snapshotJson.js';
 import { CompanionImportError, type ImportFile, type ImportItem, type ImportSnapshot } from './types.js';
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -32,6 +33,12 @@ export function snapshotFingerprint(items: ImportItem[]): string {
   return fingerprint(mapItemBytes(items, digest));
 }
 
+export async function snapshotFingerprintAsync(items: ImportItem[]): Promise<string> {
+  const hash = createHash('sha256');
+  await visitSnapshotJson(items, bytes => createHash('sha256').update(bytes).digest('hex'), text => { hash.update(text); });
+  return hash.digest('hex');
+}
+
 function mapItemBytes(items: ImportItem[], encode: (bytes: Buffer) => unknown) {
   return items.map(item => ({ ...item,
     ...(item.files ? { files: item.files.map(file => ({ ...file, bytes: encode(file.bytes) })) } : {}),
@@ -39,9 +46,9 @@ function mapItemBytes(items: ImportItem[], encode: (bytes: Buffer) => unknown) {
   }));
 }
 
-export function reserveSnapshotItems(items: ImportItem[], budget: ImportReadBudget): void {
-  const metadata = mapItemBytes(items, bytes => { budget.reserveFile(bytes.length); return null; });
-  budget.reserve(Buffer.byteLength(JSON.stringify(metadata)));
+export async function reserveSnapshotItems(items: ImportItem[], budget: ImportReadBudget, assertOwner: () => void = () => {}): Promise<void> {
+  await visitSnapshotJson(items, bytes => { budget.reserveFile(bytes.length); return null; },
+    text => budget.reserve(Buffer.byteLength(text)), assertOwner);
 }
 
 /** Checkpoints use compact binary encoding; old numeric-array checkpoints still resume. */

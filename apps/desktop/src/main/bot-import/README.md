@@ -28,6 +28,12 @@ preview retains its full snapshot and normal error path. Discovery performs no w
 Retained previews are limited to one per controller, four total and 128 MiB of
 snapshot data combined. Oldest previews are evicted through the existing expired
 preview flow. Recovery reads its durable checkpoint without caching another preview.
+Preview/retry accounting and source fingerprints stream the existing item graph
+without a mapped clone or full metadata JSON string. Strings use 16 Ki-character
+chunks (preserving surrogate pairs); each 64 KiB of work yields to Main and retry/
+preview accounting rechecks the owner. Binary files are charged directly and the
+legacy byte/hash representation remains unchanged. A refreshed cache entry cannot
+replace a newer preview while waiting; over-budget reads stop during accounting.
 All command operations use the existing per-call approval policy. Discovery never
 persists a native tool/server grant that could authorize a later `start` operation.
 Auto still reviews the actual invocation; Full Access retains its normal behavior.
@@ -144,6 +150,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   Warm search and pagination stream that index and retain only the requested
   response page, without reopening each source file. Full name/description
   matching, stable name/slug ordering and disabled entries remain available.
+  Disabled query results retain management/deduplication metadata and `enabled:
+  false`, but omit `filePath` and `bodyStartLine`. Original files and the settings
+  read remain intact; enabling a Skill restores its body/resource discovery path.
   Mutation invalidation and watcher recovery also cover this query index and
   disabled metadata. A cold cache builds it once; subsequent queries still scan
   index bytes for exact matching/counts, rather than maintaining a search database.

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createImportBudget, deserializeImportSnapshot, readImportFile, readImportTree, serializeImportSnapshot, snapshotFingerprint } from '../files.js';
+import { createImportBudget, deserializeImportSnapshot, readImportFile, readImportTree, reserveSnapshotItems, serializeImportSnapshot, snapshotFingerprint, snapshotFingerprintAsync } from '../files.js';
 import { readImportSkillTree } from '../skills.js';
 import type { ImportSnapshot } from '../types.js';
 import { promises as fs } from 'node:fs';
@@ -144,4 +144,72 @@ it('copies native venv interpreter aliases while keeping unrelated external link
     await fs.writeFile(path.join(runtime, 'python3.12'), 'fixture-private-token');
     await expect(readImportSkillTree(skill)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it.each(['items', 'files'] as const)('counts a 100,000-entry %s snapshot incrementally and yields without serializing its graph', async kind => {
+  const file = { name: 'empty', bytes: Buffer.alloc(0), executable: false };
+  const view = { id: 'skill', name: 'Fixture', category: 'skills' as const, selected: true };
+  const items = kind === 'items' ? Array.from({ length: 100_000 }, () => ({ view }))
+    : [{ view, files: Array.from({ length: 100_000 }, () => file) }];
+  const stringify = JSON.stringify;
+  const serialize = vi.spyOn(JSON, 'stringify').mockImplementation((value, ...args) => {
+    if (value && typeof value === 'object') throw new Error('snapshot graph serialized');
+    return stringify(value, ...args);
+  });
+  let bytes = 0, files = 0, yielded = false;
+  const turn = new Promise<void>(resolve => setImmediate(() => { yielded = true; resolve(); }));
+  try {
+    await reserveSnapshotItems(items, { reserve: size => { bytes += size; }, reserveFile: size => { bytes += size + 256; files++; } });
+    expect(bytes).toBeGreaterThan(100_000);
+    expect(files).toBe(kind === 'files' ? 100_000 : 0);
+    expect(yielded).toBe(true);
+    expect(items[0]?.view).toBe(view);
+  } finally { serialize.mockRestore(); await turn; }
+});
+
+it('preserves exact legacy budget bytes and fingerprints across streamed string/file boundaries', async () => {
+  const text = 'x'.repeat(16 * 1024 - 1) + '😀漢\u0000\n"\\' + '\ud800';
+  const files = [{ name: 'empty', bytes: Buffer.alloc(0), executable: false },
+    { name: 'binary', bytes: Buffer.alloc(128 * 1024, 255), executable: true }];
+  const items = [{ view: { id: 'fixture', name: text, category: 'memory' as const, selected: true }, files,
+    asset: { name: 'asset', bytes: Buffer.from('fixture') },
+    credential: { format: 'fixture', value: { when: new Date('2026-09-29T00:00:00Z'), list: [null, false, undefined, 7, Infinity], omitted: undefined, hidden: { toJSON: () => undefined } } }, text }];
+  const mapped = items.map(item => ({ ...item, files: item.files.map(file => ({ ...file, bytes: null })), asset: { ...item.asset, bytes: null } }));
+  const expected = Buffer.byteLength(JSON.stringify(mapped)) + files.reduce((total, file) => total + file.bytes.length + 256, 0) + items[0]!.asset.bytes.length + 256;
+  const before = serializeImportSnapshot({ source: {} as never, fingerprint: 'fixture', items });
+  await reserveSnapshotItems(items, createImportBudget(expected));
+  await expect(reserveSnapshotItems(items, createImportBudget(expected - 1))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(await snapshotFingerprintAsync(items)).toBe(snapshotFingerprint(items));
+  expect(serializeImportSnapshot({ source: {} as never, fingerprint: 'fixture', items })).toBe(before);
+});
+
+it('stops streamed accounting on budget exhaustion and on an owner change', async () => {
+  const view = { id: 'fixture', name: 'Fixture', category: 'memory' as const, selected: true };
+  const read = vi.fn(() => 'tail should stay unread');
+  const tail = { view, get text() { return read(); } };
+  const items = [{ view, text: 'x'.repeat(1024 * 1024) }, tail];
+  await expect(reserveSnapshotItems(items, createImportBudget(1000))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(read).not.toHaveBeenCalled();
+  let changed = false;
+  const turn = new Promise<void>(resolve => setImmediate(() => { changed = true; resolve(); }));
+  await expect(reserveSnapshotItems(items, createImportBudget(), () => {
+    if (changed) throw new Error('OWNER_CHANGED');
+  })).rejects.toThrow('OWNER_CHANGED');
+  expect(read).not.toHaveBeenCalled();
+  await turn;
+});
+
+it('accounts a near-budget binary snapshot without serializing or copying its buffers', async () => {
+  const bytes = Buffer.alloc(16 * 1024 * 1024, 1);
+  const items = Array.from({ length: 7 }, (_, index) => ({
+    view: { id: `fixture-${index}`, name: 'Fixture', category: 'memory' as const, selected: true },
+    asset: { name: `${index}.bin`, bytes },
+  }));
+  const toJSON = vi.spyOn(Buffer.prototype, 'toJSON').mockImplementation(() => { throw new Error('buffer copied'); });
+  try {
+    await reserveSnapshotItems(items, createImportBudget());
+    expect(items.every(item => item.asset.bytes === bytes)).toBe(true);
+    await expect(reserveSnapshotItems([...items, ...items.slice(0, 2)], createImportBudget())).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    expect(toJSON).not.toHaveBeenCalled();
+  } finally { toJSON.mockRestore(); }
 });

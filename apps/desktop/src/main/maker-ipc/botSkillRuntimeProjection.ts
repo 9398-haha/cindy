@@ -10,15 +10,15 @@ import {
 /** A startup/output byte budget, never a limit on stored or discoverable Skills. */
 export const BOT_SKILL_RUNTIME_INDEX_BYTES = 16 * 1024;
 
-export function botSkillRuntimeSummary(item: BotSkillSummary) {
+export function botSkillRuntimeSummary(item: BotSkillSummary):
+  Pick<BotSkillSummary, 'slug' | 'name' | 'description' | 'updatedAt' | 'enabled'>
+  & Partial<Pick<BotSkillSummary, 'filePath' | 'bodyStartLine'>> {
   return {
     slug: item.slug,
     name: item.name.slice(0, BOT_SKILL_MAX_NAME_CHARS),
     description: item.description.slice(0, BOT_SKILL_MAX_DESCRIPTION_CHARS),
     updatedAt: item.updatedAt.slice(0, 64),
-    filePath: item.filePath,
-    bodyStartLine: item.bodyStartLine,
-    ...(item.enabled === false ? { enabled: false } : {}),
+    ...(item.enabled === false ? { enabled: false as const } : { filePath: item.filePath, bodyStartLine: item.bodyStartLine }),
   };
 }
 

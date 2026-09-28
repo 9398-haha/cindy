@@ -152,3 +152,22 @@ it('externally sorts 100,000 entries before enumeration completes and keeps the 
   expect(await fs.readFile(catalog, 'utf8')).toBe(text);
   expect(await fs.readdir(directory)).toEqual(['query-catalog.jsonl']);
 }, 30_000);
+
+it('keeps disabled Skill metadata discoverable without publishing read paths, then restores them on enable', async () => {
+  const file = await write('off', 'Off', 'Searchable disabled', true, 'Private disabled instructions');
+  const before = await fs.readFile(file, 'utf8');
+  const first = await listBotSkillsForSession({ callerSessionId: 's', query: 'disabled' }, deps());
+  expect(first).toMatchObject({ ok: true, skills: [{ slug: 'off', name: 'Off', description: 'Searchable disabled', enabled: false }] });
+  if (!first.ok) throw Error('Expected result');
+  expect(first.skills[0]).not.toHaveProperty('filePath');
+  expect(first.skills[0]).not.toHaveProperty('bodyStartLine');
+  expect(first.skills[0]).not.toHaveProperty('dirPath');
+  // A cached query and the full settings read keep the same disabled state.
+  expect((await query({ query: 'disabled' })).skills[0]).not.toHaveProperty('filePath');
+  expect((await listBotSkills(home, bot))[0]).toMatchObject({ enabled: false, filePath: file });
+  expect(await fs.readFile(file, 'utf8')).toBe(before);
+  await fs.mkdir(botSkillsDir(home, bot), { recursive: true });
+  await fs.rename(path.dirname(file), path.join(root(), 'skills/off'));
+  await vi.waitFor(async () => expect((await query({ query: 'disabled' })).skills[0])
+    .toMatchObject({ filePath: path.join(root(), 'skills/off/SKILL.md'), bodyStartLine: 5 }));
+});

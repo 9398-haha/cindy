@@ -39,7 +39,7 @@ export interface TransferDeps {
   /** Return serialized UTF-8 bytes when available, avoiding a second full serialization. */
   saveReceipt(receipt: ImportReceipt): Promise<number | void>;
   createCompanion(botId: string, selection: CompanionImportSelection): Promise<void>;
-  validateItems?(items: ImportItem[]): void;
+  validateItems?(items: ImportItem[]): void | Promise<void>;
   importItem(botId: string, item: ImportItem, snapshot: ImportSnapshot): Promise<void>;
   saveEnvironment(botId: string, items: ImportItem[]): Promise<void>;
   saveCheckpoint(botId: string, items: ImportItem[]): Promise<void>;
@@ -163,7 +163,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   // before storing credentials. Acceptance still waits for the full checkpoint.
   if (!receipt.checkpointSaved || items.some(item => item.captureIssue)) {
     const budget = createImportBudget();
-    reserveSnapshotItems(snapshot.items, budget);
+    await reserveSnapshotItems(snapshot.items, budget, deps.assertOwner);
     for (const item of items) {
       if (item.captureIssue && item.sourceDirectory && item.filesComplete && !copied.has(item.view.id)) {
         item.files = undefined; item.filesComplete = false;
@@ -238,7 +238,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         deps.assertOwner();
       }
     }
-    deps.validateItems?.(items);
+    await deps.validateItems?.(items);
     await save();
     await deps.saveCheckpoint(botId, items);
     deps.assertOwner();

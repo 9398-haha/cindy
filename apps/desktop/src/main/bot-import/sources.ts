@@ -5,7 +5,7 @@ import JSON5 from 'json5';
 import { redactEnvironmentValues } from './process.js';
 import yaml from 'js-yaml';
 import { parse as parseEnv } from 'dotenv';
-import { createImportBudget, fingerprint, optionalText, readImportFile, readImportTree, snapshotFingerprint, type ImportReadBudget } from './files.js';
+import { createImportBudget, fingerprint, optionalText, readImportFile, readImportTree, snapshotFingerprintAsync, type ImportReadBudget } from './files.js';
 import { discoverImportSkills } from './skills.js';
 import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
@@ -355,5 +355,5 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   }
   markImportEnvironmentChoices(items);
   const resolved = resolveImportEnvironmentDependencies(items, items.filter(item => item.view.selected));
-  return { source, items: resolved, ...(avatarImageBase64 ? { avatarImageBase64 } : {}), fingerprint: snapshotFingerprint(resolved) };
+  return { source, items: resolved, ...(avatarImageBase64 ? { avatarImageBase64 } : {}), fingerprint: await snapshotFingerprintAsync(resolved) };
 }
