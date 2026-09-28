@@ -58,10 +58,13 @@ omitting it retains normal companion defaults, and a rejected request can be cor
 - Selected identity/user/instruction documents and memories retain their original
   text in the encrypted environment. Profile prompt fields and the native memory
   store receive copies with known selected env/MCP/auth credentials masked, while
-  ordinary text stays unchanged. Import summaries/titles obey the storage UTF-16
+  ordinary text stays unchanged. Oversized profile fields retain a UTF-8-safe source
+  prefix within the existing profile capacity; the complete documents remain in memory
+  and the encrypted archive, without synthesized system instructions. Import summaries/titles obey the storage UTF-16
   length bounds, and document parts preserve source frontmatter and whitespace.
   Each new part is read back before it counts as saved; failures preserve part
-  progress and safe storage reasons. Existing edited parts are not overwritten. Env references and original credentials remain
+  progress accumulated across all documents in a recovered directory, and safe storage
+  reasons. Existing edited parts are not overwritten. Env references and original credentials remain
   available to host execution; no model call or extra confirmation is added.
   Selected skill folders retain their
   real scripts, templates, executable bits and `SKILL.md`.

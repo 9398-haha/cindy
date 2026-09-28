@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
-import { transferCompanion, type ImportReceipt, type TransferDeps } from '../transfer.js';
+import { validateImportSelection, transferCompanion, type ImportReceipt, type TransferDeps } from '../transfer.js';
 import { CompanionImportError, type ImportSnapshot } from '../types.js';
 import type { CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { normalizeAutomation } from '../sourceAutomations.js';
@@ -389,4 +389,25 @@ it('preserves concrete memory failures and partial progress in a retryable recei
   const retried = await transferCompanion(snapshot, selection, deps);
   expect(retried.savedEntryIds).toContain('memory');
   expect(retried.checks.find(check => check.entryId === 'memory')?.progress).toBeUndefined();
+});
+
+it('validates 100,000 sparse selections in linear work and rejects oversized ranges before expansion', () => {
+  const size = 100_000;
+  let reads = 0;
+  const entryRanges: Array<[number, number]> = Array.from({ length: size / 2 }, (_, i) => {
+    const range: [number, number] = [i * 2, i * 2];
+    Object.defineProperty(range, 0, { get() { reads++; return i * 2; } });
+    return range;
+  });
+  const indexed = { ...snapshot, items: Array.from({ length: size }, (_, sourceIndex) => ({
+    sourceIndex, view: { id: `memory-${sourceIndex}`, name: 'Memory', category: 'memory' as const, selected: true },
+  })) };
+  const chosen = validateImportSelection({ ...selection, entryIds: [], entryRanges }, indexed);
+  expect(chosen.map(item => item.sourceIndex)).toEqual(Array.from({ length: size / 2 }, (_, i) => i * 2));
+  expect(reads).toBeLessThan(size * 10);
+  // Selected-only checkpoints need not be contiguous or in index order.
+  expect(validateImportSelection({ ...selection, entryIds: [], entryRanges }, { ...indexed, items: chosen.toReversed() }))
+    .toEqual(chosen.toReversed());
+  expect(() => validateImportSelection({ ...selection, entryIds: [], entryRanges: [[0, Number.MAX_SAFE_INTEGER - 1]] }, indexed))
+    .toThrow('SELECTION_CHANGED');
 });

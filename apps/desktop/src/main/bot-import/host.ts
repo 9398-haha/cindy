@@ -16,6 +16,7 @@ import type { CompanionImportPreview, CompanionImportResult, CompanionImportSele
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBotRemoteResourceSource, reconcileBotProfileFolder } from '../localDb/ipc/bots.js';
 import { readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
+import { splitImportedMemoryText } from '../maker-ipc/botMemoryService.js';
 import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
@@ -468,9 +469,25 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name,
             text: `![${redactText(file.name).replace(/[\[\]\r\n]/g, '')}](${url})`, role: undefined });
         }
-        for (const document of documents) {
-          scope.assert();
-          await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), redactText(document.text), document.role === 'user' ? 'user' : 'reference');
+        const prepared = documents.map(document => {
+          const text = redactText(document.text);
+          return { ...document, text, parts: splitImportedMemoryText(text).length };
+        });
+        const total = prepared.reduce((sum, document) => sum + document.parts, 0);
+        let saved = 0;
+        for (const document of prepared) {
+          try {
+            scope.assert();
+            await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), document.text, document.role === 'user' ? 'user' : 'reference');
+            saved += document.parts;
+          } catch (error) {
+            if (error instanceof Error) {
+              const progress = (error as Error & { importProgress?: { saved: number; total: number } }).importProgress;
+              Object.assign(error, { importProgress: { saved: saved + (progress?.saved ?? 0),
+                total: total + (progress ? progress.total - document.parts : 0) } });
+            }
+            throw error;
+          }
         }
       }
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
@@ -524,7 +541,16 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       }, scope.assert);
       const roleText = (role: 'identity' | 'user' | 'instructions') => {
         const text = redactText(items.flatMap(item => [...(item.role === role ? [item.text] : []), ...(item.documents ?? []).filter(document => document.role === role).map(document => document.text)]).join('\n\n'));
-        return Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES ? text : `The imported ${role} documents are preserved in your personal memory. Search and read those original documents when applying the imported profile.`;
+        if (Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES) return text;
+        // Keep the original profile text without synthesizing new system instructions.
+        // The entire source remains in personal memory and the encrypted document archive.
+        let bytes = 0, end = 0;
+        for (const char of text) {
+          bytes += Buffer.byteLength(char, 'utf8');
+          if (bytes > BOT_PROFILE_TEXT_MAX_BYTES) break;
+          end += char.length;
+        }
+        return text.slice(0, end);
       };
       const folder = await readBotProfileFolder(scope.root, botId); scope.assert();
       await writeBotProfileFolder(scope.root, botId, {

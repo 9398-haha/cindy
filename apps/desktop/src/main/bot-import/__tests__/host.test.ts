@@ -17,6 +17,7 @@ import { CompanionImportError } from '../types.js';
 import { previewImportRedactions } from '../environmentSelection.js';
 import { redactEnvironmentValues } from '../process.js';
 import { DEFAULT_MEMORY_CONFIG, MemoryStorage, type MakerMemoryStore } from '@cindy/maker-core';
+import { BOT_MEMORY_BODY_MAX_BYTES } from '../../../shared/botMemory.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 
 const h = vi.hoisted(() => ({ root: '', botId: '', created: false, verified: false, sourceEnabled: true, failReadyWrite: false, boundary: false,
@@ -1123,4 +1124,53 @@ it('publishes a partial-save notice with the failed filename and safe reason, th
   const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
   expect(completed?.status).toBe('complete');
   expect(vi.mocked(createMessage).mock.calls.at(-1)![1]).toMatchObject({ clientId: `companion-import:${selection.requestId}:ready`, content: t('bots.import.chatReady') });
+});
+
+it.each([0, 1])('counts earlier recovered documents when a later document fails after %s chunks', async failedAfter => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const write = storage.write.bind(storage);
+  let fail = true;
+  vi.spyOn(storage, 'write').mockImplementation(async input => {
+    if (fail && input.name === `import_second_${failedAfter}`) throw Object.assign(new Error('private disk path'), { code: 'ENOSPC' });
+    return write(input);
+  });
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore,
+    readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  h.snapshot.items = [{ view: { id: 'memory-directory', name: 'Recovered directory', category: 'memory', selected: true }, documents: [
+    { id: 'first', name: 'first.md', text: 'a'.repeat(BOT_MEMORY_BODY_MAX_BYTES + 1) },
+    { id: 'second', name: 'second.md', text: 'b'.repeat(BOT_MEMORY_BODY_MAX_BYTES + 1) },
+    { id: 'third', name: 'third.md', text: 'Still to save' },
+  ] }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-directory-progress', previewId: preview.id, name: 'Ada', entryIds: ['memory-directory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first?.checks).toContainEqual({ entryId: 'memory-directory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 2 + failedAfter, total: 5 } });
+  expect(await storage.list()).toHaveLength(2 + failedAfter);
+  fail = false;
+  await startCompanionImport(selection, 'reconnected');
+  const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(completed).toMatchObject({ status: 'complete', savedEntryIds: ['memory-directory'] });
+  expect(await storage.list()).toHaveLength(5);
+});
+
+it('keeps oversized profile text as original Unicode while preserving the entire source in memory', async () => {
+  const text = 'Source instructions\n' + '😀原文'.repeat(20_000);
+  h.snapshot.items = [{ view: { id: 'instructions', name: 'AGENTS.md', category: 'personality', selected: true }, role: 'instructions', text }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-original-profile', previewId: preview.id, name: 'Ada', entryIds: ['instructions'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  const profile = h.writeProfile.mock.calls.at(-1)![2].systemPromptOverride as string;
+  expect(text.startsWith(profile)).toBe(true);
+  expect(Buffer.byteLength(profile, 'utf8')).toBeLessThanOrEqual(100_000);
+  expect(Buffer.byteLength(profile, 'utf8')).toBeGreaterThan(99_996);
+  expect(profile).not.toContain('�');
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, 'instructions', 'AGENTS.md', text, 'reference');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents?.instructions).toBe(text);
 });

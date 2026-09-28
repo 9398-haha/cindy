@@ -65,9 +65,14 @@ export function validateImportSelection(value: CompanionImportSelection, snapsho
     }
     ranges = value.entryRanges;
   }
-  const items = snapshot.items.filter(item => ranges ? item.sourceIndex !== undefined && ranges.some(([first, last]) => item.sourceIndex! >= first && item.sourceIndex! <= last) : selected.has(item.view.id));
   const count = ranges ? ranges.reduce((sum, [first, last]) => sum + last - first + 1, 0) : selected.size;
-  if (!Number.isSafeInteger(count) || items.length !== count) throw new CompanionImportError('SELECTION_CHANGED');
+  // Bound expansion by the actual snapshot before allocating indexes. This also
+  // supports selected-only checkpoints without assuming their storage order.
+  if (!Number.isSafeInteger(count) || count > snapshot.items.length) throw new CompanionImportError('SELECTION_CHANGED');
+  const remaining = new Set<number>();
+  if (ranges) for (const [first, last] of ranges) for (let index = first; index <= last; index++) remaining.add(index);
+  const items = snapshot.items.filter(item => ranges ? item.sourceIndex !== undefined && remaining.delete(item.sourceIndex) : selected.has(item.view.id));
+  if (items.length !== count || remaining.size) throw new CompanionImportError('SELECTION_CHANGED');
   selectedImportEnvironment(items);
   return resolveImportEnvironmentDependencies(items);
 }

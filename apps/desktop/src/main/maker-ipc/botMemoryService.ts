@@ -38,6 +38,19 @@ const SEARCH_LIMIT = 50;
 const REFRESH_COALESCE_MS = 3_000;
 const FILENAME_RE = /^(user|feedback|project|reference)_[a-z0-9_-]{1,64}\.md$/;
 
+/** Shared with import progress so counts use the storage service's exact boundaries. */
+export function splitImportedMemoryText(text: string): string[] {
+  const chunks: string[] = [];
+  let chunk = '', bytes = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > BOT_MEMORY_BODY_MAX_BYTES) { chunks.push(chunk); chunk = ''; bytes = 0; }
+    chunk += char; bytes += size;
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks;
+}
+
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
   assertCurrent?: () => void;
@@ -194,14 +207,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     async importDocument(botId: string, id: string, title: string, text: string, type: 'user' | 'reference' = 'reference'): Promise<void> {
       if (!/^[a-z0-9_-]{1,40}$/.test(id) || !text.trim()) throwIpcError('INVALID_PARAMS', 'Invalid imported memory');
       const { store, owner } = await storeOf(botId);
-      const chunks: string[] = [];
-      let chunk = '', bytes = 0;
-      for (const char of text) {
-        const size = Buffer.byteLength(char, 'utf8');
-        if (bytes + size > BOT_MEMORY_BODY_MAX_BYTES) { chunks.push(chunk); chunk = ''; bytes = 0; }
-        chunk += char; bytes += size;
-      }
-      if (chunk) chunks.push(chunk);
+      const chunks = splitImportedMemoryText(text);
       for (const [index, body] of chunks.entries()) {
         // Whitespace inside a source document is content too.
         if (!body) continue;
