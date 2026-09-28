@@ -2764,13 +2764,14 @@ describe('production plugin Auto admission after reservation', () => {
   it.each([
     ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy'].map(point => ({ planned, point }))),
     ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan'].map(point => ({ planned: true, point })),
+    ...['queued-plan-excludes', 'queued-plan-route', 'queued-plan-matches'].map(point => ({ planned: false, point })),
   ])('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
     let reserved = false;
     let mode = 'auto';
     let taskMode = 'auto';
     let enabled = true;
     let receiptReads = 0;
-    let taskReads = 0;
+    let reservedTaskReads = 0;
     const epoch = { client: {} };
     const revoke = () => { mode = 'acceptEdits'; };
     const task = () => ({ revision: 1, permissionMode: taskMode, workingDir: path.resolve('repo') });
@@ -2780,11 +2781,19 @@ describe('production plugin Auto admission after reservation', () => {
     const depsForCallback = {
       readPluginTaskPlanReceipt: JSON.parse,
       getCurrentDbClientSnapshot: () => epoch,
-      createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 6 && point === 'receipt') revoke(); return receipt; } }),
+      createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 6 && point === 'receipt') revoke(); return structuredClone(receipt); } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
-        ++taskReads;
-        if (taskReads === 6 && point === 'final-task') revoke();
-        if (taskReads === 6 && point === 'task-mode') taskMode = 'plan';
+        if (reserved) ++reservedTaskReads;
+        if (reservedTaskReads === 3 && point === 'final-task') revoke();
+        if (reservedTaskReads === 3 && point === 'task-mode') taskMode = 'plan';
+        // A registration already past its reservation check commits while the
+        // post-reservation service read drains the existing receipt queue.
+        if (reservedTaskReads === 2 && point.startsWith('queued-plan-')) {
+          receipt.payload = JSON.stringify({ teamPlan: { concurrency: 2, items: [{ ...planItem,
+            label: point === 'queued-plan-excludes' ? 'other' : 'sample',
+            route: { ...planItem.route, model: point === 'queued-plan-route' ? 'gpt-5.4' : 'gpt-5.5' },
+          }] } });
+        }
         return task();
       } }),
       readGhostErrandConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
@@ -2816,7 +2825,7 @@ describe('production plugin Auto admission after reservation', () => {
       ...(point === 'different-model' ? { model: 'gpt-5.4' } : {}),
       ...(point === 'normalized-fast' ? { fast: true } : {}),
     });
-    if (['healthy', 'explicit-match', 'canonical-directory'].includes(point)) {
+    if (['healthy', 'explicit-match', 'canonical-directory', 'queued-plan-matches'].includes(point)) {
       await expect(result).resolves.toMatchObject({ ok: true });
       expect(deps.bootstrapSession).toHaveBeenCalledOnce();
     } else if (['different-model', 'different-directory', 'normalized-fast'].includes(point)) {
@@ -2825,7 +2834,7 @@ describe('production plugin Auto admission after reservation', () => {
       expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
       expect(deps.bootstrapSession).not.toHaveBeenCalled();
     } else {
-      await expect(result).rejects.toMatchObject({ code: point === 'changed-plan' ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
+      await expect(result).rejects.toMatchObject({ code: ['different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'queued-plan-excludes', 'queued-plan-route'].includes(point) ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
       expect(deps.bootstrapSession).not.toHaveBeenCalled();
     }
     expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(reserved ? 1 : 0);

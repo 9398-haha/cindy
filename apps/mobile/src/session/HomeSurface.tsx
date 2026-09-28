@@ -6,7 +6,7 @@ import { HomeNewTaskButton } from './HomeNewTaskButton';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
 import { homeListStyles, SessionStatusMark } from '@/session/HomeListVisuals';
-import { useHeaderHeight } from "expo-router/react-navigation";
+import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { SessionHeaderNativeBlur } from "@/session/SessionHeaderNativeControls";
 import { RemoteTaskSuggestions } from '@/session/RemoteTaskSuggestions';
 import { isTaskSuggestionsSyncPending, useRemoteTaskSuggestionsPresentation } from '@/session/useRemoteTaskSuggestionsPresentation';
@@ -2570,7 +2570,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
   const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
-  const nativeHeaderHeight = useHeaderHeight();
+  const nativeHeaderHeight = useOptionalHeaderHeight();
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
     : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);

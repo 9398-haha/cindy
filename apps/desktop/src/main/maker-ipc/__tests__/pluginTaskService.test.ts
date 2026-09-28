@@ -222,6 +222,34 @@ describe('plugin ordinary task receipts', () => {
       f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution),
     ).rejects.toMatchObject({ code: 'REQUEST_EXPIRED' });
   });
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'] as const)(
+    'keeps native %s during a running cancellation', async status => {
+      const f = fixture();
+      const run = await f.send();
+      await f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution);
+      f.deps.cancel = vi.fn(async () => {
+        await f.service.settle(run.taskId, f.execution, status);
+        return 'stopping' as const;
+      });
+      expect((await f.service.cancel('p', run.runId)).status).toBe(status);
+      await f.service.settle(run.taskId, f.execution, 'failed');
+      expect((await f.service.getRun('p', run.runId)).status).toBe(status);
+    },
+  );
+  it.each(['cancelled', 'interrupted'] as const)(
+    'settles a stopping run as %s and ignores stale or duplicate terminals', async status => {
+      const f = fixture();
+      const run = await f.send();
+      await f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution);
+      f.deps.cancel = vi.fn(async () => 'stopping' as const);
+      expect((await f.service.cancel('p', run.runId)).status).toBe('stopping');
+      await f.service.settle(run.taskId, { ...f.execution, generation: f.execution.generation + 1 }, status);
+      expect(JSON.parse(f.rows.get(run.runId)!.payload).status).toBe('stopping');
+      await f.service.settle(run.taskId, f.execution, status);
+      await f.service.settle(run.taskId, f.execution, 'failed');
+      expect((await f.service.getRun('p', run.runId)).status).toBe(status);
+    },
+  );
   it('does not convert a completed output into cancellation', async () => {
     const f = fixture();
     const run = await f.send();
