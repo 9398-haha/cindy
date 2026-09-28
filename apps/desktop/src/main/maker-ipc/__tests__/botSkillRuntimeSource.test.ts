@@ -3,7 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { iterateBotSkillRuntimeSummaries, iterateBotSkillQuerySummaries } from '../botSkillRuntimeSource';
-import { botSkillsDir } from '../botSkillStore';
+import { botSkillsDir, parseBotSkillFile, readBotSkill } from '../botSkillStore';
+import yaml from 'js-yaml';
 
 let home: string;
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-stream-')); });
@@ -21,8 +22,44 @@ async function read(iterate = iterateBotSkillRuntimeSummaries) {
   return items;
 }
 
+it.each(['>', '|', '>-', '|-', '>+', '|2+ # keep newlines', '>2- # folded'])('parses YAML block metadata (%s) consistently without modifying the original', async indicator => {
+  const header = `---\r\nname: fixture\r\ndescription: ${indicator}\r\n  invoice reconciliation\r\n  keyword: matching\r\n\r\n  second paragraph\r\n    indented detail\r\n  last line\r\n\r\nmetadata:\r\n  displayName: |-\r\n    Visible name\r\n  updatedAt: "2026-09-29"\r\nunknown: |\r\n  description: must not replace metadata\r\n---\r\n`;
+  const text = header + 'Original body';
+  const expected = yaml.load(header.slice(5, -5)) as { description: string };
+  const file = await source('block', text);
+  for (const iterate of [iterateBotSkillRuntimeSummaries, iterateBotSkillQuerySummaries]) {
+    const [item] = await read(iterate);
+    expect(item).toMatchObject({ name: 'Visible name', description: expected.description, updatedAt: '2026-09-29', frontmatterBytes: Buffer.byteLength(header), bodyStartLine: header.split('\n').length });
+  }
+  expect(parseBotSkillFile(text)).toMatchObject({ name: 'Visible name', description: expected.description, body: 'Original body' });
+  expect(await fs.readFile(file, 'utf8')).toBe(text);
+});
+
+it('bounds multi-line block previews but keeps the full description in the query stream', async () => {
+  const description = Array.from({ length: 50_000 }, (_, index) => `  Line ${index} 中文`).join('\n');
+  const text = `---\nname: fixture\ndescription: >-\n${description}\n  unique-tail-term\nmetadata:\n  displayName: Visible\n---\nOriginal body`;
+  const file = await source('long-block', text);
+  const [preview] = await read();
+  expect(preview.description).toContain('Line 0 中文');
+  expect(Buffer.byteLength(preview.description)).toBeLessThan(4200);
+  expect(preview.name).toBe('Visible');
+  const [full] = await read(iterateBotSkillQuerySummaries);
+  expect(full.description).toContain('Line 49999 中文');
+  expect(full.description).toContain('unique-tail-term');
+  expect(full.description).toBe(parseBotSkillFile(text).description);
+  expect(await fs.readFile(file, 'utf8')).toBe(text);
+});
+
+it('does not migrate an empty block scalar as legacy Cindy-authored metadata', async () => {
+  const text = '---\nname: fixture\ndescription: >-\nupdatedAt: "2026-09-29"\n---\nOriginal body\n';
+  const file = await source('empty-block', text);
+  expect(await read()).toMatchObject([{ description: '', name: 'fixture' }]);
+  expect(await readBotSkill(home, 'bot', 'empty-block')).toMatchObject({ description: '', body: 'Original body' });
+  expect(await fs.readFile(file, 'utf8')).toBe(text);
+});
+
 it.each([['runtime', iterateBotSkillRuntimeSummaries], ['query', iterateBotSkillQuerySummaries]] as const)('%s uses directory streaming and header-only reads for a large Skill body', async (_kind, iterate) => {
-  const file = await source('large-body', `---\nname: fixture\ndescription: Preview\n---\n${'Body '.repeat(2 * 1024 * 1024)}`);
+  const file = await source('large-body', `---\nname: fixture\ndescription: >-\n  Preview\n  continued\n---\n${'Body '.repeat(2 * 1024 * 1024)}`);
   const readdir = vi.spyOn(fs, 'readdir').mockRejectedValue(new Error('unbounded enumeration'));
   const readFile = vi.spyOn(fs, 'readFile').mockRejectedValue(new Error('full file read'));
   const originalOpen = fs.open.bind(fs);
@@ -37,7 +74,7 @@ it.each([['runtime', iterateBotSkillRuntimeSummaries], ['query', iterateBotSkill
     });
     return handle;
   });
-  expect(await read(iterate)).toMatchObject([{ name: 'fixture', description: 'Preview', filePath: file, bodyStartLine: 5 }]);
+  expect(await read(iterate)).toMatchObject([{ name: 'fixture', description: 'Preview continued', filePath: file, bodyStartLine: 7 }]);
   expect(bytesRead).toBeLessThanOrEqual(8192);
   expect(readdir).not.toHaveBeenCalled(); expect(readFile).not.toHaveBeenCalled();
   open.mockRestore();

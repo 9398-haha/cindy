@@ -33,7 +33,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createBotSkillFrontmatterReader, isFrontmatterBlock } from './botSkillFrontmatter.js';
 import { invalidateBotSkillRuntime } from './botSkillRuntimeCache.js';
+export { unescapeFrontmatterValue } from './botSkillFrontmatter.js';
 
 /** 一个技能在磁盘上的完整形态。 */
 export interface BotSkillRecord {
@@ -168,17 +170,6 @@ function escapeFrontmatterValue(value: string): string {
     .replace(/[\r\n]+/g, ' ')}"`;
 }
 
-export function unescapeFrontmatterValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
-    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-  }
-  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
-    return trimmed.slice(1, -1).replace(/''/g, "'");
-  }
-  return trimmed;
-}
-
 export function renderBotSkillFile(input: {
   slug: string;
   name: string;
@@ -208,16 +199,13 @@ export function parseBotSkillFile(source: string): {
   const normalized = source.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);
   if (!match) return { name: '', description: '', updatedAt: '', body: normalized.trim() };
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const separator = line.indexOf(':');
-    if (separator <= 0) continue;
-    fields[line.slice(0, separator).trim()] = unescapeFrontmatterValue(line.slice(separator + 1));
-  }
+  const metadata = createBotSkillFrontmatterReader();
+  for (const line of match[1].split('\n')) metadata.line(line);
+  const fields = metadata.finish();
   return {
-    name: fields.displayName ?? fields.name ?? '',
-    description: fields.description ?? '',
-    updatedAt: fields.updatedAt ?? '',
+    name: fields.get('displayName') ?? fields.get('name') ?? '',
+    description: fields.get('description') ?? '',
+    updatedAt: fields.get('updatedAt') ?? '',
     body: normalized.slice(match[0].length).trim(),
   };
 }
@@ -235,7 +223,7 @@ export async function readCompatibleBotSkillSource(filePath: string, slug: strin
   const lines = match[1].split('\n');
   const keys = lines.map((line) => line.slice(0, line.indexOf(':')).trim());
   if (
-    lines.some((line) => /^\s/.test(line) || line.indexOf(':') <= 0) ||
+    lines.some((line) => /^\s/.test(line) || line.indexOf(':') <= 0 || isFrontmatterBlock(line.slice(line.indexOf(':') + 1))) ||
     keys.length !== 3 ||
     !['name', 'description', 'updatedAt'].every((key) => keys.includes(key))
   ) {

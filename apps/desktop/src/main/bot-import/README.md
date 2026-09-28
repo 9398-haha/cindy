@@ -125,6 +125,12 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   bodies are not loaded/parsed in full for indexing. Existing legacy migration
   remains for small authored files; oversized legacy files retain their original
   bytes and use discovery. Authoring/detail APIs still read the originals.
+  Streamed and full-file metadata readers share block-scalar handling: YAML `>`
+  folding, `|` literal lines, indentation and chomping use the existing YAML
+  parser. Runtime previews retain at most 4 KiB of block source per field;
+  query construction retains the complete description for one header at a time.
+  Colons inside block content never become metadata keys. Imported source bytes
+  and original body offsets remain unchanged, including empty block scalars.
   Full-metadata queries reuse a separate disk index of enabled and disabled
   headers. Construction streams headers (never bodies), sorts byte-bounded runs
   and merges two records at a time; an oversized header occupies its own run.

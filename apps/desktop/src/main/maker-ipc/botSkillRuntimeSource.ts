@@ -2,8 +2,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
   BOT_SKILL_MAX_BODY_BYTES, botSkillRootDir, botSkillsDir, readCompatibleBotSkillSource,
-  unescapeFrontmatterValue, type BotSkillSummary,
+  type BotSkillSummary,
 } from './botSkillStore.js';
+import { createBotSkillFrontmatterReader, isFrontmatterBlock } from './botSkillFrontmatter.js';
 
 // Retain only a preview of any single YAML line, even a multi-MiB scalar.
 const LINE_PREVIEW_BYTES = 4096;
@@ -11,7 +12,7 @@ const READ_BYTES = 8192;
 
 async function readRuntimeHeader(filePath: string, slug: string, migrate = true, fullMetadata = false): Promise<BotSkillSummary> {
   const handle = await fs.open(filePath, 'r');
-  const fields = new Map<string, string>();
+  const metadata = createBotSkillFrontmatterReader(fullMetadata ? Infinity : LINE_PREVIEW_BYTES);
   let frontmatterBytes = 0;
   let bodyStartLine = 1;
   let legacy = true;
@@ -41,14 +42,9 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true,
         const separator = text.indexOf(':');
         const key = text.slice(0, separator).trim();
         if (!entire || /^\s/.test(text) || separator <= 0 || legacyKeys.length >= 3
-          || !['name', 'description', 'updatedAt'].includes(key)) legacy = false;
+          || !['name', 'description', 'updatedAt'].includes(key) || isFrontmatterBlock(text.slice(separator + 1))) legacy = false;
         if (legacy) legacyKeys.push(key);
-        if (separator > 0 && ['name', 'displayName', 'description', 'updatedAt'].includes(key)) {
-          let value = text.slice(separator + 1).trim();
-          // Close only the preview's quote. The original scalar stays untouched.
-          if (!fullMetadata && !entire && /^["']/.test(value) && !value.endsWith(value[0])) value += value[0];
-          fields.set(key, unescapeFrontmatterValue(value));
-        }
+        metadata.line(text, !fullMetadata && !entire);
       }
       line = Buffer.alloc(0);
       lineParts = [];
@@ -73,6 +69,7 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true,
       }
     }
   } finally { await handle.close(); }
+  const fields = metadata.finish();
   legacy = complete && legacy && ['name', 'description', 'updatedAt'].every(key => legacyKeys.includes(key));
   // Keep the existing compatibility migration for bounded, historically authored
   // files. Huge hand-written legacy files remain intact and use body discovery.

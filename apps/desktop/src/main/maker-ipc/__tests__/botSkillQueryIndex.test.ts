@@ -28,6 +28,17 @@ async function write(slug: string, name: string, description = 'Searchable', dis
   return file;
 }
 
+it('finds block-scalar description keywords in enabled and disabled Skills, including beyond the runtime preview', async () => {
+  const folded = await write('folded', 'Folded', `>-\n  ${'prefix '.repeat(2000)}\n  reconciliation needle-folded`);
+  const literal = await write('literal', 'Literal', '|\n  invoice processing\n  needle-literal', true);
+  const originals = await Promise.all([folded, literal].map(file => fs.readFile(file, 'utf8')));
+  expect(await listBotSkillsForSession({ callerSessionId: 's', query: 'reconciliation needle-folded' }, deps()))
+    .toMatchObject({ ok: true, total: 1, skills: [{ slug: 'folded' }] });
+  expect(await query({ query: 'invoice needle-literal' }))
+    .toMatchObject({ total: 1, skills: [{ slug: 'literal', enabled: false }] });
+  expect(await Promise.all([folded, literal].map(file => fs.readFile(file, 'utf8')))).toEqual(originals);
+});
+
 it('reuses its index for different terms/pages without enumerating or opening source Skills', async () => {
   // No mutation is signalled in this case. Native notification delivery (which
   // may include delayed setup writes) is exercised separately below.
