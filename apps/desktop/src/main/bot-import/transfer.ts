@@ -44,6 +44,11 @@ export interface TransferDeps {
   enableRoutine(botId: string, routineId: string, item: ImportItem): Promise<void>;
 }
 
+/** Preserve previously accepted IDs; compact only IDs the memory service could never save. */
+function recoveredDocumentId(id: string): string {
+  return id.length <= 40 ? id : `memory-${fingerprint(id).slice(0, 32)}`;
+}
+
 export function validateImportSelection(value: CompanionImportSelection, snapshot: ImportSnapshot): ImportItem[] {
   if (!value || typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(value.requestId) || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 200 || typeof value.takeover !== 'boolean' || value.deferSetup !== undefined && typeof value.deferSetup !== 'boolean'
     || !Array.isArray(value.entryIds) || value.entryIds.some(id => typeof id !== 'string') || new Set(value.entryIds).size !== value.entryIds.length
@@ -101,6 +106,9 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   if (existing?.creationRejected) throw new CompanionImportError(existing.creationRejected);
   if (existing?.cancelled) return existing.result;
   if (existing?.result.status === 'complete') return existing.result;
+  // A prior attempt may already have captured the repaired subtree in its
+  // checkpoint. Normalize that case too, without requiring another source read.
+  for (const item of items) for (const document of item.documents ?? []) document.id = recoveredDocumentId(document.id);
   const receipt: ImportReceipt = existing ?? { selectionHash, handoverMarkers: true, copied: [], routines: {}, result: {
     requestId: selection.requestId, botId: `import_${fingerprint(selection.requestId).slice(0, 24)}`, status: 'running', checks: [],
   } };
@@ -131,7 +139,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
           if (directory) {
             const files = await readImportTree(source.root, name => /\.md$/i.test(name), budget, undefined, source.file);
             item.documents = files.filter(file => file.bytes.toString('utf8').trim()).map(file => ({
-              id: `${item.view.id}-${fingerprint(file.name).slice(0, 20)}`, name: file.name, text: file.bytes.toString('utf8'),
+              id: recoveredDocumentId(`${item.view.id}-${fingerprint(file.name).slice(0, 20)}`), name: file.name, text: file.bytes.toString('utf8'),
               ...(/(^|\/)USER\.md$/i.test(file.name) ? { role: 'user' as const } : {}),
             }));
           } else item.text = (await readImportFile(source.root, source.file, budget)).bytes.toString('utf8');

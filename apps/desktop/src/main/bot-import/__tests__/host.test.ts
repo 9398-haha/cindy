@@ -16,6 +16,8 @@ import type { ImportSnapshot } from '../types.js';
 import { CompanionImportError } from '../types.js';
 import { previewImportRedactions } from '../environmentSelection.js';
 import { redactEnvironmentValues } from '../process.js';
+import { DEFAULT_MEMORY_CONFIG, MemoryStorage, type MakerMemoryStore } from '@cindy/maker-core';
+import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 
 const h = vi.hoisted(() => ({ root: '', botId: '', created: false, verified: false, sourceEnabled: true, failReadyWrite: false, boundary: false,
   snapshot: null as unknown as ImportSnapshot, store: null as unknown as ReturnType<typeof createCompanionEnvironmentStore>,
@@ -916,16 +918,21 @@ it('transfers a 10,000-entry preview in bounded, immutable chunks and preserves 
 });
 
 it.each(['directory', undefined] as const)('retries a repaired memory directory with its original request, including legacy kind=%s', async kind => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  const brokenId = `memory-${fingerprint('broken').slice(0, 20)}`;
   const directory = path.join(h.root, 'memory', 'broken');
   const memoryRoot = path.join(h.root, 'memory');
   await fs.mkdir(memoryRoot);
   h.snapshot.items = [
     { view: { id: 'healthy', name: 'healthy.md', category: 'memory', selected: true }, text: 'Healthy' },
-    { view: { id: 'broken', name: 'broken', category: 'memory', selected: true }, captureIssue: 'IMPORT_ITEM_FAILED', sourceFile: { root: memoryRoot, file: directory, ...(kind ? { kind } : {}) } },
+    { view: { id: brokenId, name: 'broken', category: 'memory', selected: true }, captureIssue: 'IMPORT_ITEM_FAILED', sourceFile: { root: memoryRoot, file: directory, ...(kind ? { kind } : {}) } },
   ];
   const [source] = await listCompanionImportSources('phone');
   const preview = await previewCompanionImport(source!.id, 'phone');
-  const selection = { previewId: preview.id, requestId: 'retry-memory-directory', name: 'Ada', entryIds: ['healthy', 'broken'], takeover: false, deferSetup: true };
+  const selection = { previewId: preview.id, requestId: 'retry-memory-directory', name: 'Ada', entryIds: ['healthy', brokenId], takeover: false, deferSetup: true };
   const first = await startCompanionImport(selection, 'phone');
   expect(first.status).toBe('needs-attention');
   expect(h.importDocument).toHaveBeenCalledTimes(1);
@@ -936,14 +943,18 @@ it.each(['directory', undefined] as const)('retries a repaired memory directory 
   await startCompanionImport(selection, 'reconnected-phone');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
   const result = (await getCompanionImportResult(selection.requestId))!;
-  expect(result).toMatchObject({ status: 'complete', botId: first.botId, savedEntryIds: ['healthy', 'broken'] });
+  expect(result).toMatchObject({ status: 'complete', botId: first.botId, savedEntryIds: ['healthy', brokenId] });
   expect(h.importDocument).toHaveBeenCalledTimes(3);
-  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^broken-/), 'broken/nested/note.md', 'Recovered note', 'reference');
-  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^broken-/), 'broken/USER.md', 'User preferences', 'user');
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/nested/note.md', 'Recovered note', 'reference');
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/USER.md', 'User preferences', 'user');
+  expect((await storage.list()).map(record => [record.frontmatter.type, record.body.trim()])).toEqual(expect.arrayContaining([
+    ['reference', 'Healthy'], ['reference', 'Recovered note'], ['user', 'User preferences'],
+  ]));
   const environment = await h.store.read(h.root, first.botId, () => {});
   expect(Object.values(environment!.documents!)).toEqual(expect.arrayContaining(['Healthy', 'Recovered note', 'User preferences']));
   await startCompanionImport(selection, 'phone');
   expect(h.importDocument).toHaveBeenCalledTimes(3);
+  expect(await storage.list()).toHaveLength(3);
 });
 
 it.each([false, true])('publishes completion after deferred setup without duplicate notices (legacy setup: %s)', async legacySetup => {
@@ -1044,4 +1055,37 @@ it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata an
   expect(readable).not.toContain(secret);
   await expect(fs.stat(path.join(h.root, 'bots', first.botId, 'skills', 'report'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(JSON.stringify(result)).not.toContain(secret);
+});
+
+it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])('resumes saved recovered documents with stable storage IDs across lost acknowledgements: %s', async originalId => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument).mockImplementationOnce(async (...args: Parameters<typeof memory.importDocument>) => {
+    await memory.importDocument(...args);
+    throw new Error('fixture lost acknowledgement');
+  });
+  h.snapshot.items = [{ view: { id: 'memory-original-entry', name: 'Recovered subtree', category: 'memory', selected: true },
+    documents: [{ id: originalId, name: 'subtree/note.md', text: 'Recovered content' }] }];
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const selection = { previewId: preview.id, requestId: 'fixture-recovered-docs', name: 'Ada', entryIds: ['memory-original-entry'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'phone');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  // Simulate the old durable checkpoint, without an available source tree.
+  await h.store.update(h.root, result.botId, () => {}, environment => {
+    const snapshot = JSON.parse(environment.pendingImport!.snapshotJson);
+    snapshot.items[0].documents[0].id = originalId;
+    environment.pendingImport!.snapshotJson = JSON.stringify(snapshot);
+  });
+  const firstFiles = (await storage.list()).map(record => record.filename);
+  expect(firstFiles).toHaveLength(1);
+  await startCompanionImport(selection, 'reconnected');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  expect((await storage.list()).map(record => record.filename)).toEqual(firstFiles);
+  const ids = h.importDocument.mock.calls.map(call => call[1] as string);
+  expect(ids[0]).toBe(ids[1]);
+  expect(ids.every(id => id.length <= 40)).toBe(true);
+  if (originalId.length <= 40) expect(ids[0]).toBe(originalId);
 });
