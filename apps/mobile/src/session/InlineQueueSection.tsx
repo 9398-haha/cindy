@@ -43,7 +43,6 @@ export interface InlineQueueSectionProps {
   sessionSource?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
-  errorRecoveryReadOnlyReason: string | null;
   onResume(): void;
   onRetryError(): void;
   onClearError(): void;
@@ -54,7 +53,6 @@ export function InlineQueueSection({
   sessionSource,
   busy,
   readOnlyReason,
-  errorRecoveryReadOnlyReason,
   onResume,
   onRetryError,
   onClearError,
@@ -70,7 +68,7 @@ export function InlineQueueSection({
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
-  const errorDisabledReason = errorRecoveryReadOnlyReason
+  const errorDisabledReason = readOnlyReason
     || (busy ? t('message.queuePresentation.row.busy') : null);
   const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '');
   const retryDisabledReason = errorDisabledReason

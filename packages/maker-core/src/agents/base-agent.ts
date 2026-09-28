@@ -489,6 +489,11 @@ export interface RefreshLocalModelsOptions {
    * session hosts never need a credential-mode switch.
    */
   credentialMode?: AgentCredentialMode;
+  /**
+   * Claude Code:把本次读到的 SDK `supportedModels()` 原样交给调用方,而不是全局
+   * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
+   */
+  onSupportedModels?: (models: unknown[]) => void;
 }
 
 export interface ClaudeSubagentTaskRegistration {
@@ -682,6 +687,8 @@ export interface PiSubagentRunnerLaunchRequest {
 }
 
 export interface AgentDeps {
+  /** Opaque companion credential identity, freshly resolved at startup. No values enter the harness. */
+  resolveSessionEnvironment?: (sessionId: string) => Promise<{ identity: string; assertCurrent?(): void } | undefined>;
   /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
   getDisabledSkillPaths?: () => readonly string[];
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
@@ -918,9 +925,11 @@ export interface AgentDeps {
    * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
    * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
    * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
+   * sessionId 供需要上游会话头的后端（OpenCode Go）确定性派生头值：spawn env 必须
+   * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
    * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
    */
-  resolvePiVisionBridgeEnv?: (model: string) => Record<string, string> | null;
+  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native

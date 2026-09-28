@@ -29,6 +29,16 @@ it('keeps all contiguous blocks of a sealed final answer', () => {
   const text = items.filter(item => item.type === 'message').map(item => item.message.body);
   expect(text).toEqual(['Help', 'Part one', 'Part two']);
 });
+it('keeps every sealed reply block after a continuation even when the main timeline folds earlier seals', () => {
+  const items = bodies([...base,
+    row('a4', 'assistant', 'First block'), row('a5', 'assistant', 'First reply', { turnCompleted: true }),
+    row('t6', 'tool_use', { toolName: 'Read', toolUseId: 't6', input: { path: 'private' } }),
+    row('r7', 'tool_result', { toolUseId: 't6', result: 'more technical details' }),
+    row('a8', 'assistant', 'Second reply', { turnCompleted: true }),
+  ], false);
+  const text = items.filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text).toEqual(['Help', 'First block', 'First reply', 'Second reply']);
+});
 it('keeps delivered attachments without their preamble', () => {
   const items = bodies([...base, row('a4', 'assistant', '![Picture](https://example.com/picture.png)')], false);
   expect(JSON.stringify(items)).toContain('picture.png');

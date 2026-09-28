@@ -41,7 +41,6 @@ vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ on
 vi.mock('@/session/TeammatePicker', () => ({ TeammatePicker: () => null }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: () => null,
   CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
-vi.mock('@/session/CompanionAutomationSheet', () => ({ CompanionAutomationSheet: () => null }));
 vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: h.chooseMode }) }));
 vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));

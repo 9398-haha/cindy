@@ -105,7 +105,7 @@ export interface NormalizedRemoteMessage {
    */
   settledAt?: string;
   isStreaming?: boolean;
-  /** Host 在 SDK done 边界写入；后台自动续跑时每个 sealed assistant 都是正式回复。 */
+  /** Host 在 SDK done 边界写入；后台自动续跑时同一 turn 可有多次 seal，最后一次是最终答复。 */
   turnCompleted?: boolean;
   turnMoney?: RemoteMoney;
   /** 旧 Desktop 消息兼容字段。 */

@@ -267,7 +267,6 @@
     },
     "queue": {
       "count": "{{count}} 個",
-      "readOnlyHint": "協同唯讀模式，僅顯示電腦端請求。",
       "empty": "沒有待處理請求",
       "hint": {
         "plan_review": "先看計畫，必要時回饋修改，確認後電腦端才繼續執行。",

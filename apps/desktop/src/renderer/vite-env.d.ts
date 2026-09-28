@@ -269,6 +269,7 @@ type VoiceInputDictionaryAdviceInput =
 type VoiceInputDictionaryLearningAction =
   import('@cindy/voice-input-core').DictationDictionaryLearningAction;
 type VoiceInputSettingsData = import('../shared/voiceInputData').VoiceInputSettings;
+type VoiceInputSettingsPatchData = import('../shared/voiceInputData').VoiceInputSettingsPatch;
 type VoiceInputHistoryEntryData = import('../shared/voiceInputData').VoiceInputHistoryEntry;
 type VoiceInputDataSnapshot = import('../shared/voiceInputData').VoiceInputDataSnapshot;
 type VoiceInputProviderKindData = import('../shared/voiceInputAsrProfiles').VoiceInputProviderKind;
@@ -1173,6 +1174,7 @@ type ElectronLocalDbSessionListUsageOptions = Omit<
 };
 
 interface ElectronAPI {
+  companionImport: import('@cindy/maker-shared/companion-import').CompanionImportApi;
   modelFavoritesHost: import('../shared/modelFavoritesSync').ModelFavoritesHostApi;
   routines: import('../shared/routines').RoutinesAPI;
   platform: string;
@@ -1827,7 +1829,7 @@ interface ElectronAPI {
       settingsRaw?: string | null;
       historyRaw?: string | null;
     }) => VoiceInputDataSnapshot;
-    updateSettings: (patch: Partial<VoiceInputSettingsData>) => Promise<VoiceInputSettingsData>;
+    updateSettings: (patch: VoiceInputSettingsPatchData) => Promise<VoiceInputSettingsData>;
     updateShortcutSetting: (shortcut: VoiceInputShortcut | null) => Promise<
       | {
           ok: true;
@@ -3919,6 +3921,7 @@ interface ElectronAPI {
     account(command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown>;
   };
   deviceLink: {
+    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest) => Promise<import('@cindy/device-link').TaskMigrationView>;
     getState: () => Promise<{
       remoteControlEnabled: boolean;
       keepAwake: boolean;
@@ -5266,6 +5269,47 @@ interface ElectronAPI {
     onBotDirectMessageChanged: (
       cb: (
         payload: import('../shared/botDirectMessage').BotDirectMessageChangedPayload,
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
+    listBotGroups: () => Promise<import('../shared/botGroupChat').BotGroupListResult>;
+    getBotGroup: (
+      groupId: string,
+      options?: import('../shared/botGroupChat').BotGroupGetOptions,
+    ) => Promise<import('../shared/botGroupChat').BotGroupGetResult>;
+    createBotGroup: (
+      input: import('../shared/botGroupChat').BotGroupCreateInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupCreateResult>;
+    updateBotGroup: (
+      input: import('../shared/botGroupChat').BotGroupUpdateInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    setBotGroupMembers: (
+      input: import('../shared/botGroupChat').BotGroupSetMembersInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    deleteBotGroup: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    sendBotGroupMessage: (
+      input: import('../shared/botGroupChat').BotGroupSendInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
+    continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    stopBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    startBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    dismissBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    continueBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    retryBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    editBotGroupPlanStep: (
+      input: import('../shared/botGroupChat').BotGroupPlanEditInput,
+    ) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
+    onBotGroupChanged: (
+      cb: (
+        payload: import('../shared/botGroupChat').BotGroupChangedPayload,
         ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;

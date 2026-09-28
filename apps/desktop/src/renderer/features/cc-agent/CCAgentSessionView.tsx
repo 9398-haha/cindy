@@ -519,6 +519,7 @@ interface CCAgentSessionViewProps {
   botIdentity?: BotChatBinding;
   /** Entry-time read boundary for a Bot chat; preserved after the live read position advances. */
   botUnreadBoundaryAt?: number | null;
+  onBotReadThrough?: (at: number) => void;
 }
 
 /**
@@ -771,6 +772,7 @@ export function CCAgentSessionView({
   botMentions,
   botIdentity,
   botUnreadBoundaryAt,
+  onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -3641,6 +3643,7 @@ export function CCAgentSessionView({
         slashCommandRanges?: SlashCommandRange[];
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         onDeferredAccepted?: () => void;
+        annotationBurnFailure?: 'abort';
       },
     ) => {
       if (readOnly) return false;
@@ -3865,6 +3868,10 @@ export function CCAgentSessionView({
           ? { onRemoteOptimisticFailure: opts.onRemoteOptimisticFailure }
           : {}),
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
+        // 输入框在返回 false 时会原样恢复草稿:标注烧录失败可安全中止(见 SendMessageOpts)。
+        ...(opts?.annotationBurnFailure
+          ? { annotationBurnFailure: opts.annotationBurnFailure }
+          : {}),
       };
       if (deliveryMode === 'steer') {
         const followStartGeneration = readSendFollowCancelGeneration(sessionId);
@@ -4742,6 +4749,7 @@ export function CCAgentSessionView({
       assistantAvatar={botAssistantAvatar}
       simplifiedBotConversation={Boolean(botChatIdentity)}
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
+      onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={messages}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
