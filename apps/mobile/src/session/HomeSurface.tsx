@@ -2825,7 +2825,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
         {nativeHomeHeader ? null : (
         <View style={styles.homeHeader}>
-        <View style={styles.headerLeadingActions}>
+        <View style={[styles.headerLeadingActions, embedded && styles.headerEmbeddedActions]}>
         <HomeHeaderGlassButton
           accessibilityLabel={onDismiss ? t('home.drawer.closeA11y') : t('devices.list.a11y.openMenu')}
           onPress={onDismiss ?? openChromeMenu}
@@ -2862,9 +2862,9 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           </NativePullDownMenu>
         )}
         {showRemoteGuide ? (
-          <View style={styles.headerActions} />
+          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]} />
         ) : (
-          <View style={styles.headerActions}>
+          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]}>
             {selectedDeviceId && !embedded ? (
               <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
@@ -4581,6 +4581,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.xs,
     justifyContent: 'flex-end',
     width: navigationChrome.target * 2 + spacing.xs,
+  },
+  headerEmbeddedActions: {
+    // Embedded drawers never show the remote-desktop action. Keep both sides
+    // symmetric without reserving space for a second button that cannot appear.
+    width: navigationChrome.target,
   },
   // 菜单外层替标题占住顶栏中间的剩余宽度,长设备名在这里截断而不是挤开右侧按钮。
   headerTitleSlot: {
