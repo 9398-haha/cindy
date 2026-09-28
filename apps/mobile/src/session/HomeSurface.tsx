@@ -261,7 +261,7 @@ import { useSessionListActions } from '@/session/useSessionListActions';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import type { RemoteSession } from '@/session/types';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
 
 const LIST_LIMIT = 200;
 // Keep the device-link channel responsive while All Sessions hydrates several
@@ -2833,6 +2833,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
         {nativeHomeHeader ? null : (
         <View style={styles.homeHeader}>
+        <View style={[styles.headerLeadingActions, embedded && styles.headerEmbeddedActions]}>
         <HomeHeaderGlassButton
           accessibilityLabel={onDismiss ? t('home.drawer.closeA11y') : t('devices.list.a11y.openMenu')}
           onPress={onDismiss ?? openChromeMenu}
@@ -2840,6 +2841,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         >
           <>{onDismiss ? <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} /> : <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />}</>
         </HomeHeaderGlassButton>
+        </View>
         {showRemoteGuide ? (
           // 引导态没有可筛选的范围:正中只留品牌标题。
           <View style={styles.headerTitleWrap} testID="devices.title">
@@ -2868,9 +2870,9 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           </NativePullDownMenu>
         )}
         {showRemoteGuide ? (
-          <View style={styles.headerIconButton} />
+          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]} />
         ) : (
-          <View style={styles.headerActions}>
+          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]}>
             {selectedDeviceId && !embedded ? (
               <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
@@ -4571,17 +4573,27 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
   },
-  headerIconButton: {
-    alignItems: 'center',
+  headerLeadingActions: {
+    // Match the trailing two-button slot so the title is centered on the
+    // screen, even when selecting a device reveals the remote-desktop action.
+    alignItems: 'flex-start',
     flexShrink: 0,
-    height: 44,
+    height: navigationChrome.target,
     justifyContent: 'center',
-    width: 44,
+    width: navigationChrome.target * 2 + spacing.xs,
   },
   headerActions: {
     alignItems: 'center',
     flexDirection: 'row',
+    flexShrink: 0,
     gap: spacing.xs,
+    justifyContent: 'flex-end',
+    width: navigationChrome.target * 2 + spacing.xs,
+  },
+  headerEmbeddedActions: {
+    // Embedded drawers never show the remote-desktop action. Keep both sides
+    // symmetric without reserving space for a second button that cannot appear.
+    width: navigationChrome.target,
   },
   // 菜单外层替标题占住顶栏中间的剩余宽度,长设备名在这里截断而不是挤开右侧按钮。
   headerTitleSlot: {
