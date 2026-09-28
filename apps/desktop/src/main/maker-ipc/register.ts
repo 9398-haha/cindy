@@ -4,7 +4,7 @@ import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
-import { setPluginTaskHandler, isPluginTaskAuthorized, getPluginTaskInstallRevision } from '../cindy-brain/index.js';
+import { setPluginTaskHandler, setPluginTaskUninstaller, isPluginTaskAuthorized, getPluginTaskInstallRevision } from '../cindy-brain/index.js';
 import type { PluginTaskRoute, PluginTaskRequest } from '../../shared/pluginTasks.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
@@ -10528,7 +10528,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await inputCoordinator.ensureQueueRestored(taskId);
         assertCurrent();
         if (!inputCoordinator.isQueueRestored(taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task queue is restoring', true);
-        await withdrawOwnedSessionInputs({ sessionId: taskId, queue: inputCoordinator, owns: value => { assertPlugin(pluginId); return inputClientIds.includes(value); }, flush: awaitAgentInputQueueSnapshotPersistence });
+        await withdrawOwnedSessionInputs({ sessionId: taskId, queue: {
+          ensureQueueRestored: async sessionId => {
+            await inputCoordinator.ensureQueueRestored(sessionId);
+            await pluginTaskServiceForCurrentOwner!().get(pluginId, taskId);
+            assertPlugin(pluginId);
+          },
+          getQueueControlSnapshot: sessionId => inputCoordinator.getQueueControlSnapshot(sessionId),
+          remove: (sessionId, clientId) => inputCoordinator.remove(sessionId, clientId),
+        }, owns: value => { assertPlugin(pluginId); return inputClientIds.includes(value); }, flush: awaitAgentInputQueueSnapshotPersistence });
         assertCurrent();
         if (!execution) return 'cancelled';
         let stopped = false;
@@ -10536,7 +10544,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sessionId: taskId, withSessionLock: withSessionRestartLock,
           matches: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId) && isSameSessionExecution(readExecution(taskId), execution),
           operation: async () => {
+            await pluginTaskServiceForCurrentOwner!().get(pluginId, taskId);
             assertPlugin(pluginId);
+            if (!isSameSessionExecution(readExecution(taskId), execution)) { stopped = true; return; }
             resetAutomaticRecoveryForExplicitStop(taskId);
             contextOverflowRolloverHolder?.cancelRecovery(taskId);
             const outcome = await sessionControlService.stopSessionTurn({ targetSessionId: taskId });
@@ -10795,6 +10805,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
         const page = await getMessagesForHistory({ sessionIds: [request.taskId], workdir: null, fromMs: null, toMs: null,
           agentKind: null, roles: null, includeRewound: false, limit: request.limit ?? 50, cursor, order: 'asc' });
+        await service.get(pluginId, request.taskId);
         if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
         return { items: page.items.map(({ id, clientId, role, content, createdAt }) => ({ id: clientId ?? id, role, content, createdAt })),
           nextCursor: page.nextCursor ? JSON.stringify(page.nextCursor) : null };
@@ -10806,6 +10817,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
   setPluginTaskHandler(handlePluginTask);
+  setPluginTaskUninstaller((pluginId, remove) => pluginTaskServiceForCurrentOwner!().withUninstall(pluginId, remove));
 
   // Local task UI only. The plugin and device-link protocols have no recovery operation.
   const pluginWriteAccessFromHost = async (event: Electron.IpcMainInvokeEvent, taskId: unknown, retry: boolean) => {

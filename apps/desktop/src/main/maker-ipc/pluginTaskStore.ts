@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, or } from 'drizzle-orm';
+import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { pluginTaskRequests } from '../localDb/schema.js';
 import type { PluginTaskStore } from './pluginTaskService.js';
@@ -55,6 +55,13 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .where(and(eq(table.operation, 'send'), eq(table.targetId, taskId))),
     insert: async (row) => {
       await db.drizzle.insert(table).values(row);
+    },
+    revokePlugin: async (pluginId) => {
+      // Keep the identity/request key so reinstall cannot replay or recreate old tasks.
+      await db.drizzle.update(table).set({
+        payload: sql`json_set(CASE WHEN json_valid(${table.payload}) THEN CASE WHEN json_type(${table.payload}) = 'object' THEN ${table.payload} ELSE '{}' END ELSE '{}' END, '$.ownershipRevoked', json('true'))`,
+        revision: sql`${table.revision} + 1`,
+      }).where(and(eq(table.pluginId, pluginId), eq(table.operation, 'create')));
     },
     save: async (row) => {
       const result = await db.drizzle
