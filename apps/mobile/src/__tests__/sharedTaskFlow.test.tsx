@@ -2,7 +2,8 @@
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { sharedTaskHostPeer } from '@cindy/device-link';
+import { parseSharedTaskInvitation, sharedTaskHostPeer } from '@cindy/device-link';
+import { writeClipboardText } from '@/session/messageActions';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { ApiError } from '@/api/client';
 import { Platform } from 'react-native';
@@ -16,7 +17,7 @@ const h = vi.hoisted(() => ({
   link: { sharedTaskAvailable: true, invoke: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), readDeviceList: vi.fn() },
   api: { list: vi.fn(), get: vi.fn(), join: vi.fn(), leave: vi.fn(), close: vi.fn() },
   store: { getSessions: () => [], removeDevice: vi.fn(), setDeviceSessions: vi.fn(), upsertDeviceSession: vi.fn() },
-  t: (key: string, options?: { title?: string }) => options?.title ? key + ':' + options.title : key,
+  t: (key: string, options?: { title?: string; link?: string }) => key === 'sharedTask.invitationMessage' ? `Join “${options?.title}”\n${options?.link}\nOpen the link, or copy it and open Cindy on mobile.` : options?.title ? key + ':' + options.title : key,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t }) }));
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test', APP_SCHEME: 'cindy' }));
@@ -94,6 +95,16 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); clearSharedTaskInvitationIntent(); vi.useRealTimers(); });
 const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
 const invitationIntent = 'cindy://shared-session?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
+it('copies a shareable invitation message with a link accepted by automatic and manual admission', async () => {
+  h.params = { sessionId: 'task', deviceId: 'desktop' };
+  h.link.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'invite' ? { invitation: 'A'.repeat(43) } : { available: true, detail });
+  await render(); await click('sharedTask.invite');
+  const content = vi.mocked(writeClipboardText).mock.lastCall![0];
+  expect(content).toContain('Design review');
+  expect(content).toContain(invitationLink);
+  expect(content).toContain('copy it and open Cindy on mobile');
+  expect(parseSharedTaskInvitation(content, 'https://relay.example.test')).toEqual({ ok: true, invitation: 'A'.repeat(43) });
+});
 it('uses an automatically detected clipboard invitation without a paste or nickname control', async () => {
   receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
   h.link.invoke.mockResolvedValue({ id: 'task' });

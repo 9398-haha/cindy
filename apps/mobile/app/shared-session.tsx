@@ -381,7 +381,8 @@ export default function SharedSessionScreen() {
             const result = await host({ action: 'invite', sharedTaskId: detail.sharedTaskId }) as { invitation: string };
             if (!current()) return;
             const invitationApp = APP_SCHEME === 'cindycn' ? 'cindycn' : APP_SCHEME === 'cindydev' ? 'cindydev' : 'cindy';
-            try { await writeClipboardText(buildSharedTaskInvitationLink(result.invitation, DEVICE_LINK_API_BASE_URL, invitationApp)); if (current()) setNotice(t('sharedTask.invitationCopied')); }
+            const invitationLink = buildSharedTaskInvitationLink(result.invitation, DEVICE_LINK_API_BASE_URL, invitationApp);
+            try { await writeClipboardText(t('sharedTask.invitationMessage', { title, link: invitationLink })); if (current()) setNotice(t('sharedTask.invitationCopied')); }
             catch { if (current()) setNotice(t('sharedTask.invitationCopyFailed')); }
           }, false) }} />
         </View>

@@ -294,7 +294,10 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
     if (!detail || !target) return;
     const result = await host(target, { action: 'invite', sharedTaskId: detail.sharedTaskId }) as { invitation: string; invitationLink?: string };
     if (!current()) return;
-    try { await navigator.clipboard.writeText(result.invitationLink ?? result.invitation); }
+    const content = result.invitationLink
+      ? t('sharedTask.invitationMessage', { title: detail.title || target.title, link: result.invitationLink })
+      : result.invitation;
+    try { await navigator.clipboard.writeText(content); }
     catch { if (current()) toast.error(t('sharedTask.invitationCopyFailed')); return; }
     if (current()) toast.success(t('sharedTask.invitationCopied'));
   });
