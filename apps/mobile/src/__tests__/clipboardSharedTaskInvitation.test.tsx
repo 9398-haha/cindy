@@ -68,6 +68,38 @@ it('does not reread after an inactive/active permission prompt', async () => {
   await render(); clearSharedTaskInvitationIntent();
   await state('inactive'); await state('active'); expect(h.read).toHaveBeenCalledTimes(1);
 });
+it('offers the first allowed clipboard invitation when the permission prompt returns to active', async () => {
+  let finish!: (text: string) => void;
+  h.read.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  await state('inactive');
+  await act(async () => finish(link));
+  expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  await state('active');
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
+  expect(h.read).toHaveBeenCalledTimes(1);
+});
+it('does not offer a permission-prompt result after a link invitation replaces it', async () => {
+  let finish!: (text: string) => void;
+  h.read.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render(); await state('inactive');
+  await act(async () => finish(link));
+  receiveSharedTaskInvitationIntent('cindy://shared-session?invitation=' + 'B'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test');
+  await state('active');
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: 'B'.repeat(43), source: 'link' });
+  expect(h.read).toHaveBeenCalledTimes(1);
+});
+it('rereads for a new account after a permission prompt returns to active', async () => {
+  const finishes: Array<(text: string) => void> = [];
+  h.read.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+  await render(); await state('inactive');
+  await act(async () => finishes[0](link));
+  await act(async () => { setMobileAuthOwner('another'); await vi.runAllTicks(); });
+  await state('active');
+  expect(h.read).toHaveBeenCalledTimes(2);
+  await act(async () => finishes[1](link.replace(token, 'B'.repeat(43))));
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: 'B'.repeat(43), source: 'clipboard' });
+});
 it('waits for login and leaves an open admission form alone', async () => {
   await render(false); expect(h.read).not.toHaveBeenCalled();
   await render(true, true); expect(h.read).not.toHaveBeenCalled();

@@ -21,6 +21,7 @@ export function useClipboardSharedTaskInvitation(enabled: boolean, joining: bool
     let started = false;
     let background = false;
     let activation = 0;
+    let deferredOffer: (() => void) | null = null;
     const check = async () => {
       if (reading || joiningRef.current || getPendingSharedTaskInvitationIntent()) return;
       const owner = getMobileAuthOwner();
@@ -35,14 +36,19 @@ export function useClipboardSharedTaskInvitation(enabled: boolean, joining: bool
         if (!/https?:\/\//.test(text)) return;
         const parsed = parseSharedTaskInvitation(text, DEVICE_LINK_API_BASE_URL);
         if (!parsed.ok || seenInvitations.current.has(parsed.invitation)) return;
-        if (joiningRef.current || !isMobileAuthOwnerCurrent(owner)
-            || sequence !== getSharedTaskInvitationIntentSequence() || getPendingSharedTaskInvitationIntent()) {
-          return;
-        }
-        if (captured !== activation || AppState.currentState !== 'active') return;
-        const url = 'cindy://shared-session?invitation=' + encodeURIComponent(parsed.invitation)
-          + '&server=' + encodeURIComponent(DEVICE_LINK_API_BASE_URL);
-        if (receiveSharedTaskInvitationIntent(url, 'clipboard')) seenInvitations.current.add(parsed.invitation);
+        const offer = () => {
+          if (disposed || captured !== activation || joiningRef.current || !isMobileAuthOwnerCurrent(owner)
+              || sequence !== getSharedTaskInvitationIntentSequence() || getPendingSharedTaskInvitationIntent()) {
+            return;
+          }
+          // The iOS paste permission sheet can resolve the read while the app is inactive.
+          // Keep that result until focus returns instead of reading the clipboard again.
+          if (AppState.currentState !== 'active') { deferredOffer = offer; return; }
+          const url = 'cindy://shared-session?invitation=' + encodeURIComponent(parsed.invitation)
+            + '&server=' + encodeURIComponent(DEVICE_LINK_API_BASE_URL);
+          if (receiveSharedTaskInvitationIntent(url, 'clipboard')) seenInvitations.current.add(parsed.invitation);
+        };
+        offer();
       } catch {
         // Denied/unavailable clipboard access leaves the current page usable.
       } finally {
@@ -51,19 +57,24 @@ export function useClipboardSharedTaskInvitation(enabled: boolean, joining: bool
       }
     };
     const activate = (state: AppStateStatus) => {
-      if (state === 'background') { background = true; activation++; }
-      if (state !== 'active' || (started && !background)) return;
+      if (state === 'background') { background = true; activation++; deferredOffer = null; }
+      if (state !== 'active') return;
+      const offer = deferredOffer;
+      deferredOffer = null;
+      offer?.();
+      if (started && !background) return;
       started = true; background = false;
       void check();
     };
     const subscription = AppState.addEventListener('change', activate);
     const stopWatchingOwner = subscribeMobileAuthOwner(() => {
       // Cancel the old owner's read; a fresh read belongs to the settled account.
-      activation++;
+      activation++; deferredOffer = null;
+      if (AppState.currentState !== 'active') started = false;
       // Let the intent store retire the old owner's pending link first.
       queueMicrotask(() => { if (!disposed && AppState.currentState === 'active') void check(); });
     });
     activate(AppState.currentState);
-    return () => { disposed = true; subscription.remove(); stopWatchingOwner(); };
+    return () => { disposed = true; deferredOffer = null; subscription.remove(); stopWatchingOwner(); };
   }, [enabled]);
 }
