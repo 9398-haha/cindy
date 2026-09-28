@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardSharedTaskInvitation';
-import { clearSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import { clearSharedTaskInvitationIntent, confirmClipboardSharedTaskInvitation, getPendingSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 
 const h = vi.hoisted(() => ({ read: vi.fn(), state: 'active', listener: null as null | ((state: string) => void) }));
 vi.mock('expo-clipboard', () => ({ getStringAsync: h.read }));
@@ -37,6 +37,18 @@ it('reads on startup and identifies the invitation as clipboard admission', asyn
   await render();
   expect(h.read).toHaveBeenCalledTimes(1);
   expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
+});
+it.each(['account', 'new-link', 'expired'] as const)('ignores confirmation after the visible clipboard invitation is superseded by %s', async reason => {
+  await render();
+  const id = getPendingSharedTaskInvitationIntent()!.id;
+  await act(async () => {
+    if (reason === 'account') invalidateMobileAuthOwnerForSwitch();
+    if (reason === 'new-link') receiveSharedTaskInvitationIntent('cindy://shared-session?invitation=' + 'B'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test', 'clipboard');
+    if (reason === 'expired') await vi.advanceTimersByTimeAsync(15 * 60_000);
+    confirmClipboardSharedTaskInvitation(id);
+  });
+  if (reason === 'new-link') expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: 'B'.repeat(43), source: 'clipboard' });
+  else expect(getPendingSharedTaskInvitationIntent()).toBeNull();
 });
 it('reads on foreground, deduplicates consumed links, and detects a newly copied link', async () => {
   await render(); clearSharedTaskInvitationIntent();

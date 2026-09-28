@@ -8,6 +8,7 @@ import { ApiError } from '@/api/client';
 import { Platform } from 'react-native';
 import { clearSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import SharedSessionScreen from '../../app/shared-session';
+import { ClipboardSharedTaskPrompt } from '@/session/ClipboardSharedTaskPrompt';
 
 const h = vi.hoisted(() => ({
   params: {} as { sessionId?: string; deviceId?: string; sharedTaskId?: string; expectedOwnedSharedTaskId?: string; mode?: string }, generation: 1,
@@ -95,14 +96,36 @@ const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repe
 const invitationIntent = 'cindy://shared-session?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
 it('uses an automatically detected clipboard invitation without a paste or nickname control', async () => {
   receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
-  await render();
+  h.link.invoke.mockResolvedValue({ id: 'task' });
+  await act(async () => root.render(createElement('div', null, 'Current task', createElement(ClipboardSharedTaskPrompt, { accountName: 'Account Guest' }))));
   expect(element.querySelector('textarea')).toBeNull();
+  expect(element.textContent).toContain('Current task');
   expect(element.textContent).toContain('sharedTask.invitationDetected');
   expect(element.textContent).not.toContain('sharedTask.pasteInvitation');
   expect(h.api.join).not.toHaveBeenCalled();
+  expect(h.router.replace).not.toHaveBeenCalled();
   await click('sharedTask.join');
+  expect(getPendingSharedTaskInvitationIntent()?.source).toBe('link');
+  await render();
   expect(h.api.join).toHaveBeenCalledExactlyOnceWith('A'.repeat(43), 'Account Guest');
+  expect(h.router.replace).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'task', deviceId: sharedTaskHostPeer('shared', 'desktop'), deviceName: 'Design review' } });
   expect(element.querySelector('[aria-label="sharedTask.joinNickname"]')).toBeNull();
+});
+it('dismisses clipboard confirmation without navigating away from the current page', async () => {
+  receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
+  await act(async () => root.render(createElement('div', null, 'Current settings', createElement(ClipboardSharedTaskPrompt, { accountName: 'Account Guest' }))));
+  await click('sharedTask.notNow');
+  expect(element.textContent).toBe('Current settings');
+  expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(h.api.join).not.toHaveBeenCalled();
+});
+it('does not let a mounted management screen consume an unconfirmed clipboard invitation', async () => {
+  h.params = { mode: 'manage' };
+  receiveSharedTaskInvitationIntent(invitationIntent, 'clipboard');
+  await render();
+  expect(getPendingSharedTaskInvitationIntent()?.source).toBe('clipboard');
+  expect(h.api.join).not.toHaveBeenCalled();
 });
 it('rejects an invitation from another service without joining', async () => {
   await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'other.example.test'));

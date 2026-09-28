@@ -48,7 +48,6 @@ export default function SharedSessionScreen() {
   const [joined, setJoined] = useState<SharedTaskListItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
-  const [clipboardInvitation, setClipboardInvitation] = useState(false);
   const [guestCounts, setGuestCounts] = useState<Record<string, number>>({});
   const [deviceNames, setDeviceNames] = useState<Record<string, string>>({});
   const [tab, setTab] = useState<'current' | 'owned' | 'joined'>('current');
@@ -133,7 +132,7 @@ export default function SharedSessionScreen() {
   useEffect(() => {
     mounted.current = true;
     epoch.current++; pending.current = false; setBusy(false);
-    setState(null); setOwnedTargetUnavailable(false); setOwned([]); setJoined([]); setLoaded(false); setManualOpen(false); setClipboardInvitation(false); setGuestCounts({}); setJoinedId(undefined); setEnded(false);
+    setState(null); setOwnedTargetUnavailable(false); setOwned([]); setJoined([]); setLoaded(false); setManualOpen(false); setGuestCounts({}); setJoinedId(undefined); setEnded(false);
     setInvitation(''); setIncomingLink(null);
     setNotice(''); setLoadError(''); setTab(management ? 'owned' : 'current'); confirmationPending.current = null;
     return () => { mounted.current = false; epoch.current++; };
@@ -232,19 +231,18 @@ export default function SharedSessionScreen() {
     const joined = await api.join(parsed.invitation, sharedTaskAccountName(user?.name));
     if (!current()) return;
     Keyboard.dismiss(); setInvitation(''); setJoinedId(joined.sharedTaskId);
-    setManualOpen(false); setClipboardInvitation(false);
+    setManualOpen(false);
     if (enter) await openTask(joined.sharedTaskId, current);
   }, false, 'join');
   useEffect(() => {
-    if (!incomingInvitation || !isAuthenticated || sessionId || deviceId || sharedTaskId) return;
+    if (incomingInvitation?.source !== 'link' || !isAuthenticated || sessionId || deviceId || sharedTaskId) return;
     const input = buildSharedTaskInvitationLink(incomingInvitation.invitation, incomingInvitation.server);
     // Claim before waiting for relay capability. Leaving this screen discards the invitation.
     epoch.current++; pending.current = false; setBusy(false);
     setJoinedId(undefined); setState(null); setEnded(false); setTab('current');
-    setIncomingLink(incomingInvitation.source === 'link' ? { link: input, owner: getMobileAuthOwner() } : null);
+    setIncomingLink({ link: input, owner: getMobileAuthOwner() });
     clearSharedTaskInvitationIntent();
     setInvitation(input);
-    setClipboardInvitation(incomingInvitation.source === 'clipboard');
   }, [incomingInvitation, isAuthenticated, sessionId, deviceId, sharedTaskId]);
   useEffect(() => {
     if (!incomingLink || !isMobileAuthOwnerCurrent(incomingLink.owner) || !isAuthenticated || link.sharedTaskAvailable !== true || guestId || pending.current) return;
@@ -346,7 +344,7 @@ export default function SharedSessionScreen() {
       setJoinedId(undefined); setEnded(false); setState(null); setNotice(''); setLoadError('');
       router.replace('/devices');
     }} /> : link.sharedTaskAvailable !== true ? <Text style={styles.intro}>{t(link.sharedTaskAvailable === false ? 'sharedTask.upgrade' : 'sharedTask.retry')}</Text> : <>
-      {!guestId && !management && !clipboardInvitation && <View style={styles.tabs}>
+      {!guestId && !management && <View style={styles.tabs}>
         <MainWindowRowButton accessibilityLabel={t(hostContext ? 'sharedTask.tabCurrent' : 'sharedTask.join')} selected={tab === 'current'} style={[styles.tab, tab === 'current' && styles.tabSelected]} onPress={() => { setNotice(''); setTab('current'); }}><Text style={styles.small}>{t(hostContext ? 'sharedTask.tabCurrent' : 'sharedTask.join')}</Text></MainWindowRowButton>
         <MainWindowRowButton accessibilityLabel={t('sharedTask.tabOwned')} selected={tab === 'owned'} style={[styles.tab, tab === 'owned' && styles.tabSelected]} onPress={() => { setNotice(''); setTab('owned'); }}><Text style={styles.small}>{t('sharedTask.tabOwned')}</Text><View style={styles.badge}><Text style={styles.metadata}>{owned.length}</Text></View></MainWindowRowButton>
       </View>}
@@ -397,13 +395,7 @@ export default function SharedSessionScreen() {
           await host({ action: 'close', sharedTaskId: detail.sharedTaskId });
           if (current() && mode === 'detail') goBackGuarded(router, { pathname: '/shared-session', params: { mode: 'manage' } });
         }) }} /></View>
-      </> : clipboardInvitation ? <SharedTaskAdmissionDialog title={t('sharedTask.invitationDetected')} onClose={() => { if (!pending.current) router.replace('/devices'); }}>
-        <Text style={styles.intro}>{t('sharedTask.joinIntro')}</Text>
-        <Text style={styles.taskTitle}>{sharedTaskAccountName(user?.name)}</Text>
-        <Text style={styles.emptyCopy}>{t('sharedTask.joinNotice')}</Text>
-        {!!notice && <Text accessibilityRole="alert" style={styles.noticeText}>{notice}</Text>}
-        <View style={styles.footer}><SharedTaskAction grow action={{ label: t('sharedTask.notNow'), disabled: busy, onPress: () => router.replace('/devices') }} /><SharedTaskAction grow action={{ label: t('sharedTask.join'), tone: 'primary', busy, onPress: () => joinInvitation(invitation, true) }} /></View>
-      </SharedTaskAdmissionDialog> : <>
+      </> : <>
         <Text style={styles.intro}>{t('sharedTask.joinIntro')}</Text>
         <View style={styles.field}><Text style={styles.label}>{t('sharedTask.invitation')}</Text><TextInput accessibilityLabel={t('sharedTask.invitation')} placeholder={t('sharedTask.invitationPlaceholder')} placeholderTextColor={colors.textPlaceholder} style={[styles.input, styles.invitation]} value={invitation} onChangeText={(text) => { setIncomingLink(null); setInvitation(text); }} maxLength={8192} multiline textAlignVertical="top" autoCapitalize="none" autoCorrect={false} editable={!busy} /></View>
         <View style={styles.noticeBox}><Users size={iconSize.sm} color={colors.textTertiary} /><Text style={[styles.smallMuted, styles.grow]}>{t('sharedTask.joinNotice')}</Text></View>

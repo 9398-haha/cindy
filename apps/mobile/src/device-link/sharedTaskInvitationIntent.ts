@@ -35,6 +35,12 @@ export function receiveSharedTaskInvitationIntent(url: string, source: 'link' | 
 }
 
 export const getPendingSharedTaskInvitationIntent = () => pending;
+/** Confirmation belongs to the visible invitation, never to a newer link or account. */
+export function confirmClipboardSharedTaskInvitation(id: number): void {
+  if (!pending || pending.id !== id || pending.source !== 'clipboard' || getMobileAuthOwner().switching) return;
+  pending = { ...pending, id: ++sequence, source: 'link' };
+  notify();
+}
 export const getSharedTaskInvitationIntentSequence = () => sequence;
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const usePendingSharedTaskInvitationIntent = () => useSyncExternalStore(subscribe, getPendingSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent);

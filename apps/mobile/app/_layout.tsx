@@ -79,6 +79,7 @@ import {
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardSharedTaskInvitation';
+import { ClipboardSharedTaskPrompt } from '@/session/ClipboardSharedTaskPrompt';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
@@ -135,9 +136,9 @@ function NavigationGate() {
       return;
     }
     if (auth.isAuthenticated && inAuthGroup) {
-      if (pendingSharedTaskInvitation) router.replace('/shared-session');
+      if (pendingSharedTaskInvitation?.source === 'link') router.replace('/shared-session');
       else router.replace('/');
-    } else if (auth.isAuthenticated && pendingSharedTaskInvitation && segments.join('/') !== 'shared-session') {
+    } else if (auth.isAuthenticated && pendingSharedTaskInvitation?.source === 'link' && segments.join('/') !== 'shared-session') {
       router.replace('/shared-session');
     }
   }, [auth.initialized, auth.isAuthenticated, pendingSharedTaskInvitation, router, segments]);
@@ -201,6 +202,7 @@ function NavigationGate() {
         </RecentMessageHistoriesProvider>
         </ResidentHomeListProvider>
       </RemoteDesktopHost>
+      {auth.initialized && auth.isAuthenticated && !splashActive && <ClipboardSharedTaskPrompt accountName={auth.user?.name} />}
     </NavigationThemeProvider>
   );
 }
