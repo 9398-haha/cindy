@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createServer } from 'node:http';
 import type { Routine } from '@cindy/maker-scheduler';
-import { createCompanionEnvironmentStore } from '../environment.js';
+import { createCompanionEnvironmentStore, type CompanionEnvironment } from '../environment.js';
 import { discoverImportSources, inspectImportSource } from '../sources.js';
 import { validateImportSelection } from '../transfer.js';
 
@@ -277,4 +277,38 @@ it.each(['stdin', 'argv', 'assignment'] as const)('masks nested JSON credentials
   expect((await prepareImportedAutomation(root, routine, 'structured-run', signal, () => {}))?.direct).toBe(prepared!.direct);
   await finishImportedAutomation(root, routine, 'chat', 'structured-run', legacy, true, signal, () => {});
   expect(shared.message.mock.calls[0]![1].content).toBe(prepared!.direct);
+});
+
+it.each(['env', 'inherited-env', 'stdin', 'argv', 'assignment'] as const)('masks capability URL components from command %s before caching or publishing', async source => {
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture URL report' } as Routine;
+  const url = 'https://fixture-user:fixture-password@example.invalid/hooks/fixture%2Fpath?token=fixture%2Bquery&enabled=true';
+  const input = JSON.stringify({ destinations: [{ endpoint: url }], city: 'Paris' });
+  const read = source === 'env' || source === 'inherited-env' ? 'process.env.WEBHOOK_URL'
+    : `JSON.parse(${source === 'stdin' ? 'require("node:fs").readFileSync(0,"utf8")' : 'process.argv[1].replace(/^--config=/, "")'}).destinations[0].endpoint`;
+  const code = `const url=new URL(${read}); const encoded=url.pathname.split("/").pop(); process.stdout.write(JSON.stringify({user:url.username,password:url.password,path:decodeURIComponent(encoded),encoded,query:url.searchParams.get("token"),wireQuery:url.search.slice(1).split("&")[0].split("=")[1],enabled:url.searchParams.get("enabled"),route:url.pathname.split("/")[1],city:"Paris"}));`;
+  const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code,
+    ...(['argv', 'assignment'].includes(source) ? ['--', source === 'assignment' ? `--config=${input}` : input] : [])], cwd: root,
+    ...(source === 'stdin' ? { input } : {}), ...(source === 'env' ? { env: { WEBHOOK_URL: url } } : {}) } };
+  const environment: CompanionEnvironment = { version: 1, env: source === 'inherited-env' ? { WEBHOOK_URL: url } : {}, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root },
+  } };
+  await shared.store.write(root, 'bot', environment, () => {});
+  const signal = new AbortController().signal;
+  const result = await prepareImportedAutomation(root, routine, 'url-run', signal, () => {});
+  const output = JSON.parse(result!.direct!);
+  expect(output).toMatchObject({ enabled: 'true', route: 'hooks', city: 'Paris' });
+  for (const value of ['fixture-user', 'fixture-password', 'fixture/path', 'fixture%2Fpath', 'fixture+query', 'fixture%2Bquery']) expect(result!.direct).not.toContain(value);
+  const saved = (await shared.store.read(root, 'bot', () => {}))!;
+  expect(saved.automations!.routine!.original).toEqual(original);
+  expect(saved.env).toEqual(environment.env);
+  expect(saved.automations!.routine!.prepared?.direct).toBe(result!.direct);
+  const legacy = JSON.stringify({ user: 'fixture-user', password: 'fixture-password', path: 'fixture/path', encoded: 'fixture%2Fpath', query: 'fixture+query', wireQuery: 'fixture%2Bquery', enabled: 'true', route: 'hooks', city: 'Paris' });
+  await shared.store.update(root, 'bot', () => {}, env => { env.automations!.routine!.prepared = { runId: 'url-run', prompt: '', direct: legacy }; });
+  expect((await prepareImportedAutomation(root, routine, 'url-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => {
+    env.automations!.routine!.deliveryProgress = { runId: 'url-run', text: legacy, direct: true, deliveries: [], next: 0 };
+  });
+  expect((await prepareImportedAutomation(root, routine, 'retry-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await finishImportedAutomation(root, routine, 'chat', 'retry-run', 'must reuse pending output', true, signal, () => {});
+  expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
 });

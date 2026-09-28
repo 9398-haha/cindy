@@ -27,7 +27,7 @@ export function connectionRedactions(server: ImportedMcpServer, environment: Rec
 }
 
 /** URL credentials can be echoed in encoded or decoded form by a remote service. */
-function urlCredentialValues(raw: string, includePath = false): string[] {
+export function urlCredentialValues(raw: string, includePath = false): string[] {
   const values = [raw];
   try {
     const url = new URL(raw);
