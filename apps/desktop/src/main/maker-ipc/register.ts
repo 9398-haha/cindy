@@ -10620,6 +10620,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'requestWriteAccess': {
         const snapshot = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
+        if (task.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
         const mode = request.mode ?? 'acceptEdits';
         const cfg = readGhostErrandConfig(pluginId);
         assertCallerCurrent();
@@ -10669,6 +10670,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             assertRequestCurrent();
             if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
+            if (fresh.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
             await assertIdle();
             assertRequestCurrent();
@@ -11842,21 +11844,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
       assertPluginWorkerAutoAuthorized(receipt.pluginId, task);
       const cfg = readGhostErrandConfig(receipt.pluginId);
-      const directory = await resolvePluginWorkerDirectory({
-        requested: params.workingDir ?? task.workingDir ?? '', leadDirectory: task.workingDir,
+      const resolveAuthorizedDirectory = (requested: string) => resolvePluginWorkerDirectory({
+        requested, leadDirectory: task.workingDir,
         configuredDirectory: cfg.workingDir, isPickedDirectory: dir => isGhostPickedDir(receipt.pluginId,dir),
         assertCurrent: () => {
           if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(receipt.pluginId) || cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
         },
       });
-      if (resolvedWorkingDir !== undefined && directory !== await realpathWorkingDirectory(resolvedWorkingDir)) throw new PluginTaskError('PERMISSION_DENIED','Worker directory changed during creation');
+      const directory = await resolveAuthorizedDirectory(params.workingDir ?? task.workingDir ?? '');
+      if (resolvedWorkingDir !== undefined && directory !== await resolveAuthorizedDirectory(resolvedWorkingDir)) throw new PluginTaskError('PERMISSION_DENIED','Worker directory changed during creation');
       // get() waits behind plan registration in the existing receipt queue.
       const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!currentReceipt || currentReceipt.operation !== 'create' || epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Task ownership changed');
       const data = readPluginTaskPlanReceipt(currentReceipt.payload);
       const item = data.teamPlan?.items.find((x: {label:string})=>x.label===params.label);
       const plannedDirectory = item && resolvedRoute
-        ? await realpathWorkingDirectory(item.workingDir) : undefined;
+        ? await resolveAuthorizedDirectory(item.workingDir) : undefined;
       const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
       // Last admission check also covers no-plan plugin tasks and revocation

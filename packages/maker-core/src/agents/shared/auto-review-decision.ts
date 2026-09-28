@@ -276,6 +276,7 @@ export async function withAutoReviewContext(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
   evaluate: (prepared: AutoReviewRequest) => Promise<AutoReviewDecision>,
+  finalize: (decision: AutoReviewDecision) => AutoReviewDecision = decision => decision,
 ): Promise<AutoReviewDecision> {
   try {
     const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
@@ -288,7 +289,8 @@ export async function withAutoReviewContext(
         return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
       }
     }
-    return decision;
+    // No await after the live runtime fence: Host lookup may outlive accepted input.
+    return finalize(decision);
   } catch {
     return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
   }

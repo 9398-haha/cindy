@@ -5565,32 +5565,31 @@ assertRouteCurrent();
         ),
         platform: sessionReviewPlatform,
       };
+      let key: string | undefined;
+      let pending: Promise<AutoReviewDecision> | undefined;
       return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        const key = JSON.stringify(prepared);
+        key = JSON.stringify(prepared);
         const cached = autoReviewDecisionCache.get(key);
-        const pending = cached ?? resolveAutoReviewDecision(
+        pending = cached ?? resolveAutoReviewDecision(
             prepared,
             this.deps.reviewAutoPermissionAction,
           );
         if (!cached) autoReviewDecisionCache.set(key, pending);
-        return pending.then<AutoReviewDecision>((decision) => (
-          autoReviewDecisionCache.get(key) !== pending
-            ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
-            : directoryGeneration === autoReviewDirectoryGeneration
-            ? decision
-            : {
-                verdict: 'block',
-                reason: 'Directory permissions changed; retry with the current scope.',
-              }
-        )).then((decision) => {
-          if (autoReviewDecisionCache.get(key) === pending && directoryGeneration === autoReviewDirectoryGeneration) {
-            autoReviewActionContext.record(action, decision);
-          }
-          return decision;
-        });
+        return pending;
+      }, (decision) => {
+        if (!pending || !key) return decision;
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
+            || autoReviewDecisionCache.get(key) !== pending) {
+          return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
+        }
+        if (directoryGeneration !== autoReviewDirectoryGeneration) {
+          return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
+        }
+        autoReviewActionContext.record(action, decision);
+        return decision;
       });
     };
     const readonlyReferencesConfig = (): Record<string, unknown> => ({

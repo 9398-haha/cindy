@@ -2789,7 +2789,7 @@ describe('production plugin Auto admission after reservation', () => {
       } }),
       readGhostErrandConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
       isPluginTaskAuthorized: () => enabled,
-      resolvePluginWorkerDirectory: async () => { if (reserved && point === 'directory') revoke(); return path.resolve('repo'); },
+      resolvePluginWorkerDirectory: async ({requested}: {requested: string}) => { if (reserved && point === 'directory') revoke(); return requested === path.resolve('other') ? requested : path.resolve('repo'); },
       realpathWorkingDirectory: async (dir: string) => dir === path.resolve('other') ? dir : path.resolve('repo'),
       isGhostPickedDir: () => false,
       PluginTaskError,

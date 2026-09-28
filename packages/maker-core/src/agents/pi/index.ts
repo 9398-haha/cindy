@@ -3959,32 +3959,30 @@ export class PiAgent extends BaseAgent {
         writableRoots: [opts.workingDir, ...mutableWritableDirs],
         platform: opts.remoteHostId ? ('linux' as const) : process.platform,
       };
+      let cacheKey: string | undefined;
+      let pending: Promise<AutoReviewDecision> | undefined;
       return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        const cacheKey = JSON.stringify(prepared);
-        let pending = autoReviewDecisionCache.get(cacheKey);
+        cacheKey = JSON.stringify(prepared);
+        pending = autoReviewDecisionCache.get(cacheKey);
         if (!pending) {
           pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction);
           autoReviewDecisionCache.set(cacheKey, pending);
         }
-        return pending.then<AutoReviewDecision>((decision) => (
-          autoReviewDecisionCache.get(cacheKey) !== pending
-            ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
-            : directoryGeneration === autoReviewDirectoryGeneration
-            && !directoryPermissionsPendingPersistence()
-            ? decision
-            : {
-                verdict: 'block',
-                reason: 'Directory permissions changed; retry with the current scope.',
-              }
-        )).then((decision) => {
-          if (autoReviewDecisionCache.get(cacheKey) === pending && directoryGeneration === autoReviewDirectoryGeneration) {
-            autoReviewActionContext.record(action, decision);
-          }
-          return decision;
-        });
+        return pending;
+      }, (decision) => {
+        if (!pending || !cacheKey) return decision;
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
+            || autoReviewDecisionCache.get(cacheKey) !== pending) {
+          return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
+        }
+        if (directoryGeneration !== autoReviewDirectoryGeneration || directoryPermissionsPendingPersistence()) {
+          return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
+        }
+        autoReviewActionContext.record(action, decision);
+        return decision;
       });
     };
     let closed = false;
