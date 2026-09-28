@@ -926,7 +926,12 @@ it.each(['directory', undefined] as const)('retries a repaired memory directory 
   const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
   await storage.init(h.root);
   const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
-  h.importDocument.mockImplementation(memory.importDocument);
+  let releaseMemoryWrite!: () => void;
+  const memoryWrite = new Promise<void>(resolve => { releaseMemoryWrite = resolve; });
+  h.importDocument.mockImplementation(memory.importDocument).mockImplementationOnce(async (...args: Parameters<typeof memory.importDocument>) => {
+    await memoryWrite;
+    await memory.importDocument(...args);
+  });
   const brokenId = `memory-${fingerprint('broken').slice(0, 20)}`;
   const directory = path.join(h.root, 'memory', 'broken');
   const memoryRoot = path.join(h.root, 'memory');
@@ -939,15 +944,18 @@ it.each(['directory', undefined] as const)('retries a repaired memory directory 
   const preview = await previewCompanionImport(source!.id, 'phone');
   const selection = { previewId: preview.id, requestId: 'retry-memory-directory', name: 'Ada', entryIds: ['healthy', brokenId], takeover: false, deferSetup: true };
   const first = await startCompanionImport(selection, 'phone');
-  expect(first.status).toBe('needs-attention');
+  // Force acceptance to happen before the real memory write finishes. The API
+  // deliberately returns running here, independently of filesystem speed.
+  try { expect(first.status).toBe('running'); } finally { releaseMemoryWrite(); }
+  const failed = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
+  expect(failed?.status).toBe('needs-attention');
   expect(h.importDocument).toHaveBeenCalledTimes(1);
   await fs.mkdir(path.join(directory, 'nested'), { recursive: true });
   await fs.writeFile(path.join(directory, 'nested', 'note.md'), 'Recovered note');
   await fs.writeFile(path.join(directory, 'USER.md'), 'User preferences');
   await fs.writeFile(path.join(directory, 'ignored.txt'), 'Not a memory');
   await startCompanionImport(selection, 'reconnected-phone');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
-  const result = (await getCompanionImportResult(selection.requestId))!;
+  const result = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
   expect(result).toMatchObject({ status: 'complete', botId: first.botId, savedEntryIds: ['healthy', brokenId] });
   expect(h.importDocument).toHaveBeenCalledTimes(3);
   expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/nested/note.md', 'Recovered note', 'reference');
