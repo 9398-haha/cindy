@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import {
   createPluginTaskService,
@@ -257,7 +258,7 @@ describe('plugin ordinary task receipts', () => {
     const f = fixture();
     const input = { requestKey: 'isolated', title: 'Test', isolatedWorkspace: true };
     const task = await f.service.create('p', input);
-    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true);
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined);
     await f.service.create('p', input);
     expect(f.deps.createSession).toHaveBeenCalledTimes(1);
     await expect(f.service.create('p', { ...input, isolatedWorkspace: false }))
@@ -488,6 +489,30 @@ it('permission elevation blocks new sends but preserves inspection of existing w
  await expect(f.service.send('p',{taskId:task.taskId,expectedRevision:task.revision,requestKey:'new-send',text:'new'})).rejects.toMatchObject({code:'PERMISSION_DENIED'});
 });
 
+it('replays create and frozen plans across key-order changes and a service restart', async () => {
+  const f = fixture();
+  const request = { requestKey: 'ordered', title: 'Test', route: f.route };
+  const task = await f.service.create('p', request);
+  const route = { fastMode: false, effort: 'high', model: 'model', providerId: 'mine', agentKind: 'codex' as const };
+  const restarted = createPluginTaskService(f.deps);
+  await expect(restarted.create('p', { ...request, route })).resolves.toEqual(task);
+  expect(f.deps.createSession).toHaveBeenCalledOnce();
+  const plan = { concurrency: 2, items: [{ label: 'sample', workingDir: '/answer', route: f.route }] };
+  await restarted.setTeamPlan('p', task.taskId, plan);
+  await expect(restarted.setTeamPlan('p', task.taskId, {
+    items: [{ route, workingDir: '/answer', label: 'sample' }], concurrency: 2,
+  })).resolves.toEqual({ ok: true });
+  await expect(restarted.create('p', { ...request, route: { ...route, model: 'changed' } })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  await expect(restarted.setTeamPlan('p', task.taskId, { ...plan, concurrency: 3 })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+it('preserves exact retries of pre-canonical development receipts', async () => {
+  const f = fixture();
+  const request = { requestKey: 'legacy', title: 'Test', route: f.route };
+  const task = await f.service.create('p', request);
+  f.rows.get(task.taskId)!.fingerprint = createHash('sha256').update(JSON.stringify([request.title, request.route])).digest('hex');
+  await expect(createPluginTaskService(f.deps).create('p', request)).resolves.toEqual(task);
+  await expect(f.service.create('p', { ...request, route: { ...f.route, model: 'changed' } })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
 it('freezes owned plan and retains settled labels',async()=>{const f=fixture(),task=await f.create();const plan={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};await f.service.setTeamPlan('p',task.taskId,plan);await f.service.setTeamPlan('p',task.taskId,plan);await expect(f.service.setTeamPlan('other',task.taskId,plan)).rejects.toThrow('Task not found');await expect(f.service.setTeamPlan('p',task.taskId,{...plan,concurrency:3})).rejects.toThrow('immutable');await f.service.settleWorkerLabel('p',task.taskId,'sample');expect(JSON.parse(f.rows.get(task.taskId)!.payload).settledLabels).toEqual(['sample']);});
 
 
