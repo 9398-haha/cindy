@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d90a85b3-4d49-43e0-b0ec-644c0c0e02ba",
-  "prevId": "87e4ab7e-d6f1-43ed-93f4-f769913af593",
+  "id": "caa7f32c-7494-48d9-a5cb-aa88d267b9bd",
+  "prevId": "d90a85b3-4d49-43e0-b0ec-644c0c0e02ba",
   "tables": {
     "account_usage_snapshots": {
       "name": "account_usage_snapshots",
@@ -77,6 +77,104 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "auto_review_projections": {
+      "name": "auto_review_projections",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lead_id": {
+          "name": "lead_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "projected_revision": {
+          "name": "projected_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": -1
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "auto_review_projections_lead_idx": {
+          "name": "auto_review_projections_lead_idx",
+          "columns": [
+            "lead_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "auto_review_projections_session_id_sessions_id_fk": {
+          "name": "auto_review_projections_session_id_sessions_id_fk",
+          "tableFrom": "auto_review_projections",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "auto_review_projections_lead_id_sessions_id_fk": {
+          "name": "auto_review_projections_lead_id_sessions_id_fk",
+          "tableFrom": "auto_review_projections",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "lead_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "auto_review_projections_session_id_lead_id_pk": {
+          "columns": [
+            "session_id",
+            "lead_id"
+          ],
+          "name": "auto_review_projections_session_id_lead_id_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
