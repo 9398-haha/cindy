@@ -77,12 +77,15 @@ it('hashes binary contents and checkpoints compactly without invoking Buffer.toJ
 it('reads every resource in a skill with more than 4096 small files', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-many-files-'));
   try {
-    for (let index = 0; index < 4100; index++) await fs.writeFile(path.join(root, `resource-${index}.txt`), `Resource ${index}`);
+    for (let first = 0; first < 4100; first += 32) await Promise.all(Array.from({ length: Math.min(32, 4100 - first) }, (_, offset) => {
+      const index = first + offset;
+      return fs.writeFile(path.join(root, `resource-${index}.txt`), `Resource ${index}`);
+    }));
     const files = await readImportTree(root, undefined, createImportBudget());
     expect(files).toHaveLength(4100);
     expect(files.find(file => file.name === 'resource-4099.txt')?.bytes.toString()).toBe('Resource 4099');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
-});
+}, 180_000);
 
 it('charges metadata for empty files and stops streaming instead of retaining unlimited errors', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-empty-files-'));

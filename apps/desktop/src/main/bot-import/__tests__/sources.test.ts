@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
 import { transferCompanion, validateImportSelection, type TransferDeps } from '../transfer.js';
 import { resolveImportReferences, selectedImportEnvironment } from '../environmentSelection.js';
-import { discoverImportSkills } from '../skills.js';
+import { discoverImportSkills, readImportSkillTree } from '../skills.js';
 import { createImportBudget } from '../files.js';
 
 let home: string;
@@ -523,6 +523,23 @@ it.each(['workspace', 'extraDirs', 'plugin', 'hermes'])('bounds empty %s directo
   expect(opened).toHaveLength(1);
   const handle = await opened[0]!.value;
   await expect(handle.read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+});
+
+it('bounds native venv enumeration even when entries are not interpreter aliases', async () => {
+  const directory = path.join(home, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin');
+  await fs.mkdir(directory, { recursive: true });
+  await write('.venv/pyvenv.cfg', `home = ${home}\n`);
+  for (let index = 0; index < 40; index++) await fs.writeFile(path.join(directory, `ordinary-${index}`), '');
+  const budget = createImportBudget(1500);
+  const reserve = vi.spyOn(budget, 'reserve');
+  const open = vi.spyOn(fs, 'opendir');
+  const readdir = vi.spyOn(fs, 'readdir');
+  await expect(readImportSkillTree(home, undefined, budget)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(readdir).not.toHaveBeenCalled();
+  expect(reserve.mock.calls.length).toBeLessThan(40);
+  const opened = open.mock.results.filter((_, index) => String(open.mock.calls[index]![0]) === directory);
+  expect(opened).toHaveLength(1);
+  await expect((await opened[0]!.value).read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
 });
 
 it('preserves sorted skill-name precedence after streaming directory entries', async () => {

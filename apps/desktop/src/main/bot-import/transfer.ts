@@ -16,6 +16,8 @@ export interface ImportReceipt {
   copied: string[];
   environmentSaved?: boolean;
   checkpointSaved?: boolean;
+  /** Completion cleanup acknowledged after the private pending snapshot was removed. */
+  checkpointCleared?: boolean;
   companionCreated?: true;
   /** Terminal, non-secret rejection; retained so lost acknowledgements unlock callers. */
   creationRejected?: 'IMPORT_NAME_EXISTS';

@@ -206,7 +206,22 @@ it('runs a native command with literal argv, cwd, stdin and private env only aft
   await expect(fs.access(marker)).rejects.toThrow();
   await shared.store.update(root, 'bot', () => {}, env => { env.automations!.routine!.handover = 'ready'; });
   const result = await prepareImportedAutomation(root, routine, 'cmd-run', signal, () => {});
-  expect(JSON.parse(result!.direct!)).toEqual([arg, await fs.realpath(root), 'test stdin', '[imported_credential_0]']);
+  expect(JSON.parse(result!.direct!)).toEqual([expect.stringMatching(/^\[command_literal_/), expect.stringMatching(/^\[command_literal_/), expect.stringMatching(/^\[command_literal_/), '[imported_credential_0]']);
+  for (const literal of [arg, root, await fs.realpath(root), 'test stdin']) expect(result!.direct).not.toContain(literal);
   expect(await prepareImportedAutomation(root, routine, 'cmd-run', signal, () => {})).toEqual(result);
   expect(await fs.readFile(marker, 'utf8')).toBe('x');
+});
+
+it('masks argv-only credentials again before publishing legacy command results', async () => {
+  const routine = { id: 'routine', botId: 'bot' } as Routine;
+  const original = { payload: { kind: 'command', argv: [process.execPath, '--token=fixture-argv-secret'], input: 'fixture-stdin-secret', cwd: root } };
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root },
+  } }, () => {});
+  await finishImportedAutomation(root, routine, 'chat', 'legacy-run', `fixture-argv-secret fixture-stdin-secret ${root}`, true, new AbortController().signal, () => {});
+  const published = shared.message.mock.calls[0]![1].content;
+  expect(published).not.toContain('fixture-argv-secret');
+  expect(published).not.toContain('fixture-stdin-secret');
+  expect(published).not.toContain(root);
+  expect(published).toContain('[command_literal_');
 });

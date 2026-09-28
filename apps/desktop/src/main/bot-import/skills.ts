@@ -102,10 +102,11 @@ export async function readImportSkillTree(root: string, include?: (name: string)
     const realHome = await fs.realpath(home).catch(() => undefined);
     if (!realHome) continue;
     const bin = path.join(root, folder, process.platform === 'win32' ? 'Scripts' : 'bin');
-    let entries: Dirent[];
-    try { entries = await fs.readdir(bin, { withFileTypes: true }); }
+    let entries: Awaited<ReturnType<typeof fs.opendir>>;
+    try { entries = await fs.opendir(bin); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-    for (const entry of entries) {
+    for await (const entry of entries) {
+      budget?.reserve(128 + Buffer.byteLength(path.join(bin, entry.name)));
       if (!entry.isSymbolicLink() || !/^python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(entry.name)) continue;
       const real = await fs.realpath(path.join(bin, entry.name));
       if (path.dirname(real) !== realHome || !/^python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(path.basename(real))) continue;

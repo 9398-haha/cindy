@@ -303,6 +303,19 @@ export async function cancelCompanionImportsForDeletion(botId: string): Promise<
   }
 }
 
+/** Caller holds the profile lock; acknowledge only after cleanup has committed. */
+async function clearCompletedCheckpoint(root: string, receipt: ImportReceipt, assertOwner: () => void) {
+  if (receipt.cancelled || receipt.result.status !== 'complete' || receipt.checkpointCleared) return;
+  const { botId, requestId } = receipt.result;
+  const environment = await companionEnvironmentStore.read(root, botId, assertOwner);
+  if (environment?.pendingImport?.selection.requestId === requestId) await companionEnvironmentStore.update(root, botId, assertOwner, env => {
+    if (env.pendingImport?.selection.requestId === requestId) delete env.pendingImport;
+  });
+  assertOwner();
+  receipt.checkpointCleared = true;
+  await saveReceipt(root, receipt); assertOwner();
+}
+
 export async function getCompanionImportResult(requestId: string): Promise<CompanionImportResult | undefined> {
   const scope = owner();
   let receipt = await readReceipt(scope.root, requestId); scope.assert();
@@ -355,6 +368,10 @@ export async function getCompanionImportResult(requestId: string): Promise<Compa
       await saveReceipt(scope.root, receipt);
     });
   }
+  if (receipt?.result.status === 'complete' && !receipt.cancelled && !receipt.checkpointCleared) await withBotProfileLocks([receipt.result.botId], async () => {
+    const latest = await readReceipt(scope.root, requestId); scope.assert();
+    if (latest) await clearCompletedCheckpoint(scope.root, latest, scope.assert);
+  });
   return receipt?.result;
 }
 
@@ -453,6 +470,38 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   const running = jobs.get(jobKey);
   if (running) return accepted(running, scope.root, selection.requestId);
   let skillConfigReader: { budget: Parameters<NonNullable<TransferDeps['readSkillConfig']>>[1]; reader: ReturnType<typeof createImportSourceReader> } | undefined;
+  const applyProfile = async (botId: string, items: ImportItem[], baseline?: Record<string, string>, originals?: Record<string, string>) => {
+    const roleText = (role: 'identity' | 'user' | 'instructions', originals?: Record<string, string>) => {
+      const text = redactText(items.flatMap(item => [...(item.role === role ? [originals ? originals[item.view.id] : item.text] : []), ...(item.documents ?? []).filter(document => document.role === role).map(document => originals ? originals[document.id] : document.text)]).join('\n\n'));
+      if (Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES) return text;
+      // Keep the original profile text without synthesizing new system instructions.
+      // The entire source remains in personal memory and the encrypted document archive.
+      let bytes = 0, end = 0;
+      for (const char of text) {
+        bytes += Buffer.byteLength(char, 'utf8');
+        if (bytes > BOT_PROFILE_TEXT_MAX_BYTES) break;
+        end += char.length;
+      }
+      return text.slice(0, end);
+    };
+    const folder = await readBotProfileFolder(scope.root, botId); scope.assert();
+    const fields = { identity: 'identitySource', user: 'userContextSource', instructions: 'systemPromptOverride' } as const;
+    const patch: { identitySource?: string; userContextSource?: string; systemPromptOverride?: string } = {};
+    for (const [role, field] of Object.entries(fields) as Array<[keyof typeof fields, typeof fields[keyof typeof fields]]>) {
+      const text = roleText(role, originals);
+      if (!text || baseline && text === roleText(role, baseline)) continue;
+      if (baseline && (folder[field] ?? '') !== roleText(role, baseline) && folder[field] !== text) throw new CompanionImportError('PROFILE_CHANGED');
+      patch[field] = text;
+    }
+    if (!baseline || Object.keys(patch).length) {
+      await writeBotProfileFolder(scope.root, botId, {
+        config: baseline ? folder.config : { ...folder.config, mcpMode: 'allowlist', mcpServers: [...new Set([
+          ...(Array.isArray(folder.config.mcpServers) ? folder.config.mcpServers : []), 'companion_connections',
+        ])] }, ...patch,
+      }); scope.assert();
+      await reconcileBotProfileFolder(botId); scope.assert();
+    }
+  };
   const transferDeps: TransferDeps = {
     assertOwner: scope.assert,
     validateItems(items) {
@@ -506,40 +555,52 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       } else if (item.view.category === 'memory' || item.view.category === 'personality') {
         const documents = [...(item.text ? [{ id: item.view.id, name: item.view.name, text: item.text, role: item.role }] : []), ...item.documents ?? []];
         const attachments = [...(item.asset ? [item.asset] : []), ...(item.files ?? [])];
+        let firstFailure: unknown; let failedAttachments = 0;
         for (const file of attachments) {
-          // Older checkpoints classified every non-md/txt file as media. Use
-          // the same byte classification on retry without changing entry IDs.
-          const content = memoryFileContent({ ...file, executable: false });
-          if (content.kind === 'empty') continue;
-          if (content.kind === 'text') {
-            documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name, text: content.text, role: undefined });
-            continue;
+          try {
+            // Old checkpoints may classify textual memory as an attachment.
+            const content = memoryFileContent({ ...file, executable: false });
+            if (content.kind === 'empty') continue;
+            if (content.kind === 'text') {
+              documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name, text: content.text, role: undefined });
+              continue;
+            }
+            const sessionId = await transferDeps.createConversation(botId);
+            const url = await importMemoryMedia(botId, sessionId, file.bytes, scope.assert);
+            documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name,
+              text: `![${redactText(file.name).replace(/[\[\]\r\n]/g, '')}](${url})`, role: undefined });
+          } catch (error) {
+            scope.assert();
+            firstFailure ??= error; failedAttachments++;
           }
-          const sessionId = await transferDeps.createConversation(botId);
-          const url = await importMemoryMedia(botId, sessionId, file.bytes, scope.assert);
-          documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name,
-            text: `![${redactText(file.name).replace(/[\[\]\r\n]/g, '')}](${url})`, role: undefined });
         }
-        const prepared = documents.map(document => {
-          const text = redactText(document.text);
-          return { ...document, text, parts: splitImportedMemoryText(text).length };
-        });
-        const total = prepared.reduce((sum, document) => sum + document.parts, 0);
-        let saved = 0;
-        for (const document of prepared) {
+        let total = failedAttachments, saved = 0;
+        for (const document of documents) {
+          let parts = 1; total++;
           try {
             scope.assert();
-            await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), document.text, document.role === 'user' ? 'user' : 'reference');
-            saved += document.parts;
+            const text = redactText(document.text);
+            parts = splitImportedMemoryText(text).length;
+            total += parts - 1;
+            await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), text, document.role === 'user' ? 'user' : 'reference');
+            saved += parts;
           } catch (error) {
-            if (error instanceof Error) {
-              const progress = (error as Error & { importProgress?: { saved: number; total: number } }).importProgress;
-              Object.assign(error, { importProgress: { saved: saved + (progress?.saved ?? 0),
-                total: total + (progress ? progress.total - document.parts : 0) } });
-            }
-            throw error;
+            scope.assert();
+            const progress = (error as { importProgress?: { saved: number; total: number } })?.importProgress;
+            if (progress) { saved += progress.saved; total += progress.total - parts; }
+            firstFailure ??= error;
           }
         }
+        if (firstFailure) {
+          const error = firstFailure instanceof Error ? firstFailure : new CompanionImportError('IMPORT_ITEM_FAILED');
+          throw Object.assign(error, { importProgress: { saved, total } });
+        }
+      }
+      if (prior?.environmentSaved && (item.role || item.documents?.some(document => document.role))) {
+        const environment = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
+        const previous = environment?.documents ?? {};
+        await applyProfile(botId, selected.map(candidate => candidate.view.id === item.view.id ? item : candidate), previous,
+          { ...previous, ...Object.fromEntries(documentEntries(item)) });
       }
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         // A formerly unreadable manifest may only now supply its own settings.
@@ -595,30 +656,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         pendingImport: previous?.pendingImport ?? { selection, snapshotJson: await serializeImportSnapshotAsync({ ...snapshot, avatarImageBase64: selection.avatarImageBase64, items, publicationRedactions: publicationRedactions(items) }, scope.assert) },
         automations: previous?.automations ?? {},
       }, scope.assert);
-      const roleText = (role: 'identity' | 'user' | 'instructions') => {
-        const text = redactText(items.flatMap(item => [...(item.role === role ? [item.text] : []), ...(item.documents ?? []).filter(document => document.role === role).map(document => document.text)]).join('\n\n'));
-        if (Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES) return text;
-        // Keep the original profile text without synthesizing new system instructions.
-        // The entire source remains in personal memory and the encrypted document archive.
-        let bytes = 0, end = 0;
-        for (const char of text) {
-          bytes += Buffer.byteLength(char, 'utf8');
-          if (bytes > BOT_PROFILE_TEXT_MAX_BYTES) break;
-          end += char.length;
-        }
-        return text.slice(0, end);
-      };
-      const folder = await readBotProfileFolder(scope.root, botId); scope.assert();
-      await writeBotProfileFolder(scope.root, botId, {
-        config: { ...folder.config, mcpMode: 'allowlist', mcpServers: [...new Set([
-          ...(Array.isArray(folder.config.mcpServers) ? folder.config.mcpServers : []),
-          'companion_connections',
-        ])] },
-        ...(roleText('identity') ? { identitySource: roleText('identity') } : {}),
-        ...(roleText('user') ? { userContextSource: roleText('user') } : {}),
-        ...(roleText('instructions') ? { systemPromptOverride: roleText('instructions') } : {}),
-      }); scope.assert();
-      await reconcileBotProfileFolder(botId); scope.assert();
+      await applyProfile(botId, items);
     },
     async createConversation(botId) {
       const source = await getBotRemoteResourceSource(botId); scope.assert();
@@ -705,7 +743,10 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
             content: unsaved.size ? `${t('bots.import.chatPartial')}\n\n${details}${failures.length > 20 ? `\n… (${failures.length})` : ''}` : t(`bots.import.${pending ? 'chatSetup' : 'chatReady'}`) });
           scope.assert();
         }
-        if (result.status === 'complete') await companionEnvironmentStore.update(scope.root, result.botId, scope.assert, env => { delete env.pendingImport; });
+        if (result.status === 'complete') {
+          const completed = await readReceipt(scope.root, selection.requestId); scope.assert();
+          if (completed) await clearCompletedCheckpoint(scope.root, completed, scope.assert);
+        }
         return result;
       });
       if (result.status !== 'running') return result;
