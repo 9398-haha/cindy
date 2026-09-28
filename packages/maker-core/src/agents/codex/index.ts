@@ -7143,7 +7143,8 @@ assertRouteCurrent();
             cwd: opts.workingDir,
             // Recovery belongs to the running send, whose catalog/window is already frozen.
             ...currentThreadWorkspaceConfig(retainHistory ? appliedContextLimit : undefined),
-            ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
+            // Fork inherits the source tools; only thread/start accepts their registration.
+            ...(!retainHistory && sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
             ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
             ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),

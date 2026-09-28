@@ -10468,10 +10468,11 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const failure = { message: 'unexpected status 502 Bad Gateway', codexErrorInfo: 'other' as const };
     const nativeId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
-    function setup(savedProvider = 'cindy_codex', resolveModelContextLimit = () => 1_000_000) {
+    function setup(savedProvider = 'cindy_codex', resolveModelContextLimit = () => 1_000_000, reviewMode = false) {
       const agent = new CodexAgent(createDeps({}, { resolveModelContextLimit }));
       let turns = 0;
       const host = installFakeHost(agent, (method, raw) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) return {};
         const params = raw as { threadId?: string; modelProvider?: string };
         if (method === Method.TurnStart) return { turn: { id: `turn-${++turns}` } };
         if (method === Method.ThreadFork) return { thread: { id: 'fork-thread-id' }, model: 'codex/gpt-6-astra', modelProvider: params.modelProvider };
@@ -10481,7 +10482,8 @@ describe('CodexAgent MCP thread context hooks', () => {
         if (method === 'thread/read') return { thread: { id: nativeId, modelProvider: savedProvider } };
         if (method === Method.TurnInterrupt) return {};
         return undefined;
-      }, { codexProxyActive: true, cindyRemoteCompactionProviderId: 'cindy_codex', localCompactionProviderId: 'cindy_summary' });
+      }, { codexProxyActive: true, cindyRemoteCompactionProviderId: 'cindy_codex', localCompactionProviderId: 'cindy_summary',
+        ...(reviewMode ? { userAgent: 'mock-codex/0.156.0' } : {}) });
       return { agent, host };
     }
     async function start(savedProvider?: string) {
@@ -10524,6 +10526,40 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
       expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
       await handle.close();
+    });
+    it.skipIf(process.platform !== 'win32')('inherits Review read tools on a history fork without sending start-only parameters', async () => {
+      const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-fork-'));
+      await fs.writeFile(path.join(workingDir, 'evidence.md'), 'FORK_REVIEW_EVIDENCE');
+      const { agent, host } = setup('cindy_codex', () => 1_000_000, true);
+      try {
+        const handle = await agent.startSession({ sessionId: 'review-summary-task', providerId: 'xd',
+          model: 'codex/gpt-6-astra', workingDir, reviewMode: true });
+        const started = host.request.mock.calls.find(([m]) => m === Method.ThreadStart)![1] as Record<string, unknown>;
+        expect(started.dynamicTools).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: 'review_read_file' }),
+          expect.objectContaining({ name: 'review_list_directory' }),
+          expect.objectContaining({ name: 'review_view_image' }),
+        ]));
+        await handle.send({ type: 'user', content: 'Review the existing evidence.' });
+        compact(host); fail(host);
+        await waitForExpectation(() => expect(handle.getCurrentTurnId?.()).toBe('turn-2'));
+        const forked = host.request.mock.calls.find(([m]) => m === Method.ThreadFork)![1] as Record<string, unknown>;
+        expect(forked).not.toHaveProperty('dynamicTools');
+        expect(forked).toMatchObject({ threadId: nativeId, permissions: started.permissions,
+          config: expect.objectContaining({ 'features.shell_tool': false, 'features.view_image': false }) });
+        const read = (target: string) => host.getThreadHandlers()!.dynamicToolCall!({
+          threadId: 'fork-thread-id', turnId: 'turn-2', callId: 'fork-read', namespace: null,
+          tool: 'review_read_file', arguments: { path: target },
+        }, { requestId: 'fork-read-request' });
+        const result = await read('evidence.md');
+        expect(result.success).toBe(true);
+        expect(JSON.stringify(result)).toContain('FORK_REVIEW_EVIDENCE');
+        expect((await read('../outside.md')).success).toBe(false);
+        await handle.close();
+      } finally {
+        await agent.dispose();
+        await fs.rm(workingDir, { recursive: true, force: true });
+      }
     });
     it('switches after remote compact exhausts 429 retries, only when the native turn finishes', async () => {
       const { host, handle } = await start();
