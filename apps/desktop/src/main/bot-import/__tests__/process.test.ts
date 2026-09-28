@@ -40,6 +40,20 @@ it('keeps credential context through array and object values without masking ord
   expect(JSON.stringify(original)).toBe(before);
 });
 
+it.each(['credential', 'credentials', 'clientCredentials', 'tokens', 'access_tokens', 'refreshTokens',
+  'secrets', 'passwords', 'passwds', 'keys', 'api_keys', 'API-KEYS', 'auth', 'authorization', 'cookies'])(
+  'masks scalar and nested string descendants of the %s credential field', field => {
+    const original = { [field]: ['fixture-container-secret', { nested: ['fixture-nested-secret'] }],
+      scalar: { [field]: 'fixture-scalar-secret' }, cities: ['Paris', 'London'], monkeys: ['capuchin'] };
+    const before = JSON.stringify(original);
+    const masks = importedContentRedactions({ env: {}, mcp: [], credentials: [{ id: 'fixture', format: 'json', value: original }] });
+    const output = redactEnvironmentValues('fixture-container-secret fixture-nested-secret fixture-scalar-secret Paris London capuchin', masks);
+    for (const secret of ['fixture-container-secret', 'fixture-nested-secret', 'fixture-scalar-secret']) expect(output).not.toContain(secret);
+    expect(output).toContain('Paris London capuchin');
+    expect(JSON.stringify(original)).toBe(before);
+  },
+);
+
 it('keeps locale/region configuration and ordinary words intact while masking unknown short credentials as tokens', () => {
   const env = { REGION: 'us', LANG: 'en', LC_ALL: 'en_US.UTF-8', AWS_REGION: 'us-east-1', PRIVATE: 'xy', ARBITRARY: 'fixture-private-value' };
   const value = { status: 'success', language: 'en', region: 'us', detail: 'English status in us-east-1; private xy / fixture-private-value' };

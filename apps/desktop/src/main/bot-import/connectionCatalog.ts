@@ -8,6 +8,8 @@ import { environmentRedactions, isPublicImportSetting, redactEnvironmentData, re
 const PUBLIC_MCP_ROUTES = new Set(['api', 'v1', 'v2', 'mcp', 'sse', 'messages', 'hooks', 'webhooks']);
 const LOCAL_MCP_ENDPOINTS = new Set(['native-mcp', 'touchdesigner-mcp']);
 const CAPABILITY_PATH_PREFIXES = new Set(['hooks', 'webhooks', 'token', 'secret', 'credential', 'key']);
+// Credential containers use the same classification as their scalar forms.
+const CREDENTIAL_FIELD = /^(?:keys?|api[_-]?keys?|.*(?:tokens?|secrets?|passwords?|passwds?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
 
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
@@ -71,7 +73,7 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
     for (const [key, child] of Object.entries(value)) {
       // Credential-bearing containers remain private through array indices and
       // nested objects; unrelated sibling fields keep their own classification.
-      collect(child, credentialValue || /^(?:key|api[_-]?key|.*token|.*secret|.*password|authorization|access|refresh)$/i.test(key));
+      collect(child, credentialValue || CREDENTIAL_FIELD.test(key));
     }
   };
   for (const credential of environment.credentials) collect(credential.value);
