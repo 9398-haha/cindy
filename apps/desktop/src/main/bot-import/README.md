@@ -602,6 +602,11 @@ fields in both wire and decoded form, including repeated fields, percent-encoded
 names and `+` spaces. Ordinary form values such as city/day-count/token type stay
 readable. Execution retries and final chat publication apply the same masks;
 the original form bytes remain in the encrypted command archive.
+For curl/curl.exe, `-u`/`--user` and `-U`/`--proxy-user` also contribute the password
+after the first userinfo colon, including joined short and assigned long forms.
+Preview/public copies and runtime/retry output share this extraction. Usernames,
+ordinary colon-containing values, other executables and arguments after `--` do
+not gain userinfo masks; original argv bytes are unchanged.
 It does not blanket-mask ordinary positional arguments or command settings:
 doing so corrupts day counts, output formats and subcommands in imported text.
 Unlabelled opaque positional values are not newly classified as credentials by

@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { previewImportRedactions, resolveImportReferences, selectedImportRedactions } from '../environmentSelection.js';
 import { redactEnvironmentValues } from '../process.js';
 import type { ImportItem } from '../types.js';
+import { commandArgumentRedactions } from '../commandRedactions.js';
 
 it('resolves mixed-case Windows references throughout selected MCP and delivery settings', () => {
   const env = { api_key: 'fixture-key', Empty: '' };
@@ -82,4 +83,30 @@ it.each(['stdin', 'argv', 'assignment', 'env'])('masks credential fields in form
     expect(readable).toContain('Paris 7 Bearer curl --data');
   }
   expect(items).toEqual(before);
+});
+
+it.each(['-u', '--user', '-U', '--proxy-user', '-ujoined', '-Ujoined', '--user=', '--proxy-user='])
+('masks only the password in curl %s userinfo before publication', option => {
+  const password = 'fixture-curl:password-"quoted"'; const userinfo = `alice:${password}`;
+  const args = option.endsWith('joined') ? [option.slice(0, 2) + userinfo] : option.endsWith('=') ? [option + userinfo] : [option, userinfo];
+  const items: ImportItem[] = [{ view: { id: 'job', category: 'automations', name: 'Job', selected: true },
+    automation: { sourceId: 'job', fingerprint: 'fixture', original: { payload: { kind: 'command', argv: ['/usr/bin/curl', ...args] } } } }];
+  const original = structuredClone(items);
+  for (const collect of [previewImportRedactions, selectedImportRedactions]) {
+    const output = redactEnvironmentValues(`${password}\n${JSON.stringify(password)}\nalice ordinary:value --user`, collect(items));
+    expect(output).not.toContain(password);
+    expect(output).not.toContain(JSON.stringify(password).slice(1, -1));
+    expect(output).toContain('alice ordinary:value --user');
+  }
+  expect(items).toEqual(original);
+});
+
+it('scopes curl userinfo parsing to its executable and options, retaining usernames and ordinary colons', () => {
+  for (const exe of ['curl', 'curl.exe', 'C:\\Windows\\System32\\curl.exe']) {
+    expect(Object.values(commandArgumentRedactions([exe, '-u', 'alice:fixture-curl-password']))).toContain('fixture-curl-password');
+  }
+  for (const args of [['node', '-u', 'alice:fixture-public'], ['curl', '--', '-u', 'alice:fixture-public'],
+    ['curl', '--user', 'alice'], ['curl', '--user', 'alice:'], ['curl', 'ordinary:fixture-public']]) {
+    expect(redactEnvironmentValues('alice ordinary:fixture-public', commandArgumentRedactions(args))).toBe('alice ordinary:fixture-public');
+  }
 });

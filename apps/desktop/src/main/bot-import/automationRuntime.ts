@@ -13,7 +13,7 @@ import { importedScriptName, importedScriptInterpreter } from './scripts.js';
 import { importedContentRedactions } from './connectionCatalog.js';
 import type { CompanionEnvironment } from './environment.js';
 import { importedCommand } from './commandAutomation.js';
-import { commandLiteralRedactions } from './commandRedactions.js';
+import { commandLiteralRedactions, curlUserinfoPasswords } from './commandRedactions.js';
 
 /** Command literals are private too, including values supplied without env names. */
 async function outputSecrets(environment: CompanionEnvironment, job: Record<string, unknown>, command: ReturnType<typeof importedCommand>) {
@@ -23,7 +23,8 @@ async function outputSecrets(environment: CompanionEnvironment, job: Record<stri
   if (!command) return secrets;
   const cwd = command.cwd ? await fs.realpath(command.cwd).catch(() => undefined) : undefined;
   Object.assign(secrets, commandLiteralRedactions(
-    [command.command, command.cwd, cwd, command.input, ...command.args].filter((value): value is string => !!value),
+    [command.command, command.cwd, cwd, command.input, ...command.args,
+      ...curlUserinfoPasswords([command.command, ...command.args])].filter((value): value is string => !!value),
     [...Object.values(environment.env), ...Object.values(command.env)],
   ));
   return secrets;

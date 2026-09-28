@@ -45,9 +45,24 @@ export function commandLiteralRedactions(literals: string[], environmentValues: 
   return secrets;
 }
 
+/** curl -u/-U and long forms carry a password after the first colon. */
+export function curlUserinfoPasswords(argv: string[]): string[] {
+  if (!/^(?:.*[/\\])?curl(?:\.exe)?$/i.test(argv[0] ?? '')) return [];
+  const passwords: string[] = [];
+  for (let index = 1; index < argv.length; index++) {
+    const arg = argv[index]!;
+    if (arg === '--') break;
+    const userinfo = ['-u', '-U', '--user', '--proxy-user'].includes(arg) ? argv[++index]
+      : /^--(?:proxy-)?user=([\s\S]*)$/.exec(arg)?.[1] ?? /^-[uU]([\s\S]+)$/.exec(arg)?.[1];
+    const colon = userinfo?.indexOf(':') ?? -1;
+    if (userinfo && colon >= 0 && colon < userinfo.length - 1) passwords.push(userinfo.slice(colon + 1));
+  }
+  return passwords;
+}
+
 /** Public copies retain ordinary CLI syntax/settings, not a blanket argv mask. */
 export function commandArgumentRedactions(argv: string[]): Record<string, string> {
-  const values: string[] = [];
+  const values = Object.values(commandLiteralRedactions(curlUserinfoPasswords(argv)));
   let credentialArgument = false;
   for (const arg of argv.slice(1)) {
     const option = /^--?([\w-]+)(?:=([\s\S]*))?$/.exec(arg);

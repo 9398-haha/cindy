@@ -7,6 +7,7 @@ import type { Routine } from '@cindy/maker-scheduler';
 import { createCompanionEnvironmentStore, type CompanionEnvironment } from '../environment.js';
 import { discoverImportSources, inspectImportSource } from '../sources.js';
 import { validateImportSelection } from '../transfer.js';
+import * as importedProcess from '../process.js';
 
 const shared = vi.hoisted(() => ({ store: null as unknown as ReturnType<typeof createCompanionEnvironmentStore>, message: vi.fn() }));
 vi.mock('../runtime.js', () => ({ companionEnvironmentStore: { read: (...args: Parameters<typeof shared.store.read>) => shared.store.read(...args), update: (...args: Parameters<typeof shared.store.update>) => shared.store.update(...args) } }));
@@ -20,7 +21,7 @@ beforeEach(async () => {
   shared.store = createCompanionEnvironmentStore({ read: key => values.get(key) ?? null, write: (key, value) => { values.set(key, value); return true; }, remove: key => { values.delete(key); return true; } });
   shared.message.mockReset().mockResolvedValue({});
 });
-afterEach(async () => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); await fs.rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); await fs.rm(root, { recursive: true, force: true }); });
 
 it.skipIf(process.platform === 'win32')('executes the default imported script and monitor subtrees after removing the source', async () => {
   const sourceRoot = path.join(root, '.hermes');
@@ -376,4 +377,36 @@ it.each(['stdin', 'argv', 'assignment', 'env', 'inherited-env'])('masks form cre
   expect((await prepareImportedAutomation(root, routine, 'retry-run', signal, () => {}))?.direct).toBe(result!.direct);
   await finishImportedAutomation(root, routine, 'chat', 'retry-run', 'must reuse pending output', true, signal, () => {});
   expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
+});
+
+it.each(['-u', '--user', '-U', '--proxy-user', '-ujoined', '-Ujoined', '--user=', '--proxy-user='])
+('masks curl %s passwords from output, retry caches and final chat', async option => {
+  const userinfo = 'alice:fixture-auth:password';
+  const args = option.endsWith('joined') ? [option.slice(0, 2) + userinfo] : option.endsWith('=') ? [option + userinfo] : [option, userinfo];
+  const original = { payload: { kind: 'command', argv: ['curl', ...args], cwd: root } };
+  const output = 'fixture-auth:password | alice | public report';
+  const run = vi.spyOn(importedProcess, 'runImportedProcess').mockResolvedValue({ stdout: output, exitCode: 0 });
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture curl report' } as Routine;
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root },
+  } }, () => {});
+  const signal = new AbortController().signal;
+  const result = await prepareImportedAutomation(root, routine, 'curl-run', signal, () => {});
+  expect(run).toHaveBeenCalledWith(expect.objectContaining({ command: 'curl', args }));
+  expect(result!.direct).toMatch(/^\[command_literal_\d+\] \| alice \| public report$/);
+  expect(result!.direct).toContain('alice | public report');
+  const saved = (await shared.store.read(root, 'bot', () => {}))!;
+  expect(saved.automations!.routine!.original).toEqual(original);
+  expect(saved.automations!.routine!.prepared?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => {
+    env.automations!.routine!.prepared = { runId: 'curl-run', prompt: '', direct: output };
+  });
+  expect((await prepareImportedAutomation(root, routine, 'curl-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => {
+    env.automations!.routine!.deliveryProgress = { runId: 'curl-run', text: output, direct: true, deliveries: [], next: 0 };
+  });
+  expect((await prepareImportedAutomation(root, routine, 'retry-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await finishImportedAutomation(root, routine, 'chat', 'retry-run', 'must reuse pending output', true, signal, () => {});
+  expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
+  expect(run).toHaveBeenCalledTimes(1);
 });
