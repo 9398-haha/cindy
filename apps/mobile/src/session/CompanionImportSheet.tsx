@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { useTranslation } from 'react-i18next';
 import { parseRemoteActionInvokeRequest, REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION, type RemoteResourceRef } from '@cindy/device-link';
-import { COMPANION_IMPORT_CHUNK_PRIMITIVE, companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, remoteCompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
+import { COMPANION_IMPORT_CHUNK_PRIMITIVE, companionImportSubmissions, companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, remoteCompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -73,11 +73,11 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
       const selection = { requestId: randomUUID(), previewId: preview.id, name: name.trim(), avatarImageBase64: avatar, ...compactCompanionImportSelection(preview, selected), takeover, deferSetup: true };
       // Validate the complete action with the host's wire parser before freezing
       // this request. Oversized inputs must remain editable, never retry forever.
-      if (!parseRemoteActionInvokeRequest({
+      for (const part of companionImportSubmissions(selection, preview.selectionChunks)) if (!parseRemoteActionInvokeRequest({
         client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['companion-import'], locale: i18n.language },
         collectionId: 'companion-import', actionId: 'import',
         resourceRef: { collectionId: 'companion-import', kind: 'import', id: `preview:${preview.source.id}` },
-        input: selection,
+        input: part,
       })) throw new Error('INVALID_SELECTION');
       intent.current = selection;
     }

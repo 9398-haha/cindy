@@ -31,6 +31,8 @@ export interface CompanionImportPreview {
   entries: CompanionImportEntry[];
   /** Host understands compact immutable preview-index ranges. */
   selectionRanges?: true;
+  /** Host accepts bounded selection uploads through the existing import action. */
+  selectionChunks?: true;
 }
 
 export interface CompanionImportSelection {
@@ -45,6 +47,20 @@ export interface CompanionImportSelection {
   takeover: boolean;
   /** Save first; connection checks and source handover continue from the teammate chat. */
   deferSetup?: boolean;
+}
+
+export type CompanionImportSubmission = CompanionImportSelection | {
+  selectionChunk: { id: string; offset: number; total: number; text: string };
+};
+// Even worst-case JSON escaping stays below the existing 64 KiB action budget.
+export const COMPANION_IMPORT_SELECTION_CHUNK_LENGTH = 8 * 1024;
+export function* companionImportSubmissions(selection: CompanionImportSelection, chunked = false): Generator<CompanionImportSubmission> {
+  if (!chunked) { yield selection; return; }
+  const text = JSON.stringify(selection);
+  if (text.length <= COMPANION_IMPORT_SELECTION_CHUNK_LENGTH) { yield selection; return; }
+  for (let offset = 0; offset < text.length; offset += COMPANION_IMPORT_SELECTION_CHUNK_LENGTH) {
+    yield { selectionChunk: { id: selection.requestId, offset, total: text.length, text: text.slice(offset, offset + COMPANION_IMPORT_SELECTION_CHUNK_LENGTH) } };
+  }
 }
 
 export interface CompanionImportCheck {
@@ -135,7 +151,7 @@ export const COMPANION_IMPORT_READ_MAX_LENGTH = 128 * 1024 * 1024;
 /** Transport-neutral client: Desktop and Mobile use their existing Remote Resource adapters. */
 export function remoteCompanionImportApi(
   read: (id: string) => Promise<unknown>,
-  invoke: (sourceId: string, selection: CompanionImportSelection) => Promise<unknown>,
+  invoke: (sourceId: string, selection: CompanionImportSubmission) => Promise<unknown>,
 ): CompanionImportApi {
   const readData = async (id: string): Promise<Record<string, unknown>> => {
     const raw = await read(id) as { blocks?: Array<{ primitive?: string; data?: Record<string, unknown> }> };
@@ -180,7 +196,7 @@ export function remoteCompanionImportApi(
       || !['running', 'complete', 'needs-attention'].includes(result.status))) throw new Error('INVALID_IMPORT_RESPONSE');
     return result ?? undefined;
   };
-  const sources = new Map<string, string>();
+  const sources = new Map<string, { id: string; selectionChunks: boolean }>();
   return {
     async sources() {
       const result = (await data('sources')).sources as CompanionImportSource[];
@@ -191,13 +207,13 @@ export function remoteCompanionImportApi(
       const result = (await data(`preview:${sourceId}`)).preview as CompanionImportPreview;
       if (!result?.id || !Array.isArray(result.entries)
         || result.entries.some(entry => !entry.id || typeof entry.name !== 'string' || !companionImportCategories.includes(entry.category))) throw new Error('INVALID_IMPORT_RESPONSE');
-      sources.set(result.id, sourceId);
+      sources.set(result.id, { id: sourceId, selectionChunks: result.selectionChunks === true });
       return result;
     },
     async start(selection) {
       const sourceId = sources.get(selection.previewId);
       if (!sourceId) throw new Error('PREVIEW_EXPIRED');
-      await invoke(sourceId, selection);
+      for (const part of companionImportSubmissions(selection, sourceId.selectionChunks)) await invoke(sourceId.id, part);
       const result = await status(selection.requestId);
       if (!result) throw new Error('IMPORT_RECEIPT_MISSING');
       return result;

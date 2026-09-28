@@ -477,3 +477,15 @@ Ordinary content/routine progress uses indexed checks and at most about 100 full
 receipt snapshots per pass, sized from the selected input. An interrupted batch
 replays idempotent writes and `createOnce` under the same IDs. Handover intent,
 source pause, target enable and rollback milestones still persist immediately.
+
+New hosts also advertise `selectionChunks` on previews. The shared remote client
+uploads large selections (including sparse ranges and portraits) in 8 Ki UTF-16
+pieces through the existing import action, below its unchanged 64 KiB input limit.
+The host bounds retained uploads by owner/controller, expiry and the snapshot byte
+budget. Repeated identical pieces are accepted; changed or out-of-order pieces
+are rejected. Only a complete upload reaches the existing selection validation
+and durable import transaction. A disconnected client can replay from zero using
+the same request ID. This recovery affects only that import, never reconnects the
+peer or replays other actions. Old hosts keep their original single-action path;
+old clients continue sending plain selections to new hosts. No relay or server
+change is required.

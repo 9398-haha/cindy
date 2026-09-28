@@ -11,8 +11,8 @@ import { parseRoutineInput, type RoutineInput } from '@cindy/maker-scheduler';
 import { normalizeBotName } from '../../shared/botCreation.js';
 import { listBotRemoteResourceSources } from '../localDb/ipc/bots.js';
 import { validateBotAvatarBuffer, decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
-import { COMPANION_IMPORT_CHUNK_LENGTH, COMPANION_IMPORT_READ_MAX_LENGTH } from '@cindy/maker-shared/companion-import';
-import type { CompanionImportPreview, CompanionImportResult, CompanionImportSelection, CompanionImportSource } from '@cindy/maker-shared/companion-import';
+import { COMPANION_IMPORT_CHUNK_LENGTH, COMPANION_IMPORT_READ_MAX_LENGTH, COMPANION_IMPORT_SELECTION_CHUNK_LENGTH } from '@cindy/maker-shared/companion-import';
+import type { CompanionImportPreview, CompanionImportResult, CompanionImportSelection, CompanionImportSubmission, CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBotRemoteResourceSource, reconcileBotProfileFolder } from '../localDb/ipc/bots.js';
 import { readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
@@ -39,6 +39,7 @@ interface Owned<T> { owner: string; controller: string; value: T; createdAt: num
 const sources = new Map<string, Owned<ImportSource>>();
 const previews = new Map<string, Owned<ImportSnapshot> & { bytes: number }>();
 const remoteReads = new Map<string, Owned<string>>();
+const remoteSelections = new Map<string, Owned<{ parts: string[]; offset: number; total: number }>>();
 const jobs = new Map<string, Promise<CompanionImportResult>>();
 const TTL = 30 * 60_000;
 function owner() {
@@ -119,7 +120,7 @@ export async function previewCompanionImport(sourceId: string, controller: strin
   retainPreview(id, { owner: scope.scope, controller, value: snapshot, createdAt: Date.now() });
   const secrets = previewImportRedactions(snapshot.items);
   const redact = (text: string) => redactEnvironmentValues(text, secrets);
-  return { id, selectionRanges: true, source: { id: sourceId, kind: source.kind, name: redact(source.name) }, name: redact(source.name),
+  return { id, selectionRanges: true, selectionChunks: true, source: { id: sourceId, kind: source.kind, name: redact(source.name) }, name: redact(source.name),
     ...(snapshot.avatarImageBase64 ? { avatarImageBase64: snapshot.avatarImageBase64 } : {}),
     entries: snapshot.items.map(({ view }) => ({ ...view, name: redact(view.name),
       ...(view.description === undefined ? {} : { description: redact(view.description) }) })) };
@@ -159,6 +160,47 @@ export async function readRemoteCompanionImport(id: string, controller: string, 
   const token = randomUUID();
   remoteReads.set(token, { owner: scope.scope, controller, value: text, createdAt: Date.now() });
   return chunk(token, text, 0);
+}
+
+/** No import side effects until the entire selection arrives. A reconnect replays
+ * chunks from zero under the same request ID, then uses normal durable recovery. */
+export async function submitRemoteCompanionImport(input: CompanionImportSubmission, controller: string): Promise<CompanionImportResult | undefined> {
+  const scope = owner();
+  if (!input || typeof input !== 'object' || !('selectionChunk' in input)) return startCompanionImport(input as CompanionImportSelection, controller);
+  const chunk = input.selectionChunk;
+  if (!chunk || typeof chunk.id !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(chunk.id)
+    || !Number.isSafeInteger(chunk.offset) || chunk.offset < 0 || chunk.offset % COMPANION_IMPORT_SELECTION_CHUNK_LENGTH
+    || !Number.isSafeInteger(chunk.total) || chunk.total <= 0 || chunk.total * 2 > MAX_SNAPSHOT_BYTES
+    || typeof chunk.text !== 'string' || !chunk.text.length || chunk.text.length > COMPANION_IMPORT_SELECTION_CHUNK_LENGTH
+    || chunk.offset + chunk.text.length > chunk.total
+    || chunk.offset + chunk.text.length < chunk.total && chunk.text.length !== COMPANION_IMPORT_SELECTION_CHUNK_LENGTH)
+    throw new CompanionImportError('INVALID_SELECTION');
+  prune(remoteSelections);
+  const key = JSON.stringify([scope.scope, controller, chunk.id]);
+  if (!remoteSelections.has(key)) {
+    if (chunk.offset !== 0) throw new CompanionImportError('PREVIEW_EXPIRED');
+    for (const [id, prior] of remoteSelections) if (prior.controller === controller) remoteSelections.delete(id);
+    let bytes = [...remoteSelections.values()].reduce((sum, prior) => sum + prior.value.total * 2, 0);
+    for (const [id, prior] of remoteSelections) {
+      if (remoteSelections.size < 4 && bytes + chunk.total * 2 <= MAX_SNAPSHOT_BYTES) break;
+      remoteSelections.delete(id); bytes -= prior.value.total * 2;
+    }
+    remoteSelections.set(key, { owner: scope.scope, controller, createdAt: Date.now(), value: { parts: [], offset: 0, total: chunk.total } });
+  }
+  const upload = owned(remoteSelections, key, controller);
+  if (upload.total !== chunk.total || chunk.offset > upload.offset) throw new CompanionImportError('INVALID_SELECTION');
+  if (chunk.offset < upload.offset) {
+    if (upload.parts[chunk.offset / COMPANION_IMPORT_SELECTION_CHUNK_LENGTH] !== chunk.text) throw new CompanionImportError('REQUEST_ALREADY_USED');
+    return undefined;
+  }
+  upload.parts.push(chunk.text); upload.offset += chunk.text.length;
+  if (upload.offset < upload.total) return undefined;
+  const text = upload.parts.join('');
+  upload.parts.length = 0; remoteSelections.delete(key);
+  let selection: CompanionImportSelection;
+  try { selection = JSON.parse(text); } catch { throw new CompanionImportError('INVALID_SELECTION'); }
+  if (!selection || selection.requestId !== chunk.id) throw new CompanionImportError('INVALID_SELECTION');
+  return startCompanionImport(selection, controller);
 }
 
 function documentEntries(item: ImportItem): Array<[string, string]> {

@@ -1,4 +1,4 @@
-import { remoteCompanionImportApi, compactCompanionImportSelection } from '@cindy/maker-shared/companion-import';
+import { remoteCompanionImportApi, compactCompanionImportSelection, companionImportSubmissions } from '@cindy/maker-shared/companion-import';
 import fsSync, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,7 +68,7 @@ vi.mock('../../routines/service.js', () => ({
     h.routines = h.routines.map(row => row.id === id ? { ...row, ...input, revision: row.revision + 1 } : row);
   } }),
 }));
-import { readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
+import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock.js';
 import { assertImportedAutomationReady, prepareImportedAutomation } from '../automationRuntime.js';
 import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
@@ -1191,4 +1191,32 @@ it('retries legacy text and empty memory assets without passing them to the medi
   expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'memory/state.json', '{"cursor":7}\n', 'reference');
   await startCompanionImport(selection, 'phone');
   expect(h.importDocument).toHaveBeenCalledOnce();
+});
+
+it('receives sparse selection chunks idempotently and starts only after the complete authorized selection', async () => {
+  h.snapshot.items = Array.from({ length: 10_000 }, (_, index) => ({ view: { id: `memory-${index}`, name: `Note ${index}`, category: 'memory' as const, selected: index % 2 === 0 }, text: 'Original' }));
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const chosen = preview.entries.filter(entry => entry.selected).map(entry => entry.id);
+  const selection = { previewId: preview.id, requestId: 'sparse-selection-fixture', name: 'Ada', takeover: false, deferSetup: true, ...compactCompanionImportSelection(preview, chosen) };
+  const parts = [...companionImportSubmissions(selection, preview.selectionChunks)];
+  expect(parts.length).toBeGreaterThan(2);
+  await expect(submitRemoteCompanionImport(parts[1]!, 'other-phone')).rejects.toThrow('PREVIEW_EXPIRED');
+  expect(await submitRemoteCompanionImport(parts[0]!, 'phone')).toBeUndefined();
+  expect(await submitRemoteCompanionImport(parts[0]!, 'phone')).toBeUndefined();
+  expect(createBotProfile).not.toHaveBeenCalled();
+  if (!('selectionChunk' in parts[0]!)) throw Error('expected chunks');
+  await expect(submitRemoteCompanionImport({ selectionChunk: { ...parts[0]!.selectionChunk, text: 'x'.repeat(parts[0]!.selectionChunk.text.length) } }, 'phone')).rejects.toThrow('REQUEST_ALREADY_USED');
+  h.boundary = true;
+  await expect(submitRemoteCompanionImport(parts[1]!, 'phone')).rejects.toThrow('OWNER_CHANGED');
+  h.boundary = false;
+  let accepted;
+  for (const part of parts) accepted = await submitRemoteCompanionImport(part, 'phone');
+  const result = await withBotProfileLocks([accepted!.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.savedEntryIds).toEqual(chosen);
+  expect(h.importDocument).toHaveBeenCalledTimes(chosen.length);
+  for (const part of parts) await submitRemoteCompanionImport(part, 'phone');
+  await withBotProfileLocks([accepted!.botId], () => getCompanionImportResult(selection.requestId));
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(h.importDocument).toHaveBeenCalledTimes(chosen.length);
 });

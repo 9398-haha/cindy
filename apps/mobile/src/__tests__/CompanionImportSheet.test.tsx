@@ -202,3 +202,27 @@ it('shows failed filenames and saved parts after a partial import without blocki
   await click('devices.companionImport.open');
   expect(h.created).toHaveBeenCalledWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
 });
+
+it('submits sparse 100,000-entry choices using bounded actions with the original selection intact', async () => {
+  const entries = Array.from({ length: 100_000 }, (_, index) => ({ id: `entry-${index}`, name: `Memory ${index}`, category: 'memory', selected: index % 2 === 0 }));
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'hermes' }] }
+      : id.startsWith('preview:') ? { preview: { id: 'preview', selectionRanges: true, selectionChunks: true, name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries } }
+      : { result: null } }] };
+  });
+  h.submit.mockReset().mockResolvedValue({ effects: [] });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  const click = async (text: string) => { await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === text)!.click()); };
+  await click('Ada · Hermes'); await click('devices.companionImport.submit');
+  const { parseRemoteActionInvokeRequest, REMOTE_RESOURCE_PROTOCOL_VERSION } = await import('@cindy/device-link');
+  expect(h.submit.mock.calls.length).toBeGreaterThan(2);
+  let text = '';
+  for (const call of h.submit.mock.calls) {
+    const request = call[2];
+    expect(parseRemoteActionInvokeRequest({ ...request, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [] } })).not.toBeNull();
+    text += request.input.selectionChunk.text;
+  }
+  expect(JSON.parse(text)).toMatchObject({ entryIds: [], entryRanges: entries.filter(entry => entry.selected).map(entry => { const index = Number(entry.id.slice(6)); return [index, index]; }), deferSetup: true });
+});

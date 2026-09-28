@@ -89,3 +89,27 @@ it('reads a multi-megabyte preview without losing escaped names, descriptions or
   expect(reads).toBe(Math.ceil(serialized.length / COMPANION_IMPORT_CHUNK_LENGTH));
   expect(compactCompanionImportSelection(received, received.entries.map(entry => entry.id))).toEqual({ entryIds: [], entryRanges: [[0, 11999]] });
 });
+
+it('retries a disconnected 100,000-entry sparse selection upload under the same request without truncation', async () => {
+  const entries: CompanionImportEntry[] = Array.from({ length: 100_000 }, (_, index) => ({ id: `memory-${index}`, name: `Note ${index}`, category: 'memory', selected: index % 2 === 0 }));
+  const preview = { id: 'preview', source: { id: 'source', kind: 'hermes', name: 'Ada' }, name: 'Ada', selectionRanges: true, selectionChunks: true, entries };
+  const result = { requestId: 'sparse-upload-request', botId: 'bot', status: 'complete', checks: [] };
+  let calls = 0, disconnected = true, text = '';
+  const invoke = vi.fn<Parameters<typeof remoteCompanionImportApi>[1]>(async (_source, input) => {
+    calls++;
+    if (disconnected && calls === 3) { disconnected = false; throw Error('DISCONNECTED'); }
+    if (!('selectionChunk' in input)) throw Error('expected chunks');
+    expect(new TextEncoder().encode(JSON.stringify(input)).length).toBeLessThan(64 * 1024);
+    if (input.selectionChunk.offset === 0) text = '';
+    expect(input.selectionChunk.offset).toBe(text.length);
+    text += input.selectionChunk.text;
+  });
+  const api = remoteCompanionImportApi(async id => ({ blocks: [{ primitive: 'companion-import', data: id.startsWith('preview:') ? { preview } : { result } }] }), invoke);
+  const received = await api.preview('source');
+  const selection = { previewId: received.id, requestId: result.requestId, name: 'Ada', takeover: false, ...compactCompanionImportSelection(received, entries.filter(entry => entry.selected).map(entry => entry.id)) };
+  expect(JSON.stringify(selection).length).toBeGreaterThan(64 * 1024);
+  await expect(api.start(selection)).rejects.toThrow('DISCONNECTED');
+  await expect(api.start(selection)).resolves.toEqual(result);
+  expect(JSON.parse(text)).toEqual(selection);
+  expect(calls).toBeGreaterThan(10);
+});

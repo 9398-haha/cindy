@@ -1,7 +1,7 @@
 import { beforeAll, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ channel: 'maker:remote-resources:invoke', remote: vi.fn(), start: vi.fn(), sources: vi.fn(), preview: vi.fn(), status: vi.fn(), handlers: new Map<string, (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>>() }));
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, fn: (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>) => h.handlers.set(name, fn) } }));
-vi.mock('../host.js', () => ({ startCompanionImport: h.start, listCompanionImportSources: h.sources, previewCompanionImport: h.preview, getCompanionImportResult: h.status, readRemoteCompanionImport: h.remote }));
+vi.mock('../host.js', () => ({ startCompanionImport: h.start, submitRemoteCompanionImport: h.start, listCompanionImportSources: h.sources, previewCompanionImport: h.preview, getCompanionImportResult: h.status, readRemoteCompanionImport: h.remote }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../device-link/invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => ({ controllerDeviceId: 'phone', channel: h.channel }) }));
 import { registerCompanionImport } from '../registration.js';
@@ -49,4 +49,10 @@ it.each([false, true])('negotiates chunk reads without changing the legacy resou
   h.remote.mockResolvedValueOnce({ preview: { id: 'preview', entries: [] } });
   await h.handlers.get('maker:remote-resources:get')!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' }, client: { protocolVersion: 1, primitives: ['companion-import', ...(supported ? ['companion-import-chunks-v1'] : [])] } });
   expect(h.remote).toHaveBeenLastCalledWith('preview:source', 'phone', supported);
+});
+
+it('acknowledges a selection chunk without navigating before the host accepts the full import', async () => {
+  h.channel = 'maker:remote-resources:invoke';
+  h.start.mockResolvedValueOnce(undefined);
+  expect(await invoke()).toMatchObject({ effects: [] });
 });
