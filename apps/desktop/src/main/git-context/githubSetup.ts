@@ -3,7 +3,7 @@ import type { GithubSetupState } from '../../shared/githubSetup.js';
 import { installTool } from '../managed-tools/installer.js';
 import { ghArtifact, GH_VERSION } from './ghArtifact.js';
 import { resolveGhBinary } from './ghBinary.js';
-import { GH_AUTH_CHECK_ARGS } from './ghCliTokenSource.js';
+import { GH_AUTH_CHECK_ARGS, ghAccountEnv } from './ghCliTokenSource.js';
 
 interface SetupDeps {
   resolveBinary(): Promise<string>;
@@ -84,9 +84,14 @@ export class GithubSetup {
 
 function check(binary: string, args: string[], expected?: string): Promise<boolean> {
   return new Promise((resolve) => {
-    execFile(binary, args, { timeout: 15_000, windowsHide: true }, (err, stdout) => {
-      resolve(!err && (!expected || stdout.startsWith(`gh version ${expected} `)));
-    });
+    execFile(
+      binary,
+      args,
+      { timeout: 15_000, windowsHide: true, env: ghAccountEnv() },
+      (err, stdout) => {
+        resolve(!err && (!expected || stdout.startsWith(`gh version ${expected} `)));
+      },
+    );
   });
 }
 
@@ -124,7 +129,7 @@ export function loginWithGh(
       {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
-        env: { ...process.env, NO_COLOR: '1', GH_PROMPT_DISABLED: '1' },
+        env: { ...ghAccountEnv(), NO_COLOR: '1', GH_PROMPT_DISABLED: '1' },
       },
     );
     let output = '';

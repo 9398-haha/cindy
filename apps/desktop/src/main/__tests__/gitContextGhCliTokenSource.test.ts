@@ -115,12 +115,7 @@ describe('createGhCliTokenSource', () => {
 
   it('可用性探测只执行静默账号 API，不读取或污染 token cache', async () => {
     const execFileFn = vi.fn(
-      (
-        _file: string,
-        args: string[],
-        opts: { timeout: number },
-        cb: ExecCb,
-      ) => {
+      (_file: string, args: string[], opts: { timeout: number }, cb: ExecCb) => {
         if (args[0] === 'api') {
           expect(opts.timeout).toBeLessThanOrEqual(1_000);
           cb(null, '', '');
@@ -137,7 +132,7 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledWith(
       expectedGhExecutable,
       ['api', '--hostname', 'github.com', 'user', '--silent'],
-      { timeout: expect.any(Number) },
+      { timeout: expect.any(Number), env: expect.any(Object) },
       expect.any(Function),
     );
     expect(await src.readToken()).toBe('gho_after_probe');
@@ -145,7 +140,9 @@ describe('createGhCliTokenSource', () => {
   });
 
   it('可用性探测失败只返回 false，不把 stderr/输出写进日志', async () => {
-    const execFileFn = execMock((_file, cb) => cb(new Error('not logged in'), 'secret-like-output', ''));
+    const execFileFn = execMock((_file, cb) =>
+      cb(new Error('not logged in'), 'secret-like-output', ''),
+    );
     const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
     expect(await src.probeAvailability()).toBe(false);
     expect(execFileFn).toHaveBeenCalledTimes(1);

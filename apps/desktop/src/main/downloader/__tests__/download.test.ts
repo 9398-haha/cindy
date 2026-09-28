@@ -45,6 +45,57 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 describe('shared verified downloads', () => {
+  it.each(['complete', 'cancel'] as const)(
+    'never checkpoints a one-shot authorized URL: %s',
+    async (outcome) => {
+      const opts = {
+        ...options(),
+        url: 'https://publisher.test/file?signature=synthetic-secret',
+        resume: false,
+      };
+      const checkpoint = vi.spyOn(resume, 'writeMeta');
+      const controller = new AbortController();
+      let pulls = 0;
+      let body!: ReadableStreamDefaultController<Uint8Array>;
+      fetchMock.mockImplementation((_url, { signal }) =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>(
+              {
+                start(stream) {
+                  body = stream;
+                  signal.addEventListener('abort', () => stream.error(new Error('aborted')), {
+                    once: true,
+                  });
+                },
+                pull(stream) {
+                  if (++pulls === 1) stream.enqueue(Buffer.from('abc'));
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+          ),
+        ),
+      );
+      const pending = download({ ...opts, signal: controller.signal });
+      const result =
+        outcome === 'cancel'
+          ? expect(pending).rejects.toMatchObject({ code: 'ABORTED' })
+          : expect(pending).resolves.toMatchObject({ size: 6 });
+      await vi.waitFor(() => expect(pulls).toBe(2));
+      expect(checkpoint).not.toHaveBeenCalled();
+      expect(fs.existsSync(`${opts.targetPath}.meta.json`)).toBe(false);
+      if (outcome === 'cancel') controller.abort();
+      else {
+        body.enqueue(Buffer.from('def'));
+        body.close();
+      }
+      await result;
+      expect(checkpoint).not.toHaveBeenCalled();
+      expect(fs.existsSync(`${opts.targetPath}.meta.json`)).toBe(false);
+      expect(fs.existsSync(`${opts.targetPath}.part`)).toBe(false);
+    },
+  );
   it.each([
     ['resume', false],
     ['cache', false],

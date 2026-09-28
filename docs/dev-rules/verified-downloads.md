@@ -14,6 +14,7 @@ Agent runtime、Cindy Make 工具、Ollama runtime、插件包、Skill 包及更
 - `signal` 取消排队、请求、缓存／续传哈希和重试等待；连接／闲置超时可重试，`timeout.totalMs`
   限制取得下载槽位后的活动时长（含校验和重试等待，不含排队）。业务取消与超时分别返回 `ABORTED` 和 `TIMEOUT`。
 - 默认保留部分文件以续传；一次性安装暂存目录可用 `resume: false`。
+  此模式不创建或写入续传元数据，避免将一次性授权 URL 留在磁盘；失败时删除部分文件。
   调用方只有在下载 Promise 结束后才可 `cleanup()` 或删除暂存目录。
 - 默认校验成功后替换目标，下载失败保留原目标；`existingTarget: 'error'`
   原子地拒绝覆盖已有文件。不要让多个进程共写同一个暂存路径。
@@ -63,6 +64,9 @@ Renderer 只接收阶段、进度、设备码和固定 GitHub 授权地址，不
 
 登录前后及插件探测共用 `gh api --hostname github.com user --silent` 检查当前活动账号，兼容不支持 `auth status --active` 的旧版 gh，也避免失效备用账号干扰；只消费退出码，不读取账号响应或 token。成功后清除 token 和 PR 缓存，
 通过 `git-context:github-connected` 立即刷新顶栏及侧栏。缓存代数隔离登录前的在途响应。
+宿主管理的检查、登录和取 token 共用 `ghAccountEnv()`，仅在子进程环境中移除
+`GH_TOKEN` / `GITHUB_TOKEN`（含 Windows 大小写变体），统一使用 gh 保存的本机账号；
+保留代理与配置目录，不修改全局环境或 Agent 终端的 token。回归见 `githubSetupActiveAccount.test.ts`。
 安装／登录 IPC 仅限受信本机主窗口，不开放给共享任务或 device-link；SSH／手机远程查看
 继续使用被控端现有 PR 查询和刷新通道，不会误操作控制端的 GitHub 账号。
 

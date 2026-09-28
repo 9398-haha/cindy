@@ -221,16 +221,17 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       total: opts.expectedSize ?? total,
       onProgress: opts.onProgress,
     });
-    meta = {
-      url: opts.url,
-      expectedSize: opts.expectedSize ?? total,
-      expectedSha256: opts.sha256,
-      downloadedBytes: loaded,
-      etag: boundedHeader(response, 'etag', 1024),
-      lastModified: boundedHeader(response, 'last-modified', 256),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    if (opts.resume !== false)
+      meta = {
+        url: opts.url,
+        expectedSize: opts.expectedSize ?? total,
+        expectedSha256: opts.sha256,
+        downloadedBytes: loaded,
+        etag: boundedHeader(response, 'etag', 1024),
+        lastModified: boundedHeader(response, 'last-modified', 256),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
     let lastMetaWriteAt = 0;
     armTimer(opts.timeout?.idleMs ?? 30_000);
     while (true) {
@@ -250,7 +251,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       await hasher.update(Buffer.from(value));
       loaded += value.byteLength;
       tracker.advance(value.byteLength);
-      if (Date.now() - lastMetaWriteAt >= 2000) {
+      if (meta && Date.now() - lastMetaWriteAt >= 2000) {
         try {
           writeMeta(opts.targetPath, {
             ...meta,

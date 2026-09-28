@@ -26,6 +26,15 @@ const log = createLogger('git-context/gh-cli');
 // --silent discards the account response; callers only consume the exit code.
 export const GH_AUTH_CHECK_ARGS = ['api', '--hostname', 'github.com', 'user', '--silent'];
 
+/** Host account flows use gh's saved login, never a terminal token override. */
+export function ghAccountEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) => !['GH_TOKEN', 'GITHUB_TOKEN'].includes(key.toUpperCase()),
+    ),
+  );
+}
+
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_NEGATIVE_CACHE_TTL_MS = 30_000;
 const GH_TIMEOUT_MS = 3_000;
@@ -36,7 +45,7 @@ export interface GhCliTokenSourceDeps {
   execFileFn?: (
     file: string,
     args: string[],
-    opts: { timeout: number },
+    opts: { timeout: number; env: NodeJS.ProcessEnv },
     cb: (err: Error | null, stdout: string, stderr: string) => void,
   ) => void;
   existsFn?: (p: string) => boolean;
@@ -106,7 +115,7 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
         execFileFn(
           bin,
           ['auth', 'token', '--hostname', 'github.com'],
-          { timeout: GH_TIMEOUT_MS },
+          { timeout: GH_TIMEOUT_MS, env: ghAccountEnv() },
           (err, stdout) => {
             if (err) {
               // 失败只 debug 级记录;原因分类留给 UI 决定引导动作。
@@ -153,7 +162,7 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
         execFileFn(
           bin,
           GH_AUTH_CHECK_ARGS,
-          { timeout: GH_PROBE_TIMEOUT_MS },
+          { timeout: GH_PROBE_TIMEOUT_MS, env: ghAccountEnv() },
           (err) => resolve(err === null),
         );
       } catch {
