@@ -8,11 +8,11 @@ import { SharedTaskDialog } from '../SharedTaskDialog';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 
-const state = vi.hoisted(() => ({ account: vi.fn(), host: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(), setSessions: vi.fn(), removeDevice: vi.fn(), getSessions: vi.fn(), bind: vi.fn(), reset: vi.fn() }));
+const state = vi.hoisted(() => ({ account: vi.fn(), host: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), invoke: vi.fn(), setSessions: vi.fn(), mergeSessions: vi.fn(), pin: vi.fn(), captureRead: vi.fn(), removeDevice: vi.fn(), getSessions: vi.fn(), bind: vi.fn(), reset: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, args?: { title?: string }) => key + (args?.title ? ':' + args.title : '') }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'guest', isAuthenticated: true, user: { name: 'Account Guest' } }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { getDeviceName: () => undefined, setDeviceSessions: state.setSessions, removeDevice: state.removeDevice, getMergedRemoteSessions: state.getSessions }, isRemoteDeviceMarkedDisconnected: () => false }));
+vi.mock('../remoteProjectsStore', () => ({ remoteProjectsStore: { getDeviceName: () => undefined, setDeviceSessions: state.setSessions, mergeDeviceSessions: state.mergeSessions, pinSessionOrigin: state.pin, captureSessionRead: state.captureRead, removeDevice: state.removeDevice, getMergedRemoteSessions: state.getSessions }, isRemoteDeviceMarkedDisconnected: () => false }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ bindSharedTaskPushOwner: state.bind, resetRemoteDataOwnerPushFence: state.reset }));
 const owned = [
   { sharedTaskId: 'own-1', sessionId: 'local-task', ownerAccountId: 'guest', hostDeviceId: 'pc', revision: 1, title: 'First owned task', local: true },
@@ -32,6 +32,7 @@ beforeEach(() => {
     if (action === 'close') { ownedItems = ownedItems.filter(item => item.sharedTaskId !== sharedTaskId); return { closed: [sharedTaskId], failed: [] }; }
   });
   state.getSessions.mockReturnValue([]);
+  state.captureRead.mockReturnValue(Object.assign(() => true, { mergeActivity: (value: unknown) => value }));
   state.invoke.mockImplementation(async (_device, channel, [command]) => {
     if (channel === 'maker:shared-task' && command.action === 'close') {
       ownedItems = ownedItems.filter(item => item.sharedTaskId !== command.sharedTaskId);
@@ -100,6 +101,38 @@ it('keeps settings tabs keyboard accessible when switching between owned and joi
   fireEvent.keyDown(joinedTab, { key: 'Home' });
   expect(document.activeElement).toBe(ownerTab);
   await act(async () => {});
+});
+it('loads an owned remote task before navigation without replacing the device list', async () => {
+  let finish!: (value: unknown) => void;
+  state.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const close = vi.fn();
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={close} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: owned[1].title }));
+  await waitFor(() => expect(state.invoke).toHaveBeenCalledWith('other-pc', 'local-db:sessions:get', ['other-task']));
+  expect(close).not.toHaveBeenCalled(); expect(state.pin).not.toHaveBeenCalled();
+  const session = { id: 'other-task', title: 'Remote task contents' };
+  await act(async () => finish(session));
+  expect(state.mergeSessions).toHaveBeenCalledWith('other-pc', expect.any(String), [session]);
+  expect(state.setSessions).not.toHaveBeenCalled();
+  expect(state.pin).toHaveBeenCalledWith('other-pc', 'other-task');
+  expect(close).toHaveBeenCalledWith(false);
+  expect(state.mergeSessions.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]);
+});
+it.each(['missing', 'wrong-task', 'stale-read', 'account-change'] as const)('does not navigate or publish an owned remote task after %s', async reason => {
+  let finish!: (value: unknown) => void;
+  state.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  if (reason === 'stale-read') state.captureRead.mockReturnValue(Object.assign(() => false, { mergeActivity: (value: unknown) => value }));
+  const close = vi.fn();
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={close} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: owned[1].title }));
+  await waitFor(() => expect(state.invoke).toHaveBeenCalled());
+  await act(async () => {
+    if (reason === 'account-change') setDataOwnerGeneration('another-account');
+    finish(reason === 'missing' ? null : { id: reason === 'wrong-task' ? 'wrong' : 'other-task' });
+  });
+  expect(state.mergeSessions).not.toHaveBeenCalled(); expect(state.pin).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+  if (reason !== 'account-change') expect(toast.error).toHaveBeenCalled();
 });
 async function closeAll() { tab('owned'); await screen.findByRole('button', { name: 'sharedTask.closeAll' }); click('closeAll'); }
 

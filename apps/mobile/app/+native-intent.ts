@@ -27,7 +27,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       appId: WECHAT_APP_ID,
       universalLink: WECHAT_UNIVERSAL_LINK,
     })) return '/';
-    const invitationUrl = path.startsWith('/shared-session?') ? `cindy:/${path}` : path;
+    const invitationUrl = /^\/(?:shared-session|shared-task\/join)\?/.test(path) ? `cindy:/${path}` : path;
     if (receiveSharedTaskInvitationIntent(invitationUrl)) return '/shared-session';
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');

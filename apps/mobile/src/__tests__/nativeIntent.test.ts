@@ -29,6 +29,15 @@ describe('mobile native deep-link redirects', () => {
     vi.advanceTimersByTime(15 * 60_000);
     expect(getPendingSharedTaskInvitationIntent()).toBeNull();
   });
+  it.each([true, false])('normalizes both relative invitation routes without retaining secrets (initial=%s)', initial => {
+    for (const route of ['/shared-session', '/shared-task/join']) {
+      const path = route + incoming.slice(incoming.indexOf('?'));
+      expect(redirectSystemPath({ path, initial })).toBe('/shared-session');
+      expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation, server: 'https://relay.example.test' });
+      expect(redirectSystemPath({ path: path + '&invitation=bad', initial })).toBe('/shared-session');
+      expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+    }
+  });
   it('drops an earlier pending invitation when a malformed one arrives', () => {
     redirectSystemPath({ path: incoming, initial: false });
     expect(redirectSystemPath({ path: incoming + '&invitation=bad', initial: false })).toBe('/shared-session');

@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardSharedTaskInvitation';
 import { clearSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 
@@ -70,6 +70,38 @@ it.each(['account', 'manual', 'link'] as const)('discards delayed clipboard resu
     clearSharedTaskInvitationIntent();
   }
   await act(async () => finish(link)); expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  // The superseded result must not consume this invitation. A fresh read can offer it.
+  if (reason === 'account') {
+    expect(h.read).toHaveBeenCalledTimes(2);
+    await act(async () => finish(link));
+  } else {
+    h.read.mockResolvedValue(link);
+    await render(true, false);
+    await state('background'); await state('active');
+  }
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
+});
+it('checks again when an account switch settles in the foreground', async () => {
+  invalidateMobileAuthOwnerForSwitch();
+  await render(); expect(h.read).not.toHaveBeenCalled();
+  await act(async () => { setMobileAuthOwner('another'); await vi.runAllTicks(); });
+  expect(h.read).toHaveBeenCalledTimes(1);
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
+});
+it('lets the old pending invitation clear before reading for the new account', async () => {
+  await render();
+  const next = 'B'.repeat(43);
+  h.read.mockResolvedValue(link.replace(token, next));
+  await act(async () => { setMobileAuthOwner('another'); await vi.runAllTicks(); });
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: next, source: 'clipboard' });
+});
+it('does not read on logout or after unmounting the owner subscription', async () => {
+  await render();
+  await act(async () => { setMobileAuthOwner(null); await vi.runAllTicks(); });
+  expect(h.read).toHaveBeenCalledTimes(1);
+  await act(async () => root.render(null));
+  await act(async () => { setMobileAuthOwner('another'); await vi.runAllTicks(); });
+  expect(h.read).toHaveBeenCalledTimes(1);
 });
 it('ignores clipboard denial without interrupting the app', async () => {
   h.read.mockRejectedValue(new Error('Clipboard unavailable')); await render();

@@ -275,6 +275,11 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
     if (!item.local) {
       await window.electronAPI.deviceLink.openLink(item.hostDeviceId);
       if (!current()) return;
+      const readIsCurrent = remoteProjectsStore.captureSessionRead(item.hostDeviceId, item.sessionId);
+      const remoteSession = await window.electronAPI.deviceLink.invoke(item.hostDeviceId, 'local-db:sessions:get', [item.sessionId]) as Session | null;
+      if (!current()) return;
+      if (!readIsCurrent() || remoteSession?.id !== item.sessionId) throw new Error('Remote session is unavailable');
+      remoteProjectsStore.mergeDeviceSessions(item.hostDeviceId, deviceName(item), [readIsCurrent.mergeActivity(remoteSession)]);
       remoteProjectsStore.pinSessionOrigin(item.hostDeviceId, item.sessionId);
     }
     if (current()) { navigate('/cc-agent/' + encodeURIComponent(item.sessionId)); onOpenChange(false); }
