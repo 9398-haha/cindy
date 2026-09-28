@@ -1517,6 +1517,95 @@ it('cleans a completed checkpoint after a crash without replaying import work', 
   expect(h.importDocument).not.toHaveBeenCalled();
 });
 
+it.each((['identity', 'user', 'instructions'] as const).flatMap(role => [0, 1].map(failedAfter => ({ role, failedAfter }))))
+('projects only fully saved $role documents after failure at chunk $failedAfter', async ({ role, failedAfter }) => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const write = storage.write.bind(storage);
+  let fail = true;
+  vi.spyOn(storage, 'write').mockImplementation(async input => {
+    if (fail && input.name === `import_failed_${failedAfter}`) throw Object.assign(new Error('fixture full'), { code: 'ENOSPC' });
+    return write(input);
+  });
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore,
+    readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  const healthy = 'Saved original'; const failed = 'Not yet complete ' + 'x'.repeat(BOT_MEMORY_BODY_MAX_BYTES);
+  h.snapshot.items = [healthy, failed].map((text, index) => ({
+    view: { id: index ? 'failed' : 'healthy', name: index ? 'Failed.md' : 'Healthy.md', category: 'personality', selected: true }, role, text,
+  }));
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `first-role-${role}-${failedAfter}`, previewId: preview.id, name: 'Ada', entryIds: ['healthy', 'failed'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const field = { identity: 'identitySource', user: 'userContextSource', instructions: 'systemPromptOverride' }[role];
+  expect(h.profile[field]).toBe(healthy);
+  expect(first?.savedEntryIds).toEqual(['healthy']);
+  expect(first?.checks).toContainEqual({ entryId: 'failed', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: failedAfter, total: 2 } });
+  expect(await storage.list()).toHaveLength(1 + failedAfter);
+  const stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(stored.documents).toEqual({ healthy });
+  const checkpoint = await deserializeImportSnapshotAsync(stored.pendingImport!.snapshotJson, () => {});
+  expect(checkpoint.items.find(item => item.view.id === 'failed')?.text).toBe(failed);
+  // Retrying a failed original cannot treat its text as an already-applied baseline.
+  h.profile[field] = 'User edited profile'; fail = false;
+  await startCompanionImport(selection, 'reconnected');
+  const conflict = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile[field]).toBe('User edited profile');
+  expect(conflict?.checks.find(check => check.entryId === 'failed')?.message).toBe('PROFILE_CHANGED');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents).toEqual({ healthy });
+  h.profile[field] = healthy;
+  await startCompanionImport(selection, 'reconnected');
+  const complete = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(complete?.status).toBe('complete');
+  expect(complete?.savedEntryIds).toEqual(['healthy', 'failed']);
+  expect(String(h.profile[field])).toContain(`${healthy}\n\nNot yet complete`);
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents).toEqual({ healthy, failed });
+  expect(await storage.list()).toHaveLength(3);
+});
+
+it('projects healthy role siblings on the first save even when their item is incomplete', async () => {
+  const documents = [{ id: 'good-role', name: 'USER.md', text: 'Saved user', role: 'user' as const },
+    { id: 'bad-role', name: 'later/USER.md', text: 'Pending user', role: 'user' as const }];
+  h.snapshot.items = [{ view: { id: 'mixed-role', name: 'Mixed', category: 'memory', selected: true }, documents,
+    files: [{ name: 'bad.bin', bytes: Buffer.from([0, 255, 0, 255]), executable: false }] }];
+  h.importDocument.mockImplementation(async (_bot, id) => { if (id === 'bad-role') throw Object.assign(new Error('full'), { code: 'ENOSPC' }); });
+  h.importMedia.mockRejectedValue(Object.assign(new Error('unsupported'), { code: 'SOURCE_MEMORY_ATTACHMENT_UNSUPPORTED' }));
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'first-mixed-role-fixture', previewId: preview.id, name: 'Ada', entryIds: ['mixed-role'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first?.savedEntryIds).toEqual([]);
+  expect(h.profile.userContextSource).toBe('Saved user');
+  const stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(stored.documents).toEqual({ 'good-role': 'Saved user' });
+  expect((await deserializeImportSnapshotAsync(stored.pendingImport!.snapshotJson, () => {})).items[0]?.documents).toEqual(documents);
+  h.importDocument.mockResolvedValue(undefined);
+  await startCompanionImport(selection, 'reconnected');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('Saved user\n\nPending user');
+});
+
+it('recovers saved role documents when the first profile write fails after copies commit', async () => {
+  h.snapshot.items = [{ view: { id: 'identity', name: 'SOUL.md', category: 'personality', selected: true }, role: 'identity', text: 'Saved identity' }];
+  h.writeProfile.mockRejectedValueOnce(Object.assign(new Error('profile full'), { code: 'ENOSPC' }));
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'role-before-environment-fixture', previewId: preview.id, name: 'Ada', entryIds: ['identity'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${selection.requestId}.json`), 'utf8'));
+  expect(receipt.copied).toEqual(['identity']);
+  expect(receipt.environmentSaved).not.toBe(true);
+  expect(h.profile.identitySource).toBeUndefined();
+  h.importDocument.mockClear();
+  await startCompanionImport(selection, 'reconnected');
+  const complete = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(complete?.status).toBe('complete');
+  expect(h.importDocument).not.toHaveBeenCalled();
+  expect(h.profile.identitySource).toBe('Saved identity');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents).toEqual({ identity: 'Saved identity' });
+});
+
 it.each(['identity', 'user', 'instructions'] as const)('reapplies a repaired %s source to the profile, while preserving user edits', async role => {
   const file = path.join(h.root, 'repaired.md');
   h.snapshot.items = [{ view: { id: 'role-source', name: 'source.md', category: 'personality', selected: true }, role,

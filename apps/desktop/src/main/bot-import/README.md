@@ -610,6 +610,11 @@ in the encrypted archive; the existing execution-output mask stays conservative.
 
 Full preservation also includes unused Hermes scripts, disabled MCP definitions,
 empty marker bytes and UTF-8 text documents containing terminal control characters.
+Initial profile projection and its retry baseline include only role documents
+whose memory import completed in full. Healthy role children of partial items
+still apply; failed/partial role originals remain in the encrypted checkpoint
+until retry succeeds. A durable copied receipt restores this eligibility if the
+profile/environment save was interrupted, and retries still preserve user edits.
 Native Python virtualenv interpreter aliases retain their original runtime targets only when `pyvenv.cfg`
 declares their exact runtime home and the resolved target is a native executable.
 Their captured bytes remain in the import checkpoint; native links preserve dynamic

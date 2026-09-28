@@ -543,6 +543,11 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   };
   const prior = await readReceipt(scope.root, selection.requestId); scope.assert();
   if (prior?.cancelled) return prior.result;
+  // Completed entries may be skipped after a crash before environmentSaved.
+  // Partial entries contribute only documents completed during this attempt.
+  const previouslyCopied = new Set(prior?.copied);
+  const completedDocumentIds = new Set(selected.filter(item => previouslyCopied.has(item.view.id))
+    .flatMap(item => documentEntries(item).map(([id]) => id)));
   const readLegacyDeferSetup = async (botId: string) => {
     const pending = (await companionEnvironmentStore.read(scope.root, botId, scope.assert))?.pendingImport;
     return pending ? pending.selection.deferSetup === true : undefined;
@@ -673,6 +678,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
             total += parts - 1;
             await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), text, document.role === 'user' ? 'user' : 'reference');
             saved += parts; savedDocuments.add(document.id);
+            completedDocumentIds.add(document.id);
           } catch (error) {
             scope.assert();
             const progress = (error as { importProgress?: { saved: number; total: number } })?.importProgress;
@@ -726,6 +732,12 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     },
     async saveEnvironment(botId, items) {
       const previous = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
+      const roleDocumentIds = new Set(items.flatMap(item => [...(item.role ? [item.view.id] : []),
+        ...(item.documents ?? []).filter(document => document.role).map(document => document.id)]));
+      // Failed role originals remain in pendingImport, not in the applied
+      // profile or its retry baseline. Keep healthy children of partial items.
+      const documents = Object.fromEntries(items.flatMap(documentEntries)
+        .filter(([id]) => !roleDocumentIds.has(id) || completedDocumentIds.has(id)));
       const chosen = new Set(items.map(item => item.view.id));
       const env = selectedImportEnvironment(items);
       const resolveReferences = (value: unknown) => resolveImportReferences(value, env);
@@ -749,13 +761,13 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         files: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.bytes.toString('base64')]] : [])),
         memoryFiles: Object.fromEntries(items.flatMap(memoryFileEntries)),
         skillFiles,
-        documents: Object.fromEntries(items.flatMap(documentEntries)),
+        documents,
         contentRedactions: publicationRedactions(items),
         sourceAutomations: items.flatMap(item => item.automation ? [{ entryId: item.view.id, kind: snapshot.source.kind, original: item.automation.original }] : []),
         pendingImport: previous?.pendingImport ?? { selection, snapshotJson: await serializeImportSnapshotAsync({ ...snapshot, avatarImageBase64: selection.avatarImageBase64, items, publicationRedactions: publicationRedactions(items) }, scope.assert) },
         automations: previous?.automations ?? {},
       }, scope.assert);
-      await applyProfile(botId, items);
+      await applyProfile(botId, items, undefined, documents);
     },
     async createConversation(botId) {
       const source = await getBotRemoteResourceSource(botId); scope.assert();
