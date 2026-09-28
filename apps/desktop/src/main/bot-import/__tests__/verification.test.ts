@@ -8,7 +8,7 @@ import { getMakerIfReady } from '../../maker-host/index.js';
 import { getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
 import { companionEnvironmentStore } from '../runtime.js';
 import { matchesReadEvidence, readImportHttpEvidence, verifyImportedAutomation } from '../verification.js';
-import { normalizeAutomation } from '../sourceAutomations.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
 import { resolveImportEnvironmentDependencies } from '../environmentSelection.js';
 import type { ImportItem, ImportSource } from '../types.js';
 import * as connectionModule from '../connections.js';
@@ -201,7 +201,7 @@ it.each(['hermes', 'openclaw'] as const)('routes a %s reminder locally without p
   const reminder = (prompt: string) => resolveImportEnvironmentDependencies([normalizeAutomation(source, {
     id: 'reminder', name: 'Reminder', prompt, payload: { message: prompt }, schedule: { kind: 'interval', minutes: 5 },
     deliver: 'telegram:123', delivery: { mode: 'announce', channel: 'telegram', to: '123' },
-  }, selected, 'UTC')], selected)[0]!;
+  }, indexAutomationDependencies(selected), 'UTC')], selected)[0]!;
   const item = reminder('Remind me to stretch');
   expect(item.view.dependsOn).toEqual([]);
   expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(true);
@@ -431,7 +431,7 @@ it('does not verify a native command as a local reminder or expose its inline en
   vi.mocked(getMakerIfReady).mockReturnValue({ oneShot, getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'pi', model: 'fixture-model' }) } as never);
   vi.mocked(getBotRemoteResourceSource).mockResolvedValue({ canonicalSessionId: 'fixture-session' } as never);
   const source: ImportSource = { kind: 'openclaw', agentId: 'main', name: 'Fixture', root: '/fixture', workspace: '/fixture/workspace', configFile: '/fixture/openclaw.json' };
-  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['report', '--token', secret], env: { API_TOKEN: secret } }, schedule: { kind: 'every', everyMs: 60000 } }, [], 'UTC');
+  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['report', '--token', secret], env: { API_TOKEN: secret } }, schedule: { kind: 'every', everyMs: 60000 } }, indexAutomationDependencies([]), 'UTC');
   expect(await verifyImportedAutomation('/fixture', 'bot', item, () => {})).toMatchObject({ verified: false, reason: 'AUTOMATION_READ_NOT_VERIFIED' });
   expect(oneShot.mock.calls[0]![1]).toContain('native-command');
   expect(oneShot.mock.calls[0]![1]).not.toContain(secret);
@@ -443,7 +443,7 @@ it('keeps literals that are absent from all credential maps out of the command r
   vi.mocked(getMakerIfReady).mockReturnValue({ oneShot, getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'pi', model: 'fixture-model' }) } as never);
   vi.mocked(getBotRemoteResourceSource).mockResolvedValue({ canonicalSessionId: 'fixture-session' } as never);
   const source: ImportSource = { kind: 'openclaw', agentId: 'main', name: 'Fixture', root: '/fixture', workspace: '/fixture/workspace', configFile: '/fixture/openclaw.json' };
-  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['private-executable', '--token', 'argument-only-secret'], cwd: '/private-directory', input: 'stdin-only-secret' }, schedule: { kind: 'every', everyMs: 60000 } }, [], 'UTC');
+  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['private-executable', '--token', 'argument-only-secret'], cwd: '/private-directory', input: 'stdin-only-secret' }, schedule: { kind: 'every', everyMs: 60000 } }, indexAutomationDependencies([]), 'UTC');
   expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {})).verified).toBe(false);
   const prompt = oneShot.mock.calls[0]![1];
   for (const literal of ['private-executable', 'argument-only-secret', '/private-directory', 'stdin-only-secret']) expect(prompt).not.toContain(literal);

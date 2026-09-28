@@ -4,7 +4,7 @@ import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
 import { CompanionImportError, importFailureCode, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { normalizeImportSkill, readImportSkillTree } from './skills.js';
-import { normalizeAutomation } from './sourceAutomations.js';
+import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
 import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from './environmentSelection.js';
 
@@ -259,6 +259,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
     const item = byId.get(id);
     return !!item?.captureIssue || item?.view.enabled === false && (item.view.category === 'skills' || !!item.mcp) || needsAttention(id) || !!item?.view.issues?.length || !!item?.view.dependsOn?.some(child => missingDependency(child, visited));
   };
+  let automationDependencies: ReturnType<typeof indexAutomationDependencies> | undefined;
   for (const item of items.filter(item => item.automation)) {
     // Background reconciliation repairs only interrupted work. A definitive
     // failed verification needs an explicit retry, never another model/Ask call.
@@ -268,7 +269,8 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
     const automation = item.automation!;
     if (!automation.input) {
       // Retry checkpoints created before unsupported tasks had visible drafts.
-      const restored = normalizeAutomation(snapshot.source, automation.original, items, 'UTC');
+      automationDependencies ??= indexAutomationDependencies(items);
+      const restored = normalizeAutomation(snapshot.source, automation.original, automationDependencies, 'UTC');
       automation.input = restored.automation!.input;
       item.view.issues = [...new Set([...(item.view.issues ?? []), ...(restored.view.issues ?? []), 'SOURCE_AUTOMATION_INVALID'])];
     }

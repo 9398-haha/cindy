@@ -584,7 +584,8 @@ it('passes the saved reminder choice and check into the shared runner and return
 });
 
 it('persists all imported paused routines before tool-policy setup and never dispatches them', async () => {
-  const { normalizeAutomation } = await import('../../bot-import/sourceAutomations.js');
+  const { indexAutomationDependencies, normalizeAutomation } = await import('../../bot-import/sourceAutomations.js');
+  const dependencies = indexAutomationDependencies([]);
   const guard = vi.fn(async () => { throw new Error('SOURCE_TOOL_POLICY_NEEDS_MAPPING'); });
   configureRoutineHost({ getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage, assertImportedAutomationReady: guard });
   for (let index = 0; index < 11; index++) {
@@ -592,7 +593,7 @@ it('persists all imported paused routines before tool-policy setup and never dis
       id: `report-${index}`, name: `Report ${index}`, enabled: false,
       schedule: { kind: 'every', everyMs: 60_000 }, payload: { message: 'Read the report' },
       ...(index < 4 ? { tools: { allow: ['read'] } } : {}),
-    }, [], 'UTC');
+    }, dependencies, 'UTC');
     expect(item.automation?.input).toBeDefined();
     if (index < 4) expect(item.view.issues).toContain('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
     await routineTools.createOnce('bot', item.automation!.input!, `imported-report-${index}`);

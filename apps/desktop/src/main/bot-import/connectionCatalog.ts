@@ -9,7 +9,7 @@ const PUBLIC_MCP_ROUTES = new Set(['api', 'v1', 'v2', 'mcp', 'sse', 'messages', 
 const LOCAL_MCP_ENDPOINTS = new Set(['native-mcp', 'touchdesigner-mcp']);
 const CAPABILITY_PATH_PREFIXES = new Set(['hooks', 'webhooks', 'token', 'secret', 'credential', 'key']);
 // Credential containers use the same classification as their scalar forms.
-const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decryption|secret|access)[_-]?keys?|.*(?:tokens?|secrets?|passwords?|passwds?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
+const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decryption|secret|access)[_-]?keys?|.*(?:tokens?|secrets?|passwords?|passwds?|pass[_-]?phrases?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
 
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
@@ -71,6 +71,10 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
     }
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value)) {
+      // OAuth token records include public protocol metadata alongside secrets.
+      // Do not turn a scheme name into a global mask for imported source files.
+      // Unknown values and non-scalar descendants retain the private context.
+      if (/^token[_-]?type$/i.test(key) && typeof child === 'string' && /^(?:Bearer|DPoP)$/i.test(child)) continue;
       // Credential-bearing containers remain private through array indices and
       // nested objects; unrelated sibling fields keep their own classification.
       collect(child, credentialValue || CREDENTIAL_FIELD.test(key));

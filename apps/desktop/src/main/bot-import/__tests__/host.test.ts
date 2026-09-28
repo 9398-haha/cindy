@@ -76,7 +76,7 @@ import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
 import { verifyImportedAutomation } from '../verification.js';
-import { normalizeAutomation } from '../sourceAutomations.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-host-test-'));
@@ -1230,7 +1230,7 @@ it('receives sparse selection chunks idempotently and starts only after the comp
 it('archives unsupported automation definitions and blocks both management and runtime execution', async () => {
   const original = { id: 'native', schedule: { kind: 'source-specific' }, payload: { kind: 'heartbeat' }, delivery: { channel: 'missing-channel', to: 'original-recipient' } };
   h.snapshot.source.kind = 'openclaw';
-  const item = normalizeAutomation(h.snapshot.source, original, [], 'UTC');
+  const item = normalizeAutomation(h.snapshot.source, original, indexAutomationDependencies([]), 'UTC');
   h.snapshot.items = [item];
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');

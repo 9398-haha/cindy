@@ -7,7 +7,7 @@ import yaml from 'js-yaml';
 import { parse as parseEnv } from 'dotenv';
 import { createImportBudget, fingerprint, optionalText, readImportFile, readImportTree, snapshotFingerprint, type ImportReadBudget } from './files.js';
 import { discoverImportSkills } from './skills.js';
-import { normalizeAutomation } from './sourceAutomations.js';
+import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 
@@ -334,8 +334,10 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   }
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   sourceConfiguration(items, source, values);
+  const automationDependencies = indexAutomationDependencies(items);
+  const timezone = string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
   for (const [index, job] of jobs.entries()) {
-    items.push(normalizeAutomation(source, job, items, string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone, index));
+    items.push(normalizeAutomation(source, job, automationDependencies, timezone, index));
   }
   const identity = items.find(item => item.view.name === 'IDENTITY.md')?.text ?? '';
   const avatar = string(object(row.identity).avatar) || string(row.avatar) || /^\s*[-*]?\s*\*{0,2}Avatar\*{0,2}:\s*(.+)$/im.exec(identity)?.[1]?.trim() || '';

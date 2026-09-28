@@ -7,12 +7,58 @@ import { transferCompanion, validateImportSelection, type TransferDeps } from '.
 import { resolveImportReferences, selectedImportEnvironment } from '../environmentSelection.js';
 import { discoverImportSkills, readImportSkillTree } from '../skills.js';
 import { createImportBudget } from '../files.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
+import type { ImportItem, ImportSource } from '../types.js';
 
 let home: string;
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-source-test-')); });
 afterEach(async () => { vi.restoreAllMocks(); await fs.rm(home, { recursive: true, force: true }); });
 async function write(name: string, text: string) { const file = path.join(home, name); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, text); }
 const deps = () => ({ home, env: {}, readCronDatabase: vi.fn(async () => []) });
+
+it.each(['hermes', 'openclaw'] as const)('previews 20,000 %s jobs with complete shared dependencies', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, JSON.stringify({
+    mcpServers: { data: { url: 'https://example.invalid/mcp' } },
+  }));
+  await write(`.${kind}/.env`, 'API_TOKEN=fixture-token');
+  const jobs = Array.from({ length: 20_000 }, (_, index) => ({ id: `job-${index}`, agentId: 'main',
+    prompt: 'Use data with API_TOKEN', payload: { kind: 'agentTurn', message: 'Use data with API_TOKEN' },
+    schedule: { kind: 'interval', minutes: 5 }, enabled: index % 2 === 0 }));
+  await write(`.${kind}/cron/jobs.json`, JSON.stringify({ jobs }));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const tasks = snapshot.items.filter(item => item.automation);
+  const connection = snapshot.items.find(item => item.mcp?.name === 'data')!;
+  const environment = snapshot.items.find(item => item.env?.API_TOKEN)!;
+  expect(tasks).toHaveLength(jobs.length);
+  expect(new Set(tasks.map(item => item.view.id)).size).toBe(jobs.length);
+  expect(tasks.every((item, index) => item.view.enabled === jobs[index]!.enabled
+    && item.view.dependsOn?.includes(connection.view.id) && item.view.dependsOn?.includes(environment.view.id)
+    && item.automation?.input?.enabled === false)).toBe(true);
+  expect(tasks.map(item => item.automation!.original)).toEqual(jobs);
+});
+
+it('indexes aliases and script subtrees while preserving dependency order and inherited policies', () => {
+  const source: ImportSource = { kind: 'hermes', root: home, workspace: home, configFile: path.join(home, 'config.yaml'), agentId: 'main', name: 'Ada' };
+  const view = (id: string, category: ImportItem['view']['category'] = 'connections') => ({ id, name: id, category, selected: true });
+  const items: ImportItem[] = [
+    { view: view('mcp'), mcp: { name: 'bridge', url: 'https://example.invalid/mcp' } },
+    { view: { ...view('skill', 'skills'), name: 'Display name' }, sourceAlias: 'alias', sourceDirectory: path.join(home, 'folder'),
+      files: [{ name: 'SKILL.md', bytes: Buffer.from('bridge SKILL_TOKEN'), executable: false }, { name: 'image.png', bytes: Buffer.from('UNUSED_TOKEN'), executable: false }] },
+    { view: view('main'), asset: { name: 'scripts/reports/run.py', bytes: Buffer.from('SCRIPT_TOKEN') } },
+    { view: view('data'), asset: { name: 'scripts/reports/data/check.py', bytes: Buffer.from('bridge') } },
+    { view: view('unrelated'), asset: { name: 'scripts/reports-other/other.py', bytes: Buffer.from('UNUSED_TOKEN') } },
+    { view: view('env'), env: { SKILL_TOKEN: 'a', SCRIPT_TOKEN: 'b', UNUSED_TOKEN: 'c' } },
+    { view: view('tools'), credential: { format: 'source-tools', value: {} } },
+    { view: view('model'), credential: { format: 'source-model', value: {} } },
+  ];
+  const dependencies = indexAutomationDependencies(items);
+  const item = normalizeAutomation(source, { id: 'report', skills: ['folder', 'alias'], script: 'reports/run.py', monitor_script: 'reports/data/check.py', schedule: { kind: 'interval', minutes: 5 } }, dependencies, 'UTC');
+  expect(item.view.dependsOn).toEqual(['mcp', 'skill', 'main', 'data']);
+  expect(item.envDependencies?.names).toEqual(['SKILL_TOKEN', 'SCRIPT_TOKEN']);
+  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
+  expect(normalizeAutomation(source, { id: 'missing', script: 'reports/missing.py' }, dependencies, 'UTC').view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
+});
 
 it.each([
   { kind: 'hermes', config: { model: 'source-model' }, blocked: true },

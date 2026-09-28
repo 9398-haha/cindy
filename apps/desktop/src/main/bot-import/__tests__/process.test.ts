@@ -40,10 +40,25 @@ it('keeps credential context through array and object values without masking ord
   expect(JSON.stringify(original)).toBe(before);
 });
 
+it('preserves OAuth token-type metadata in source files while masking credentials in the same container', () => {
+  const tokens = { token_type: 'Bearer', access_token: 'fixture-access-secret', nested: { tokenType: 'DPoP', value: 'fixture-nested-secret' },
+    unknown: { token_type: 'fixture-unknown-secret' }, structured: { token_type: ['fixture-array-secret'] } };
+  const before = JSON.stringify(tokens);
+  const environment = { env: {}, mcp: [], credentials: [{ id: 'fixture', format: 'json', value: { tokens } }] };
+  const masks = importedContentRedactions(environment);
+  const source = 'Use Bearer or DPoP authorization. fixture-access-secret fixture-nested-secret fixture-unknown-secret fixture-array-secret';
+  const output = redactEnvironmentValues(source, masks);
+  expect(output).toContain('Use Bearer or DPoP authorization.');
+  for (const secret of ['fixture-access-secret', 'fixture-nested-secret', 'fixture-unknown-secret', 'fixture-array-secret']) expect(output).not.toContain(secret);
+  expect(JSON.stringify(tokens)).toBe(before);
+  // Public metadata never exempts the same literal supplied as an actual token.
+  expect(redactEnvironmentValues('Bearer', importedContentRedactions({ ...environment, env: { API_TOKEN: 'Bearer' } }))).not.toBe('Bearer');
+});
+
 it.each(['credential', 'credentials', 'clientCredentials', 'tokens', 'access_tokens', 'refreshTokens',
   'secrets', 'passwords', 'passwds', 'keys', 'api_keys', 'API-KEYS', 'auth', 'authorization', 'cookies',
   'private_key', 'privateKey', 'privateKeys', 'SSH_PRIVATE_KEY', 'signing_key', 'signing-key', 'signingKey',
-  'encryption_key', 'decryptionKey', 'awsSecretAccessKey', 'serviceApiKey'])(
+  'encryption_key', 'decryptionKey', 'awsSecretAccessKey', 'serviceApiKey', 'passphrase', 'passphrases', 'keyPassphrase', 'pass_phrase', 'pass-phrases'])(
   'masks scalar and nested string descendants of the %s credential field', field => {
     const original = { [field]: ['fixture-container-secret', { nested: ['fixture-nested-secret'] }],
       scalar: { [field]: 'fixture-scalar-secret' }, cities: ['Paris', 'London'], monkeys: ['capuchin'],

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { validateImportSelection, transferCompanion, type ImportReceipt, type TransferDeps } from '../transfer.js';
 import { CompanionImportError, type ImportSnapshot } from '../types.js';
 import type { CompanionImportSelection } from '@cindy/maker-shared/companion-import';
-import { normalizeAutomation } from '../sourceAutomations.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
 import { fingerprint } from '../files.js';
 
 const snapshot: ImportSnapshot = { source: { kind: 'hermes', agentId: 'default', name: 'Ada', root: '/fixture/hermes', workspace: '/fixture/work', configFile: '/fixture/hermes/config.yaml' }, fingerprint: 'fixture', items: [
@@ -60,7 +60,7 @@ it('keeps the source running when a script sibling or resource is deselected', a
   const items = ['reports/main.py', 'reports/helper.py', 'reports/data/input.json'].map(name => ({
     view: { id: name, name, category: 'connections' as const, selected: true }, asset: { name: `scripts/${name}`, bytes: Buffer.from('fixture') },
   }));
-  const task = normalizeAutomation(snapshot.source, { id: 'report', script: 'reports/main.py', no_agent: true, schedule: { kind: 'interval', minutes: 5 } }, items, 'UTC');
+  const task = normalizeAutomation(snapshot.source, { id: 'report', script: 'reports/main.py', no_agent: true, schedule: { kind: 'interval', minutes: 5 } }, indexAutomationDependencies(items), 'UTC');
   const source = { ...snapshot, items: [...items, task] };
   for (const omitted of ['reports/helper.py', 'reports/data/input.json']) {
     const { deps } = harness();
@@ -85,7 +85,7 @@ it.each([
   }));
   for (const candidates of [accounts, [...accounts].reverse(), [accounts[0]!]]) {
     const source = { ...snapshot.source, kind };
-    const task = normalizeAutomation(source, { id: 'reminder', prompt: 'Remember', payload: { message: 'Remember' }, schedule: { kind: 'interval', minutes: 5 }, ...job }, candidates, 'UTC');
+    const task = normalizeAutomation(source, { id: 'reminder', prompt: 'Remember', payload: { message: 'Remember' }, schedule: { kind: 'interval', minutes: 5 }, ...job }, indexAutomationDependencies(candidates), 'UTC');
     const { deps } = harness();
     const items = [...candidates, task];
     const result = await transferCompanion({ ...snapshot, source, items }, { ...selection, entryIds: items.map(item => item.view.id) }, deps);
@@ -103,7 +103,7 @@ it.each(['personal', 'missing'])('uses local delivery even when the source names
     view: { id: account, name: account, category: 'connections' as const, selected: true },
     credential: { format: 'telegram', value: { account, token: `123:fake-${account}-token` } },
   }));
-  const task = normalizeAutomation(source, { id: 'reminder', payload: { message: 'Remember' }, schedule: { kind: 'every', everyMs: 60000 }, delivery: { mode: 'announce', channel: 'telegram', to: '123', accountId } }, accounts, 'UTC');
+  const task = normalizeAutomation(source, { id: 'reminder', payload: { message: 'Remember' }, schedule: { kind: 'every', everyMs: 60000 }, delivery: { mode: 'announce', channel: 'telegram', to: '123', accountId } }, indexAutomationDependencies(accounts), 'UTC');
   const { deps } = harness();
   const items = [...accounts, task];
   await transferCompanion({ ...snapshot, source, items }, { ...selection, entryIds: items.map(item => item.view.id) }, deps);
@@ -377,7 +377,7 @@ it.each([
   const { deps, receipt } = harness();
   const source = { ...snapshot.source, kind: 'openclaw' as const };
   const original = { id: 'unsupported', ...job, delivery: { channel: 'unavailable-channel', to: 'original-target' } };
-  const item = normalizeAutomation(source, original, [], 'UTC');
+  const item = normalizeAutomation(source, original, indexAutomationDependencies([]), 'UTC');
   expect(item.automation?.input).toMatchObject({ enabled: false });
   expect(item.view.issues?.length).toBeGreaterThan(0);
   const input = { ...selection, entryIds: [item.view.id], deferSetup: true, takeover: false };
@@ -397,7 +397,7 @@ it.each([
 
 it('recovers legacy checkpoints that had no converted routine input', async () => {
   const { deps } = harness();
-  const item = normalizeAutomation(snapshot.source, { id: 'legacy', schedule: { kind: 'unknown' } }, [], 'UTC');
+  const item = normalizeAutomation(snapshot.source, { id: 'legacy', schedule: { kind: 'unknown' } }, indexAutomationDependencies([]), 'UTC');
   delete item.automation!.input;
   const result = await transferCompanion({ ...snapshot, items: [item] }, { ...selection, entryIds: [item.view.id], deferSetup: true }, deps);
   expect(result.savedEntryIds).toContain(item.view.id);
