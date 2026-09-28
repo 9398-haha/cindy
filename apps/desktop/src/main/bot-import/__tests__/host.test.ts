@@ -733,8 +733,13 @@ it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])(
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: `fixture-skill-limit-${mode}`, previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false };
-  await startCompanionImport(selection, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  const accepted = await startCompanionImport(selection, 'fixture');
+  // Acceptance can precede the 142 real filesystem writes. Join the existing
+  // profile transaction instead of racing vi.waitFor's one-second deadline.
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect(result?.savedEntryIds).toEqual(expect.arrayContaining(selection.entryIds));
+  expect(await fs.readdir(path.join(h.root, 'bots', accepted.botId, 'skills'))).toHaveLength(count);
   expect(createBotProfile).toHaveBeenCalledOnce();
 });
 
