@@ -13,7 +13,10 @@ export interface CompanionEnvironment {
   env: Record<string, string>;
   mcp: ImportedMcpServer[];
   credentials: Array<{ id: string; format: string; value: unknown }>;
+  /** Source script assets. Legacy imports may also contain memory attachments; execution filters by the scripts/ namespace. */
   files?: Record<string, string>;
+  /** Non-media memory originals (including empty markers); never execution assets. Media originals live in the media ledger. */
+  memoryFiles?: Record<string, string>;
   /** Originals behind redacted skill projections; only materialized for authorized host commands. */
   skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean; interpreterLink?: string }>>;
   /** Original selected documents; model-readable profile/memory copies redact known credentials. */

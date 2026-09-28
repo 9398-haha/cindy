@@ -8,7 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
-import { fingerprint } from '../files.js';
+import { deserializeImportSnapshotAsync, fingerprint } from '../files.js';
 import { createMessage } from '../../localDb/ipc/messages.js';
 import { t } from '../../i18n.js';
 import { createBotProfile, getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
@@ -1192,7 +1192,9 @@ it('retries legacy text and empty memory assets without passing them to the medi
   expect(result).toMatchObject({ status: 'complete', savedEntryIds: ['old-json', 'old-marker'] });
   expect(h.importDocument).toHaveBeenCalledOnce();
   expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'memory/state.json', '{"cursor":7}\n', 'reference');
-  expect((await h.store.read(h.root, first.botId, () => {}))?.files?.['memory/.report.sent']).toBe('');
+  const environment = await h.store.read(h.root, first.botId, () => {});
+  expect(environment?.memoryFiles).toEqual({ 'memory/state.json': Buffer.from('{"cursor":7}\n').toString('base64'), 'memory/.report.sent': '' });
+  expect(environment?.files).toEqual({});
   await startCompanionImport(selection, 'phone');
   expect(h.importDocument).toHaveBeenCalledOnce();
 });
@@ -1262,9 +1264,42 @@ it('continues healthy recovered documents when a sibling attachment fails', asyn
   const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
   expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, 'healthy', 'healthy.md', 'Keep this note', 'reference');
   expect(first?.checks).toContainEqual({ entryId: 'mixed', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 2 } });
+  const pending = await h.store.read(h.root, accepted.botId, () => {});
+  expect(pending?.files).toEqual({});
+  expect(pending?.memoryFiles).toEqual({});
+  const checkpoint = await deserializeImportSnapshotAsync(pending!.pendingImport!.snapshotJson, () => {});
+  const original = h.snapshot.items[0]!.files![0]!;
+  expect(checkpoint.items[0]!.files![0]!.bytes).toEqual(original.bytes);
+  // An old failed import may already have mixed attachment bytes into files.
+  await h.store.update(h.root, accepted.botId, () => {}, env => { env.files = { [original.name]: original.bytes.toString('base64') }; });
   await startCompanionImport(selection, 'fixture');
   const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
   expect(result?.savedEntryIds).toContain('mixed');
+  const completed = await h.store.read(h.root, accepted.botId, () => {});
+  expect(completed?.files).toEqual({});
+  expect(completed?.pendingImport).toBeUndefined();
+  expect(h.importMedia).toHaveBeenLastCalledWith(accepted.botId, 'chat', original.bytes, expect.any(Function));
+});
+
+it('retains managed media by ledger reference without copying its bytes into execution assets', async () => {
+  const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const script = Buffer.from('print("fixture")');
+  h.snapshot.items = [
+    { view: { id: 'image', name: 'image.png', category: 'memory', selected: true }, asset: { name: 'memory/image.png', bytes: image } },
+    { view: { id: 'script', name: 'report.py', category: 'connections', selected: true }, asset: { name: 'scripts/report.py', bytes: script } },
+  ];
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'media-ledger-only-fixture', previewId: preview.id, name: 'Ada', entryIds: ['image', 'script'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect(h.importMedia).toHaveBeenCalledWith(accepted.botId, 'chat', image, expect.any(Function));
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, expect.any(String), 'memory/image.png', '![memory/image.png](cindy-media://blobs/fixture.png)', 'reference');
+  const environment = await h.store.read(h.root, accepted.botId, () => {});
+  expect(environment?.files).toEqual({ 'scripts/report.py': script.toString('base64') });
+  expect(environment?.memoryFiles).toEqual({});
+  expect(environment?.pendingImport).toBeUndefined();
+  expect(JSON.stringify(environment)).not.toContain(image.toString('base64'));
 });
 
 it('cleans a completed checkpoint after a crash without replaying import work', async () => {

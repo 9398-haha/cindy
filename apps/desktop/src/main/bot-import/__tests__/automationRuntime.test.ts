@@ -27,7 +27,7 @@ it.skipIf(process.platform === 'win32')('executes the default imported script an
   const files = {
     'config.yaml': 'name: Ada\n',
     'cron/jobs.json': JSON.stringify([{ id: 'report', script: 'reports/report.sh', monitor_script: 'monitor/check.sh', no_agent: true, schedule: { kind: 'interval', minutes: 5 } }]),
-    'scripts/reports/report.sh': '. ./helper.sh\nreport\n',
+    'scripts/reports/report.sh': 'test ! -e "$HERMES_HOME/memory/image.png" || exit 91\ntest -f "$HERMES_HOME/scripts/unrelated/unused.sh" || exit 92\n. ./helper.sh\nreport\n',
     'scripts/reports/helper.sh': 'report() { cat data/report.txt; }\n',
     'scripts/reports/data/report.txt': 'copied report resource',
     'scripts/monitor/check.sh': '. ./helper.sh\nmonitor\n',
@@ -45,6 +45,7 @@ it.skipIf(process.platform === 'win32')('executes the default imported script an
   expect(Object.keys(assets)).toHaveLength(7);
   expect(assets['scripts/unrelated/unused.sh']).toBe(Buffer.from('exit 99').toString('base64'));
   expect(task.view.dependsOn).not.toContain(snapshot.items.find(item => item.asset?.name === 'scripts/unrelated/unused.sh')!.view.id);
+  assets['memory/image.png'] = Buffer.from('legacy-private-image').toString('base64');
   await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], files: assets, automations: {
     routine: { kind: 'hermes', handover: 'ready', original: task.automation!.original, sourceRoot, deliveries: [] },
   } }, () => {});
@@ -54,6 +55,23 @@ it.skipIf(process.platform === 'win32')('executes the default imported script an
   expect(result?.direct).toBe('copied report resource');
   expect(result?.prompt).toContain('copied monitor resource');
   expect(await fs.readdir(path.join(root, 'bots/bot/import-executions'))).toEqual([]);
+});
+
+it('does not materialize legacy media or archived memory for a native command', async () => {
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture command' } as Routine;
+  const directory = path.join(root, 'bots', 'bot', 'import-executions');
+  const code = 'const fs=require("node:fs"),path=require("node:path");const dirs=fs.readdirSync(process.argv[1]);console.log(dirs.every(name=>!fs.existsSync(path.join(process.argv[1],name,"memory"))&&fs.existsSync(path.join(process.argv[1],name,"scripts/unused.py")))?"clean":"incorrect assets");';
+  const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code, directory], cwd: root } };
+  const legacyFiles = { 'memory/image.png': Buffer.from('legacy-media-bytes').toString('base64'), 'scripts/unused.py': Buffer.from('unused').toString('base64') };
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], files: legacyFiles,
+    memoryFiles: { 'memory/.report.sent': '' }, automations: { routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root } },
+  }, () => {});
+  const result = await prepareImportedAutomation(root, routine, 'no-media-command', new AbortController().signal, () => {});
+  expect(result?.direct).toBe('clean');
+  const preserved = await shared.store.read(root, 'bot', () => {});
+  expect(preserved?.files).toEqual(legacyFiles);
+  expect(preserved?.memoryFiles).toEqual({ 'memory/.report.sent': '' });
+  expect(await fs.readdir(directory)).toEqual([]);
 });
 
 it('uses the original monitor URL but masks echoed path/query credentials, previous output and legacy retry caches', async () => {

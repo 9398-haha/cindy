@@ -208,6 +208,19 @@ function documentEntries(item: ImportItem): Array<[string, string]> {
     ...(item.documents ?? []).map(document => [document.id, document.text] as [string, string])];
 }
 
+function isMemoryItem(item: ImportItem): boolean {
+  return item.view.category === 'memory' || item.view.category === 'personality';
+}
+
+function memoryFileEntries(item: ImportItem): Array<[string, string]> {
+  if (!isMemoryItem(item)) return [];
+  // Managed media is owned by the ledger and referenced by imported memory.
+  // Failed attachments remain in pendingImport until they can be retried.
+  return [...(item.asset ? [item.asset] : []), ...item.files ?? []]
+    .filter(file => memoryFileContent({ ...file, executable: false }).kind !== 'attachment')
+    .map(file => [file.name, file.bytes.toString('base64')]);
+}
+
 function receiptFile(root: string, requestId: string) {
   if (!/^[A-Za-z0-9_-]{16,100}$/.test(requestId)) throw new CompanionImportError('INVALID_REQUEST');
   return path.join(root, 'companion-imports', `${requestId}.json`);
@@ -552,7 +565,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         const slug = skillSlug(item);
         const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
         await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
-      } else if (item.view.category === 'memory' || item.view.category === 'personality') {
+      } else if (isMemoryItem(item)) {
         const documents = [...(item.text ? [{ id: item.view.id, name: item.view.name, text: item.text, role: item.role }] : []), ...item.documents ?? []];
         const attachments = [...(item.asset ? [item.asset] : []), ...(item.files ?? [])];
         let firstFailure: unknown; let failedAttachments = 0;
@@ -605,8 +618,14 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         // A formerly unreadable manifest may only now supply its own settings.
         if (item.env) environment.env = { ...environment.env, ...item.env };
-        const attachments = [...(item.asset ? [item.asset] : []), ...(['memory', 'personality'].includes(item.view.category) ? item.files ?? [] : [])];
-        if (attachments.length) environment.files = { ...environment.files, ...Object.fromEntries(attachments.map(file => [file.name, file.bytes.toString('base64')])) };
+        if (isMemoryItem(item)) {
+          environment.memoryFiles = { ...environment.memoryFiles, ...Object.fromEntries(memoryFileEntries(item)) };
+          // A successful retry may upgrade an earlier mixed execution archive.
+          // Remove only the exact copy whose original has just been preserved.
+          for (const file of [...(item.asset ? [item.asset] : []), ...item.files ?? []]) {
+            if (environment.files?.[file.name] === file.bytes.toString('base64')) delete environment.files[file.name];
+          }
+        } else if (item.asset) environment.files = { ...environment.files, [item.asset.name]: item.asset.bytes.toString('base64') };
         if (item.credential) environment.credentials = [...environment.credentials.filter(value => value.id !== item.view.id), { id: item.view.id, ...item.credential }];
         for (const [id, text] of documentEntries(item)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
@@ -645,10 +664,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           return [server];
         }),
         credentials: items.flatMap(item => item.credential && !item.view.dependsOn?.some(id => !chosen.has(id)) && (!item.view.issues?.length || item.credential.format !== 'telegram') ? [{ id: item.view.id, ...item.credential, ...(item.credential.format === 'telegram' ? { value: resolveReferences(item.credential.value) } : {}) }] : []),
-        files: Object.fromEntries(items.flatMap(item => [
-          ...(item.asset ? [[item.asset.name, item.asset.bytes.toString('base64')]] : []),
-          ...(['memory', 'personality'].includes(item.view.category) ? (item.files ?? []).map(file => [file.name, file.bytes.toString('base64')]) : []),
-        ])),
+        files: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.bytes.toString('base64')]] : [])),
+        memoryFiles: Object.fromEntries(items.flatMap(memoryFileEntries)),
         skillFiles,
         documents: Object.fromEntries(items.flatMap(documentEntries)),
         contentRedactions: publicationRedactions(items),
