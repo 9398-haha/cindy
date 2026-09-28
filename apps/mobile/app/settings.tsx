@@ -1153,6 +1153,16 @@ export default function SettingsScreen() {
           ]}
         </SettingsGroup>
 
+        <SettingsGroup title={t('sharedTask.title')}>
+          <ActionInfoRow
+            accessibilityLabel={t('sharedTask.manageSharing')}
+            label={t('sharedTask.manageSharing')}
+            value=""
+            onPress={() => router.push({ pathname: '/shared-session', params: { mode: 'manage' } })}
+            testID="settings.sharedTasks.row"
+          />
+        </SettingsGroup>
+
         {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup title={t('settings.appearance.title')}>
           <NativePullDownMenu
