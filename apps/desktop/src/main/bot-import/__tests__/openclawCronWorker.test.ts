@@ -59,10 +59,33 @@ it.each(['tiny', 'utf8'] as const)('stops the worker iterator before retaining a
     const exit = new Promise<void>((resolve, reject) => { worker.once('exit', code => code ? reject(new Error(`worker exit ${code}`)) : resolve()); worker.once('error', reject); });
     const reply = await new Promise<unknown>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
     await exit;
-    expect(reply).toEqual({ ok: false });
+    expect(reply).toEqual({ ok: false, code: 'SOURCE_DATABASE_TOO_LARGE' });
     const counts = JSON.parse(await fs.readFile(database, 'utf8'));
     expect(counts.closed).toBe(true);
     expect(counts.read).toBeGreaterThan(1);
     expect(counts.read).toBeLessThan(scenario === 'tiny' ? 65_000 : 13);
+  } finally { await worker.terminate(); }
+});
+
+it.each([false, true])('passes the host native binding into the database constructor (driver fails: %s)', async fails => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-sqlite-binding-'));
+  const nativeBinding = path.join(root, 'electron-native.node');
+  const databaseModule = path.join(root, 'driver.cjs');
+  await fs.writeFile(databaseModule, `module.exports = class {
+    constructor(file, options) {
+      if (options.nativeBinding !== ${JSON.stringify(nativeBinding)} || !options.readonly || !options.fileMustExist) throw new Error('wrong binding');
+      ${fails ? "throw Object.assign(new Error('private source path'), { code: 'ERR_DLOPEN_FAILED' });" : ''}
+    }
+    prepare() { return { *iterate() { yield { job_json: '{"id":"selected-binding"}', state_json: '{}' }; } }; }
+    close() {}
+  };`);
+  const source = await fs.readFile(new URL('../openclawCronWorker.ts', import.meta.url), 'utf8');
+  const module = path.join(root, 'worker.cjs');
+  await fs.writeFile(module, transformSync(source, { loader: 'ts', format: 'cjs', platform: 'node', target: 'node22', logLevel: 'silent' }).code);
+  const worker = new Worker(module, { workerData: { database: 'source', storeKey: 'store', agentId: 'main', defaultAgent: true, modulePath: databaseModule, nativeBinding } });
+  try {
+    const reply = await new Promise<unknown>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
+    expect(reply).toEqual(fails ? { ok: false, code: 'SOURCE_DATABASE_DRIVER_UNAVAILABLE' } : { ok: true, jobs: [{ id: 'selected-binding', state: {} }] });
+    expect(JSON.stringify(reply)).not.toContain('private source path');
   } finally { await worker.terminate(); }
 });

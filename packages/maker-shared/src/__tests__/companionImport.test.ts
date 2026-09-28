@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { COMPANION_IMPORT_CHUNK_LENGTH, compactCompanionImportSelection, remoteCompanionImportApi, areCompanionImportEntriesSelected, toggleCompanionImportEntries, type CompanionImportEntry, type CompanionImportPreview } from '../companionImport.js';
+import { companionImportErrorCode, companionImportReasonKey, COMPANION_IMPORT_CHUNK_LENGTH, compactCompanionImportSelection, remoteCompanionImportApi, areCompanionImportEntriesSelected, toggleCompanionImportEntries, type CompanionImportEntry, type CompanionImportPreview } from '../companionImport.js';
 const entries: CompanionImportEntry[] = [
   { id: 'work', name: 'Work', category: 'connections', selected: false, exclusiveWith: ['personal'] },
   { id: 'personal', name: 'Personal', category: 'connections', selected: false, exclusiveWith: ['work'] },
@@ -57,4 +57,13 @@ it.each(['token', 'offset', 'total', 'missing', 'disconnect'])('rejects %s drift
   const api = remoteCompanionImportApi(read, async () => {});
   await expect(api.preview('source')).rejects.toThrow(mode === 'disconnect' ? 'DISCONNECTED' : 'INVALID_IMPORT_RESPONSE');
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+
+it('keeps concrete import failures through IPC wrappers without displaying private exception text', () => {
+  const error = { code: 'INVALID_PARAMS', message: '[INVALID_PARAMS] SOURCE_DATABASE_DRIVER_UNAVAILABLE private path' };
+  expect(companionImportErrorCode(error)).toBe('SOURCE_DATABASE_DRIVER_UNAVAILABLE');
+  expect(companionImportReasonKey(companionImportErrorCode(error))).toBe('databaseDriver');
+  expect(companionImportReasonKey('PRIVATE_UNKNOWN')).toBe('itemFailed');
+  expect(companionImportErrorCode(new Error('private source contents'))).toBeUndefined();
 });

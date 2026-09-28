@@ -127,11 +127,15 @@ async function memoryDocuments(items: ImportItem[], root: string, prefix: string
   const failed = (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name: name || prefix, selected: true },
     sourceFile: { root: directory, file: path.join(directory, name), kind }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
   let files;
-  try { files = await readImportTree(directory, name => /\.md$/i.test(name), budget, failed); }
+  try { files = await readImportTree(directory, undefined, budget, failed); }
   catch (error) { failed('', error, 'directory'); return; }
-  for (const file of files.filter(file => /\.md$/i.test(file.name))) {
+  for (const file of files) {
+    if (!/\.(md|txt)$/i.test(file.name)) {
+      items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: `${prefix}/${file.name}`, selected: true }, asset: { name: `${prefix}/${file.name}`, bytes: file.bytes } });
+      continue;
+    }
     if (!file.bytes.toString('utf8').trim()) continue;
-    items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: file.name, selected: true },
+    items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: file.name, description: prefix, selected: true },
       text: file.bytes.toString('utf8'), role: /(^|\/)USER\.md$/i.test(file.name) ? 'user' : undefined });
   }
 }
@@ -267,6 +271,10 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
       if (items.length !== before) break;
     }
     await memoryDocuments(items, source.root, 'memories', budget);
+    // Some installations keep their own archive alongside Hermes' built-in memories.
+    // Keep distinct paths/IDs; this does not redefine the upstream layout.
+    await memoryDocuments(items, source.root, 'memory', budget);
+    await document(items, source.root, 'MEMORY.md', undefined, 'memory', budget);
     const raw = await optionalText(source.root, path.join(source.root, 'cron', 'jobs.json'), budget);
     let decoded: unknown;
     try { decoded = raw ? JSON.parse(raw) : []; } catch { throw new CompanionImportError('SOURCE_AUTOMATIONS_INVALID'); }
@@ -278,6 +286,7 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
     await document(items, workspace, 'USER.md', 'user', 'memory', budget);
     await document(items, workspace, 'MEMORY.md', undefined, 'memory', budget);
     await memoryDocuments(items, workspace, 'memory', budget);
+    await document(items, workspace, 'DREAMS.md', undefined, 'memory', budget);
     const rows = agentRows(values);
     const defaultAgent = (rows.find(row => row.default === true) ?? rows[0])?.id === source.agentId;
     const storeKey = sourcePath(deps.home, string(object(values.cron).store) || path.join(source.root, 'cron', 'jobs.json'), source.root);

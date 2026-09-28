@@ -89,3 +89,16 @@ export const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
 export const string = (value: unknown): string => typeof value === 'string' ? value : '';
+
+export function importFailureCode(error: unknown): string {
+  if (error instanceof CompanionImportError) return error.code;
+  const code = (error as { code?: string } | null)?.code;
+  const known: Record<string, string> = {
+    'description-has-newline': 'MEMORY_METADATA_INVALID', 'description-too-long': 'MEMORY_DESCRIPTION_TOO_LONG', 'title-too-long': 'MEMORY_TITLE_TOO_LONG',
+    'shard-too-large': 'MEMORY_CONTENT_TOO_LARGE', 'invalid-frontmatter': 'MEMORY_METADATA_INVALID',
+    'version-conflict': 'MEMORY_CHANGED', 'already-exists': 'MEMORY_CHANGED',
+    'not-ready': 'MEMORY_STORAGE_UNAVAILABLE', 'io-error': 'MEMORY_WRITE_FAILED',
+    ENOSPC: 'IMPORT_DISK_FULL', EACCES: 'IMPORT_PERMISSION_DENIED', EPERM: 'IMPORT_PERMISSION_DENIED',
+  };
+  return code && known[code] || 'IMPORT_ITEM_FAILED';
+}

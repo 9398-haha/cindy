@@ -68,7 +68,7 @@ function plainText(body: string): string {
 export function botMemoryDescriptionFromBody(body: string): string {
   const text = plainText(body);
   const sentence = /^.+?[。！？!?；;](?=\s|$|[^。！？!?；;])/u.exec(text)?.[0] ?? text;
-  return Array.from(sentence).slice(0, DESCRIPTION_MAX).join('').trim();
+  return sentence.slice(0, DESCRIPTION_MAX).replace(/[\uD800-\uDBFF]$/u, '').trim();
 }
 
 function preview(body: string): string {
@@ -203,22 +203,28 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
       }
       if (chunk) chunks.push(chunk);
       for (const [index, body] of chunks.entries()) {
-        if (!body.trim()) continue;
+        // Whitespace inside a source document is content too.
+        if (!body) continue;
         const name = `import_${id}_${index}`;
-        await serialized(`${botId}/${type}_${name}.md`, async () => {
+        try { await serialized(`${botId}/${type}_${name}.md`, async () => {
           owner.assertCurrent?.();
           const existing = await store.read(`${type}_${name}.md`).catch(error => {
             if (error instanceof MemoryError && error.code === 'not-found') return null;
             throw error;
           });
           if (existing) {
-            if (existing.body.trim() !== body.trim()) throwIpcError('PRECONDITION_FAILED', 'Imported memory was edited');
+            if (existing.body.trim() !== body.trim()) throw new MemoryError('version-conflict', '[PRECONDITION_FAILED] Imported memory was edited');
             return;
           }
-          await store.write({ type, name, title: Array.from(title).slice(0, BOT_MEMORY_TITLE_MAX).join(''),
-            description: botMemoryDescriptionFromBody(body) || title.slice(0, DESCRIPTION_MAX), body });
+          await store.write({ type, name, title: title.slice(0, BOT_MEMORY_TITLE_MAX).replace(/[\uD800-\uDBFF]$/u, ''),
+            description: botMemoryDescriptionFromBody(body) || botMemoryDescriptionFromBody(title) || id, body, preserveBody: true });
+          const saved = await store.read(`${type}_${name}.md`);
+          if (saved.body !== body) throw new MemoryError('io-error', 'Imported content readback mismatch');
           owner.assertCurrent?.();
-        });
+        }); } catch (error) {
+          if (error instanceof Error) Object.assign(error, { importProgress: { saved: index, total: chunks.length } });
+          throw error;
+        }
       }
       scheduleRefresh(owner);
     },

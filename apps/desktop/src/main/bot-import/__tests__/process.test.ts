@@ -46,3 +46,11 @@ it('preserves bounded ordinary settings even when deselected, while explicit sam
   expect(redactEnvironmentValues('true 3000', privateValues)).not.toContain('3000');
   expect(redactEnvironmentValues('fixture-private-value', { DEBUG: 'fixture-private-value' })).toBe('[DEBUG]');
 });
+
+it('does not turn ordinary scalar settings or MCP endpoint names into content credentials', () => {
+  const env = { SOME_FEATURE_ENABLED: 'true', RETRY_COUNT: '1', TEMPERATURE: '0.5' };
+  const secrets = importedContentRedactions({ env, mcp: [{ name: 'native-mcp', url: 'http://localhost:9000/native-mcp?enabled=true&retry=1' }, { name: 'touchdesigner-mcp', url: 'http://localhost:9001/touchdesigner-mcp' }], credentials: [] });
+  const text = 'sys.exit(1) action="store_true" <path d="M1 0.5"/> native-mcp touchdesigner-mcp';
+  expect(redactEnvironmentValues(text, secrets)).toBe(text);
+  expect(redactEnvironmentValues('secret=1', { API_KEY: '1' })).toBe('secret=[API_KEY]');
+});

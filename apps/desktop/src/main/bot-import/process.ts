@@ -54,7 +54,10 @@ export function runImportedProcess(input: {
 
 /** Recognisable ordinary settings keep their meaning; arbitrary keys remain private. */
 export function isPublicImportSetting(name: string, value: string): boolean {
-  return /^(LANG|LANGUAGE|LC_ALL|LC_CTYPE)$/i.test(name) && /^(?:C|POSIX|[a-z]{2,3}(?:[_-][a-z]{2})?)(?:\.UTF-?8)?$/i.test(value)
+  return (!/(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|COOKIE)/i.test(name)
+      && /(?:^|_)(?:ENABLED|DISABLED|COUNT|RETRIES|RETRY|LIMIT|TIMEOUT|INTERVAL|SIZE|TEMPERATURE|TOP_P|HEADLESS|UNBUFFERED)(?:_|$)|^(?:MAX_|MIN_|PYTHONUNBUFFERED$)/i.test(name)
+      && /^(?:true|false|[+-]?\d+(?:\.\d+)?)$/i.test(value))
+    || /^(LANG|LANGUAGE|LC_ALL|LC_CTYPE)$/i.test(name) && /^(?:C|POSIX|[a-z]{2,3}(?:[_-][a-z]{2})?)(?:\.UTF-?8)?$/i.test(value)
     || /^(?:[A-Z0-9]+_)*REGION$/i.test(name) && /^(?:[a-z]{2}|global|[a-z]{2}(?:-[a-z]+)+-\d)$/i.test(value)
     || /^(?:DEBUG|VERBOSE|CI|NO_COLOR|FORCE_COLOR)$/i.test(name) && /^(?:true|false|0|1)$/i.test(value)
     || /^(?:PORT|HTTP_PORT|HTTPS_PORT|SERVER_PORT|APP_PORT)$/i.test(name) && /^\d{1,5}$/.test(value) && Number(value) <= 65535

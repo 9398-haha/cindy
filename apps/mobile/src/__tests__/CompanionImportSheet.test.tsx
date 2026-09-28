@@ -175,3 +175,29 @@ it('submits all 10,000 selected entries compactly without raising the transport 
   await click('Ada · Hermes'); await click('devices.companionImport.submit');
   expect(h.submit.mock.calls[0]?.[2].input).toMatchObject({ entryIds: [], entryRanges: [[0, 9999]], deferSetup: true });
 });
+
+it('shows failed filenames and saved parts after a partial import without blocking chat or retry', async () => {
+  const result = { requestId: 'fixture-request-12345', botId: 'bot', canonicalSessionId: 'chat', saved: true, savedEntryIds: [], status: 'needs-attention',
+    checks: [{ entryId: 'memory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 3 } }] };
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'hermes' }] }
+      : id.startsWith('preview:') ? { preview: { id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries: [{ id: 'memory', name: 'long-document.md', category: 'memory', selected: true }] } }
+      : { result } }] };
+  });
+  h.submit.mockReset().mockResolvedValue({ effects: [] });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  const click = async (text: string) => { await act(async () => { const button = [...container.querySelectorAll('button')].find(button => button.textContent?.startsWith(text)); expect(button).toBeDefined(); button!.click(); }); };
+  await click('Ada · Hermes'); await click('devices.companionImport.submit');
+  expect(container.textContent).toContain('devices.companionImport.partial');
+  expect(container.textContent).not.toContain('devices.companionImport.complete');
+  await click('devices.companionImport.details');
+  expect(container.textContent).toContain('long-document.md');
+  expect(container.textContent).toContain('devices.companionImport.partlySaved');
+  expect(container.textContent).toContain('devices.companionImport.diskFull');
+  expect(container.textContent).toContain('1 / 3');
+  expect(container.textContent).toContain('devices.companionImport.retry');
+  await click('devices.companionImport.open');
+  expect(h.created).toHaveBeenCalledWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
+});

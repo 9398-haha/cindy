@@ -171,3 +171,29 @@ it('shows 142 selected skills in a flat searchable paginated list and opens chat
   expect(screen.queryByRole('alert')).toBeNull();
   expect(screen.queryByRole('button', { name: 'bots.import.retry' })).toBeNull();
 });
+
+it('distinguishes partial saves, setup-only checks and failed automations while leaving chat and retry available', async () => {
+  const entries = [
+    { id: 'partial', name: 'long-document.md', category: 'memory' as const, selected: true },
+    { id: 'saved', name: 'ready.md', category: 'memory' as const, selected: true },
+    { id: 'routine', name: 'Daily report', category: 'automations' as const, selected: true },
+  ];
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }],
+    preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries }), status: async () => undefined,
+    start: vi.fn(async input => ({ requestId: input.requestId, botId: 'bot', canonicalSessionId: 'chat', saved: true, savedEntryIds: ['saved'], status: 'needs-attention' as const,
+      checks: [{ entryId: 'partial', status: 'needs-attention' as const, message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 3 } }, { entryId: 'routine', status: 'needs-attention' as const, message: 'SOURCE_AUTOMATION_INVALID' }] })) };
+  const created = vi.fn();
+  render(<BotImportForm api={api} onCreated={created} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.import.submit' }));
+  await screen.findByText('bots.import.partial');
+  expect(screen.queryByText('bots.import.complete')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /bots.import.details/ }));
+  expect(screen.getByText('long-document.md')).toBeTruthy();
+  expect(screen.getByText(/bots.import.partlySaved.*bots.import.diskFull/)).toBeTruthy();
+  expect(screen.getByText('1 / 3')).toBeTruthy();
+  expect(screen.getByText(/bots.import.notSaved.*bots.import.automationInvalid/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'bots.import.retry' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.open' }));
+  expect(created).toHaveBeenCalledWith('bot');
+});

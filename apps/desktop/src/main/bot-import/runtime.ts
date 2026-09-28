@@ -6,6 +6,7 @@ import { botEnvironmentSecretIo } from '../secrets/providerSecretStore.js';
 import { createCompanionEnvironmentStore } from './environment.js';
 import { fingerprint } from './files.js';
 import { CompanionImportError } from './types.js';
+import { removeImportedMemoryMedia } from './memoryMedia.js';
 import { closeInvalidImportedConnections } from './connections.js';
 
 // Bot IDs are not reused. Retain a process-local deletion fence so a delayed DB
@@ -18,6 +19,7 @@ export const companionEnvironmentStore = createCompanionEnvironmentStore({
   read: (key, assertOwner) => botEnvironmentSecretIo.read(key, assertOwner),
   write: (key, value, assertOwner) => botEnvironmentSecretIo.write(key, value, assertOwner),
   remove: key => botEnvironmentSecretIo.remove(key),
+  removeResources: removeImportedMemoryMedia,
 });
 
 /** Called only after profile deletion commits; failed deletions retain access. */

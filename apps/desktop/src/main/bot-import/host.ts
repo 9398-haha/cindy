@@ -1,3 +1,4 @@
+import { companionImportReasonKey } from '@cindy/maker-shared/companion-import';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { t } from '../i18n.js';
 import { randomUUID } from 'node:crypto';
@@ -28,6 +29,7 @@ import { transferCompanion, validateImportSelection, validateImportRequestIdenti
 import { CompanionImportError, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { changeSourceAutomationState } from './takeover.js';
 import { verifyImportedAutomation } from './verification.js';
+import { importMemoryMedia } from './memoryMedia.js';
 import { projectImportedSkill } from './skillResources.js';
 import { assertImportedAutomationReady } from './automationRuntime.js';
 
@@ -459,6 +461,13 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
       } else if (item.view.category === 'memory' || item.view.category === 'personality') {
         const documents = [...(item.text ? [{ id: item.view.id, name: item.view.name, text: item.text, role: item.role }] : []), ...item.documents ?? []];
+        const attachments = [...(item.asset ? [item.asset] : []), ...(item.files ?? [])];
+        for (const file of attachments) {
+          const sessionId = await transferDeps.createConversation(botId);
+          const url = await importMemoryMedia(botId, sessionId, file.bytes, scope.assert);
+          documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name,
+            text: `![${redactText(file.name).replace(/[\[\]\r\n]/g, '')}](${url})`, role: undefined });
+        }
         for (const document of documents) {
           scope.assert();
           await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), redactText(document.text), document.role === 'user' ? 'user' : 'reference');
@@ -605,8 +614,13 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           const pending = result.checks.some(check => check.status === 'needs-attention');
           // Keep the legacy setup ID across upgrades, but do not let its
           // idempotency key swallow the later successful completion message.
-          await createMessage(result.canonicalSessionId, { clientId: `companion-import:${selection.requestId}${pending ? '' : ':ready'}`, role: 'assistant',
-            content: t(`bots.import.${pending ? 'chatSetup' : 'chatReady'}`) });
+          const savedIds = new Set(result.savedEntryIds);
+          const unsaved = new Map(selected.filter(item => !savedIds.has(item.view.id)).map(item => [item.view.id, item]));
+          const failures = result.checks.filter(check => unsaved.has(check.entryId));
+          const details = failures.slice(0, 20).map(check => `${redactText(unsaved.get(check.entryId)?.view.name ?? check.entryId).slice(0, 160)} · ${t(`bots.import.${check.progress?.saved ? 'partlySaved' : 'notSaved'}`)} · ${t(`bots.import.${companionImportReasonKey(check.message)}`)}`).join('\n');
+          const partialKey = unsaved.size ? `:partial:${fingerprint(failures).slice(0, 16)}` : '';
+          await createMessage(result.canonicalSessionId, { clientId: `companion-import:${selection.requestId}${partialKey || (pending ? '' : ':ready')}`, role: 'assistant',
+            content: unsaved.size ? `${t('bots.import.chatPartial')}\n\n${details}${failures.length > 20 ? `\n… (${failures.length})` : ''}` : t(`bots.import.${pending ? 'chatSetup' : 'chatReady'}`) });
           scope.assert();
         }
         if (result.status === 'complete') await companionEnvironmentStore.update(scope.root, result.botId, scope.assert, env => { delete env.pendingImport; });

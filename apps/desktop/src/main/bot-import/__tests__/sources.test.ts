@@ -534,3 +534,21 @@ it('preserves sorted skill-name precedence after streaming directory entries', a
   expect(items[0]!.sourceAlias).toBe('a-first');
   expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
 });
+
+it.each(['hermes', 'openclaw'] as const)('discovers %s custom archives, hidden TXT corpus and attachments without conflating roots', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  const workspace = `.${kind}/${kind === 'hermes' ? '' : 'workspace/'}`;
+  await write(`${workspace}memory/semantic/knowledge/note.md`, 'Custom archive');
+  await write(`${workspace}memory/.dreams/session-corpus/session.txt`, 'Full transcript');
+  await write(`${workspace}memory/picture.png`, 'fixture image bytes');
+  if (kind === 'hermes') await write('.hermes/memories/note.md', 'Built-in memory');
+  else await write(`${workspace}DREAMS.md`, 'Dreams document');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const memory = snapshot.items.filter(item => item.view.category === 'memory');
+  expect(memory.map(item => item.text)).toContain('Custom archive');
+  expect(memory.map(item => item.text)).toContain('Full transcript');
+  expect(memory.find(item => item.asset)?.asset?.bytes.toString()).toBe('fixture image bytes');
+  expect(memory.map(item => item.text)).toContain(kind === 'hermes' ? 'Built-in memory' : 'Dreams document');
+  expect(new Set(memory.map(item => item.view.id)).size).toBe(memory.length);
+});

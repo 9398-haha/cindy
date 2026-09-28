@@ -38,6 +38,7 @@ export interface CompanionSecretIo {
   read(key: string, assertOwner?: () => void): string | null | Promise<string | null>;
   write(key: string, value: string, assertOwner?: () => void): boolean | Promise<boolean>;
   remove(key: string): boolean;
+  removeResources?(botId: string, assertOwner: () => void): Promise<void>;
 }
 
 function bindingPath(userData: string, botId: string): string {
@@ -117,6 +118,8 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
       const key = `${userData}:${botId}`;
       await queues.get(key)?.catch(() => {});
       await Promise.allSettled([...(writes.get(key) ?? [])]);
+      assertOwner();
+      await io.removeResources?.(botId, assertOwner);
       assertOwner();
       store.remove(botId);
       assertOwner();

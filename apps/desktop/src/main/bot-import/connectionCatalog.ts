@@ -2,7 +2,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ImportedMcpServer } from './types.js';
 import type { CompanionEnvironment } from './environment.js';
 import { fingerprint } from './files.js';
-import { environmentRedactions, redactEnvironmentData, redactEnvironmentValues } from './process.js';
+import { environmentRedactions, isPublicImportSetting, redactEnvironmentData, redactEnvironmentValues } from './process.js';
 
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
@@ -24,10 +24,21 @@ function urlCredentialValues(raw: string, includePath = false): string[] {
   const values = [raw];
   try {
     const url = new URL(raw);
-    values.push(url.username, url.password, ...url.searchParams.values());
-    // URLSearchParams already decodes once; retain the wire representation too.
-    for (const pair of url.search.slice(1).split('&')) if (pair.includes('=')) values.push(pair.slice(pair.indexOf('=') + 1));
-    if (includePath) values.push(url.pathname, ...url.pathname.split('/').filter(Boolean));
+    values.push(url.username, url.password);
+    // Apply the same setting classification to decoded and wire query values.
+    for (const [name, value] of url.searchParams) if (!isPublicImportSetting(name, value)) values.push(value);
+    for (const pair of url.search.slice(1).split('&')) {
+      if (!pair.includes('=')) continue;
+      const params = new URLSearchParams(pair);
+      const [name, value] = [...params.entries()][0] ?? [];
+      if (name && value && !isPublicImportSetting(name, value)) values.push(pair.slice(pair.indexOf('=') + 1));
+    }
+    if (includePath) {
+      // Ordinary endpoint names are routing, not credentials. Keep the full URL
+      // private; mask only opaque path components that can carry access tokens.
+      const parts = url.pathname.split('/').filter(part => /(?:token|secret|credential|key)/i.test(part) || part.length >= 32 || part.length >= 20 && /[A-Z0-9_]/.test(part) || /%[0-9a-f]{2}/i.test(part));
+      values.push(...parts);
+    }
   } catch { /* Invalid URLs fail at execution; never publish the literal in errors. */ }
   return [...new Set(values.filter(value => value && value !== '/').flatMap(value => {
     try { return [value, decodeURIComponent(value)]; } catch { return [value]; }

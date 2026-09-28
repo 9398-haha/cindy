@@ -231,3 +231,37 @@ it('imports long original memory into the real index without losing Unicode, and
   expect(restored.map(row => row.body).join('')).toBe(original);
   expect(await fs.readFile(path.join(dir, 'MEMORY.md'), 'utf8')).toContain(entries[0]!.filename);
 });
+
+it('round-trips emoji summaries, source frontmatter, blank lines and all parts through real storage', async () => {
+  const { service } = setup();
+  const original = '---\ntitle: Source title\n---\n' + '🙂'.repeat(110) + '\n\n' + ('段落 abc 🙂 '.repeat(1500)) + '\n  ';
+  await service.importDocument('bot-1', 'complete-source', '🙂'.repeat(90), original);
+  await service.importDocument('bot-1', 'complete-source', '🙂'.repeat(90), original);
+  const records = (await storage.list()).filter(record => record.filename.startsWith('reference_import_complete-source_'))
+    .sort((a, b) => Number(a.filename.match(/_(\d+)\.md$/)![1]) - Number(b.filename.match(/_(\d+)\.md$/)![1]));
+  expect(records.length).toBeGreaterThan(2);
+  expect(records.map(record => record.body).join('')).toBe(original);
+  for (const record of records) expect(record.frontmatter.description.length).toBeLessThanOrEqual(200);
+});
+
+it('reports a partial document write and retries missing chunks without duplicating or replacing saved content', async () => {
+  const { service } = setup();
+  const original = '  ' + 'x'.repeat(18000) + '\n\nlast paragraph 🙂';
+  const write = storage.write.bind(storage);
+  let fail = true;
+  vi.spyOn(storage, 'write').mockImplementation(async opts => {
+    if (fail && opts.name.endsWith('_1')) throw Object.assign(new Error('private filesystem detail'), { code: 'ENOSPC' });
+    return write(opts);
+  });
+  await expect(service.importDocument('bot-1', 'retry-document', 'retry', original)).rejects.toMatchObject({ code: 'ENOSPC', importProgress: { saved: 1, total: 3 } });
+  const first = await storage.read('reference_import_retry-document_0.md');
+  fail = false;
+  await service.importDocument('bot-1', 'retry-document', 'retry', original);
+  const parts = await Promise.all([0, 1, 2].map(index => storage.read(`reference_import_retry-document_${index}.md`)));
+  expect(parts.map(part => part.body).join('')).toBe(original);
+  expect(parts[0].frontmatter.updatedAt).toBe(first.frontmatter.updatedAt);
+  // A user edit through the filesystem must not be hidden by stale serialization metadata.
+  await fs.appendFile(path.join(dir, first.filename), '\nUser added this later.');
+  expect((await storage.read(first.filename)).body).toContain('User added this later.');
+  await expect(service.importDocument('bot-1', 'retry-document', 'retry', original)).rejects.toThrow('PRECONDITION_FAILED');
+});

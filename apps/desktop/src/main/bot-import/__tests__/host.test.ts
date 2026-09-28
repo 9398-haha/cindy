@@ -402,7 +402,9 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   expect(stored.env).not.toHaveProperty('EXCLUDED');
   expect(JSON.stringify(stored)).not.toContain('fake-absent-from-selected-content');
   expect(stored.documents).toEqual(Object.fromEntries(documents.map(item => [item.view.id, item.text])));
-  expect(stored.pendingImport).toBeUndefined();
+  await vi.waitFor(async () => {
+    expect((await h.store.read(h.root, result.botId, () => {}))?.pendingImport).toBeUndefined();
+  });
 });
 
 it('persists redacted routine fields and retains identical publication masks across a handover retry after restart', async () => {
@@ -953,21 +955,21 @@ it.each(['directory', undefined] as const)('retries a repaired memory directory 
   await fs.mkdir(path.join(directory, 'nested'), { recursive: true });
   await fs.writeFile(path.join(directory, 'nested', 'note.md'), 'Recovered note');
   await fs.writeFile(path.join(directory, 'USER.md'), 'User preferences');
-  await fs.writeFile(path.join(directory, 'ignored.txt'), 'Not a memory');
+  await fs.writeFile(path.join(directory, 'ignored.txt'), 'Recovered TXT archive');
   await startCompanionImport(selection, 'reconnected-phone');
   const result = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
   expect(result).toMatchObject({ status: 'complete', botId: first.botId, savedEntryIds: ['healthy', brokenId] });
-  expect(h.importDocument).toHaveBeenCalledTimes(3);
+  expect(h.importDocument).toHaveBeenCalledTimes(4);
   expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/nested/note.md', 'Recovered note', 'reference');
   expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/USER.md', 'User preferences', 'user');
   expect((await storage.list()).map(record => [record.frontmatter.type, record.body.trim()])).toEqual(expect.arrayContaining([
-    ['reference', 'Healthy'], ['reference', 'Recovered note'], ['user', 'User preferences'],
+    ['reference', 'Recovered TXT archive'], ['reference', 'Healthy'], ['reference', 'Recovered note'], ['user', 'User preferences'],
   ]));
   const environment = await h.store.read(h.root, first.botId, () => {});
   expect(Object.values(environment!.documents!)).toEqual(expect.arrayContaining(['Healthy', 'Recovered note', 'User preferences']));
   await startCompanionImport(selection, 'phone');
-  expect(h.importDocument).toHaveBeenCalledTimes(3);
-  expect(await storage.list()).toHaveLength(3);
+  expect(h.importDocument).toHaveBeenCalledTimes(4);
+  expect(await storage.list()).toHaveLength(4);
 });
 
 it.each([false, true])('publishes completion after deferred setup without duplicate notices (legacy setup: %s)', async legacySetup => {
@@ -1101,4 +1103,24 @@ it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])
   expect(ids[0]).toBe(ids[1]);
   expect(ids.every(id => id.length <= 40)).toBe(true);
   if (originalId.length <= 40) expect(ids[0]).toBe(originalId);
+});
+
+it('publishes a partial-save notice with the failed filename and safe reason, then a distinct completion notice', async () => {
+  h.snapshot.items = [{ view: { id: 'memory-doc', name: 'long-document.md', category: 'memory', selected: true }, text: 'Source text' }];
+  h.importDocument.mockRejectedValueOnce(Object.assign(new Error('private filesystem path'), { code: 'ENOSPC', importProgress: { saved: 1, total: 3 } }));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-partial-notice', previewId: preview.id, name: 'Ada', entryIds: ['memory-doc'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first).toMatchObject({ saved: true, status: 'needs-attention', savedEntryIds: [] });
+  const notice = vi.mocked(createMessage).mock.calls.at(-1)![1];
+  expect(notice.content).toContain(t('bots.import.chatPartial'));
+  expect(notice.content).toContain('long-document.md');
+  expect(notice.content).toContain(t('bots.import.diskFull'));
+  expect(notice.content).not.toContain('private filesystem path');
+  await startCompanionImport(selection, 'fixture');
+  const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(completed?.status).toBe('complete');
+  expect(vi.mocked(createMessage).mock.calls.at(-1)![1]).toMatchObject({ clientId: `companion-import:${selection.requestId}:ready`, content: t('bots.import.chatReady') });
 });

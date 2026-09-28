@@ -390,7 +390,8 @@ export class MemoryStorage {
       );
     }
 
-    const fileText = matter.stringify(nextBody, nextFrontmatter);
+    if (opts.preserveBody) nextFrontmatter.bodyLength = nextBody.length;
+    const fileText = matter.stringify({ content: nextBody }, nextFrontmatter);
     // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
@@ -678,7 +679,12 @@ function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
       type: data.type,
       updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
     },
-    body: parsed.content.trim(),
+    // gray-matter appends one newline. Remove only that exact serialization
+    // suffix; an external edit must never be truncated to a stale length.
+    body: Number.isSafeInteger(data.bodyLength) && data.bodyLength! >= 0
+      ? (parsed.content.length === data.bodyLength! + 1 && parsed.content.endsWith('\n')
+        ? parsed.content.slice(0, -1) : parsed.content)
+      : parsed.content.trim(),
   };
 }
 

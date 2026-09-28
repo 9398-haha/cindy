@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import { compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, type CompanionImportCategory, type CompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
+import { companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, type CompanionImportCategory, type CompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { normalizeBotName } from '../../../shared/botCreation';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
 import { useBotProfiles } from './botStore';
@@ -25,16 +25,19 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
   const [page, setPage] = useState(0);
   const [takeover, setTakeover] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string>();
+  const [details, setDetails] = useState(false);
+  const [detailPage, setDetailPage] = useState(0);
   const [result, setResult] = useState<CompanionImportResult>();
+  useEffect(() => setDetailPage(0), [result]);
   const intent = useRef<CompanionImportSelection | undefined>(undefined);
   const alive = useRef(true);
   const lock = useRef(false);
   const duplicate = bots.some(bot => bot.id !== result?.botId && bot.status !== 'archived' && normalizeBotName(bot.name) === normalizeBotName(name));
-  useEffect(() => { alive.current = true; void api.sources().then(value => { if (alive.current) setSources(value); }).catch(() => { if (alive.current) setError(true); }); return () => { alive.current = false; }; }, [api]);
+  useEffect(() => { alive.current = true; void api.sources().then(value => { if (alive.current) setSources(value); }).catch(cause => { if (alive.current) setError(companionImportErrorCode(cause) ?? 'IMPORT_ITEM_FAILED'); }); return () => { alive.current = false; }; }, [api]);
   const act = async (fn: () => Promise<void>) => {
     if (lock.current) return;
-    lock.current = true; setBusy(true); onBusy(true); setError(false);
+    lock.current = true; setBusy(true); onBusy(true); setError(undefined);
     try { await fn(); } catch (cause) {
       const code = extractIpcError(cause)?.code;
       // Only definitive creation/preflight rejections unlock editing. An ambiguous ACK
@@ -49,7 +52,7 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
         // Host restarts invalidate source IDs too. Reuse the existing source step.
         try { const refreshed = await api.sources(); if (alive.current) setSources(refreshed); } catch { /* Existing source buttons allow another attempt. */ }
       }
-      if (alive.current) setError(true);
+      if (alive.current) setError(companionImportErrorCode(cause) ?? 'IMPORT_ITEM_FAILED');
     }
     finally { lock.current = false; if (alive.current) { setBusy(false); onBusy(false); } }
   };
@@ -77,6 +80,9 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
   const selectedSet = new Set(selected);
   const locked = busy || !!intent.current;
   const saved = !!result?.saved || result?.status === 'complete';
+  const outstanding = result?.checks.filter(check => check.status === 'needs-attention') ?? [];
+  const savedIds = new Set(result?.savedEntryIds);
+  const incomplete = result?.savedEntryIds ? selected.some(id => !savedIds.has(id)) : outstanding.some(check => check.message === 'IMPORT_ITEM_FAILED');
   const finished = result && result.status !== 'running';
   const categoryEntries = preview?.entries.filter(entry => entry.category === category) ?? [];
   const filtered = categoryEntries.filter(entry => `${entry.name} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
@@ -87,15 +93,26 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
   return <div className="flex min-h-0 flex-col gap-5">
     <div className="min-h-0 space-y-5 overflow-y-auto">
     {finished && saved ? <div role="status" className="space-y-5">
-      <p className="text-16 font-medium text-[var(--text-primary)]">{tr('complete')}</p>
+      <p className="text-16 font-medium text-[var(--text-primary)]">{tr(incomplete ? 'partial' : 'complete')}</p>
       <div className="divide-y divide-[var(--border-default)]">
         {companionImportCategories.map(group => {
           const ids = new Set(preview?.entries.filter(entry => entry.category === group).map(entry => entry.id));
           const count = result.savedEntryIds ? result.savedEntryIds.filter(id => ids.has(id)).length : result.checks.filter(check => ids.has(check.entryId) && check.status !== 'needs-attention').length;
           if (!ids.size) return null;
-          return <div key={group} className="flex items-center justify-between gap-3 py-3 text-14"><span>{tr(group)}</span><span className="text-[var(--text-secondary)]">{count}</span></div>;
+          return <div key={group} className="flex items-center justify-between gap-3 py-3 text-14"><span>{tr(group)}</span><span className="text-[var(--text-secondary)]">{count} / {selected.filter(id => ids.has(id)).length}</span></div>;
         })}
       </div>
+      {outstanding.length ? <>
+        <Button variant="secondary" onClick={() => { setDetails(!details); setDetailPage(0); }}>{tr('details')} · {outstanding.length}</Button>
+        {details ? <div className="space-y-3">
+          {outstanding.slice(detailPage * 20, (detailPage + 1) * 20).map(check => <div key={check.entryId} className="break-words text-13">
+            <p className="text-[var(--text-primary)]">{preview?.entries.find(entry => entry.id === check.entryId)?.name ?? tr('itemAttention')}</p>
+            <p className="text-[var(--text-secondary)]">{tr(check.progress?.saved ? 'partlySaved' : savedIds.has(check.entryId) ? 'savedNeedsSetup' : 'notSaved')} · {tr(companionImportReasonKey(check.message))}</p>
+            {check.progress ? <p className="text-[var(--text-secondary)]">{check.progress.saved} / {check.progress.total}</p> : null}
+          </div>)}
+          {outstanding.length > 20 ? <div className="flex justify-between gap-3"><Button variant="secondary" disabled={detailPage === 0} onClick={() => setDetailPage(detailPage - 1)}>{tr('previous')}</Button><span>{detailPage + 1} / {Math.ceil(outstanding.length / 20)}</span><Button variant="secondary" disabled={(detailPage + 1) * 20 >= outstanding.length} onClick={() => setDetailPage(detailPage + 1)}>{tr('next')}</Button></div> : null}
+        </div> : null}
+      </> : null}
     </div> : result?.status === 'running' ? <div role="status" className="space-y-3 py-5">
       <p className="text-16 font-medium">{tr('running')}</p>
       <p className="text-13 text-[var(--text-secondary)]">{result.checks.length} / {selected.length}</p>
@@ -139,11 +156,11 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
       </div>
       {preview.entries.some(entry => entry.category === 'automations' && selectedSet.has(entry.id)) ? <label className="flex items-start gap-3 text-13"><input type="checkbox" checked={takeover} disabled={locked} onChange={event => setTakeover(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-[var(--text-primary)]" /><span>{tr('takeover')}</span></label> : null}
     </>}
-    {(error || duplicate) && !saved ? <p role="alert" className="text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : tr('error')}</p> : null}
+    {(error || duplicate) ? <p role="alert" className="text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : tr(companionImportReasonKey(error))}</p> : null}
     </div>
     <div className="flex shrink-0 flex-wrap justify-between gap-3 py-3">
       {!saved ? <Button variant="secondary" size="lg" disabled={busy} onClick={() => category ? setCategory(undefined) : onBack()}>{tr('back')}</Button> : null}
-      {finished ? <>{!saved ? <Button variant="secondary" size="lg" disabled={busy} onClick={() => void submit()}>{tr('retry')}</Button> : null}<Button variant="cta" size="lg" className={saved ? 'ml-auto' : undefined} disabled={!result.canonicalSessionId} onClick={() => onCreated(result.botId)}>{tr('open')}</Button></> : preview && !category ? <Button variant="cta" size="lg" loading={busy} disabled={busy || !name.trim() || !portrait || duplicate} onClick={() => void submit()}>{tr('submit')}</Button> : null}
+      {finished ? <>{!saved || incomplete ? <Button variant="secondary" size="lg" disabled={busy} onClick={() => void submit()}>{tr('retry')}</Button> : null}<Button variant="cta" size="lg" className={saved ? 'ml-auto' : undefined} disabled={!result.canonicalSessionId} onClick={() => onCreated(result.botId)}>{tr('open')}</Button></> : preview && !category ? <Button variant="cta" size="lg" loading={busy} disabled={busy || !name.trim() || !portrait || duplicate} onClick={() => void submit()}>{tr('submit')}</Button> : null}
     </div>
   </div>;
 }

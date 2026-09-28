@@ -128,3 +128,17 @@ it('joins asynchronous writes before committed deletion removes credentials', as
   await rejected; await removal;
   expect(values.size).toBe(0);
 });
+
+it('recovers media cleanup before removing the private import checkpoint', async () => {
+  const remove = vi.fn(() => true);
+  const removeResources = vi.fn().mockRejectedValueOnce(new Error('ledger unavailable')).mockResolvedValue(undefined);
+  const store = createCompanionEnvironmentStore({ read: () => 'private-checkpoint', write: () => true, remove, removeResources });
+  await store.stageRemoval(root, 'fixture', () => {});
+  await expect(store.finishRemoval(root, 'fixture', () => {})).rejects.toThrow('ledger unavailable');
+  expect(remove).not.toHaveBeenCalled();
+  await expect(fs.access(path.join(root, 'companion-import-cleanups/fixture.json'))).resolves.toBeUndefined();
+  await store.recoverRemovals(root, () => {}, async () => false);
+  expect(removeResources).toHaveBeenCalledTimes(2);
+  expect(remove).toHaveBeenCalledOnce();
+  await expect(fs.access(path.join(root, 'companion-import-cleanups/fixture.json'))).rejects.toThrow();
+});

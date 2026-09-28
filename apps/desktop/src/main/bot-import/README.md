@@ -45,11 +45,23 @@ omitting it retains normal companion defaults, and a rejected request can be cor
 
 - Hermes default/profile homes and OpenClaw's selected agent workspace are read
   independently. OpenClaw's current SQLite cron store takes precedence over the
-  legacy JSON store; a database failure never substitutes a stale backup.
+  legacy JSON store; a database failure never substitutes a stale backup. The worker
+  uses the native SQLite binding selected by Main, including isolated Electron dev
+  bindings. Driver, size and database failures retain distinct safe reason codes.
+- Memory discovery includes Markdown, TXT and attachments under the memory trees,
+  including hidden subdirectories. Hermes `memories/` and a user-maintained `memory/`
+  archive stay separate; OpenClaw also includes workspace `DREAMS.md`. Supported media
+  originals enter the shared media ledger with a companion-owned import reference
+  and a memory document linking the managed URL. Retry reuses that reference;
+  companion deletion releases only its own refs through recoverable cleanup.
+  Unsupported attachments remain visible failures, not silently omitted files.
 - Selected identity/user/instruction documents and memories retain their original
   text in the encrypted environment. Profile prompt fields and the native memory
   store receive copies with known selected env/MCP/auth credentials masked, while
-  ordinary text stays unchanged. Env references and original credentials remain
+  ordinary text stays unchanged. Import summaries/titles obey the storage UTF-16
+  length bounds, and document parts preserve source frontmatter and whitespace.
+  Each new part is read back before it counts as saved; failures preserve part
+  progress and safe storage reasons. Existing edited parts are not overwritten. Env references and original credentials remain
   available to host execution; no model call or extra confirmation is added.
   Selected skill folders retain their
   real scripts, templates, executable bits and `SKILL.md`.
@@ -144,7 +156,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   Codex hosts remain partitioned by companion environment identity.
   Before publishing a selected Skill, UTF-8 and BOM-marked UTF-16 text (including
   SKILL.md, scripts and reference resources) masks all known source credentials.
-  Unchanged resources and binary assets retain their bytes. Affected skills keep
+  Recognizable boolean/numeric settings and ordinary MCP endpoint names are not
+  treated as credentials. Explicit credentials (including short values) and unknown
+  private settings remain masked. Unchanged resources and binary assets retain their bytes. Affected skills keep
   their complete original resource tree in the encrypted environment after the
   restart checkpoint is cleared. Their readable SKILL.md points commands to the
   existing `run_command` bridge and its private `CINDY_IMPORTED_SKILLS/<slug>`
@@ -309,9 +323,14 @@ external data still require actual read evidence.
 GUI imports send the additive `deferSetup` flag (the command defaults it to true).
 Saving personality/memory/skills, private connections and disabled routine definitions
 finishes before any data probe, source pause or target activation. `savedEntryIds`
-counts saved definitions independently of activation status. The completion page
-opens the normal teammate chat, without a per-item warning wall. One idempotent
-chat message explains that remaining setup can wait. Native Heartbeat is omitted;
+counts saved definitions independently of activation status. `saved: true` means
+that the save pass finished, not that every selected item succeeded. Both clients
+show saved/selected counts and distinguish partial imports from setup-only checks.
+An expandable, paginated detail list shows filenames, safe reasons and partial
+progress. Chat remains available alongside retry. Idempotent chat notices distinguish
+partial saves, pending setup and eventual completion without exposing raw exceptions.
+An invalid automation definition reports the conversion failure before setup warnings;
+valid definitions are saved disabled even when tool/model mapping is still pending. Native Heartbeat is omitted;
 ordinary cron jobs named heartbeat are still imported.
 
 The owner-scoped `companion_connections.import_setup` tool lists remaining checks

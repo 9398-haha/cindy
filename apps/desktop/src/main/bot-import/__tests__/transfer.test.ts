@@ -366,3 +366,27 @@ it('returns a completed legacy deferred receipt even after its checkpoint was re
   expect(deps.createCompanion).not.toHaveBeenCalled();
   expect(deps.pauseSource).not.toHaveBeenCalled();
 });
+
+it('reports the creation error instead of a setup mapping warning when an automation has no usable input', async () => {
+  const { deps } = harness();
+  const source = { ...snapshot.source, kind: 'openclaw' as const };
+  const item = normalizeAutomation(source, { id: 'invalid', tools: { allow: ['read'] }, schedule: { kind: 'every', everyMs: 60_000 }, payload: {} }, [], 'UTC');
+  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'SOURCE_AUTOMATION_INVALID']);
+  const result = await transferCompanion({ ...snapshot, source, items: [item] }, { ...selection, entryIds: [item.view.id], deferSetup: true }, deps);
+  expect(result.checks).toContainEqual({ entryId: item.view.id, status: 'needs-attention', message: 'SOURCE_AUTOMATION_INVALID' });
+  expect(result.savedEntryIds).not.toContain(item.view.id);
+  expect(deps.createRoutine).not.toHaveBeenCalled();
+  expect(deps.pauseSource).not.toHaveBeenCalled();
+});
+
+it('preserves concrete memory failures and partial progress in a retryable receipt', async () => {
+  const { deps } = harness();
+  vi.mocked(deps.importItem).mockRejectedValueOnce(Object.assign(new Error('private disk path'), { code: 'ENOSPC', importProgress: { saved: 1, total: 3 } }));
+  const result = await transferCompanion(snapshot, selection, deps);
+  expect(result.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 3 } });
+  expect(JSON.stringify(result)).not.toContain('private disk path');
+  expect(result.savedEntryIds).not.toContain('memory');
+  const retried = await transferCompanion(snapshot, selection, deps);
+  expect(retried.savedEntryIds).toContain('memory');
+  expect(retried.checks.find(check => check.entryId === 'memory')?.progress).toBeUndefined();
+});

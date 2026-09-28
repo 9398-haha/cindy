@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { CompanionImportResult, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
-import { CompanionImportError, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
+import { CompanionImportError, importFailureCode, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { normalizeImportSkill } from './skills.js';
 import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from './environmentSelection.js';
 
@@ -116,8 +116,8 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   receipt.deferSetup = selection.deferSetup === true;
   const botId = receipt.result.botId;
   const save = async () => { deps.assertOwner(); await deps.saveReceipt(receipt); deps.assertOwner(); };
-  const check = (entryId: string, status: CompanionImportResult['checks'][number]['status'], message?: string) => {
-    receipt.result.checks = [...receipt.result.checks.filter(item => item.entryId !== entryId), { entryId, status, ...(message ? { message } : {}) }];
+  const check = (entryId: string, status: CompanionImportResult['checks'][number]['status'], message?: string, progress?: { saved: number; total: number }) => {
+    receipt.result.checks = [...receipt.result.checks.filter(item => item.entryId !== entryId), { entryId, status, ...(message ? { message } : {}), ...(progress ? { progress } : {}) }];
   };
   receipt.result.status = 'running';
   receipt.result.checks = receipt.result.checks.filter(item => item.entryId !== 'import');
@@ -137,14 +137,19 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
           // keep containment anchored to the original memory root in either case.
           const directory = source.kind === 'directory' || source.kind !== 'file' && (await fs.stat(source.file)).isDirectory();
           if (directory) {
-            const files = await readImportTree(source.root, name => /\.md$/i.test(name), budget, undefined, source.file);
-            item.documents = files.filter(file => file.bytes.toString('utf8').trim()).map(file => ({
+            const files = await readImportTree(source.root, undefined, budget, undefined, source.file);
+            item.files = files.filter(file => !/\.(md|txt)$/i.test(file.name));
+            item.documents = files.filter(file => /\.(md|txt)$/i.test(file.name) && file.bytes.toString('utf8').trim()).map(file => ({
               id: recoveredDocumentId(`${item.view.id}-${fingerprint(file.name).slice(0, 20)}`), name: file.name, text: file.bytes.toString('utf8'),
               ...(/(^|\/)USER\.md$/i.test(file.name) ? { role: 'user' as const } : {}),
             }));
-          } else item.text = (await readImportFile(source.root, source.file, budget)).bytes.toString('utf8');
+          } else {
+            const file = await readImportFile(source.root, source.file, budget);
+            if (/\.(md|txt)$/i.test(file.name)) item.text = file.bytes.toString('utf8');
+            else item.asset = { name: file.name, bytes: file.bytes };
+          }
           delete item.captureIssue;
-        } catch (error) { item.captureIssue = error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED'; }
+        } catch (error) { item.captureIssue = importFailureCode(error); }
         deps.assertOwner();
       }
       if (item.sourceDirectory && !item.filesComplete) {
@@ -171,7 +176,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
           delete item.captureIssue;
         } catch (error) {
           deps.assertOwner();
-          item.captureIssue = error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED';
+          item.captureIssue = importFailureCode(error);
         }
         deps.assertOwner();
       }
@@ -199,7 +204,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       check(item.view.id, item.view.issues?.length ? 'needs-attention' : 'copied', item.view.issues?.[0]);
     } catch (error) {
       deps.assertOwner();
-      check(item.view.id, 'needs-attention', error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED');
+      check(item.view.id, 'needs-attention', importFailureCode(error), (error as { importProgress?: { saved: number; total: number } })?.importProgress);
     }
     await save();
   }
@@ -232,7 +237,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       && prior?.phase !== 'pausing-source' && prior?.phase !== 'source-paused') continue;
     const automation = item.automation!;
     if (!automation.input) {
-      check(item.view.id, 'needs-attention', item.view.issues?.[0] ?? 'SOURCE_AUTOMATION_INVALID');
+      check(item.view.id, 'needs-attention', item.view.issues?.find(issue => !['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING'].includes(issue)) ?? 'SOURCE_AUTOMATION_INVALID');
       await save(); continue;
     }
     let record = receipt.routines[item.view.id];
@@ -244,7 +249,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         await save();
       } catch (error) {
         deps.assertOwner();
-        check(item.view.id, 'needs-attention', error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED');
+        check(item.view.id, 'needs-attention', importFailureCode(error));
         await save(); continue;
       }
     }

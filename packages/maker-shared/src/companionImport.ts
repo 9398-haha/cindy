@@ -51,6 +51,8 @@ export interface CompanionImportCheck {
   entryId: string;
   status: 'copied' | 'verified' | 'needs-attention' | 'taken-over' | 'paused';
   message?: string;
+  /** Fully written parts before an item failure; absent for old receipts. */
+  progress?: { saved: number; total: number };
 }
 
 export interface CompanionImportResult {
@@ -196,4 +198,30 @@ export function remoteCompanionImportApi(
     },
     status,
   };
+}
+
+/** Stable public reason categories, shared by Desktop/Mobile. Never display raw exceptions. */
+export function companionImportReasonKey(code?: string): string {
+  const keys: Record<string, string> = {
+    SOURCE_DATABASE_DRIVER_UNAVAILABLE: 'databaseDriver', SOURCE_DATABASE_UNAVAILABLE: 'databaseUnavailable',
+    SOURCE_DATABASE_INVALID: 'databaseUnavailable', SOURCE_DATABASE_TOO_LARGE: 'fileTooLarge',
+    MEMORY_DESCRIPTION_TOO_LONG: 'memoryMetadata', MEMORY_TITLE_TOO_LONG: 'memoryMetadata', MEMORY_METADATA_INVALID: 'memoryMetadata',
+    MEMORY_CONTENT_TOO_LARGE: 'fileTooLarge', MEMORY_WRITE_FAILED: 'memoryWrite', MEMORY_CHANGED: 'memoryChanged',
+    MEMORY_STORAGE_UNAVAILABLE: 'memoryWrite', MEMORY_ATTACHMENT_UNSUPPORTED: 'attachmentUnsupported',
+    SOURCE_FILE_TOO_LARGE: 'fileTooLarge', SOURCE_SNAPSHOT_TOO_LARGE: 'fileTooLarge', SOURCE_ITEM_TOO_LARGE: 'fileTooLarge',
+    IMPORT_DISK_FULL: 'diskFull', IMPORT_PERMISSION_DENIED: 'permissionDenied',
+    IMPORT_SETUP_DEFERRED: 'setupDeferred', SOURCE_TOOL_POLICY_NEEDS_MAPPING: 'toolMapping', AUTOMATION_MODEL_NEEDS_MAPPING: 'modelMapping',
+    AUTOMATION_CONTEXT_NEEDS_MAPPING: 'contextMapping', AUTOMATION_WORKDIR_NEEDS_MAPPING: 'contextMapping',
+    SOURCE_AUTOMATION_INVALID: 'automationInvalid', AUTOMATION_TRIGGER_NEEDS_ADAPTER: 'automationInvalid',
+    AUTOMATION_DATA_READ_FAILED: 'readFailed', AUTOMATION_READ_NOT_VERIFIED: 'readFailed',
+    NATIVE_AUTH_REFRESH_REQUIRED: 'authRefresh', AUTOMATION_DEPENDENCY_NOT_SELECTED: 'missingSelection',
+  };
+  return code && keys[code] || 'itemFailed';
+}
+export function companionImportErrorCode(error: unknown): string | undefined {
+  const value = error as { code?: unknown; message?: unknown } | null;
+  const pattern = /\b(?:SOURCE|IMPORT|MEMORY|CREDENTIAL|AUTOMATION|PROFILE|PREVIEW|SELECTION)_[A-Z_]+\b/;
+  const candidate = typeof value?.code === 'string' && pattern.test(value.code) ? value.code
+    : typeof value?.message === 'string' ? value.message.match(pattern)?.[0] : undefined;
+  return candidate && /^[A-Z][A-Z_]+$/.test(candidate) ? candidate : undefined;
 }
