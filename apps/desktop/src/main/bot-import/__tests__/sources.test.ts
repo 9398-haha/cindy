@@ -54,11 +54,11 @@ it('retains an over-budget skill for retry without dropping healthy siblings', a
   const jobs = (skills: string[]) => JSON.stringify([{ id: 'read', skills, prompt: 'Read resources', schedule: { kind: 'interval', minutes: 5 } }]);
   await write('.hermes/cron/jobs.json', jobs(['first']));
   const reader = deps(); const [source] = await discoverImportSources(reader);
-  const snapshot = await inspectImportSource(source!, reader, createImportBudget(3000));
+  const snapshot = await inspectImportSource(source!, reader, createImportBudget(4500));
   expect(snapshot.items.find(item => item.view.name === 'first')?.files?.find(file => file.name === 'data.txt')?.bytes.length).toBe(2048);
   expect(snapshot.items.find(item => item.view.name === 'second')?.files).toHaveLength(1);
   await write('.hermes/cron/jobs.json', jobs(['first', 'second']));
-  const partial = await inspectImportSource(source!, reader, createImportBudget(3000));
+  const partial = await inspectImportSource(source!, reader, createImportBudget(4500));
   expect(partial.items.find(item => item.view.name === 'second')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
   expect(partial.items.find(item => item.view.name === 'first')?.files).toHaveLength(2);
 });
@@ -68,7 +68,7 @@ it('counts configuration includes and memory against the same source budget', as
   await write('.openclaw/extra.json', JSON.stringify({ name: 'x'.repeat(1000) }));
   await write('.openclaw/workspace/MEMORY.md', 'x'.repeat(1000));
   const reader = deps(); const [source] = await discoverImportSources(reader);
-  const partial = await inspectImportSource(source!, reader, createImportBudget(1500));
+  const partial = await inspectImportSource(source!, reader, createImportBudget(2100));
   expect(partial.items.find(item => item.view.name === 'MEMORY.md')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
 });
 
@@ -347,7 +347,7 @@ it('shares discovery config/include reads with name masking and charges all Herm
     await write(`.hermes/profiles/${id}/.env`, `API_KEY=${'z'.repeat(80)}\n`);
   }
   const reader = deps();
-  const metadata = createImportSourceReader(reader, createImportBudget(400));
+  const metadata = createImportSourceReader(reader, createImportBudget(2350));
   const opened = vi.spyOn(fs, 'open');
   const sources = await discoverImportSources(reader, metadata);
   expect(sources).toHaveLength(3);
@@ -434,4 +434,27 @@ it('retains unmapped skill authentication privately without deselecting the skil
   expect(skill.view).toMatchObject({ selected: true, issues: ['MISSING_ENVIRONMENT_REFERENCE'] });
   expect(skill.credential).toEqual({ format: 'source-skill-auth', value: { apiKey: secret } });
   expect(JSON.stringify(skill.view)).not.toContain(secret);
+});
+
+it.each(['hermes', 'openclaw'] as const)('records a failed %s memory subtree separately from a failed document', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  const folder = kind === 'hermes' ? '.hermes/memories' : '.openclaw/workspace/memory';
+  await write(`${folder}/healthy.md`, 'Keep healthy');
+  await write(`${folder}/broken/note.md`, 'Repair directory');
+  await write(`${folder}/bad.md`, 'Repair file');
+  const open = fs.opendir.bind(fs);
+  vi.spyOn(fs, 'opendir').mockImplementation(((...args: Parameters<typeof fs.opendir>) => {
+    if (String(args[0]).endsWith(`${path.sep}broken`)) return Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    return open(...args);
+  }) as typeof fs.opendir);
+  const read = fs.open.bind(fs);
+  vi.spyOn(fs, 'open').mockImplementation(((...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]).endsWith(`${path.sep}bad.md`)) return Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    return read(...args);
+  }) as typeof fs.open);
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  expect(snapshot.items.find(item => item.view.name === 'broken')?.sourceFile).toMatchObject({ root: path.join(home, folder), file: path.join(home, folder, 'broken'), kind: 'directory' });
+  expect(snapshot.items.find(item => item.view.name === 'bad.md')?.sourceFile?.kind).toBe('file');
+  expect(snapshot.items.find(item => item.view.name === 'healthy.md')?.text).toBe('Keep healthy');
 });

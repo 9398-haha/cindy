@@ -125,16 +125,46 @@ export function companionImportIssueKey(code?: string): string {
   return 'itemAttention';
 }
 
+/** Additive read capability; older hosts continue returning the original projection. */
+export const COMPANION_IMPORT_CHUNK_PRIMITIVE = 'companion-import-chunks-v1';
+export const COMPANION_IMPORT_CHUNK_LENGTH = 256 * 1024;
+export const COMPANION_IMPORT_READ_MAX_LENGTH = 128 * 1024 * 1024;
+
 /** Transport-neutral client: Desktop and Mobile use their existing Remote Resource adapters. */
 export function remoteCompanionImportApi(
   read: (id: string) => Promise<unknown>,
   invoke: (sourceId: string, selection: CompanionImportSelection) => Promise<unknown>,
 ): CompanionImportApi {
-  const data = async (id: string): Promise<Record<string, unknown>> => {
+  const readData = async (id: string): Promise<Record<string, unknown>> => {
     const raw = await read(id) as { blocks?: Array<{ primitive?: string; data?: Record<string, unknown> }> };
     const block = raw?.blocks?.find(block => block.primitive === 'companion-import');
     if (!block?.data) throw new Error('IMPORT_UNAVAILABLE');
     return block.data;
+  };
+  const data = async (id: string): Promise<Record<string, unknown>> => {
+    let part = await readData(id);
+    if (!part.chunk) return part;
+    const pieces: string[] = [];
+    let offset = 0;
+    let token: string | undefined;
+    let total: number | undefined;
+    for (;;) {
+      const chunk = part.chunk as { id?: unknown; offset?: unknown; total?: unknown; text?: unknown } | undefined;
+      if (!chunk || typeof chunk.id !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(chunk.id)
+        || chunk.offset !== offset || !Number.isSafeInteger(chunk.total)
+        || typeof chunk.total !== 'number' || chunk.total <= 0 || chunk.total > COMPANION_IMPORT_READ_MAX_LENGTH
+        || typeof chunk.text !== 'string' || !chunk.text.length || chunk.text.length > COMPANION_IMPORT_CHUNK_LENGTH
+        || (token !== undefined && (token !== chunk.id || total !== chunk.total))
+        || offset + chunk.text.length > chunk.total) throw new Error('INVALID_IMPORT_RESPONSE');
+      token = chunk.id; total = chunk.total;
+      pieces.push(chunk.text); offset += chunk.text.length;
+      if (offset === total) break;
+      if (chunk.text.length !== COMPANION_IMPORT_CHUNK_LENGTH) throw new Error('INVALID_IMPORT_RESPONSE');
+      part = await readData(`chunk:${token}:${offset}`);
+    }
+    const result: unknown = JSON.parse(pieces.join(''));
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('INVALID_IMPORT_RESPONSE');
+    return result as Record<string, unknown>;
   };
   const status = async (requestId: string) => {
     const result = (await data(`result:${requestId}`)).result as CompanionImportResult | null;

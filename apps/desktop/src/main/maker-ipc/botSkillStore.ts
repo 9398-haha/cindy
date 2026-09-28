@@ -498,6 +498,14 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
   validateBotSkillFiles(slug, files);
   await ensureLayout(userDataDir, botId);
   assertOwner();
+  // Slugs identify one skill across both stores. A source must not create a
+  // second, indistinguishable entry or overwrite a skill learned during retry.
+  try {
+    await fs.lstat(resolveSkillDir(userDataDir, botId, slug, !enabled));
+    throw new BotSkillStoreError('INVALID_ARGS', 'Imported skill conflicts with an existing skill');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   const target = resolveSkillDir(userDataDir, botId, slug, enabled);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temporary = path.join(botSkillRootDir(userDataDir, botId), `.import-skill-${randomUUID()}`);
@@ -535,13 +543,14 @@ export async function deleteBotSkill(
   botId: string,
   slug: string,
 ): Promise<boolean> {
-  let deleted = false;
+  // Match read/edit precedence, including any pre-existing duplicate directories.
+  // Deleting one visible skill must never remove another directory implicitly.
   for (const enabled of [true, false]) {
     const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
     try { if (!(await fs.stat(skillDir)).isDirectory()) continue; }
     catch { continue; }
     await fs.rm(skillDir, { recursive: true, force: true });
-    deleted = true;
+    return true;
   }
-  return deleted;
+  return false;
 }

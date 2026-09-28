@@ -316,3 +316,21 @@ it('retains a disabled imported skill without mounting or re-enabling it when ed
   expect(await deleteBotSkill(userDataDir, 'bot-1', 'disabled')).toBe(true);
   expect(await listBotSkills(userDataDir, 'bot-1')).toEqual([]);
 });
+
+it.each([false, true])('preserves the other skill when an import collides across enabled stores (%s)', async enabled => {
+  const files = [{ name: 'SKILL.md', bytes: Buffer.from('# Existing'), executable: false }];
+  await importBotSkillFiles(userDataDir, 'bot-1', 'report', files, () => {}, enabled);
+  await expect(importBotSkillFiles(userDataDir, 'bot-1', 'report', [{ ...files[0]!, bytes: Buffer.from('# Different') }], () => {}, !enabled)).rejects.toThrow('conflicts with an existing skill');
+  expect(await listBotSkills(userDataDir, 'bot-1')).toHaveLength(1);
+  expect((await readBotSkill(userDataDir, 'bot-1', 'report'))?.body).toBe('# Existing');
+});
+
+it('deletes only the read/edit target if older data contains duplicate enabled and disabled slugs', async () => {
+  await saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, slug: 'report' });
+  const disabled = path.join(botSkillRootDir(userDataDir, 'bot-1'), 'disabled-skills', 'report');
+  await fs.mkdir(disabled, { recursive: true });
+  await fs.writeFile(path.join(disabled, 'SKILL.md'), '# Retain disabled copy');
+  expect(await deleteBotSkill(userDataDir, 'bot-1', 'report')).toBe(true);
+  expect(await fs.readFile(path.join(disabled, 'SKILL.md'), 'utf8')).toBe('# Retain disabled copy');
+  expect(await readBotSkill(userDataDir, 'bot-1', 'report')).toMatchObject({ enabled: false, body: '# Retain disabled copy' });
+});

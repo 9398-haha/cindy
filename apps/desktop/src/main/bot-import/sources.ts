@@ -124,11 +124,11 @@ async function document(items: ImportItem[], root: string, name: string, role: I
 async function memoryDocuments(items: ImportItem[], root: string, prefix: string, budget: ImportReadBudget) {
   if (!(await directories(root)).includes(prefix)) return;
   const directory = path.join(root, prefix);
-  const failed = (name: string, error: unknown) => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name, selected: true },
-    sourceFile: { root: directory, file: path.join(directory, name) }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
+  const failed = (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name: name || prefix, selected: true },
+    sourceFile: { root: directory, file: path.join(directory, name), kind }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
   let files;
   try { files = await readImportTree(directory, name => /\.md$/i.test(name), budget, failed); }
-  catch (error) { failed(prefix, error); return; }
+  catch (error) { failed('', error, 'directory'); return; }
   for (const file of files.filter(file => /\.md$/i.test(file.name))) {
     if (!file.bytes.toString('utf8').trim()) continue;
     items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: file.name, selected: true },

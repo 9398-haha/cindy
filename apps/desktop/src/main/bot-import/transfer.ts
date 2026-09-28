@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs';
 import type { CompanionImportResult, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems } from './files.js';
@@ -94,7 +95,17 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       }
       if (item.captureIssue && item.sourceFile) {
         try {
-          item.text = (await readImportFile(item.sourceFile.root, item.sourceFile.file, budget)).bytes.toString('utf8');
+          const source = item.sourceFile;
+          // Missing kind is a legacy checkpoint. Re-evaluate repaired paths, but
+          // keep containment anchored to the original memory root in either case.
+          const directory = source.kind === 'directory' || source.kind !== 'file' && (await fs.stat(source.file)).isDirectory();
+          if (directory) {
+            const files = await readImportTree(source.root, name => /\.md$/i.test(name), budget, undefined, source.file);
+            item.documents = files.filter(file => file.bytes.toString('utf8').trim()).map(file => ({
+              id: `${item.view.id}-${fingerprint(file.name).slice(0, 20)}`, name: file.name, text: file.bytes.toString('utf8'),
+              ...(/(^|\/)USER\.md$/i.test(file.name) ? { role: 'user' as const } : {}),
+            }));
+          } else item.text = (await readImportFile(source.root, source.file, budget)).bytes.toString('utf8');
           delete item.captureIssue;
         } catch (error) { item.captureIssue = error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED'; }
         deps.assertOwner();

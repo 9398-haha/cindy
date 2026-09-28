@@ -1,3 +1,4 @@
+import { remoteCompanionImportApi, compactCompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import fsSync, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,7 +63,7 @@ vi.mock('../../routines/service.js', () => ({
     h.routines = h.routines.map(row => row.id === id ? { ...row, ...input, revision: row.revision + 1 } : row);
   } }),
 }));
-import { listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
+import { readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock.js';
 import { assertImportedAutomationReady, prepareImportedAutomation } from '../automationRuntime.js';
 import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
@@ -878,4 +879,66 @@ it('refreshes masks and encrypted originals when a previously failed credential-
   const original = environment.skillFiles?.report?.find(file => file.name === 'read.txt');
   expect(Buffer.from(original!.bytes, 'base64').toString()).toContain(secret);
   expect(Object.values(environment.contentRedactions ?? {})).toContain(secret);
+});
+
+it('transfers a 10,000-entry preview in bounded, immutable chunks and preserves selection indexes', async () => {
+  h.snapshot.items = Array.from({ length: 10_000 }, (_, index) => ({ view: { id: `skill-${index}`, name: `技能 ${index} ` + 'long name '.repeat(20), description: '説明😀'.repeat(60), category: 'skills' as const, selected: true } }));
+  let reads = 0;
+  let continuation = '';
+  const api = remoteCompanionImportApi(async id => {
+    const data = await readRemoteCompanionImport(id, 'phone', true);
+    const response = { blocks: [{ primitive: 'companion-import', data }] };
+    expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThan(2 * 1024 * 1024 - 4096);
+    reads++;
+    if (id.startsWith('chunk:')) continuation = id;
+    return response;
+  }, async () => {});
+  const [source] = await api.sources();
+  const preview = await api.preview(source!.id);
+  expect(preview.entries).toEqual(h.snapshot.items.map(item => item.view));
+  expect(reads).toBeGreaterThan(2);
+  expect(inspectImportSource).toHaveBeenCalledOnce();
+  expect(compactCompanionImportSelection(preview, preview.entries.filter((_, index) => index !== 500).map(entry => entry.id)))
+    .toEqual({ entryIds: [], entryRanges: [[0, 499], [501, 9999]] });
+  const again = await readRemoteCompanionImport(continuation, 'phone', true);
+  expect(await readRemoteCompanionImport(continuation, 'phone', true)).toEqual(again);
+  await expect(readRemoteCompanionImport(continuation, 'other-phone', true)).rejects.toThrow('PREVIEW_EXPIRED');
+  h.boundary = true;
+  await expect(readRemoteCompanionImport(continuation, 'phone', true)).rejects.toThrow('OWNER_CHANGED');
+  h.boundary = false;
+  const [legacySource] = await listCompanionImportSources('old-phone');
+  const legacy = await readRemoteCompanionImport(`preview:${legacySource!.id}`, 'old-phone', false);
+  expect(legacy).not.toHaveProperty('chunk');
+  expect((legacy.preview as { entries: unknown[] }).entries).toHaveLength(10_000);
+});
+
+it.each(['directory', undefined] as const)('retries a repaired memory directory with its original request, including legacy kind=%s', async kind => {
+  const directory = path.join(h.root, 'memory', 'broken');
+  const memoryRoot = path.join(h.root, 'memory');
+  await fs.mkdir(memoryRoot);
+  h.snapshot.items = [
+    { view: { id: 'healthy', name: 'healthy.md', category: 'memory', selected: true }, text: 'Healthy' },
+    { view: { id: 'broken', name: 'broken', category: 'memory', selected: true }, captureIssue: 'IMPORT_ITEM_FAILED', sourceFile: { root: memoryRoot, file: directory, ...(kind ? { kind } : {}) } },
+  ];
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const selection = { previewId: preview.id, requestId: 'retry-memory-directory', name: 'Ada', entryIds: ['healthy', 'broken'], takeover: false, deferSetup: true };
+  const first = await startCompanionImport(selection, 'phone');
+  expect(first.status).toBe('needs-attention');
+  expect(h.importDocument).toHaveBeenCalledTimes(1);
+  await fs.mkdir(path.join(directory, 'nested'), { recursive: true });
+  await fs.writeFile(path.join(directory, 'nested', 'note.md'), 'Recovered note');
+  await fs.writeFile(path.join(directory, 'USER.md'), 'User preferences');
+  await fs.writeFile(path.join(directory, 'ignored.txt'), 'Not a memory');
+  await startCompanionImport(selection, 'reconnected-phone');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(result).toMatchObject({ status: 'complete', botId: first.botId, savedEntryIds: ['healthy', 'broken'] });
+  expect(h.importDocument).toHaveBeenCalledTimes(3);
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^broken-/), 'broken/nested/note.md', 'Recovered note', 'reference');
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^broken-/), 'broken/USER.md', 'User preferences', 'user');
+  const environment = await h.store.read(h.root, first.botId, () => {});
+  expect(Object.values(environment!.documents!)).toEqual(expect.arrayContaining(['Healthy', 'Recovered note', 'User preferences']));
+  await startCompanionImport(selection, 'phone');
+  expect(h.importDocument).toHaveBeenCalledTimes(3);
 });

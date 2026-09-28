@@ -10,7 +10,7 @@ it('rejects the next file before allocating its buffer when the cumulative budge
   try {
     const file = path.join(root, 'resource');
     await fs.writeFile(file, '1234');
-    const budget = createImportBudget(7);
+    const budget = createImportBudget(270);
     expect((await readImportFile(root, file, budget)).bytes.toString()).toBe('1234');
     const allocate = vi.spyOn(Buffer, 'alloc');
     try {
@@ -50,5 +50,38 @@ it('reads every resource in a skill with more than 4096 small files', async () =
     const files = await readImportTree(root, undefined, createImportBudget());
     expect(files).toHaveLength(4100);
     expect(files.find(file => file.name === 'resource-4099.txt')?.bytes.toString()).toBe('Resource 4099');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('charges metadata for empty files and stops streaming instead of retaining unlimited errors', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-empty-files-'));
+  try {
+    for (let index = 0; index < 20; index++) await fs.writeFile(path.join(root, `${index}.txt`), '');
+    const onError = vi.fn();
+    await expect(readImportTree(root, undefined, createImportBudget(1000), onError)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    expect(onError).not.toHaveBeenCalled();
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('retries a selected subtree inside its original root and still rejects escapes and cycles', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-subtree-'));
+  try {
+    const memory = path.join(root, 'memory'); const outside = path.join(root, 'outside');
+    await fs.mkdir(memory); await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, 'note.md'), 'Outside');
+    const link = path.join(memory, 'broken');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    await fs.symlink(outside, link, linkType);
+    const failures: unknown[] = [];
+    expect(await readImportTree(memory, undefined, createImportBudget(), (name, error, kind) => failures.push([name, (error as Error).message, kind]))).toEqual([]);
+    expect(failures).toEqual([['broken', 'SOURCE_LINK_OUTSIDE_FOLDER', 'directory']]);
+    await expect(readImportTree(memory, undefined, createImportBudget(), undefined, link)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    await fs.rm(link, { recursive: true });
+    await fs.symlink(memory, link, linkType);
+    await expect(readImportTree(memory, undefined, createImportBudget(), undefined, link)).rejects.toThrow('SOURCE_LINK_CYCLE');
+    await fs.rm(link, { recursive: true });
+    await fs.mkdir(link); await fs.writeFile(path.join(link, 'note.md'), 'Repaired');
+    const files = await readImportTree(memory, undefined, createImportBudget(), undefined, link);
+    expect(files.map(file => [file.name, file.bytes.toString()])).toEqual([['broken/note.md', 'Repaired']]);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

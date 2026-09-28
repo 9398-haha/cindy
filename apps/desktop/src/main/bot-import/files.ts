@@ -16,7 +16,8 @@ export function createImportBudget(limit = MAX_SNAPSHOT_BYTES) {
     remaining -= size;
   };
   return { reserve, reserveFile(size: number) {
-    reserve(size);
+    // Even empty files retain a Buffer, metadata and checkpoint representation.
+    reserve(size + 256);
   } };
 }
 export type ImportReadBudget = ReturnType<typeof createImportBudget>;
@@ -111,6 +112,7 @@ export async function readImportFile(root: string, file: string, budget?: Import
     if (!stat.isFile()) throw new CompanionImportError('SOURCE_NOT_REGULAR_FILE');
     if (stat.size > MAX_FILE_BYTES) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
     budget?.reserveFile(stat.size);
+    budget?.reserve(Buffer.byteLength(path.relative(root, file)));
     // A bounded read also handles files growing after fstat.
     const bytes = Buffer.alloc(Math.min(stat.size + 1, MAX_FILE_BYTES + 1));
     let size = 0;
@@ -133,7 +135,7 @@ export async function optionalText(root: string, file: string, budget?: ImportRe
 }
 
 /** Only traverses the selected skill/document subtree; never copies a whole Agent home. */
-export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown) => void): Promise<ImportFile[]> {
+export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => void, directory = root): Promise<ImportFile[]> {
   const result: ImportFile[] = [];
   const visited = new Set<string>();
   let size = 0;
@@ -143,26 +145,35 @@ export async function readImportTree(root: string, include: (name: string) => bo
     if (!inside(realRoot, real)) throw new CompanionImportError('SOURCE_LINK_OUTSIDE_FOLDER');
     if (visited.has(real)) throw new CompanionImportError('SOURCE_LINK_CYCLE');
     visited.add(real);
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-      if (entry.name === '.git' || entry.name === '__pycache__' || entry.name === '.DS_Store') continue;
-      const file = path.join(dir, entry.name);
-      try {
-        const target = entry.isSymbolicLink() ? await fs.stat(file) : entry;
-        if (target.isDirectory()) await visit(file);
-        else if (include(path.relative(root, file).split(path.sep).join('/'))) {
-          const item = await readImportFile(root, file, budget);
-          size += item.bytes.length;
-          if (size > MAX_ITEM_BYTES) throw new CompanionImportError('SOURCE_ITEM_TOO_LARGE');
-          result.push(item);
+    try {
+      budget?.reserve(128 + Buffer.byteLength(path.relative(root, dir)));
+      // Stream directory entries too: empty files and rejected links must not
+      // allocate an unbounded readdir array or an unbounded list of errors.
+      for await (const entry of await fs.opendir(dir)) {
+        if (entry.name === '.git' || entry.name === '__pycache__' || entry.name === '.DS_Store') continue;
+        const file = path.join(dir, entry.name);
+        const name = path.relative(root, file).split(path.sep).join('/');
+        budget?.reserve(128 + Buffer.byteLength(name));
+        let kind: 'file' | 'directory' | 'unknown' = entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'unknown' : 'file';
+        try {
+          const target = entry.isSymbolicLink() ? await fs.stat(file) : entry;
+          kind = target.isDirectory() ? 'directory' : 'file';
+          if (target.isDirectory()) await visit(file);
+          else if (include(name)) {
+            const item = await readImportFile(root, file, budget);
+            size += item.bytes.length;
+            if (size > MAX_ITEM_BYTES) throw new CompanionImportError('SOURCE_ITEM_TOO_LARGE');
+            result.push(item);
+          }
+        } catch (error) {
+          if (!onError || error instanceof CompanionImportError && error.code === 'SOURCE_SNAPSHOT_TOO_LARGE') throw error;
+          onError(name, error, kind);
         }
-      } catch (error) {
-        if (!onError) throw error;
-        onError(path.relative(root, file).split(path.sep).join('/'), error);
       }
-    }
-    visited.delete(real);
+    } finally { visited.delete(real); }
   }
-  await visit(root);
+  if (!inside(path.resolve(root), path.resolve(directory))) throw new CompanionImportError('SOURCE_LINK_OUTSIDE_FOLDER');
+  await visit(directory);
   return result.sort((a, b) => a.name.localeCompare(b.name));
 }
 

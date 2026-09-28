@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { useTranslation } from 'react-i18next';
 import { parseRemoteActionInvokeRequest, REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION, type RemoteResourceRef } from '@cindy/device-link';
-import { compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, remoteCompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
+import { COMPANION_IMPORT_CHUNK_PRIMITIVE, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, remoteCompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -20,7 +20,7 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
   const styles = useThemedStyles(makeStyles);
   const { invoke, openLink } = useDeviceLink();
   const api = useMemo(() => remoteCompanionImportApi(
-    async id => { await openLink(deviceId); return invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ ref: { collectionId: 'companion-import', kind: 'import', id }, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['companion-import'], locale: i18n.language } }]); },
+    async id => { await openLink(deviceId); return invoke(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ ref: { collectionId: 'companion-import', kind: 'import', id }, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['companion-import', COMPANION_IMPORT_CHUNK_PRIMITIVE], locale: i18n.language } }]); },
     (sourceId, selection) => invokeRemoteResourceAction(invoke, { deviceId, deviceName }, { collectionId: 'companion-import', resourceRef: { collectionId: 'companion-import', kind: 'import', id: `preview:${sourceId}` }, actionId: 'import', input: { ...selection } }, i18n.language),
   ), [deviceId, deviceName, invoke, openLink, i18n.language]);
   const [sources, setSources] = useState<CompanionImportSource[]>();

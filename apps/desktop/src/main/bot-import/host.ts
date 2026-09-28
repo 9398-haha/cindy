@@ -10,6 +10,7 @@ import { parseRoutineInput, type RoutineInput } from '@cindy/maker-scheduler';
 import { normalizeBotName } from '../../shared/botCreation.js';
 import { listBotRemoteResourceSources } from '../localDb/ipc/bots.js';
 import { validateBotAvatarBuffer, decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
+import { COMPANION_IMPORT_CHUNK_LENGTH, COMPANION_IMPORT_READ_MAX_LENGTH } from '@cindy/maker-shared/companion-import';
 import type { CompanionImportPreview, CompanionImportResult, CompanionImportSelection, CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBotRemoteResourceSource, reconcileBotProfileFolder } from '../localDb/ipc/bots.js';
@@ -24,7 +25,7 @@ import { readOpenClawCronDatabase } from './openclawCron.js';
 import { companionEnvironmentStore, recoverCompanionEnvironmentRemovals } from './runtime.js';
 import { deserializeImportSnapshotAsync, fingerprint, serializeImportSnapshotAsync, reserveSnapshotItems, MAX_SNAPSHOT_BYTES } from './files.js';
 import { transferCompanion, validateImportSelection, type ImportReceipt, type TransferDeps } from './transfer.js';
-import { CompanionImportError, type ImportSnapshot, type ImportSource } from './types.js';
+import { CompanionImportError, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { changeSourceAutomationState } from './takeover.js';
 import { verifyImportedAutomation } from './verification.js';
 import { projectImportedSkill } from './skillResources.js';
@@ -33,6 +34,7 @@ import { assertImportedAutomationReady } from './automationRuntime.js';
 interface Owned<T> { owner: string; controller: string; value: T; createdAt: number }
 const sources = new Map<string, Owned<ImportSource>>();
 const previews = new Map<string, Owned<ImportSnapshot> & { bytes: number }>();
+const remoteReads = new Map<string, Owned<string>>();
 const jobs = new Map<string, Promise<CompanionImportResult>>();
 const TTL = 30 * 60_000;
 function owner() {
@@ -117,6 +119,47 @@ export async function previewCompanionImport(sourceId: string, controller: strin
     ...(snapshot.avatarImageBase64 ? { avatarImageBase64: snapshot.avatarImageBase64 } : {}),
     entries: snapshot.items.map(({ view }) => ({ ...view, name: redact(view.name),
       ...(view.description === undefined ? {} : { description: redact(view.description) }) })) };
+}
+
+/** Freeze each public read while transferring it; never re-inspect a source between chunks.
+ * UTF-16 slices are at most 1.5 MiB after JSON escaping, well below a 2 MiB frame. */
+export async function readRemoteCompanionImport(id: string, controller: string, chunked: boolean): Promise<Record<string, unknown>> {
+  const scope = owner();
+  const chunk = (token: string, text: string, offset: number) => ({
+    chunk: { id: token, offset, total: text.length, text: text.slice(offset, offset + COMPANION_IMPORT_CHUNK_LENGTH) },
+  });
+  if (id.startsWith('chunk:')) {
+    const match = /^chunk:([a-zA-Z0-9-]{1,64}):(0|[1-9][0-9]*)$/.exec(id);
+    if (!chunked || !match) throw new CompanionImportError('INVALID_REQUEST');
+    const text = owned(remoteReads, match[1]!, controller);
+    const offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset >= text.length || offset % COMPANION_IMPORT_CHUNK_LENGTH) throw new CompanionImportError('INVALID_REQUEST');
+    return chunk(match[1]!, text, offset);
+  }
+  const data = id === 'sources' ? { sources: await listCompanionImportSources(controller) }
+    : id.startsWith('preview:') ? { preview: await previewCompanionImport(id.slice(8), controller) }
+      : id.startsWith('result:') ? { result: await getCompanionImportResult(id.slice(7)) ?? null } : undefined;
+  scope.assert();
+  if (!data) throw new CompanionImportError('INVALID_REQUEST');
+  if (!chunked) return data;
+  const text = JSON.stringify(data);
+  if (text.length <= COMPANION_IMPORT_CHUNK_LENGTH) return data;
+  if (text.length > COMPANION_IMPORT_READ_MAX_LENGTH || text.length * 2 > MAX_SNAPSHOT_BYTES) throw new CompanionImportError('SOURCE_SNAPSHOT_TOO_LARGE');
+  prune(remoteReads);
+  for (const [key, entry] of remoteReads) if (entry.controller === controller) remoteReads.delete(key);
+  let bytes = [...remoteReads.values()].reduce((sum, entry) => sum + entry.value.length * 2, 0);
+  for (const [key, entry] of remoteReads) {
+    if (remoteReads.size < 4 && bytes + text.length * 2 <= MAX_SNAPSHOT_BYTES) break;
+    remoteReads.delete(key); bytes -= entry.value.length * 2;
+  }
+  const token = randomUUID();
+  remoteReads.set(token, { owner: scope.scope, controller, value: text, createdAt: Date.now() });
+  return chunk(token, text, 0);
+}
+
+function documentEntries(item: ImportItem): Array<[string, string]> {
+  return [...(item.text === undefined ? [] : [[item.view.id, item.text] as [string, string]]),
+    ...(item.documents ?? []).map(document => [document.id, document.text] as [string, string])];
 }
 
 function receiptFile(root: string, requestId: string) {
@@ -395,11 +438,15 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         const slug = skillSlug(item);
         const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
         await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
-      } else if (item.text && (item.view.category === 'memory' || item.view.category === 'personality')) {
-        await getBotMemoryService().importDocument(botId, item.view.id, redactText(item.view.name), redactText(item.text), item.role === 'user' ? 'user' : 'reference');
+      } else if (item.view.category === 'memory' || item.view.category === 'personality') {
+        const documents = [...(item.text ? [{ id: item.view.id, name: item.view.name, text: item.text, role: item.role }] : []), ...item.documents ?? []];
+        for (const document of documents) {
+          scope.assert();
+          await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), redactText(document.text), document.role === 'user' ? 'user' : 'reference');
+        }
       }
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
-        if (item.text !== undefined) { environment.documents ??= {}; environment.documents[item.view.id] = item.text; }
+        for (const [id, text] of documentEntries(item)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
           const slug = skillSlug(item);
           const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
@@ -438,14 +485,14 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         credentials: items.flatMap(item => item.credential && !item.view.dependsOn?.some(id => !chosen.has(id)) && (!item.view.issues?.length || item.credential.format !== 'telegram') ? [{ id: item.view.id, ...item.credential, ...(item.credential.format === 'telegram' ? { value: resolveReferences(item.credential.value) } : {}) }] : []),
         files: Object.fromEntries(items.flatMap(item => item.asset ? [[item.asset.name, item.asset.bytes.toString('base64')]] : [])),
         skillFiles,
-        documents: Object.fromEntries(items.flatMap(item => item.text === undefined ? [] : [[item.view.id, item.text]])),
+        documents: Object.fromEntries(items.flatMap(documentEntries)),
         contentRedactions: publicationRedactions(items),
         sourceAutomations: items.flatMap(item => item.automation ? [{ entryId: item.view.id, kind: snapshot.source.kind, original: item.automation.original }] : []),
         pendingImport: previous?.pendingImport ?? { selection, snapshotJson: await serializeImportSnapshotAsync({ ...snapshot, avatarImageBase64: selection.avatarImageBase64, items, publicationRedactions: publicationRedactions(items) }, scope.assert) },
         automations: previous?.automations ?? {},
       }, scope.assert);
       const roleText = (role: 'identity' | 'user' | 'instructions') => {
-        const text = redactText(items.filter(item => item.role === role).map(item => item.text).join('\n\n'));
+        const text = redactText(items.flatMap(item => [...(item.role === role ? [item.text] : []), ...(item.documents ?? []).filter(document => document.role === role).map(document => document.text)]).join('\n\n'));
         return Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES ? text : `The imported ${role} documents are preserved in your personal memory. Search and read those original documents when applying the imported profile.`;
       };
       const folder = await readBotProfileFolder(scope.root, botId); scope.assert();
@@ -574,7 +621,8 @@ async function accepted(task: Promise<CompanionImportResult>, root: string, requ
   const receipt = (async () => {
     while (!finished) {
       const value = await readReceipt(root, requestId);
-      if (value && (value.companionCreated || value.environmentSaved)) return value.result;
+      // A retry must not acknowledge the previous attempt's terminal receipt.
+      if (value?.result.status === 'running' && (value.companionCreated || value.environmentSaved)) return value.result;
       await new Promise(resolve => setTimeout(resolve, 40));
     }
     return task;

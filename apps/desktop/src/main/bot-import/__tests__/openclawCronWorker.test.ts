@@ -30,3 +30,39 @@ it.each(['esm', 'cjs'] as const)('reads committed WAL jobs for exactly the selec
     expect(db.prepare('SELECT COUNT(*) AS count FROM cron_jobs').get()).toEqual({ count: 1103 });
   } finally { await worker.terminate(); db.close(); }
 });
+
+it.each(['tiny', 'utf8'] as const)('stops the worker iterator before retaining an unbounded %s row set', async scenario => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-sqlite-limit-'));
+  const database = path.join(root, 'iterator-count.json');
+  const fakeDatabase = path.join(root, 'database.cjs');
+  await fs.writeFile(fakeDatabase, `
+    const fs = require('node:fs');
+    module.exports = class {
+      constructor(file) { this.file = file; this.read = 0; this.closed = false; }
+      prepare() {
+        const db = this;
+        return { *iterate() {
+          try { for (let i = 0; i < 2000000; i++) {
+            db.read++;
+            yield { job_json: ${scenario === 'tiny' ? "'{}'" : "JSON.stringify({ note: '漢'.repeat(500000) })"}, state_json: '{}' };
+          } } finally { db.closed = true; }
+        } };
+      }
+      close() { fs.writeFileSync(this.file, JSON.stringify({ read: this.read, closed: this.closed })); }
+    };
+  `);
+  const source = await fs.readFile(new URL('../openclawCronWorker.ts', import.meta.url), 'utf8');
+  const module = path.join(root, 'worker.cjs');
+  await fs.writeFile(module, transformSync(source, { loader: 'ts', format: 'cjs', platform: 'node', target: 'node22', logLevel: 'silent' }).code);
+  const worker = new Worker(module, { workerData: { database, storeKey: 'store', agentId: 'main', defaultAgent: true, modulePath: fakeDatabase } });
+  try {
+    const exit = new Promise<void>((resolve, reject) => { worker.once('exit', code => code ? reject(new Error(`worker exit ${code}`)) : resolve()); worker.once('error', reject); });
+    const reply = await new Promise<unknown>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
+    await exit;
+    expect(reply).toEqual({ ok: false });
+    const counts = JSON.parse(await fs.readFile(database, 'utf8'));
+    expect(counts.closed).toBe(true);
+    expect(counts.read).toBeGreaterThan(1);
+    expect(counts.read).toBeLessThan(scenario === 'tiny' ? 65_000 : 13);
+  } finally { await worker.terminate(); }
+});

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { compactCompanionImportSelection, remoteCompanionImportApi, areCompanionImportEntriesSelected, toggleCompanionImportEntries, type CompanionImportEntry, type CompanionImportPreview } from '../companionImport.js';
+import { COMPANION_IMPORT_CHUNK_LENGTH, compactCompanionImportSelection, remoteCompanionImportApi, areCompanionImportEntriesSelected, toggleCompanionImportEntries, type CompanionImportEntry, type CompanionImportPreview } from '../companionImport.js';
 const entries: CompanionImportEntry[] = [
   { id: 'work', name: 'Work', category: 'connections', selected: false, exclusiveWith: ['personal'] },
   { id: 'personal', name: 'Personal', category: 'connections', selected: false, exclusiveWith: ['work'] },
@@ -30,4 +30,31 @@ it.each([false, true])('negotiates compact selections only when the host adverti
   await expect(api.start({ previewId: received.id, requestId: result.requestId, name: 'Ada', takeover: false, ...compactCompanionImportSelection(received, chosen) })).resolves.toEqual(result);
   expect(invoke).toHaveBeenCalledWith('source', expect.objectContaining(supported ? { entryIds: [], entryRanges: [[0, 99], [101, 2099]] } : { entryIds: chosen }));
   if (!supported) expect(invoke.mock.calls[0]?.[1]).not.toHaveProperty('entryRanges');
+});
+
+it('reassembles source and result reads without dropping saved IDs or checks', async () => {
+  const sources = Array.from({ length: 3000 }, (_, index) => ({ id: `source-${index}`, kind: 'hermes', name: 'Name'.repeat(20) }));
+  const result = { requestId: 'request-1234567890', botId: 'bot', status: 'complete', checks: sources.map(source => ({ entryId: source.id, status: 'copied' })), savedEntryIds: sources.map(source => source.id) };
+  let text = '';
+  const api = remoteCompanionImportApi(async id => {
+    if (!id.startsWith('chunk:')) text = JSON.stringify(id === 'sources' ? { sources } : { result });
+    const offset = id.startsWith('chunk:') ? Number(id.split(':')[2]) : 0;
+    return { blocks: [{ primitive: 'companion-import', data: { chunk: { id: 'token', offset, total: text.length, text: text.slice(offset, offset + COMPANION_IMPORT_CHUNK_LENGTH) } } }] };
+  }, async () => {});
+  expect(await api.sources()).toEqual(sources);
+  expect(await api.status(result.requestId)).toEqual(result);
+});
+
+it.each(['token', 'offset', 'total', 'missing', 'disconnect'])('rejects %s drift during chunk reads without publishing a partial preview', async mode => {
+  const first = { id: 'stable', offset: 0, total: COMPANION_IMPORT_CHUNK_LENGTH + 10, text: 'x'.repeat(COMPANION_IMPORT_CHUNK_LENGTH) };
+  const read = vi.fn(async (id: string) => {
+    if (id.startsWith('chunk:') && mode === 'disconnect') throw new Error('DISCONNECTED');
+    const chunk = !id.startsWith('chunk:') ? first : { ...first, offset: COMPANION_IMPORT_CHUNK_LENGTH, text: 'x'.repeat(10),
+      ...(mode === 'token' ? { id: 'changed' } : {}), ...(mode === 'offset' ? { offset: 0 } : {}), ...(mode === 'total' ? { total: first.total + 1 } : {}),
+    };
+    return { blocks: [{ primitive: 'companion-import', data: mode === 'missing' && id.startsWith('chunk:') ? {} : { chunk } }] };
+  });
+  const api = remoteCompanionImportApi(read, async () => {});
+  await expect(api.preview('source')).rejects.toThrow(mode === 'disconnect' ? 'DISCONNECTED' : 'INVALID_IMPORT_RESPONSE');
+  expect(read).toHaveBeenCalledTimes(2);
 });
