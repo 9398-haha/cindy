@@ -538,7 +538,7 @@ it.each(['hermes', 'openclaw'] as const)('records a failed %s memory subtree sep
   }) as typeof fs.open);
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader);
-  expect(snapshot.items.find(item => item.view.name === 'broken')?.sourceFile).toMatchObject({ root: path.join(home, folder), file: path.join(home, folder, 'broken'), kind: 'directory' });
+  expect(snapshot.items.find(item => item.view.name === 'broken')?.sourceFile).toMatchObject({ root: path.join(home, folder), file: path.join(home, folder, 'broken'), kind: 'directory', logicalPrefix: kind === 'hermes' ? 'memories' : 'memory' });
   expect(snapshot.items.find(item => item.view.name === 'bad.md')?.sourceFile?.kind).toBe('file');
   expect(snapshot.items.find(item => item.view.name === 'healthy.md')?.text).toBe('Keep healthy');
 });

@@ -50,8 +50,11 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   bindings. Driver, size and database failures retain distinct safe reason codes.
 - Memory discovery includes UTF-8 text (including JSON, backups and extensionless notes) and attachments under the memory trees,
   including hidden subdirectories. Hermes `memories/` and a user-maintained `memory/`
-  archive stay separate; OpenClaw also includes workspace `DREAMS.md`. Supported media
-  originals enter the shared media ledger with a companion-owned import reference
+  archive stay separate; OpenClaw also includes workspace `DREAMS.md`.
+  Retry metadata retains each tree's logical prefix; legacy checkpoints infer it
+  only when the original entry ID and physical memory root agree. Repaired files
+  and subtrees therefore keep distinct archive keys even for identical names.
+  Supported media originals enter the shared media ledger with a companion-owned import reference
   and a memory document linking the managed URL. Retry reuses that reference;
   companion deletion releases only its own refs through recoverable cleanup.
   Empty files such as delivery/lock markers do not become attachment failures. Explicit native memory file links into the source-declared document vault retain their logical names and bounded file reads; undeclared external files and external directory links remain rejected. Retry applies the same classification to legacy checkpoints. Unsupported binary attachments remain visible failures, not silently omitted files.
@@ -69,6 +72,12 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   through storage reads and subsequent editor/tool writes. A whitespace-only edit
   therefore reports `MEMORY_CHANGED` and keeps the checkpoint pending. Legacy parts
   without that marker retain their historical trimmed-body comparison.
+  On a repaired subtree retry, successfully saved role documents update the
+  profile and its baseline before a failed sibling is reported. Missing baseline
+  values do not contribute synthetic blank lines; earlier saved role text remains
+  available even if its memory write temporarily fails on a later retry. Unsaved
+  siblings remain in the checkpoint and user profile edits are not overwritten.
+  Individually repaired memory USER.md files also recover their user role.
   Env references and original credentials remain
   available to host execution; no model call or extra confirmation is added.
   Selected skill folders retain their
@@ -551,6 +560,16 @@ old checkpoints that only contained a boolean link exception. Native command
 argv, cwd and stdin are now opaque to the read planner, even when a literal secret
 is absent from every configured credential map; the original payload remains in
 local encrypted storage for authorized execution.
+
+Readable import copies collect credentials from structured argv/stdin as well as
+command env. The same literal/JSON/URL traversal is shared with output masking;
+publication treats stdin and credential-named options as private literals and
+examines other arguments for structured credential fields and capability URLs.
+It does not blanket-mask ordinary positional arguments or command settings:
+doing so corrupts day counts, output formats and subcommands in imported text.
+Unlabelled opaque positional values are not newly classified as credentials by
+this publication pass. Raw commands, source documents and Skill resources remain
+in the encrypted archive; the existing execution-output mask stays conservative.
 
 Full preservation also includes unused Hermes scripts, disabled MCP definitions,
 empty marker bytes and UTF-8 text documents containing terminal control characters.

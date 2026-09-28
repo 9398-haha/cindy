@@ -1,4 +1,5 @@
 import { fingerprint } from './files.js';
+import { commandArgumentRedactions, commandLiteralRedactions } from './commandRedactions.js';
 import { CompanionImportError, object, type ImportItem } from './types.js';
 import { importedContentRedactions } from './connectionCatalog.js';
 import { environmentRedactions, redactEnvironmentValues } from './process.js';
@@ -90,9 +91,19 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
       return parsed && typeof parsed === 'object' ? [{ id: `command_${index}`, format: 'command-env', value: parsed }] : [];
     } catch { return []; }
   });
+  const commandValues = items.flatMap(item => {
+    const payload = object(item.automation?.original.payload);
+    if (payload.kind !== 'command') return [];
+    const args = Array.isArray(payload.argv) ? payload.argv.filter((arg): arg is string => typeof arg === 'string') : [];
+    return [
+      ...Object.values(commandLiteralRedactions(typeof payload.input === 'string' ? [String(resolve(payload.input))] : [])),
+      ...Object.values(commandArgumentRedactions(args.map(arg => String(resolve(arg))))),
+    ];
+  });
+  const literalMasks = Object.fromEntries([...new Set(commandValues)].map((value, index) => [`command_input_${index}`, value]));
   return importedContentRedactions({ env,
-    contentRedactions: Object.fromEntries(commandEnvironments.flatMap(environment => Object.entries(environmentRedactions(environment)))
-      .map(([name, value], index) => [`command_${index}_${name}`, value])),
+    contentRedactions: { ...Object.fromEntries(commandEnvironments.flatMap(environment => Object.entries(environmentRedactions(environment)))
+      .map(([name, value], index) => [`command_${index}_${name}`, value])), ...literalMasks },
     mcp: items.flatMap(item => item.mcp ? [resolve(item.mcp) as NonNullable<typeof item.mcp>] : []),
     credentials: [...items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []), ...structured],
   });

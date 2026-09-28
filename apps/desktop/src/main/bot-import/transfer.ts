@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { CompanionImportResult, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
@@ -160,13 +161,21 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         try {
           const source = item.sourceFile;
           const sharedDocumentRoots = source.sharedDocumentRoots ?? [];
+          // Older checkpoints recorded only the physical root. Recover its
+          // logical prefix only when both the known root and original entry ID
+          // agree; custom/standalone document checkpoints keep their old names.
+          const relative = path.relative(source.root, source.file).split(path.sep).join('/');
+          const prefix = source.logicalPrefix ?? ['memories', 'memory'].find(candidate =>
+            path.basename(source.root) === candidate && item.view.id === `memory-${fingerprint(`${candidate}/${relative}`).slice(0, 20)}`);
+          const logicalName = (name: string) => prefix ? `${prefix}/${name}` : name;
           // Missing kind is a legacy checkpoint. Re-evaluate repaired paths, but
           // keep containment anchored to the original memory root in either case.
           const directory = source.kind === 'directory' || source.kind !== 'file' && (await fs.stat(source.file)).isDirectory();
           if (directory) {
             const files = await readImportTree(source.root, undefined, budget, undefined, source.file, sharedDocumentRoots);
             item.files = []; item.documents = [];
-            for (const file of files) {
+            for (const captured of files) {
+              const file = { ...captured, name: logicalName(captured.name) };
               const content = memoryFileContent(file);
               if (content.kind !== 'text') item.files.push(file);
               else if (content.kind === 'text') item.documents.push({
@@ -175,9 +184,14 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
               });
             }
           } else {
-            const file = await readImportFile(source.root, source.file, budget, sharedDocumentRoots);
+            const captured = await readImportFile(source.root, source.file, budget, sharedDocumentRoots);
+            const file = { ...captured, name: logicalName(captured.name) };
             const content = memoryFileContent(file);
-            if (content.kind === 'text') item.text = content.text;
+            if (content.kind === 'text') {
+              item.text = content.text;
+              // A failed individual USER.md has no role from initial discovery.
+              if (!item.role && /(^|\/)USER\.md$/i.test(file.name)) item.role = 'user';
+            }
             else item.asset = { name: file.name, bytes: file.bytes };
           }
           delete item.captureIssue;

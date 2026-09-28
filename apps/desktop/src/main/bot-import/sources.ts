@@ -129,7 +129,7 @@ async function memoryDocuments(items: ImportItem[], root: string, prefix: string
   if (!(await directories(root)).includes(prefix)) return;
   const directory = path.join(root, prefix);
   const failed = (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name: name || prefix, selected: true },
-    sourceFile: { root: directory, file: path.join(directory, name), kind, sharedDocumentRoots }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
+    sourceFile: { root: directory, file: path.join(directory, name), kind, logicalPrefix: prefix, sharedDocumentRoots }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
   let files;
   try { files = await readImportTree(directory, undefined, budget, failed, directory, sharedDocumentRoots); }
   catch (error) { failed('', error, 'directory'); return; }

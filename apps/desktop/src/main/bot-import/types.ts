@@ -46,7 +46,7 @@ export interface ImportItem {
   sourceDirectory?: string;
   sourceAlias?: string;
   /** Failed document or subtree read; retained for an explicit retry. */
-  sourceFile?: { root: string; file: string; kind?: 'file' | 'directory' | 'unknown'; sharedDocumentRoots?: string[] };
+  sourceFile?: { root: string; file: string; kind?: 'file' | 'directory' | 'unknown'; logicalPrefix?: string; sharedDocumentRoots?: string[] };
   /** Recovered subtree documents stay under the original selected entry/receipt. */
   documents?: Array<{ id: string; name: string; text: string; role?: 'user' }>;
   /** Selected skill resources have been captured for copying, verification and restart. */

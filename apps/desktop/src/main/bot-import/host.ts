@@ -547,7 +547,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   let skillConfigReader: { budget: Parameters<NonNullable<TransferDeps['readSkillConfig']>>[1]; reader: ReturnType<typeof createImportSourceReader> } | undefined;
   const applyProfile = async (botId: string, items: ImportItem[], baseline?: Record<string, string>, originals?: Record<string, string>) => {
     const roleText = (role: 'identity' | 'user' | 'instructions', originals?: Record<string, string>) => {
-      const text = redactText(items.flatMap(item => [...(item.role === role ? [originals ? originals[item.view.id] : item.text] : []), ...(item.documents ?? []).filter(document => document.role === role).map(document => originals ? originals[document.id] : document.text)]).join('\n\n'));
+      const text = redactText(items.flatMap(item => [...(item.role === role ? [originals ? originals[item.view.id] : item.text] : []), ...(item.documents ?? []).filter(document => document.role === role).map(document => originals ? originals[document.id] : document.text)]).filter((value): value is string => typeof value === 'string').join('\n\n'));
       if (Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES) return text;
       // Keep the original profile text without synthesizing new system instructions.
       // The entire source remains in personal memory and the encrypted document archive.
@@ -623,6 +623,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       }
     },
     async importItem(botId, item) {
+      let pendingFailure: Error | undefined;
+      let persistedItem = item;
       if (item.view.category === 'skills') {
         const slug = skillSlug(item);
         const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
@@ -650,6 +652,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           }
         }
         let total = failedAttachments, saved = 0;
+        const savedDocuments = new Set<string>();
         for (const document of documents) {
           let parts = 1; total++;
           try {
@@ -658,7 +661,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
             parts = splitImportedMemoryText(text).length;
             total += parts - 1;
             await getBotMemoryService().importDocument(botId, document.id, redactText(document.name), text, document.role === 'user' ? 'user' : 'reference');
-            saved += parts;
+            saved += parts; savedDocuments.add(document.id);
           } catch (error) {
             scope.assert();
             const progress = (error as { importProgress?: { saved: number; total: number } })?.importProgress;
@@ -668,14 +671,18 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         }
         if (firstFailure) {
           const error = firstFailure instanceof Error ? firstFailure : new CompanionImportError('IMPORT_ITEM_FAILED');
-          throw Object.assign(error, { importProgress: { saved, total } });
+          pendingFailure = Object.assign(error, { importProgress: { saved, total } });
+          // Failed siblings remain in the encrypted checkpoint. Only documents
+          // saved in full may advance the profile projection and its baseline.
+          persistedItem = { ...item, text: savedDocuments.has(item.view.id) ? item.text : undefined,
+            documents: item.documents?.filter(document => savedDocuments.has(document.id)) };
         }
       }
       if (prior?.environmentSaved && (item.role || item.documents?.some(document => document.role))) {
         const environment = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
         const previous = environment?.documents ?? {};
         await applyProfile(botId, selected.map(candidate => candidate.view.id === item.view.id ? item : candidate), previous,
-          { ...previous, ...Object.fromEntries(documentEntries(item)) });
+          { ...previous, ...Object.fromEntries(documentEntries(persistedItem)) });
       }
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         // A formerly unreadable manifest may only now supply its own settings.
@@ -689,7 +696,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           }
         } else if (item.asset) environment.files = { ...environment.files, [item.asset.name]: item.asset.bytes.toString('base64') };
         if (item.credential) environment.credentials = [...environment.credentials.filter(value => value.id !== item.view.id), { id: item.view.id, ...item.credential }];
-        for (const [id, text] of documentEntries(item)) { environment.documents ??= {}; environment.documents[id] = text; }
+        for (const [id, text] of documentEntries(persistedItem)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
           const slug = skillSlug(item);
           const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
@@ -697,6 +704,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         }
         environment.contentRedactions = { ...environment.contentRedactions, ...publicationRedactions([item]) };
       });
+      if (pendingFailure) throw pendingFailure;
     },
     async saveCheckpoint(botId, items) {
       const previous = await companionEnvironmentStore.read(scope.root, botId, scope.assert);

@@ -10,9 +10,10 @@ import { writeImportFiles } from './files.js';
 import { importedProcessEnvironment, redactEnvironmentValues, runImportedProcess } from './process.js';
 import { sendImportedDelivery } from './delivery.js';
 import { importedScriptName, importedScriptInterpreter } from './scripts.js';
-import { importedContentRedactions, urlCredentialValues } from './connectionCatalog.js';
+import { importedContentRedactions } from './connectionCatalog.js';
 import type { CompanionEnvironment } from './environment.js';
 import { importedCommand } from './commandAutomation.js';
+import { commandLiteralRedactions } from './commandRedactions.js';
 
 /** Command literals are private too, including values supplied without env names. */
 async function outputSecrets(environment: CompanionEnvironment, job: Record<string, unknown>, command: ReturnType<typeof importedCommand>) {
@@ -21,37 +22,10 @@ async function outputSecrets(environment: CompanionEnvironment, job: Record<stri
   }, job.monitor_url ? [string(job.monitor_url)] : []);
   if (!command) return secrets;
   const cwd = command.cwd ? await fs.realpath(command.cwd).catch(() => undefined) : undefined;
-  const values = [command.command, command.cwd, cwd, command.input,
-    ...command.args.flatMap(arg => [arg, /^--?[\w-]+=(.+)$/s.exec(arg)?.[1]])].filter((value): value is string => !!value);
-  const structured: CompanionEnvironment['credentials'] = [];
-  const urlValues: string[] = [];
-  const collectUrls = (value: unknown): void => {
-    if (typeof value === 'string') {
-      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) urlValues.push(...urlCredentialValues(value, true));
-    } else if (value && typeof value === 'object') Object.values(value).forEach(collectUrls);
-  };
-  // A URL can carry credentials even in a field named "endpoint". Apply the
-  // existing URL policy only to runtime output, preserving imported source text.
-  const literals = new Set(values);
-  for (const value of new Set([...literals, ...Object.values(environment.env), ...Object.values(command.env)])) {
-    collectUrls(value);
-    try {
-      const parsed: unknown = JSON.parse(value);
-      collectUrls(parsed);
-      // JSON env objects use the same credential-field rules as argv/stdin;
-      // ordinary env scalar settings retain their existing classification.
-      if (typeof parsed === 'string' && literals.has(value)) values.push(parsed);
-      else if (parsed && typeof parsed === 'object') structured.push({ id: `command_${structured.length}`, format: 'command-input', value: parsed });
-    } catch { /* Non-JSON command literals still receive exact-value masking. */ }
-  }
-  // Reuse credential-field classification for nested objects/arrays, keeping
-  // ordinary report values readable. Raw and JSON-escaped children are private.
-  values.push(...urlValues, ...Object.values(importedContentRedactions({ env: {}, mcp: [], credentials: structured })));
-  for (const [index, value] of [...new Set(values)].entries()) {
-    secrets[`command_literal_${index}`] = value;
-    const escaped = JSON.stringify(value).slice(1, -1);
-    if (escaped !== value) secrets[`command_literal_${index}_json`] = escaped;
-  }
+  Object.assign(secrets, commandLiteralRedactions(
+    [command.command, command.cwd, cwd, command.input, ...command.args].filter((value): value is string => !!value),
+    [...Object.values(environment.env), ...Object.values(command.env)],
+  ));
   return secrets;
 }
 

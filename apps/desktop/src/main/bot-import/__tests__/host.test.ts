@@ -413,17 +413,18 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   });
 });
 
-it.each([false, true])('publishes structured command env credentials safely (command selected: %s)', async selected => {
+it.each([false, true])('publishes command env/argv/stdin credentials safely (command selected: %s)', async selected => {
   const secret = 'fixture-command-json-token';
   const nested = 'fixture-command-json-nested';
+  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token'];
   const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
     'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment'];
   const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
     services: [{ endpoint: 'https://host/hooks/fixture-hook-token#access_token=fixture-fragment%20token' }],
     unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
-  const text = `Keep Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')}`;
+  const text = `Keep node --mode -e, Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')} ${literalSecrets.join(' ')}`;
   const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
-  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', ''], env: { CONFIG: config, WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
+  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', '', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2]], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
   h.sourceEnabled = false;
   h.snapshot.items = [
     { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
@@ -434,7 +435,7 @@ it.each([false, true])('publishes structured command env credentials safely (com
   ];
   const [source] = await listCompanionImportSources('fixture');
   const remote = await readRemoteCompanionImport(`preview:${source!.id}`, 'fixture', false);
-  for (const value of [secret, nested, ...urlSecrets]) expect(JSON.stringify(remote)).not.toContain(value);
+  for (const value of [secret, nested, ...urlSecrets, ...literalSecrets]) expect(JSON.stringify(remote)).not.toContain(value);
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const requestId = 'fixture-json-command-publication';
   const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
@@ -443,8 +444,8 @@ it.each([false, true])('publishes structured command env credentials safely (com
   const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
   const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${requestId}.json`), 'utf8');
   const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines, receiptText]);
-  for (const value of [secret, nested, ...urlSecrets]) expect(output).not.toContain(value);
-  expect(published).toContain('Keep Paris and 7.');
+  for (const value of [secret, nested, ...urlSecrets, ...literalSecrets]) expect(output).not.toContain(value);
+  expect(published).toContain('Keep node --mode -e, Paris and 7.');
   const stored = (await h.store.read(h.root, result.botId, () => {}))!;
   expect(stored.documents?.memory).toBe(text);
   const savedSkill = stored.skillFiles?.report?.find(file => file.name === 'SKILL.md');
@@ -1359,6 +1360,92 @@ it('continues healthy recovered documents when a sibling attachment fails', asyn
   expect(completed?.files).toEqual({});
   expect(completed?.pendingImport).toBeUndefined();
   expect(h.importMedia).toHaveBeenLastCalledWith(accepted.botId, 'chat', original.bytes, expect.any(Function));
+});
+
+it('applies healthy recovered role text even while an attachment keeps failing', async () => {
+  const directory = path.join(h.root, 'memories', 'broken');
+  const brokenId = `memory-${fingerprint('memories/broken').slice(0, 20)}`;
+  h.snapshot.items = [{ view: { id: brokenId, name: 'broken', category: 'memory', selected: true },
+    sourceFile: { root: path.dirname(directory), file: directory, kind: 'directory' }, captureIssue: 'IMPORT_PERMISSION_DENIED' }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'mixed-repaired-role-fixture', previewId: preview.id, name: 'Ada', entryIds: [brokenId], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'USER.md'), 'Healthy user preferences');
+  await fs.writeFile(path.join(directory, 'bad.bin'), Buffer.from([0, 255, 0, 255]));
+  await fs.mkdir(path.join(directory, 'later'));
+  await fs.writeFile(path.join(directory, 'later/USER.md'), 'Later user preferences');
+  let failRole = true; let failEarlierRole = false;
+  h.importDocument.mockImplementation(async (_bot, _id, name) => {
+    if ((failRole && name.endsWith('later/USER.md')) || (failEarlierRole && !name.endsWith('later/USER.md'))) throw Object.assign(new Error('full'), { code: 'ENOSPC' });
+  });
+  h.importMedia.mockRejectedValue(Object.assign(new Error('unsupported'), { code: 'SOURCE_MEMORY_ATTACHMENT_UNSUPPORTED' }));
+  await startCompanionImport(selection, 'fixture');
+  let result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('Healthy user preferences');
+  expect(result?.status).toBe('needs-attention');
+  expect(result?.savedEntryIds ?? []).not.toContain(brokenId);
+  expect(result?.checks.find(check => check.entryId === brokenId)?.progress).toEqual({ saved: 1, total: 3 });
+  const stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(Object.values(stored.documents ?? {})).toContain('Healthy user preferences');
+  expect(stored.pendingImport).toBeDefined();
+  expect(Object.values(stored.documents ?? {})).not.toContain('Later user preferences');
+  failRole = false; failEarlierRole = true;
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toContain('Healthy user preferences');
+  expect(h.profile.userContextSource).toContain('Later user preferences');
+  failEarlierRole = false;
+  // A later retry of the bad attachment must preserve edits to the applied profile.
+  h.profile.userContextSource = 'User edited preferences';
+  await startCompanionImport(selection, 'fixture');
+  result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('User edited preferences');
+  expect(result?.status).toBe('needs-attention');
+});
+
+it.each([['file', true], ['directory', true], ['file', false], ['directory', false]] as const)('keeps both memory root prefixes when repairing %s entries (legacy=%s)', async (kind, legacy) => {
+  const name = kind === 'directory' ? 'broken' : 'state.lock';
+  h.snapshot.items = ['memories', 'memory'].map(prefix => ({
+    view: { id: `memory-${fingerprint(`${prefix}/${name}`).slice(0, 20)}`, name, category: 'memory', selected: true },
+    sourceFile: { root: path.join(h.root, prefix), file: path.join(h.root, prefix, name), kind, ...(legacy ? {} : { logicalPrefix: prefix }) }, captureIssue: 'IMPORT_PERMISSION_DENIED',
+  }));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `memory-prefix-${kind}-fixture`, previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const suffix = kind === 'directory' ? 'broken/state.lock' : 'state.lock';
+  const originals = { [`memories/${suffix}`]: Buffer.alloc(0), [`memory/${suffix}`]: Buffer.from('  \n') };
+  for (const [name, bytes] of Object.entries(originals)) {
+    await fs.mkdir(path.dirname(path.join(h.root, name)), { recursive: true });
+    await fs.writeFile(path.join(h.root, name), bytes);
+  }
+  await startCompanionImport(selection, 'after-restart');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.memoryFiles)
+    .toEqual(Object.fromEntries(Object.entries(originals).map(([name, bytes]) => [name, bytes.toString('base64')])));
+});
+
+it('recovers the user role of an individually failed memory USER.md', async () => {
+  const file = path.join(h.root, 'memories/USER.md');
+  const id = `memory-${fingerprint('memories/USER.md').slice(0, 20)}`;
+  h.snapshot.items = [{ view: { id, name: 'USER.md', category: 'memory', selected: true },
+    sourceFile: { root: path.dirname(file), file, kind: 'file', logicalPrefix: 'memories' }, captureIssue: 'IMPORT_PERMISSION_DENIED' }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'memory-user-role-recovery', previewId: preview.id, name: 'Ada', entryIds: [id], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, 'User preferences');
+  await startCompanionImport(selection, 'after-restart');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('User preferences');
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, id, 'USER.md', 'User preferences', 'user');
 });
 
 it('retains managed media by ledger reference without copying its bytes into execution assets', async () => {

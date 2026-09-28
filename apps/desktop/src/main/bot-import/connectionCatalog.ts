@@ -13,6 +13,8 @@ const CAPABILITY_PATH_PREFIXES = new Set(['hooks', 'webhooks', 'token', 'secret'
 // format names and public keys must not become global content masks.
 const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decryption|secret|access)[_-]?keys?(?:[_-]?(?:pem|base64))?|.*(?:tokens?|secrets?|passwords?|passwds?|pass[_-]?phrases?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
 
+export function isImportedCredentialField(name: string): boolean { return CREDENTIAL_FIELD.test(name); }
+
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
   const values = [...Object.values(environmentRedactions(environment)), ...Object.values(environmentRedactions(server.env ?? {})), ...Object.values(server.headers ?? {})];
