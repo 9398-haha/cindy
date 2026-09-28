@@ -33,6 +33,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { invalidateBotSkillRuntime } from './botSkillRuntimeCache.js';
 
 /** 一个技能在磁盘上的完整形态。 */
 export interface BotSkillRecord {
@@ -247,6 +248,7 @@ async function readCompatibleBotSkillSource(filePath: string, slug: string): Pro
     body: parsed.body,
   });
   await fs.writeFile(filePath, migrated, 'utf8');
+  invalidateBotSkillRuntime(path.dirname(path.dirname(path.dirname(filePath))));
   return migrated;
 }
 
@@ -440,6 +442,7 @@ export async function seedBotSkillIfMissing(
   const filePath = path.join(skillDir, 'SKILL.md');
   try {
     await fs.writeFile(filePath, renderBotSkillFile(normalized), { encoding: 'utf8', flag: 'wx' });
+    invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException)?.code !== 'EEXIST') throw cause;
     const raced = await readBotSkill(userDataDir, botId, normalized.slug);
@@ -486,6 +489,7 @@ export async function saveBotSkill(
     renderBotSkillFile({ slug, name, description, updatedAt, body }),
     'utf8',
   );
+  invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
   return {
     record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath, ...(previous?.enabled === false ? { enabled: false } : {}) },
     created,
@@ -535,7 +539,10 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
       else await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
     }
     assertOwner();
-    try { await fs.rename(temporary, target); }
+    try {
+      await fs.rename(temporary, target);
+      invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+    }
     catch (error) {
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
       // Resume after a committed rename, without overwriting a later user edit.
@@ -572,6 +579,7 @@ export async function deleteBotSkill(
     try { if (!(await fs.stat(skillDir)).isDirectory()) continue; }
     catch { continue; }
     await fs.rm(skillDir, { recursive: true, force: true });
+    invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
     return true;
   }
   return false;

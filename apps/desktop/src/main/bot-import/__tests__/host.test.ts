@@ -414,8 +414,11 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
 it.each([false, true])('publishes structured command env credentials safely (command selected: %s)', async selected => {
   const secret = 'fixture-command-json-token';
   const nested = 'fixture-command-json-nested';
-  const config = JSON.stringify({ token: secret, credentials: [{ key: nested }], unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
-  const text = `Keep Paris and 7. ${secret} ${nested}`;
+  const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token'];
+  const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
+    services: [{ endpoint: 'https://host/hooks/fixture-hook-token#access_token=fixture-fragment%20token' }],
+    unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
+  const text = `Keep Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')}`;
   const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
   const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', ''], env: { CONFIG: config } } };
   h.sourceEnabled = false;
@@ -428,7 +431,7 @@ it.each([false, true])('publishes structured command env credentials safely (com
   ];
   const [source] = await listCompanionImportSources('fixture');
   const remote = await readRemoteCompanionImport(`preview:${source!.id}`, 'fixture', false);
-  for (const value of [secret, nested]) expect(JSON.stringify(remote)).not.toContain(value);
+  for (const value of [secret, nested, ...urlSecrets]) expect(JSON.stringify(remote)).not.toContain(value);
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const requestId = 'fixture-json-command-publication';
   const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
@@ -436,7 +439,7 @@ it.each([false, true])('publishes structured command env credentials safely (com
   await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.saved).toBe(true));
   const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
   const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines]);
-  for (const value of [secret, nested]) expect(output).not.toContain(value);
+  for (const value of [secret, nested, ...urlSecrets]) expect(output).not.toContain(value);
   expect(published).toContain('Keep Paris and 7.');
   const stored = (await h.store.read(h.root, result.botId, () => {}))!;
   expect(stored.documents?.memory).toBe(text);

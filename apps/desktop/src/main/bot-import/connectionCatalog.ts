@@ -74,6 +74,9 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
   const collect = (value: unknown, credentialValue = false): void => {
     if (typeof value === 'string') {
       if (credentialValue) values.push(value);
+      // Structured command env may put capability URLs under ordinary names
+      // such as endpoint. Apply the same URL policy as command output masks.
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) values.push(...urlCredentialValues(value, true));
       return;
     }
     if (!value || typeof value !== 'object') return;

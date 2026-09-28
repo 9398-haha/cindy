@@ -96,6 +96,11 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   `list_teammate_skills` searches full original metadata and pages by count and
   response bytes. Relative resources remain rooted at the original Skill folder;
   later saves, deletion and disabling refresh the discovery index on the next turn.
+  Repeated runtime hydrations reuse the small per-owner/bot projection and saved
+  catalog. Typed writes invalidate it synchronously; filesystem observation plus
+  directory identity checks cover hand edits, moves and replacement. Watcher
+  errors fall back to rebuilding, and missing generated catalogs are recreated.
+  The cache retains at most 32 roots, not a maximum number of stored Skills.
 - Skill discovery follows grouped Hermes directories, configured external roots,
   native directory links and disabled lists. OpenClaw discovery covers workspace,
   workspace `.agents`, personal/managed/workshop, installed bundled, extra and

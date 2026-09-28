@@ -10,6 +10,7 @@
 import { app } from 'electron';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { BOT_SKILL_RUNTIME_INDEX_BYTES, botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
+import { cachedBotSkillRuntime } from './botSkillRuntimeCache.js';
 import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js';
 import { and, eq } from 'drizzle-orm';
 
@@ -311,9 +312,10 @@ export async function collectBotOwnSkillMounts(
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);
-  const skills = await listBotSkills(userDataDir, botId, false);
   const baseline = await collectTeammateGuideMount(userDataDir);
-  const projected = await projectBotSkillMounts(botSkillRootDir(userDataDir, botId), skills);
+  const root = botSkillRootDir(userDataDir, botId);
+  const projected = await cachedBotSkillRuntime(root, async () =>
+    projectBotSkillMounts(root, await listBotSkills(userDataDir, botId, false)));
   assertOwnerBoundary(deps, boundary);
   return { ...projected, baseline };
 }

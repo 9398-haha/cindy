@@ -1,10 +1,10 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectBotOwnSkillMounts, listBotSkillsForSession } from '../botSkillService';
 import { BOT_SKILL_RUNTIME_INDEX_BYTES } from '../botSkillRuntimeProjection';
-import { botSkillRootDir, parseBotSkillFile } from '../botSkillStore';
+import { botSkillRootDir, parseBotSkillFile, saveBotSkill, seedBotSkillIfMissing, importBotSkillFiles, deleteBotSkill } from '../botSkillStore';
 import { buildBotSkillIndex } from '../botSystemPrompt';
 import { applyPiBotSkillPolicy } from '../../../../../../packages/maker-core/src/agents/pi/bot-skill-policy';
 import { buildCodexBotSkillConfigOverrides } from '../../../../../../packages/maker-core/src/agents/codex/capability-routing';
@@ -12,7 +12,7 @@ import { buildCodexBotSkillConfigOverrides } from '../../../../../../packages/ma
 let userDataDir: string;
 const botId = 'imported-bot';
 beforeEach(async () => { userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-projection-')); });
-afterEach(async () => { await fs.rm(userDataDir, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); await fs.rm(userDataDir, { recursive: true, force: true }); });
 const deps = () => ({ userDataDir, resolveBotId: async () => ({ ok: true as const, botId }) });
 
 async function writeSkill(slug: string, source: string, disabled = false) {
@@ -93,6 +93,15 @@ describe('complete personal Skills with bounded startup projection', () => {
     const last = catalog.at(-1);
     expect(last.slug).toBe('skill-02047');
     expect(await fs.readFile(last.filePath, 'utf8')).toContain('Instructions for skill-02047');
+    const reads = vi.spyOn(fs, 'readFile');
+    const opens = vi.spyOn(fs, 'open');
+    const catalogTime = (await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs;
+    for (let turn = 0; turn < 5; turn++) expect((await collectBotOwnSkillMounts(botId, deps())).skills).toEqual(mounts.skills);
+    const sourcePrefix = path.join(botSkillRootDir(userDataDir, botId), 'skills') + path.sep;
+    expect(reads.mock.calls.filter(([file]) => String(file).startsWith(sourcePrefix))).toHaveLength(0);
+    expect(opens.mock.calls.filter(([file]) => String(file).includes('catalog.jsonl'))).toHaveLength(0);
+    expect((await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs).toBe(catalogTime);
+    reads.mockRestore(); opens.mockRestore();
     const firstPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow' }, deps());
     expect(firstPage).toMatchObject({ ok: true, total: count, nextOffset: 20 });
     const lastPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow', offset: count - 1 }, deps());
@@ -103,8 +112,36 @@ describe('complete personal Skills with bounded startup projection', () => {
     catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(catalog).toHaveLength(count + 1);
     expect(catalog.at(-1).slug).toBe('z-new');
+    await fs.unlink(path.join(mounts.pluginRoot, 'catalog.jsonl'));
+    await collectBotOwnSkillMounts(botId, deps());
+    expect((await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(count + 1);
     expect(await fs.readdir(path.join(mounts.pluginRoot))).not.toEqual(expect.arrayContaining([expect.stringMatching(/\.tmp$/)]));
   }, 30_000);
+
+  it('refreshes after typed mutations, hand edits, disabling and directory replacement without mixing owners', async () => {
+    const input = { name: 'report', description: 'Original', body: 'Steps' };
+    await seedBotSkillIfMissing(userDataDir, botId, input);
+    const collect = () => collectBotOwnSkillMounts(botId, deps());
+    expect((await collect()).skills[0].description).toBe('Original');
+    await saveBotSkill(userDataDir, botId, { ...input, description: 'Saved update' });
+    expect((await collect()).skills[0].description).toBe('Saved update');
+    await importBotSkillFiles(userDataDir, botId, 'imported', [{ name: 'SKILL.md',
+      bytes: Buffer.from('---\nname: imported\ndescription: Imported\n---\nSteps'), executable: false }], () => {});
+    expect((await collect()).skills.map(item => item.name)).toEqual(['imported', 'report']);
+    await writeSkill('report', '---\nname: report\ndescription: Hand edited\n---\nSteps');
+    await vi.waitFor(async () => expect((await collect()).skills.find(item => item.name === 'report')?.description).toBe('Hand edited'));
+    await deleteBotSkill(userDataDir, botId, 'imported');
+    expect((await collect()).skills.map(item => item.name)).toEqual(['report']);
+    const root = botSkillRootDir(userDataDir, botId);
+    await fs.rename(path.join(root, 'skills'), path.join(root, 'disabled-skills'));
+    expect((await collect()).skills).toEqual([]);
+    await writeSkill('replacement', '---\nname: replacement\ndescription: New directory\n---\nSteps');
+    expect((await collect()).skills.map(item => item.name)).toEqual(['replacement']);
+    const other = path.join(userDataDir, 'other-owner');
+    await seedBotSkillIfMissing(other, botId, { ...input, name: 'private-other-owner' });
+    expect((await collectBotOwnSkillMounts(botId, { userDataDir: other })).skills.map(item => item.name)).toEqual(['private-other-owner']);
+    expect((await collect()).skills.map(item => item.name)).toEqual(['replacement']);
+  });
 
   it('paginates by response bytes as well as page size without losing the remainder', async () => {
     for (let index = 0; index < 35; index++) {
