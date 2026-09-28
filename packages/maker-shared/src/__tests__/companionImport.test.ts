@@ -67,3 +67,25 @@ it('keeps concrete import failures through IPC wrappers without displaying priva
   expect(companionImportReasonKey('PRIVATE_UNKNOWN')).toBe('itemFailed');
   expect(companionImportErrorCode(new Error('private source contents'))).toBeUndefined();
 });
+
+it('reads a multi-megabyte preview without losing escaped names, descriptions or selection indexes', async () => {
+  const entries = Array.from({ length: 12_000 }, (_, index) => ({
+    id: `entry-${index}`, name: `Memory ${index}: "quoted" \\ path 🙂`, category: 'memory',
+    description: 'Unicode 段落\n'.repeat(40), selected: true,
+  }));
+  const preview = { id: 'large-preview', source: { id: 'source', name: 'Ada', kind: 'hermes' }, name: 'Ada', selectionRanges: true, entries };
+  const serialized = JSON.stringify({ preview });
+  expect(serialized.length).toBeGreaterThan(5 * 1024 * 1024);
+  let reads = 0;
+  const api = remoteCompanionImportApi(async id => {
+    reads++;
+    const offset = id.startsWith('chunk:') ? Number(id.split(':')[2]) : 0;
+    return { blocks: [{ primitive: 'companion-import', data: { chunk: {
+      id: 'large-preview', offset, total: serialized.length, text: serialized.slice(offset, offset + COMPANION_IMPORT_CHUNK_LENGTH),
+    } } }] };
+  }, async () => {});
+  const received = await api.preview('source');
+  expect(received).toEqual(preview);
+  expect(reads).toBe(Math.ceil(serialized.length / COMPANION_IMPORT_CHUNK_LENGTH));
+  expect(compactCompanionImportSelection(received, received.entries.map(entry => entry.id))).toEqual({ entryIds: [], entryRanges: [[0, 11999]] });
+});

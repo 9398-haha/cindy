@@ -164,7 +164,13 @@ export function remoteCompanionImportApi(
       if (chunk.text.length !== COMPANION_IMPORT_CHUNK_LENGTH) throw new Error('INVALID_IMPORT_RESPONSE');
       part = await readData(`chunk:${token}:${offset}`);
     }
-    const result: unknown = JSON.parse(pieces.join(''));
+    const serialized = pieces.join('');
+    // Release transport chunks before materializing the full projection. Keeping
+    // pieces alive through JSON.parse retains three copies of a large preview
+    // (chunks, joined text and objects) on the controlling phone at once.
+    pieces.length = 0;
+    part = {};
+    const result: unknown = JSON.parse(serialized);
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('INVALID_IMPORT_RESPONSE');
     return result as Record<string, unknown>;
   };
