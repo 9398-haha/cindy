@@ -1278,6 +1278,83 @@ describe('botGroupChatService attachments', () => {
     expect(h.sqlite!.prepare('SELECT id FROM media_refs ORDER BY id').all()).toEqual([{ id: 'r2' }, { id: 'r3' }]);
   });
 
+  it('undoes a batch whose account changed or whose send broke before it was posted', async () => {
+    const store = fakeAttachments();
+    let switched = false;
+    const harness = createHarness(() => 'x', {
+      prepareAttachments: async (input) => {
+        const result = await store.prepare(input);
+        switched = true;
+        return result;
+      },
+      captureOwnerScope: () => ({ owner: 'a' }) as never,
+      isOwnerScopeCurrent: () => !switched,
+    });
+    const groupId = await createGroup(harness);
+    expect(await harness.service.sendMessage({ groupId, text: 'x', mentions: NONE, clientId: 'c1', attachments: attach('a.pdf') }))
+      .toMatchObject({ ok: false });
+    expect(store.discard).toHaveBeenCalledTimes(1);
+    expect(store.commit).not.toHaveBeenCalled();
+
+    switched = false;
+    const broken = fakeAttachments();
+    h.sqlite?.close();
+    h.sqlite = createDatabase();
+    const other = createHarness(() => 'x', { prepareAttachments: broken.prepare });
+    const otherGroup = await createGroup(other);
+    h.sqlite!.exec('DROP TABLE bot_group_members');
+    await expect(other.service.sendMessage({ groupId: otherGroup, text: 'x', mentions: NONE, clientId: 'c2', attachments: attach('b.pdf') }))
+      .rejects.toThrow();
+    expect(broken.discard).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands over the attachments of unseen messages left out of the prompt, newest first when too many', async () => {
+    const store = fakeAttachments();
+    const harness = createHarness(() => '收到', { prepareAttachments: store.prepare });
+    const groupId = await createGroup(harness);
+    await harness.service.updateGroup({ groupId, replyMode: 'mentioned' });
+    for (let index = 0; index < 45; index += 1) {
+      await harness.service.sendMessage({ groupId, text: `第${index}条`, mentions: NONE, clientId: `m${index}`, attachments: attach(`f${index}.pdf`) });
+    }
+    expect(harness.dispatches).toHaveLength(0);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 都看看', mentions: { all: false, botIds: ['mimi'] }, clientId: 'ask' });
+    await waitForIdle(harness, groupId);
+    const turn = harness.dispatches[0]!;
+    expect(turn.attachments).toEqual(Array.from({ length: 40 }, (_, index) => `f${index + 5}.pdf`));
+    expect(turn.prompt).toContain('The omitted earlier messages carried these attachments');
+    expect(turn.prompt).toContain('f15.pdf');
+    expect(turn.prompt).not.toContain('f4.pdf');
+    expect(turn.prompt).toContain('(5 older attachments are not included');
+  });
+
+  it('keeps what the user added to a step that then failed for its retry', async () => {
+    const store = fakeAttachments();
+    let first = true;
+    const harness = createHarness((botId) => {
+      if (botId === 'mimi' && first) {
+        first = false;
+        return null;
+      }
+      return '好了';
+    }, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(), prepareAttachments: store.prepare });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await vi.waitFor(() => expect(harness.dispatches.at(-1)?.botId).toBe('mimi'));
+    const running = harness.dispatches.at(-1)!;
+    await harness.service.sendMessage({ groupId, text: '参考这份', mentions: NONE, clientId: 'note', attachments: attach('参考.pdf') });
+    await harness.service.settleLaneTurn({ sessionId: running.sessionId, activeInputClientId: running.clientId, outcome: 'error', resultText: '' });
+    let group = await waitForIdle(harness, groupId);
+    expect(openPlan(group).steps[0]!.status).toBe('failed');
+
+    await harness.service.retryPlan({ groupId, planId: plan.id });
+    group = await waitForIdle(harness, groupId);
+    const retry = harness.dispatches.at(-1)!;
+    expect(retry).toMatchObject({ botId: 'mimi', attachments: ['参考.pdf'] });
+    expect(retry.prompt).toContain('参考这份');
+    expect(openPlan(group).steps[0]!.status).toBe('done');
+  });
+
   it('gives every 分工 step the request attachments, and a redo only the new ones', async () => {
     const store = fakeAttachments();
     const decidePlan = vi.fn(async (_input: PlanDecisionInput) => THREE_STEPS);

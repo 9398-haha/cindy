@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   blobDir: '',
   removed: [] as string[],
   uploads: new Map<string, string>(),
+  db: { name: 'account-a' } as object,
+  dbSeen: [] as unknown[],
 }));
 
 vi.mock('../../cindy-media/blobStore.js', () => ({
@@ -23,16 +25,19 @@ vi.mock('../../cindy-media/ledger.js', () => ({
   pinBlob: vi.fn(async () => undefined),
   hasRef: vi.fn(async (ref: { hash: string; refKind: string; refId: string }) =>
     h.refs.some((row) => row.hash === ref.hash && row.refKind === ref.refKind && row.refId === ref.refId)),
-  addRef: vi.fn(async (ref: { hash: string; refKind: string; refId: string }) => {
-    const id = `ref-${h.refs.length + 1}`;
+  addRef: vi.fn(async (ref: { hash: string; refKind: string; refId: string }, db?: unknown) => {
+    h.dbSeen.push(db);
+    const id = `ref-${h.refs.length + 1}-${Math.random().toString(36).slice(2, 6)}`;
     h.refs.push({ id, ...ref });
     return id;
   }),
-  removeRefById: vi.fn(async (id: string) => {
+  removeRefById: vi.fn(async (id: string, db?: unknown) => {
+    h.dbSeen.push(db);
     h.refs = h.refs.filter((row) => row.id !== id);
     return 1;
   }),
 }));
+vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: h.db }) }));
 vi.mock('../../cindy-media/ingest.js', () => ({
   ingestMedia: vi.fn(async (params: { buffer: Uint8Array; refs: Array<{ refKind: string; refId: string }> }) => {
     const hash = 'b'.repeat(64);
@@ -72,6 +77,8 @@ beforeEach(async () => {
   await fs.mkdir(h.blobDir);
   await fs.writeFile(path.join(h.blobDir, `${hash}.png`), 'png');
   h.refs = [];
+  h.dbSeen = [];
+  h.db = { name: 'account-a' };
   h.removed = [];
   h.uploads = new Map();
 });
@@ -83,7 +90,7 @@ afterEach(async () => {
 const store = () => createBotGroupAttachmentStore({ ownerRoot: () => path.join(root, 'owner') });
 
 describe('bot group attachment store', () => {
-  it('references this computer’s images once per group and keeps picked files in place', async () => {
+  it('references this computer’s images for the group and keeps picked files in place', async () => {
     const doc = path.join(root, '需求.pdf');
     await fs.writeFile(doc, 'pdf!');
     const odd = path.join(root, 'scan.heic');
@@ -106,7 +113,31 @@ describe('bot group attachment store', () => {
       // The media store cannot take it, so members get it as a file.
       { id: 'f2', name: 'scan.heic', category: 'file', mimeType: 'image/heic', size: 4, url: null, path: odd },
     ]);
-    expect(h.refs).toEqual([{ id: 'ref-1', hash, refKind: 'bot-group-attachment', refId: 'g1', originKind: 'user' }]);
+    expect(h.refs).toHaveLength(2);
+    for (const ref of h.refs) expect(ref).toMatchObject({ hash, refKind: 'bot-group-attachment', refId: 'g1', originKind: 'user' });
+  });
+
+  it('never lets undoing one send unpin an image another send posted', async () => {
+    const image = { id: 'i1', name: 'shot.png', path: 'x', category: 'image', mimeType: 'image/png', url: `cindy-media://blobs/${hash}.png` };
+    // The second send starts while the first is still waiting for its group's queue.
+    const first = await store().prepare({ groupId: 'g1', attachments: [image] });
+    const second = await store().prepare({ groupId: 'g1', attachments: [image] });
+    if (!first.ok || !second.ok) throw new Error('prepare failed');
+    second.commit();
+    await first.discard();
+    expect(h.refs).toHaveLength(1);
+    expect(h.refs[0]).toMatchObject({ hash, refId: 'g1' });
+  });
+
+  it('keeps a batch on the account it started in', async () => {
+    const image = { id: 'i1', name: 'shot.png', path: 'x', category: 'image', mimeType: 'image/png', url: `cindy-media://blobs/${hash}.png` };
+    const accountA = h.db;
+    const prepared = await store().prepare({ groupId: 'g1', attachments: [image] });
+    if (!prepared.ok) throw new Error(prepared.message);
+    h.db = { name: 'account-b' };
+    await prepared.discard();
+    expect(h.dbSeen).toEqual([accountA, accountA]);
+    expect(h.refs).toEqual([]);
   });
 
   it('refuses anything it cannot vouch for, undoing the batch', async () => {

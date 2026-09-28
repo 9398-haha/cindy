@@ -19,6 +19,7 @@ import type { AttachmentIntegrity } from '@cindy/device-link';
 import * as blobStore from '../cindy-media/blobStore.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import * as ledger from '../cindy-media/ledger.js';
+import { getDbClient } from '../localDb/client/current.js';
 import { removeRemote } from '../device-link/mediaTransfer.js';
 import {
   materializeRemoteAttachment,
@@ -105,19 +106,25 @@ export interface BotGroupAttachmentStore {
 export function createBotGroupAttachmentStore(deps: { ownerRoot: () => string }): BotGroupAttachmentStore {
   const prepare: BotGroupAttachmentStore['prepare'] = async (input) => {
     if (input.attachments.length > BOT_GROUP_ATTACHMENTS_MAX) return invalid();
+    // One account for the whole batch: an account switch while a phone upload is fetched must
+    // neither write into nor clean up the next account's data.
+    const db = getDbClient().drizzle;
+    const ownerRoot = deps.ownerRoot();
     const refIds: string[] = [];
     const folders: string[] = [];
     const uploads: string[] = [];
     const discard = async () => {
-      for (const refId of refIds.splice(0)) await ledger.removeRefById(refId).catch(() => undefined);
+      for (const refId of refIds.splice(0)) await ledger.removeRefById(refId, db).catch(() => undefined);
       for (const folder of folders.splice(0)) await fs.rm(folder, { recursive: true, force: true }).catch(() => undefined);
     };
 
-    /** The group's reference to an image already in the media store (once per group). */
+    /**
+     * The group's reference to an image already in the media store. Every batch keeps its
+     * own, never another send's: undoing a batch must not unpin an image a posted message shows.
+     */
     const referenceImage = async (hash: string) => {
-      await ledger.pinBlob(hash);
-      if (await ledger.hasRef({ hash, refKind: 'bot-group-attachment', refId: input.groupId })) return;
-      refIds.push(await ledger.addRef({ hash, refKind: 'bot-group-attachment', refId: input.groupId, originKind: 'user' }));
+      await ledger.pinBlob(hash, db);
+      refIds.push(await ledger.addRef({ hash, refKind: 'bot-group-attachment', refId: input.groupId, originKind: 'user' }, db));
     };
 
     /** Picked on this computer: images are already in the media store, files stay in place. */
@@ -144,7 +151,7 @@ export function createBotGroupAttachmentStore(deps: { ownerRoot: () => string })
       const ref = parseRemoteAttachmentRef(refText);
       if (!ref) return null;
       const mimeType = ref.mimeType ?? entry.mimeType;
-      const dir = botGroupAttachmentsPath(deps.ownerRoot(), input.groupId);
+      const dir = botGroupAttachmentsPath(ownerRoot, input.groupId);
       await fs.mkdir(dir, { recursive: true });
       const incoming = path.join(dir, `.incoming-${randomUUID()}`);
       try {
@@ -155,7 +162,7 @@ export function createBotGroupAttachmentStore(deps: { ownerRoot: () => string })
             buffer: await fs.readFile(incoming),
             mimeType,
             refs: [{ refKind: 'bot-group-attachment', refId: input.groupId, originKind: 'user' }],
-          });
+          }, db);
           refIds.push(...written.refIds);
           const size = await isRegularFile(blobStore.resolveSafe(written.url).absPath) ?? 0;
           return { id: entry.id, name: entry.name, category: 'image', mimeType, size, url: written.url, path: null, ...(entry.annotated ? { annotated: true } : {}) };
