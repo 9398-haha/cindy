@@ -635,6 +635,42 @@ it('preserves sorted skill-name precedence after streaming directory entries', a
   expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
 });
 
+it('does not synchronously sort a whole 100,000-entry Skill root before visiting children', async () => {
+  const root = path.join(home, '.hermes'); const directory = path.join(root, 'skills');
+  await fs.mkdir(directory, { recursive: true });
+  const opendir = fs.opendir.bind(fs);
+  let closed = false; let visited = 0; let previous = '';
+  vi.spyOn(fs, 'opendir').mockImplementation(async (...args) => {
+    if (String(args[0]) !== directory) return opendir(...args);
+    return { async *[Symbol.asyncIterator]() {
+      try {
+        for (let index = 99_999; index >= 0; index--) yield {
+          name: `skill-${String(index).padStart(6, '0')}`,
+          isDirectory: () => false, isSymbolicLink: () => true,
+        };
+      } finally { closed = true; }
+    } } as Awaited<ReturnType<typeof fs.opendir>>;
+  });
+  const stat = fs.stat.bind(fs);
+  vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
+    if (path.dirname(String(args[0])) !== directory) return stat(...args);
+    const name = path.basename(String(args[0]));
+    expect(previous.localeCompare(name)).toBeLessThan(0);
+    previous = name; visited++;
+    throw Object.assign(new Error('fixture dangling link'), { code: 'ENOENT' });
+  });
+  const sort = Array.prototype.sort;
+  vi.spyOn(Array.prototype, 'sort').mockImplementation(function(this: unknown[], compare) {
+    if (this.length > 8192) throw new Error('Unbounded synchronous directory sort');
+    return sort.call(this, compare);
+  });
+  const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root,
+    configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
+  expect(items).toEqual([]);
+  expect(visited).toBe(100_000);
+  expect(closed).toBe(true);
+}, 30_000);
+
 it.each(['hermes', 'openclaw'] as const)('discovers %s custom archives, hidden TXT corpus and attachments without conflating roots', async kind => {
   await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
   const workspace = `.${kind}/${kind === 'hermes' ? '' : 'workspace/'}`;

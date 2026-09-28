@@ -113,6 +113,12 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   fixed quota. Imported SKILL.md files preserve their full body rather than using
   the interactive skill editor's 64 KiB authoring limit. Individual file and total
   in-memory snapshot byte bounds remain; this is not an unlimited-byte importer.
+  Skill-root discovery charges each streamed directory entry before retaining it.
+  Native alphabetical precedence uses 256 KiB sort batches, 64 KiB merge I/O and
+  a logarithmic set of runs instead of a whole-directory Dirent array. Large
+  roots spill only names/types into a private OS temporary directory, removed
+  after success, failure or an early consumer return; small roots stay in memory.
+  Skill files, duplicate-name precedence, disabled state and link policy are unchanged.
   Skills disabled at the source are saved outside the active native skills folder
   and stay disabled when read or edited.
   Runtime discovery is separately bounded: small shelves mount directly; headers

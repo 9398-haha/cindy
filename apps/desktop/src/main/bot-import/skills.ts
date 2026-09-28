@@ -1,8 +1,9 @@
-import { constants, promises as fs, type Dirent } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { fingerprint, inside, readImportFile, readImportTree, type ImportReadBudget } from './files.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSource } from './types.js';
+import { orderedSkillDirectories } from './skillDirectories.js';
 
 /** Discovery roots are derived on the host from the selected source, never from IPC paths. */
 // `any` preserves native Hermes personal/external and OpenClaw managed/personal
@@ -13,16 +14,6 @@ interface SkillRoot { directory: string; links: 'any' | string[]; bundled?: bool
 const ignored = new Set(['.git', '.github', '.hub', '.archive', '_archive', '.venv', 'venv', 'node_modules', 'site-packages', '__pycache__', '.tox', '.nox', '.pytest_cache', '.mypy_cache', '.ruff_cache']);
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && !!v.trim()) : [];
 const disabledSkills = (config: Record<string, unknown>) => new Set([...strings(config.disabled), ...strings(object(config.platform_disabled).cli)]);
-
-/** Charge entries before retaining them; sorting preserves native name precedence. */
-async function directoryEntries(directory: string, budget: ImportReadBudget): Promise<Dirent[]> {
-  const entries: Dirent[] = [];
-  for await (const entry of await fs.opendir(directory)) {
-    budget.reserve(128 + Buffer.byteLength(path.join(directory, entry.name)));
-    if (entry.isDirectory() || entry.isSymbolicLink()) entries.push(entry);
-  }
-  return entries.sort((a, b) => a.name.localeCompare(b.name));
-}
 
 /** Resolve only path configuration; never expand credentials into public names. */
 function sourcePath(value: string, base: string, home: string, env: NodeJS.ProcessEnv) {
@@ -76,7 +67,7 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
     const locations = [...strings(object(plugins.load).paths).map(resolve),
       ...Object.values(object(plugins.installs)).flatMap(value => string(object(value).installPath) ? [resolve(string(object(value).installPath))] : [])];
     for (const parent of [path.join(source.root, 'extensions'), ...(install ? [path.join(install, 'extensions')] : [])]) {
-      try { for (const entry of await directoryEntries(parent, budget)) if (entry.isDirectory()) locations.push(path.join(parent, entry.name)); }
+      try { for await (const entry of orderedSkillDirectories(parent, budget)) if (entry.directory) locations.push(path.join(parent, entry.name)); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
     for (const location of new Set(locations)) {
@@ -202,11 +193,11 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
         items.push(item); return;
       }
       if (source.kind === 'openclaw' && depth >= 6) return;
-      for (const entry of await directoryEntries(directory, budget)) {
+      for await (const entry of orderedSkillDirectories(directory, budget)) {
         if (ignored.has(entry.name) || entry.name.startsWith('.')) continue;
         const child = path.join(directory, entry.name);
-        if (entry.isDirectory()) await visit(child, depth + 1);
-        else if (entry.isSymbolicLink()) {
+        if (entry.directory) await visit(child, depth + 1);
+        else {
           try { if ((await fs.stat(child)).isDirectory()) await visit(child, depth + 1); }
           catch (error) { if (!['ENOENT', 'ELOOP'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
         }
