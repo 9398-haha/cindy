@@ -9,7 +9,7 @@ const PUBLIC_MCP_ROUTES = new Set(['api', 'v1', 'v2', 'mcp', 'sse', 'messages', 
 const LOCAL_MCP_ENDPOINTS = new Set(['native-mcp', 'touchdesigner-mcp']);
 const CAPABILITY_PATH_PREFIXES = new Set(['hooks', 'webhooks', 'token', 'secret', 'credential', 'key']);
 // Credential containers use the same classification as their scalar forms.
-const CREDENTIAL_FIELD = /^(?:keys?|api[_-]?keys?|.*(?:tokens?|secrets?|passwords?|passwds?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
+const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decryption|secret|access)[_-]?keys?|.*(?:tokens?|secrets?|passwords?|passwds?|credentials?)|auth(?:orization)?|access|refresh|cookies?)$/i;
 
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {

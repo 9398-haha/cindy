@@ -249,10 +249,13 @@ it.each(['stdin', 'argv', 'assignment'] as const)('masks nested JSON credentials
   const secret = 'fixture-nested-"quoted"\n-secret';
   const arraySecret = 'fixture-array-secret';
   const containerSecret = 'fixture-container-secret';
-  const input = JSON.stringify({ credentials: [{ token: secret, api_key: [arraySecret] }, containerSecret], city: 'Paris', cities: ['Paris', 'London'], count: 7 });
+  const privateKey = 'fixture-private-"quoted"\n-key';
+  const keyField = source === 'stdin' ? 'private_key' : source === 'argv' ? 'privateKey' : 'signing_key';
+  const input = JSON.stringify({ credentials: [{ token: secret, api_key: [arraySecret] }, containerSecret],
+    [keyField]: privateKey, city: 'Paris', cities: ['Paris', 'London'], count: 7 });
   const read = source === 'stdin' ? 'require("node:fs").readFileSync(0,"utf8")'
     : source === 'assignment' ? 'process.argv[1].slice("--config=".length)' : 'process.argv[1]';
-  const code = `const input=JSON.parse(${read}); process.stdout.write(JSON.stringify({token:input.credentials[0].token,arrayToken:input.credentials[0].api_key[0],containerToken:input.credentials[1],city:input.city,cities:input.cities,count:input.count}));`;
+  const code = `const input=JSON.parse(${read}); process.stdout.write(JSON.stringify({token:input.credentials[0].token,arrayToken:input.credentials[0].api_key[0],containerToken:input.credentials[1],privateKey:input.${keyField},city:input.city,cities:input.cities,count:input.count}));`;
   const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code,
     ...(source === 'stdin' ? [] : ['--', source === 'assignment' ? `--config=${input}` : input])],
     ...(source === 'stdin' ? { input } : {}), cwd: root } };
@@ -261,12 +264,12 @@ it.each(['stdin', 'argv', 'assignment'] as const)('masks nested JSON credentials
   } }, () => {});
   const signal = new AbortController().signal;
   const prepared = await prepareImportedAutomation(root, routine, 'structured-run', signal, () => {});
-  expect(JSON.parse(prepared!.direct!)).toEqual({ token: expect.stringMatching(/^\[command_literal_/), arrayToken: expect.stringMatching(/^\[command_literal_/), containerToken: expect.stringMatching(/^\[command_literal_/), city: 'Paris', cities: ['Paris', 'London'], count: 7 });
+  expect(JSON.parse(prepared!.direct!)).toEqual({ token: expect.stringMatching(/^\[command_literal_/), arrayToken: expect.stringMatching(/^\[command_literal_/), containerToken: expect.stringMatching(/^\[command_literal_/), privateKey: expect.stringMatching(/^\[command_literal_/), city: 'Paris', cities: ['Paris', 'London'], count: 7 });
   const saved = (await shared.store.read(root, 'bot', () => {}))!.automations!.routine!;
   expect(saved.original).toEqual(original);
   expect(saved.prepared?.direct).toBe(prepared!.direct);
   // Old private output must be masked even when no process is executed again.
-  const legacy = JSON.stringify({ token: secret, arrayToken: arraySecret, containerToken: containerSecret, city: 'Paris', cities: ['Paris', 'London'], count: 7 });
+  const legacy = JSON.stringify({ token: secret, arrayToken: arraySecret, containerToken: containerSecret, privateKey, city: 'Paris', cities: ['Paris', 'London'], count: 7 });
   await shared.store.update(root, 'bot', () => {}, env => {
     env.automations!.routine!.prepared = { runId: 'structured-run', prompt: '', direct: legacy };
   });

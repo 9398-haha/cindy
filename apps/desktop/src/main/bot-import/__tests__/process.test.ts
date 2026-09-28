@@ -41,15 +41,18 @@ it('keeps credential context through array and object values without masking ord
 });
 
 it.each(['credential', 'credentials', 'clientCredentials', 'tokens', 'access_tokens', 'refreshTokens',
-  'secrets', 'passwords', 'passwds', 'keys', 'api_keys', 'API-KEYS', 'auth', 'authorization', 'cookies'])(
+  'secrets', 'passwords', 'passwds', 'keys', 'api_keys', 'API-KEYS', 'auth', 'authorization', 'cookies',
+  'private_key', 'privateKey', 'privateKeys', 'SSH_PRIVATE_KEY', 'signing_key', 'signing-key', 'signingKey',
+  'encryption_key', 'decryptionKey', 'awsSecretAccessKey', 'serviceApiKey'])(
   'masks scalar and nested string descendants of the %s credential field', field => {
     const original = { [field]: ['fixture-container-secret', { nested: ['fixture-nested-secret'] }],
-      scalar: { [field]: 'fixture-scalar-secret' }, cities: ['Paris', 'London'], monkeys: ['capuchin'] };
+      scalar: { [field]: 'fixture-scalar-secret' }, cities: ['Paris', 'London'], monkeys: ['capuchin'],
+      public_key: 'fixture-public-key', sort_key: 'name', keyboard: 'qwerty' };
     const before = JSON.stringify(original);
     const masks = importedContentRedactions({ env: {}, mcp: [], credentials: [{ id: 'fixture', format: 'json', value: original }] });
-    const output = redactEnvironmentValues('fixture-container-secret fixture-nested-secret fixture-scalar-secret Paris London capuchin', masks);
+    const output = redactEnvironmentValues('fixture-container-secret fixture-nested-secret fixture-scalar-secret Paris London capuchin fixture-public-key name qwerty', masks);
     for (const secret of ['fixture-container-secret', 'fixture-nested-secret', 'fixture-scalar-secret']) expect(output).not.toContain(secret);
-    expect(output).toContain('Paris London capuchin');
+    expect(output).toContain('Paris London capuchin fixture-public-key name qwerty');
     expect(JSON.stringify(original)).toBe(before);
   },
 );
