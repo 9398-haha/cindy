@@ -23,6 +23,17 @@ async function outputSecrets(environment: CompanionEnvironment, job: Record<stri
   const cwd = command.cwd ? await fs.realpath(command.cwd).catch(() => undefined) : undefined;
   const values = [command.command, command.cwd, cwd, command.input,
     ...command.args.flatMap(arg => [arg, /^--?[\w-]+=(.+)$/s.exec(arg)?.[1]])].filter((value): value is string => !!value);
+  const structured: CompanionEnvironment['credentials'] = [];
+  for (const value of new Set(values)) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === 'string') values.push(parsed);
+      else if (parsed && typeof parsed === 'object') structured.push({ id: `command_${structured.length}`, format: 'command-input', value: parsed });
+    } catch { /* Non-JSON command literals still receive exact-value masking. */ }
+  }
+  // Reuse credential-field classification for nested objects/arrays, keeping
+  // ordinary report values readable. Raw and JSON-escaped children are private.
+  values.push(...Object.values(importedContentRedactions({ env: {}, mcp: [], credentials: structured })));
   for (const [index, value] of [...new Set(values)].entries()) {
     secrets[`command_literal_${index}`] = value;
     const escaped = JSON.stringify(value).slice(1, -1);
