@@ -26,6 +26,20 @@ it('masks encoded and decoded URL credentials without mutating the private conne
   expect(output).not.toContain('fake-collision-token');
 });
 
+it('keeps credential context through array and object values without masking ordinary siblings', () => {
+  const original = {
+    token: ['fixture-first-secret', ['fixture-second-secret', { value: 'fixture-third-secret' }]],
+    profile: { api_key: { current: ['fixture-fourth-secret'] }, cities: ['Paris', 'London'] },
+    features: ['true', 'false'], count: 7,
+  };
+  const before = JSON.stringify(original);
+  const masks = importedContentRedactions({ env: {}, mcp: [], credentials: [{ id: 'fixture', format: 'json', value: original }] });
+  const output = redactEnvironmentValues('fixture-first-secret fixture-second-secret fixture-third-secret fixture-fourth-secret Paris London true false 7', masks);
+  for (const secret of ['fixture-first-secret', 'fixture-second-secret', 'fixture-third-secret', 'fixture-fourth-secret']) expect(output).not.toContain(secret);
+  expect(output).toContain('Paris London true false 7');
+  expect(JSON.stringify(original)).toBe(before);
+});
+
 it('keeps locale/region configuration and ordinary words intact while masking unknown short credentials as tokens', () => {
   const env = { REGION: 'us', LANG: 'en', LC_ALL: 'en_US.UTF-8', AWS_REGION: 'us-east-1', PRIVATE: 'xy', ARBITRARY: 'fixture-private-value' };
   const value = { status: 'success', language: 'en', region: 'us', detail: 'English status in us-east-1; private xy / fixture-private-value' };

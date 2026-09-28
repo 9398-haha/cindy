@@ -62,11 +62,16 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
     ...Object.values(environment.contentRedactions ?? {}),
     ...environment.mcp.flatMap(server => Object.values(connectionRedactions(server, environment.env))),
     ...monitorUrls.flatMap(url => urlCredentialValues(url, true))];
-  const collect = (value: unknown): void => {
+  const collect = (value: unknown, credentialValue = false): void => {
+    if (typeof value === 'string') {
+      if (credentialValue) values.push(value);
+      return;
+    }
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value)) {
-      if (typeof child === 'string' && /^(?:key|api[_-]?key|.*token|.*secret|.*password|authorization|access|refresh)$/i.test(key)) values.push(child);
-      else collect(child);
+      // Credential-bearing containers remain private through array indices and
+      // nested objects; unrelated sibling fields keep their own classification.
+      collect(child, credentialValue || /^(?:key|api[_-]?key|.*token|.*secret|.*password|authorization|access|refresh)$/i.test(key));
     }
   };
   for (const credential of environment.credentials) collect(credential.value);

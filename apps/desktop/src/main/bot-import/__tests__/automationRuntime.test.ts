@@ -247,10 +247,11 @@ it('masks argv-only credentials again before publishing legacy command results',
 it.each(['stdin', 'argv', 'assignment'] as const)('masks nested JSON credentials from %s in execution, cached output and publication', async source => {
   const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture structured input' } as Routine;
   const secret = 'fixture-nested-"quoted"\n-secret';
-  const input = JSON.stringify({ credentials: [{ token: secret }], city: 'Paris', count: 7 });
+  const arraySecret = 'fixture-array-secret';
+  const input = JSON.stringify({ credentials: [{ token: secret, api_key: [arraySecret] }], city: 'Paris', cities: ['Paris', 'London'], count: 7 });
   const read = source === 'stdin' ? 'require("node:fs").readFileSync(0,"utf8")'
     : source === 'assignment' ? 'process.argv[1].slice("--config=".length)' : 'process.argv[1]';
-  const code = `const input=JSON.parse(${read}); process.stdout.write(JSON.stringify({token:input.credentials[0].token,city:input.city,count:input.count}));`;
+  const code = `const input=JSON.parse(${read}); process.stdout.write(JSON.stringify({token:input.credentials[0].token,arrayToken:input.credentials[0].api_key[0],city:input.city,cities:input.cities,count:input.count}));`;
   const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code,
     ...(source === 'stdin' ? [] : ['--', source === 'assignment' ? `--config=${input}` : input])],
     ...(source === 'stdin' ? { input } : {}), cwd: root } };
@@ -259,12 +260,12 @@ it.each(['stdin', 'argv', 'assignment'] as const)('masks nested JSON credentials
   } }, () => {});
   const signal = new AbortController().signal;
   const prepared = await prepareImportedAutomation(root, routine, 'structured-run', signal, () => {});
-  expect(JSON.parse(prepared!.direct!)).toEqual({ token: expect.stringMatching(/^\[command_literal_/), city: 'Paris', count: 7 });
+  expect(JSON.parse(prepared!.direct!)).toEqual({ token: expect.stringMatching(/^\[command_literal_/), arrayToken: expect.stringMatching(/^\[command_literal_/), city: 'Paris', cities: ['Paris', 'London'], count: 7 });
   const saved = (await shared.store.read(root, 'bot', () => {}))!.automations!.routine!;
   expect(saved.original).toEqual(original);
   expect(saved.prepared?.direct).toBe(prepared!.direct);
   // Old private output must be masked even when no process is executed again.
-  const legacy = JSON.stringify({ token: secret, city: 'Paris', count: 7 });
+  const legacy = JSON.stringify({ token: secret, arrayToken: arraySecret, city: 'Paris', cities: ['Paris', 'London'], count: 7 });
   await shared.store.update(root, 'bot', () => {}, env => {
     env.automations!.routine!.prepared = { runId: 'structured-run', prompt: '', direct: legacy };
   });
