@@ -18,7 +18,7 @@ export class PluginDownloadCache {
   private reserved = new Map<string, number>();
   private pins = new Map<string, number>();
   private receipts = new Map<string, Receipt>();
-  constructor(private limit = 4 * 1024 ** 3) {}
+  constructor(private limit = 16 * 1024 ** 3) {}
   revokeAll() {
     this.receipts.clear();
   }

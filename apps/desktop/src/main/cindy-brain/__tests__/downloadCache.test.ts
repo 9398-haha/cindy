@@ -4,6 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { PluginDownloadCache } from '../downloadCache';
 
+it('reserves an 8 GiB question with metadata without allocating its contents', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-large-quota-')));
+  const cache = new PluginDownloadCache();
+  try {
+    await cache.reserve(root, path.join(root, 'p', 'a'.repeat(64)), 8 * 1024 ** 3);
+    await expect(cache.reserve(root, path.join(root, 'p', 'b'.repeat(64)), 8 * 1024 ** 3)).rejects.toThrow('full');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 it('shares quota across plugins, protects reserved/pinned files, and revokes evicted receipts', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-quota-test-')));
   const cache = new PluginDownloadCache(148000);

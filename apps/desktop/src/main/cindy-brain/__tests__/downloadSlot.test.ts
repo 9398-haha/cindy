@@ -7,6 +7,49 @@ vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: gua
 import { PluginDownloadSlot } from '../downloadSlot';
 import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
+it('drains a destroyed page before a new page resumes the same download id', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-page-')));
+  let oldPage = true, calls = 0, started!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  const slot = new PluginDownloadSlot({root: id => path.join(root,id),scope:()=> 'owner',send(){},
+    getGhost:()=>({enabled:true,approval:{},manifest:{node:{},network:{hosts:['github.com']}}}) as unknown as InstalledGhost,
+    download:async o => {
+      if (++calls === 1) {
+        await new Promise<void>(resolve => { o.signal!.addEventListener('abort',()=>resolve(),{once:true}); started(); });
+        await cleanup;
+        throw Error('old page stopped');
+      }
+      await fs.writeFile(o.targetPath,'ok');
+      return {path:o.targetPath,size:2,sha256:o.sha256,fromCache:false,durationMs:1,resumedFromBytes:0};
+    }});
+  try {
+    const request={kind:'start',id:'same',url:'https://github.com/file',sha256:'a'.repeat(64),bytes:2};
+    const old = slot.handle('p',request,()=>oldPage);
+    await ready; oldPage=false;
+    const fresh = slot.handle('p',request,()=>true);
+    await Promise.resolve(); expect(calls).toBe(1);
+    release();
+    expect(await old).toMatchObject({ok:false});
+    expect(await fresh).toMatchObject({ok:true});
+    expect(calls).toBe(2);
+  } finally { release(); await slot.stopAndWait(); await fs.rm(root,{recursive:true,force:true}); }
+});
+it('admits 8 GiB archives and rejects an extra byte before invoking the downloader', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-size-')));
+  const download = vi.fn(async () => { throw new Error('fixture stops before allocating bytes'); });
+  const slot = new PluginDownloadSlot({ root: id => path.join(root,id), scope: () => 'owner', send() {}, download,
+    getGhost: () => ({enabled:true,approval:{},manifest:{node:{},network:{hosts:['github.com']}}}) as unknown as InstalledGhost,
+  });
+  try {
+    const request = {kind:'start',id:'large',url:'https://github.com/file',sha256:'a'.repeat(64),bytes:8*1024**3};
+    await slot.handle('p',request);
+    expect(download).toHaveBeenCalledOnce();
+    expect(download.mock.calls[0]).toEqual([expect.objectContaining({expectedSize:8*1024**3,maxBytes:8*1024**3})]);
+    await slot.handle('p',{...request,id:'too-large',bytes:request.bytes+1});
+    expect(download).toHaveBeenCalledOnce();
+  } finally { await fs.rm(root,{recursive:true,force:true}); }
+});
 it('keeps display progress monotonic across restart retries and resets for a new request', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-progress-')));
   const events: any[] = [];

@@ -20,7 +20,7 @@ export class PluginDownloadSlot {
   private cache = new PluginDownloadCache();
   private active = new Map<
     string,
-    { controller: AbortController; promise: Promise<unknown>; fingerprint: string }
+    { controller: AbortController; promise: Promise<unknown>; fingerprint: string; current: () => boolean }
   >();
   constructor(private deps: PluginDownloadDeps) {}
   abortAll() {
@@ -143,9 +143,9 @@ export class PluginDownloadSlot {
         !/^[a-f0-9]{64}$/.test(p.sha256) ||
         !Number.isSafeInteger(p.bytes) ||
         (p.bytes as number) < 1 ||
-        (p.bytes as number) > 2 ** 31
+        (p.bytes as number) > 8 * 1024 ** 3
       )
-        throw Error('URL, SHA-256 and exact size (up to 2 GiB) are required');
+        throw Error('URL, SHA-256 and exact size (up to 8 GiB) are required');
       const ghost = this.deps.getGhost(id);
       if (!ghost?.enabled || !ghost.manifest.node || !ghost.manifest.network?.hosts.length)
         throw Error('Download requires node and network.hosts declarations');
@@ -182,6 +182,11 @@ export class PluginDownloadSlot {
       const fingerprint = JSON.stringify([p.url, p.sha256, p.bytes]);
       const existing = this.active.get(key);
       if (existing) {
+        if (!existing.current()) {
+          existing.controller.abort();
+          await existing.promise;
+          return this.handle(id, value, callerActive);
+        }
         if (existing.fingerprint !== fingerprint) throw Error('Download id already in use');
         return existing.promise;
       }
@@ -301,7 +306,7 @@ export class PluginDownloadSlot {
           };
         })
         .finally(() => this.active.delete(key));
-      this.active.set(key, { controller, promise, fingerprint });
+      this.active.set(key, { controller, promise, fingerprint, current });
       return promise;
     } catch (e) {
       return { ok: false, message: (e as Error).message };
