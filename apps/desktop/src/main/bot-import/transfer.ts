@@ -3,7 +3,8 @@ import type { CompanionImportResult, CompanionImportSelection } from '@cindy/mak
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
 import { CompanionImportError, importFailureCode, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
-import { normalizeImportSkill } from './skills.js';
+import { normalizeImportSkill, readImportSkillTree } from './skills.js';
+import { normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
 import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from './environmentSelection.js';
 
@@ -163,7 +164,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
             item.files = []; item.documents = [];
             for (const file of files) {
               const content = memoryFileContent(file);
-              if (content.kind === 'attachment') item.files.push(file);
+              if (content.kind !== 'text') item.files.push(file);
               else if (content.kind === 'text') item.documents.push({
                 id: recoveredDocumentId(`${item.view.id}-${fingerprint(file.name).slice(0, 20)}`), name: file.name, text: content.text,
                 ...(/(^|\/)USER\.md$/i.test(file.name) ? { role: 'user' as const } : {}),
@@ -173,7 +174,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
             const file = await readImportFile(source.root, source.file, budget, sharedDocumentRoots);
             const content = memoryFileContent(file);
             if (content.kind === 'text') item.text = content.text;
-            else if (content.kind === 'attachment') item.asset = { name: file.name, bytes: file.bytes };
+            else item.asset = { name: file.name, bytes: file.bytes };
           }
           delete item.captureIssue;
         } catch (error) { item.captureIssue = importFailureCode(error); }
@@ -187,7 +188,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         const captured = item.files ?? [];
         const names = new Set(captured.map(file => file.name));
         try {
-          item.files = [...captured, ...await readImportTree(item.sourceDirectory, name => !names.has(name), budget)];
+          item.files = [...captured, ...await readImportSkillTree(item.sourceDirectory, name => !names.has(name), budget)];
           if (metadataPending) {
             const manifest = item.files.find(file => file.name === 'SKILL.md')?.bytes.toString('utf8');
             if (!manifest?.trim() || !deps.readSkillConfig) throw new CompanionImportError('SOURCE_CONFIG_INVALID');
@@ -264,13 +265,15 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       && prior?.phase !== 'pausing-source' && prior?.phase !== 'source-paused') continue;
     const automation = item.automation!;
     if (!automation.input) {
-      check(item.view.id, 'needs-attention', item.view.issues?.find(issue => !['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING'].includes(issue)) ?? 'SOURCE_AUTOMATION_INVALID');
-      await saveProgress(); continue;
+      // Retry checkpoints created before unsupported tasks had visible drafts.
+      const restored = normalizeAutomation(snapshot.source, automation.original, items, 'UTC');
+      automation.input = restored.automation!.input;
+      item.view.issues = [...new Set([...(item.view.issues ?? []), ...(restored.view.issues ?? []), 'SOURCE_AUTOMATION_INVALID'])];
     }
     let record = receipt.routines[item.view.id];
     if (!record) {
       try {
-        const id = await deps.createRoutine(botId, { ...automation.input, enabled: false }, fingerprint([selection.requestId, item.view.id]), item);
+        const id = await deps.createRoutine(botId, { ...automation.input!, enabled: false }, fingerprint([selection.requestId, item.view.id]), item);
         deps.assertOwner();
         record = receipt.routines[item.view.id] = { id, phase: 'created' };
         // createOnce is idempotent if this progress batch is interrupted.
@@ -281,11 +284,11 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       }
     }
     if (record.phase === 'complete') { check(item.view.id, item.view.enabled && selection.takeover ? 'taken-over' : 'paused'); continue; }
-    if (!item.view.enabled || !selection.takeover) {
-      record.phase = 'complete'; check(item.view.id, 'paused'); await saveProgress(); continue;
-    }
     if (item.view.issues?.length) {
       check(item.view.id, 'needs-attention', item.view.issues[0]); await saveProgress(); continue;
+    }
+    if (!item.view.enabled || !selection.takeover) {
+      record.phase = 'complete'; check(item.view.id, 'paused'); await saveProgress(); continue;
     }
     if (selection.deferSetup && !resumeSetup && record.phase === 'created') {
       check(item.view.id, 'needs-attention', 'IMPORT_SETUP_DEFERRED'); await saveProgress(); continue;

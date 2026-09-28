@@ -106,8 +106,8 @@ export async function readImportFile(root: string, file: string, budget?: Import
   const realRoot = await fs.realpath(root);
   const realFile = await fs.realpath(file);
   if (!inside(realRoot, realFile)) {
-    // Native memory entries may explicitly link a shared document. Trust only
-    // that file entry inside a declared document vault, never an arbitrary
+    // Native entries may explicitly link a shared document or interpreter.
+    // Trust only declared vaults / exact interpreter targets, never an arbitrary
     // external file/directory or a path supplied by IPC.
     if (!sharedDocumentRoots.some(directory => inside(directory, realFile)) || !inside(path.resolve(root), path.resolve(file))
       || !inside(realRoot, await fs.realpath(path.dirname(file)))
@@ -190,6 +190,13 @@ export async function writeImportFiles(root: string, files: readonly ImportFile[
     const target = path.resolve(root, file.name);
     if (!inside(root, target) || target === root) throw new CompanionImportError('INVALID_TARGET');
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    // The importer validates these exact native interpreter targets; preserve
+    // their location so dynamic libraries and pyvenv.cfg still resolve normally.
+    if (file.interpreterLink) {
+      if (!/(?:^|\/)(?:\.venv|venv)\/(?:bin|Scripts)\/python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(file.name) || !path.isAbsolute(file.interpreterLink)) throw new CompanionImportError('INVALID_TARGET');
+      await fs.symlink(file.interpreterLink, target, 'file');
+      continue;
+    }
     // Imports write into newly allocated directories; never follow a pre-existing entry.
     const handle = await fs.open(target, 'wx', file.executable ? 0o700 : 0o600);
     try { await handle.writeFile(file.bytes); } finally { await handle.close(); }

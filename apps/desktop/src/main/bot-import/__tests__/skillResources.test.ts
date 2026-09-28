@@ -47,3 +47,16 @@ it('executes the preserved resource with credentials while keeping ordinary code
   }));
   expect(result).toEqual({ stdout: 'store_true\n', exitCode: 0 });
 });
+
+it.skipIf(process.platform === 'win32')('retains and materializes native interpreter aliases without copying them into broken standalone executables', async () => {
+  const files = [
+    { name: 'SKILL.md', bytes: Buffer.from('# Native'), executable: false },
+    { name: '.venv/bin/python', bytes: Buffer.from('native fixture'), executable: true, interpreterLink: '/fixture/native/python3' },
+  ];
+  const projected = projectImportedSkill(files, 'native', {});
+  expect(projected.files).toEqual(files);
+  expect(projected.originals?.[1]?.interpreterLink).toBe('/fixture/native/python3');
+  await withImportedSkillResources({ version: 1, env: {}, mcp: [], credentials: [], skillFiles: { native: projected.originals! } }, () => {}, async env => {
+    expect(await fs.readlink(path.join(env.CINDY_IMPORTED_SKILLS!, 'native/.venv/bin/python'))).toBe('/fixture/native/python3');
+  });
+});

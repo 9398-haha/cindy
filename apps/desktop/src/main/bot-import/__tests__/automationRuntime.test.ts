@@ -42,8 +42,9 @@ it.skipIf(process.platform === 'win32')('executes the default imported script an
   const selected = validateImportSelection({ requestId: 'script-subtree-fixture', previewId: 'preview', name: 'Ada', takeover: true, entryIds: snapshot.items.filter(item => item.view.selected).map(item => item.view.id) }, snapshot);
   const task = selected.find(item => item.automation)!;
   const assets = Object.fromEntries(selected.flatMap(item => item.asset ? [[item.asset.name, item.asset.bytes.toString('base64')]] : []));
-  expect(Object.keys(assets)).toHaveLength(6);
-  expect(assets['scripts/unrelated/unused.sh']).toBeUndefined();
+  expect(Object.keys(assets)).toHaveLength(7);
+  expect(assets['scripts/unrelated/unused.sh']).toBe(Buffer.from('exit 99').toString('base64'));
+  expect(task.view.dependsOn).not.toContain(snapshot.items.find(item => item.asset?.name === 'scripts/unrelated/unused.sh')!.view.id);
   await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], files: assets, automations: {
     routine: { kind: 'hermes', handover: 'ready', original: task.automation!.original, sourceRoot, deliveries: [] },
   } }, () => {});

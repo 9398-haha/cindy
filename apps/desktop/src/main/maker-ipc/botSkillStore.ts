@@ -480,7 +480,7 @@ export async function saveBotSkill(
 
 /** Shared preflight for imports, before creating a profile or persisting its checkpoint. */
 export function validateBotSkillFiles(slug: string,
-  files: readonly { name: string; bytes: Buffer; executable: boolean }[]): void {
+  files: readonly { name: string; bytes: Buffer; executable: boolean; interpreterLink?: string }[]): void {
   if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug)
     throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill');
   const entrypoint = files.find(file => file.name === 'SKILL.md');
@@ -489,12 +489,14 @@ export function validateBotSkillFiles(slug: string,
   for (const file of files) {
     if (file.name.includes('\\') || file.name.split('/').some(part => !part || part === '.' || part === '..') || path.isAbsolute(file.name))
       throw new BotSkillStoreError('INVALID_ARGS', 'Invalid skill resource');
+    if (file.interpreterLink && (!/^(?:\.venv|venv)\/(?:bin|Scripts)\/python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(file.name) || !path.isAbsolute(file.interpreterLink)))
+      throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported interpreter');
   }
 }
 
 /** Import a selected real skill with its scripts/templates; keep the native SKILL.md bytes. */
 export async function importBotSkillFiles(userDataDir: string, botId: string, slug: string,
-  files: readonly { name: string; bytes: Buffer; executable: boolean }[], assertOwner: () => void, enabled = true): Promise<void> {
+  files: readonly { name: string; bytes: Buffer; executable: boolean; interpreterLink?: string }[], assertOwner: () => void, enabled = true): Promise<void> {
   validateBotSkillFiles(slug, files);
   await ensureLayout(userDataDir, botId);
   assertOwner();
@@ -515,7 +517,8 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
       const output = path.join(temporary, ...file.name.split('/'));
       await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
       assertOwner();
-      await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
+      if (file.interpreterLink) await fs.symlink(file.interpreterLink, output, 'file');
+      else await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
     }
     assertOwner();
     try { await fs.rename(temporary, target); }
@@ -525,6 +528,11 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
       if (!(await fs.lstat(target)).isDirectory()) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill folder');
       for (const file of files) {
         const entry = path.join(target, ...file.name.split('/'));
+        if (file.interpreterLink) {
+          if (!(await fs.lstat(entry)).isSymbolicLink() || await fs.readlink(entry) !== file.interpreterLink)
+            throw new BotSkillStoreError('INVALID_ARGS', 'Imported interpreter was edited');
+          continue;
+        }
         const resolved = await fs.realpath(entry);
         const relative = path.relative(await fs.realpath(target), resolved);
         if (relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill resource');

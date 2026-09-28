@@ -18,6 +18,8 @@ export interface ImportFile {
   name: string;
   bytes: Buffer;
   executable: boolean;
+  /** Host-validated native Python interpreter; retain its runtime/library location. */
+  interpreterLink?: string;
 }
 
 export interface ImportedMcpServer {

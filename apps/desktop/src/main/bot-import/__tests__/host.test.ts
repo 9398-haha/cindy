@@ -75,6 +75,7 @@ import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
 import { verifyImportedAutomation } from '../verification.js';
+import { normalizeAutomation } from '../sourceAutomations.js';
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-host-test-'));
@@ -1189,6 +1190,7 @@ it('retries legacy text and empty memory assets without passing them to the medi
   expect(result).toMatchObject({ status: 'complete', savedEntryIds: ['old-json', 'old-marker'] });
   expect(h.importDocument).toHaveBeenCalledOnce();
   expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'memory/state.json', '{"cursor":7}\n', 'reference');
+  expect((await h.store.read(h.root, first.botId, () => {}))?.files?.['memory/.report.sent']).toBe('');
   await startCompanionImport(selection, 'phone');
   expect(h.importDocument).toHaveBeenCalledOnce();
 });
@@ -1219,4 +1221,29 @@ it('receives sparse selection chunks idempotently and starts only after the comp
   await withBotProfileLocks([accepted!.botId], () => getCompanionImportResult(selection.requestId));
   expect(createBotProfile).toHaveBeenCalledTimes(1);
   expect(h.importDocument).toHaveBeenCalledTimes(chosen.length);
+});
+
+it('archives unsupported automation definitions and blocks both management and runtime execution', async () => {
+  const original = { id: 'native', schedule: { kind: 'source-specific' }, payload: { kind: 'heartbeat' }, delivery: { channel: 'missing-channel', to: 'original-recipient' } };
+  h.snapshot.source.kind = 'openclaw';
+  const item = normalizeAutomation(h.snapshot.source, original, [], 'UTC');
+  h.snapshot.items = [item];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'unsupported-original-task', previewId: preview.id, name: 'Ada', entryIds: [item.view.id], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result).toMatchObject({ savedEntryIds: [item.view.id], status: 'needs-attention' });
+  const env = await h.store.read(h.root, accepted.botId, () => {});
+  expect(env?.sourceAutomations?.[0]?.original).toEqual(original);
+  const routine = h.routines[0]!;
+  expect(routine).toMatchObject({ enabled: false, triggers: [] });
+  expect(env?.automations?.[routine.id]?.original).toEqual(original);
+  await expect(assertImportedAutomationReady(h.root, accepted.botId, routine.id, () => {})).rejects.toThrow('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
+  await expect(prepareImportedAutomation(h.root, routine, 'run', new AbortController().signal, () => {})).rejects.toThrow('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
+  expect(h.pause).not.toHaveBeenCalled();
+  expect(verifyImportedAutomation).not.toHaveBeenCalled();
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.routines).toHaveLength(1);
 });

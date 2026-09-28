@@ -334,3 +334,20 @@ it('deletes only the read/edit target if older data contains duplicate enabled a
   expect(await fs.readFile(path.join(disabled, 'SKILL.md'), 'utf8')).toBe('# Retain disabled copy');
   expect(await readBotSkill(userDataDir, 'bot-1', 'report')).toMatchObject({ enabled: false, body: '# Retain disabled copy' });
 });
+
+it.skipIf(process.platform === 'win32')('preserves native interpreter links across save/retry and rejects a changed alias', async () => {
+  const runtime = path.join(userDataDir, 'runtime-python');
+  await fs.writeFile(runtime, 'fixture-runtime');
+  const files = [
+    { name: 'SKILL.md', bytes: Buffer.from('# Imported'), executable: false },
+    { name: '.venv/bin/python', bytes: Buffer.from('fixture-runtime'), executable: true, interpreterLink: runtime },
+  ];
+  await importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {});
+  const alias = path.join(botSkillsDir(userDataDir, 'bot'), 'native/.venv/bin/python');
+  expect(await fs.readlink(alias)).toBe(runtime);
+  await importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {});
+  await fs.unlink(alias); await fs.symlink(path.join(userDataDir, 'other-python'), alias);
+  await expect(importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {})).rejects.toThrow('Imported interpreter was edited');
+  expect(await fs.readFile(runtime, 'utf8')).toBe('fixture-runtime');
+  await expect(importBotSkillFiles(userDataDir, 'bot', 'unsafe', [{ ...files[0]!, interpreterLink: runtime }], () => {})).rejects.toThrow('Invalid imported interpreter');
+});

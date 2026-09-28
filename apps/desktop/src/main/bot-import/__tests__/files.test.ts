@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createImportBudget, deserializeImportSnapshot, readImportFile, readImportTree, serializeImportSnapshot, snapshotFingerprint } from '../files.js';
+import { readImportSkillTree } from '../skills.js';
 import type { ImportSnapshot } from '../types.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -113,5 +114,30 @@ it('retries a selected subtree inside its original root and still rejects escape
     await fs.mkdir(link); await fs.writeFile(path.join(link, 'note.md'), 'Repaired');
     const files = await readImportTree(memory, undefined, createImportBudget(), undefined, link);
     expect(files.map(file => [file.name, file.bytes.toString()])).toEqual([['broken/note.md', 'Repaired']]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('copies native venv interpreter aliases while keeping unrelated external links rejected', async ctx => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-venv-'));
+  try {
+    const skill = path.join(root, 'skill'), runtime = path.join(root, 'runtime');
+    const bin = path.join(skill, '.venv', 'bin');
+    await fs.mkdir(bin, { recursive: true }); await fs.mkdir(runtime);
+    await fs.writeFile(path.join(skill, 'SKILL.md'), '# Fixture');
+    await fs.writeFile(path.join(skill, '.venv/pyvenv.cfg'), `home = ${runtime}\n`);
+    const executable = Buffer.from('7f454c460102030405060708', 'hex');
+    await fs.writeFile(path.join(runtime, 'python3.12'), executable, { mode: 0o700 });
+    try { await fs.symlink(path.join(runtime, 'python3.12'), path.join(bin, 'python')); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+    await fs.symlink('python', path.join(bin, 'python3'));
+    const files = await readImportSkillTree(skill, undefined, createImportBudget());
+    for (const name of ['.venv/bin/python', '.venv/bin/python3']) expect(files.find(file => file.name === name)).toMatchObject({ bytes: executable, interpreterLink: await fs.realpath(path.join(runtime, 'python3.12')) });
+    expect(files.find(file => file.name === '.venv/pyvenv.cfg')?.bytes.toString()).toContain(runtime);
+    await fs.writeFile(path.join(runtime, 'private.txt'), 'fixture-private-token');
+    await fs.symlink(path.join(runtime, 'private.txt'), path.join(skill, 'credentials.txt'));
+    await expect(readImportSkillTree(skill)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    await fs.unlink(path.join(skill, 'credentials.txt'));
+    await fs.writeFile(path.join(runtime, 'python3.12'), 'fixture-private-token');
+    await expect(readImportSkillTree(skill)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

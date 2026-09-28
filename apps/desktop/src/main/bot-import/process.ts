@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { isIP } from 'node:net';
 import { killProcessTree } from '../scheduler-host/proc-util.js';
 import { CompanionImportError } from './types.js';
 
@@ -72,9 +73,9 @@ export function isPublicImportSetting(name: string, value: string): boolean {
   if (/(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|COOKIE)/i.test(name)) return false;
   return (/(?:^|_)(?:ENABLED|DISABLED|COUNT|RETRIES|RETRY|LIMIT|TIMEOUT|INTERVAL|SIZE|TEMPERATURE|TOP_P|HEADLESS|UNBUFFERED)(?:_|$)|^(?:MAX_|MIN_|PYTHONUNBUFFERED$)/i.test(name)
       && /^(?:true|false|[+-]?\d+(?:\.\d+)?)$/i.test(value))
-    || (/(?:^|_)(?:FORCE|REQUIRE|OBSERVE|ALLOW|USE|ENABLE|DISABLE)_|(?:^|_)(?:DEBUG|VERBOSE|PROXIES|STEALTH)$/i.test(name)
+    || (/(?:^|_)(?:FORCE|REQUIRE|OBSERVE|ALLOW|USE|ENABLE|DISABLE)_|(?:^|_)(?:DEBUG|VERBOSE|PROXIES|STEALTH|SEND_READ_RECEIPTS)$/i.test(name)
       && /^(?:true|false|0|1)$/i.test(value))
-    || /(?:^|_)(?:HOST|BIND|ADDRESS)$/i.test(name) && /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1?\]?)$/i.test(value)
+    || /(?:^|_)(?:HOST|BIND|ADDRESS)$/i.test(name) && (/^(?:localhost|\[?::1?\]?)$/i.test(value) || isIP(value) !== 0)
     || /(?:^|_)(?:MODE|TRANSPORT)$/i.test(name) && /^(?:websocket|polling|long_polling|webhook|http|https|stdio|sse)$/i.test(value)
     || /(?:^|_)POLICY$/i.test(name) && /^(?:allowlist|denylist|open|closed|disabled)$/i.test(value)
     || /(?:^|_)BOT_NAME$/i.test(name)

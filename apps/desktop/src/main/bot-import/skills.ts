@@ -1,4 +1,4 @@
-import { promises as fs, type Dirent } from 'node:fs';
+import { constants, promises as fs, type Dirent } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { fingerprint, inside, readImportFile, readImportTree, type ImportReadBudget } from './files.js';
@@ -89,6 +89,49 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
   return roots;
 }
 
+/** A native venv declares its Python home. Preserve interpreter aliases and captured
+ * executable bytes, without granting access to other files beside that interpreter. */
+export async function readImportSkillTree(root: string, include?: (name: string) => boolean, budget?: ImportReadBudget) {
+  const interpreters: string[] = [];
+  for (const folder of ['.venv', 'venv']) {
+    let config: string;
+    try { config = (await readImportFile(root, path.join(root, folder, 'pyvenv.cfg'), budget)).bytes.toString('utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+    const home = /^home\s*=\s*(.+)$/m.exec(config)?.[1]?.trim();
+    if (!home || !path.isAbsolute(home)) continue;
+    const realHome = await fs.realpath(home).catch(() => undefined);
+    if (!realHome) continue;
+    const bin = path.join(root, folder, process.platform === 'win32' ? 'Scripts' : 'bin');
+    let entries: Dirent[];
+    try { entries = await fs.readdir(bin, { withFileTypes: true }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+    for (const entry of entries) {
+      if (!entry.isSymbolicLink() || !/^python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(entry.name)) continue;
+      const real = await fs.realpath(path.join(bin, entry.name));
+      if (path.dirname(real) !== realHome || !/^python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(path.basename(real))) continue;
+      // Check only a bounded native executable header. Text credentials are
+      // never made importable by renaming their link or forging pyvenv.cfg.
+      const handle = await fs.open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || process.platform !== 'win32' && !(stat.mode & 0o111)) continue;
+        const header = Buffer.alloc(4);
+        if ((await handle.read(header, 0, 4, 0)).bytesRead !== 4) continue;
+        if (['7f454c46', 'feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca'].includes(header.toString('hex')) || header.subarray(0, 2).toString() === 'MZ') interpreters.push(real);
+      } finally { await handle.close(); }
+    }
+  }
+  const files = await readImportTree(root, include, budget, undefined, root, interpreters);
+  for (const file of files) {
+    if (!/^(?:\.venv|venv)\/(?:bin|Scripts)\/python(?:[23](?:\.\d+)?)?(?:\.exe)?$/.test(file.name)) continue;
+    const entry = path.join(root, file.name);
+    if (!(await fs.lstat(entry)).isSymbolicLink()) continue;
+    const target = await fs.realpath(entry);
+    if (interpreters.includes(target)) file.interpreterLink = target;
+  }
+  return files;
+}
+
 /** Discovery and repaired manifests must apply exactly the same native settings. */
 export function normalizeImportSkill(kind: ImportSource['kind'], alias: string, text: string, config: Record<string, unknown>, disabled = disabledSkills(config)): Pick<ImportItem, 'view' | 'sourceAlias' | 'env' | 'credential'> {
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
@@ -147,7 +190,7 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
         const item: ImportItem = { ...metadata, sourceDirectory: real, files: [manifest], filesComplete: false };
         if (used.has(name) || used.has(path.basename(directory))) {
           try {
-            item.files = [manifest, ...await readImportTree(real, name => name !== 'SKILL.md', budget)];
+            item.files = [manifest, ...await readImportSkillTree(real, name => name !== 'SKILL.md', budget)];
             item.filesComplete = true;
           } catch (error) { item.captureIssue = error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED'; }
         }

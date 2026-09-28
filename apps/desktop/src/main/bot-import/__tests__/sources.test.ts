@@ -218,7 +218,7 @@ it('imports Hermes context without turning unrelated repository instructions int
   expect((await inspectImportSource(source!, reader)).items.find(item => item.role === 'instructions')?.text).toBe('Speak gently and briefly.');
 });
 
-it('selects entry and monitor subtrees, including sibling code, resources and their environment dependencies', async () => {
+it('preserves every script while tracking only actual entry and monitor dependencies', async () => {
   await write('.hermes/config.yaml', 'name: Ada\n');
   await write('.hermes/.env', 'DATA_URL=https://example.invalid\nDATA_TOKEN=fixture-token');
   await write('.hermes/scripts/reports/daily.sh', '. ./helper.sh');
@@ -234,9 +234,9 @@ it('selects entry and monitor subtrees, including sibling code, resources and th
   expect(automation.view.issues).toBeUndefined();
   const files = snapshot.items.filter(item => item.asset);
   expect(files.filter(item => item.view.selected).map(item => item.asset!.name).sort()).toEqual([
-    'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh',
-  ]);
-  expect(automation.view.dependsOn?.toSorted()).toEqual(snapshot.items.filter(item => item.view.selected && (item.asset || item.env)).map(item => item.view.id).sort());
+    'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh', 'scripts/reports-unused/other.sh',
+  ].sort());
+  expect(automation.view.dependsOn?.toSorted()).toEqual(snapshot.items.filter(item => item.view.selected && (item.asset || item.env) && !item.asset?.name.includes('reports-unused')).map(item => item.view.id).sort());
   // A surviving sibling must not hide a missing entrypoint.
   await fs.unlink(path.join(home, '.hermes/scripts/reports/daily.sh'));
   expect((await inspectImportSource(source!, reader)).items.find(item => item.automation)?.view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
@@ -557,17 +557,20 @@ it.each(['hermes', 'openclaw'] as const)('discovers %s custom archives, hidden T
 it.each(['hermes', 'openclaw'] as const)('imports %s textual state and backups without treating empty markers as attachments', async kind => {
   await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
   const folder = `.${kind}/${kind === 'hermes' ? 'memories' : 'workspace/memory'}`;
-  const documents = { 'state.json': '{"lastRun":"fixture"}\n', 'MEMORY.md.bak-20260101': '# Old note\n', 'extensionless': 'A note\n' };
+  const documents = { 'state.json': '{"lastRun":"fixture"}\n', 'MEMORY.md.bak-20260101': '# Old note\n', 'extensionless': 'A note\n', 'terminal.txt': 'A log with \u0015 control bytes\n' };
   for (const [name, text] of Object.entries(documents)) await write(`${folder}/${name}`, text);
   for (const name of ['.morning-report.sent', 'MEMORY.md.lock', 'empty.md']) await write(`${folder}/${name}`, '');
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const memory = (await inspectImportSource(source!, reader)).items.filter(item => item.view.category === 'memory');
-  expect(memory.map(item => [item.view.name, item.text]).sort()).toEqual(Object.entries(documents).sort());
-  expect(memory.every(item => !item.asset && !item.captureIssue)).toBe(true);
+  expect(memory.filter(item => item.text).map(item => [item.view.name, item.text]).sort()).toEqual(Object.entries(documents).sort());
+  expect(memory.filter(item => item.asset)).toHaveLength(3);
+  expect(memory.filter(item => item.asset).every(item => item.asset!.bytes.length === 0)).toBe(true);
+  expect(memory.every(item => !item.captureIssue)).toBe(true);
 });
 
-it('saves native command jobs as disabled routines and excludes only native heartbeats', async () => {
+it('preserves native commands, heartbeat jobs and their instruction document', async () => {
   await write('.openclaw/openclaw.json', JSON.stringify({ agents: { defaults: { model: 'source-model' } }, tools: { profile: 'restricted' } }));
+  await write('.openclaw/workspace/HEARTBEAT.md', 'Check the original checklist');
   const command = { kind: 'command', argv: ['node', 'report.js', 'argument with spaces'], cwd: home, timeoutSeconds: 90, noOutputTimeoutSeconds: 10, outputMaxBytes: 4096 };
   await write('.openclaw/cron/jobs.json', JSON.stringify({ jobs: [
     { id: 'command', name: 'Command report', payload: command, schedule: { kind: 'every', everyMs: 60000 } },
@@ -575,12 +578,17 @@ it('saves native command jobs as disabled routines and excludes only native hear
     { id: 'ordinary-heartbeat', name: 'heartbeat-main', payload: { kind: 'agentTurn', message: 'A normal reminder' }, schedule: { kind: 'every', everyMs: 60000 } },
   ] }));
   const reader = deps(); const [source] = await discoverImportSources(reader);
-  const tasks = (await inspectImportSource(source!, reader)).items.filter(item => item.automation);
-  expect(tasks).toHaveLength(2);
+  const inspected = await inspectImportSource(source!, reader);
+  expect(inspected.items.find(item => item.view.name === 'HEARTBEAT.md')?.text).toBe('Check the original checklist');
+  const tasks = inspected.items.filter(item => item.automation);
+  expect(tasks).toHaveLength(3);
   expect(tasks[0]?.automation?.input).toMatchObject({ name: 'Command report', enabled: false });
   expect(tasks[0]?.automation?.original.payload).toEqual(command);
   expect(tasks[0]?.view.issues).toBeUndefined();
-  expect(tasks[1]?.view.name).toBe('heartbeat-main');
+  expect(tasks[1]?.automation?.input).toMatchObject({ enabled: false, triggers: [{ kind: 'interval', intervalMs: 60000 }] });
+  expect(tasks[1]?.automation?.original.payload).toEqual({ kind: 'heartbeat' });
+  expect(tasks[1]?.view.issues).toContain('AUTOMATION_CONTEXT_NEEDS_MAPPING');
+  expect(tasks[2]?.view.name).toBe('heartbeat-main');
 });
 
 for (const kind of ['hermes', 'openclaw'] as const) it(`imports ${kind} memory links only from its declared document vault`, async ctx => {
@@ -603,4 +611,17 @@ for (const kind of ['hermes', 'openclaw'] as const) it(`imports ${kind} memory l
   await fs.unlink(path.join(home, `.${kind}/.env`));
   const withoutDeclaration = await inspectImportSource(source!, { ...reader, env: { ...reader.env, OBSIDIAN_VAULT_PATH: vault } });
   expect(withoutDeclaration.items.find(item => item.view.name === 'state.json')).toMatchObject({ captureIssue: 'SOURCE_LINK_OUTSIDE_FOLDER' });
+});
+
+it('keeps distinct source records even when unsupported jobs lack usable identities', async () => {
+  await write('.hermes/config.yaml', '{}');
+  await write('.hermes/cron/jobs.json', JSON.stringify([
+    { name: ' ', prompt: ' ', schedule: { kind: 'unknown' } },
+    { name: ' ', prompt: ' ', schedule: { kind: 'unknown' } },
+  ]));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const tasks = (await inspectImportSource(source!, reader)).items.filter(item => item.automation);
+  expect(tasks).toHaveLength(2);
+  expect(new Set(tasks.map(item => item.view.id)).size).toBe(2);
+  expect(tasks.every(item => item.automation?.input?.enabled === false)).toBe(true);
 });

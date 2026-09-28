@@ -544,6 +544,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         // A formerly unreadable manifest may only now supply its own settings.
         if (item.env) environment.env = { ...environment.env, ...item.env };
+        const attachments = [...(item.asset ? [item.asset] : []), ...(['memory', 'personality'].includes(item.view.category) ? item.files ?? [] : [])];
+        if (attachments.length) environment.files = { ...environment.files, ...Object.fromEntries(attachments.map(file => [file.name, file.bytes.toString('base64')])) };
         if (item.credential) environment.credentials = [...environment.credentials.filter(value => value.id !== item.view.id), { id: item.view.id, ...item.credential }];
         for (const [id, text] of documentEntries(item)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
@@ -582,7 +584,10 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           return [server];
         }),
         credentials: items.flatMap(item => item.credential && !item.view.dependsOn?.some(id => !chosen.has(id)) && (!item.view.issues?.length || item.credential.format !== 'telegram') ? [{ id: item.view.id, ...item.credential, ...(item.credential.format === 'telegram' ? { value: resolveReferences(item.credential.value) } : {}) }] : []),
-        files: Object.fromEntries(items.flatMap(item => item.asset ? [[item.asset.name, item.asset.bytes.toString('base64')]] : [])),
+        files: Object.fromEntries(items.flatMap(item => [
+          ...(item.asset ? [[item.asset.name, item.asset.bytes.toString('base64')]] : []),
+          ...(['memory', 'personality'].includes(item.view.category) ? (item.files ?? []).map(file => [file.name, file.bytes.toString('base64')]) : []),
+        ])),
         skillFiles,
         documents: Object.fromEntries(items.flatMap(documentEntries)),
         contentRedactions: publicationRedactions(items),

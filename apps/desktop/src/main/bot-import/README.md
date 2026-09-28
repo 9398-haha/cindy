@@ -337,9 +337,11 @@ show saved/selected counts and distinguish partial imports from setup-only check
 An expandable, paginated detail list shows filenames, safe reasons and partial
 progress. Chat remains available alongside retry. Idempotent chat notices distinguish
 partial saves, pending setup and eventual completion without exposing raw exceptions.
-An invalid automation definition reports the conversion failure before setup warnings;
-valid definitions are saved disabled even when tool/model mapping is still pending. Native Heartbeat is omitted;
-ordinary cron jobs named heartbeat are still imported.
+Every source automation is preserved, including native Heartbeat and unsupported definitions.
+Unconvertible schedules become disabled drafts with no trigger; unresolved issues
+block both activation and manual execution. Full original definitions remain encrypted.
+Empty memory markers and Heartbeat instructions are retained as well. Completeness
+is audited against the source inventory, not just the converted selection count.
 
 The owner-scoped `companion_connections.import_setup` tool lists remaining checks
 in pages, retries from the encrypted checkpoint, and permits explicit adoption of
@@ -471,7 +473,8 @@ saved disabled and execute as literal subprocess argv only after the existing
 verification and handover gates. They never start a model turn or inherit model/tool
 policy requirements. Read-only verification must verify their actual dependencies;
 it cannot accept a command as a simple local reminder. Native `heartbeat` payloads
-are excluded, while ordinary jobs named heartbeat remain importable.
+are preserved disabled with their schedule and original definition; native context
+semantics remain explicitly pending, rather than being silently reduced to a reminder.
 
 Ordinary content/routine progress uses indexed checks and at most about 100 full
 receipt snapshots per pass, sized from the selected input. An interrupted batch
@@ -498,3 +501,13 @@ old checkpoints that only contained a boolean link exception. Native command
 argv, cwd and stdin are now opaque to the read planner, even when a literal secret
 is absent from every configured credential map; the original payload remains in
 local encrypted storage for authorized execution.
+
+Full preservation also includes unused Hermes scripts, disabled MCP definitions,
+empty marker bytes and UTF-8 text documents containing terminal control characters.
+Native Python virtualenv interpreter aliases retain their original runtime targets only when `pyvenv.cfg`
+declares their exact runtime home and the resolved target is a native executable.
+Their captured bytes remain in the import checkpoint; native links preserve dynamic
+library resolution when the skill is saved or temporarily materialized.
+This grants no access to neighboring credentials or external directories. The
+original virtualenv configuration and resource files stay intact; cross-machine
+runtime availability is not implied by saving their definitions.

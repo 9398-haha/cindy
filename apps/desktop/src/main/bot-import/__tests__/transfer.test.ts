@@ -367,15 +367,41 @@ it('returns a completed legacy deferred receipt even after its checkpoint was re
   expect(deps.pauseSource).not.toHaveBeenCalled();
 });
 
-it('reports the creation error instead of a setup mapping warning when an automation has no usable input', async () => {
-  const { deps } = harness();
+it.each([
+  { schedule: { kind: 'native-event', event: 'inbox' }, payload: { kind: 'agentTurn', message: 'Read' } },
+  { schedule: { kind: 'every', everyMs: 1000 }, payload: { kind: 'agentTurn', message: 'Read' } },
+  { schedule: { kind: 'every', everyMs: 60_000 }, payload: { kind: 'heartbeat' } },
+  { schedule: { kind: 'every', everyMs: 60_000 }, payload: { kind: 'future-native-task', message: 'Read' } },
+  { schedule: { kind: 'every', everyMs: 60_000 }, payload: {} },
+])('preserves unsupported automation $payload.kind without changing the source or enabling it', async job => {
+  const { deps, receipt } = harness();
   const source = { ...snapshot.source, kind: 'openclaw' as const };
-  const item = normalizeAutomation(source, { id: 'invalid', tools: { allow: ['read'] }, schedule: { kind: 'every', everyMs: 60_000 }, payload: {} }, [], 'UTC');
-  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'SOURCE_AUTOMATION_INVALID']);
-  const result = await transferCompanion({ ...snapshot, source, items: [item] }, { ...selection, entryIds: [item.view.id], deferSetup: true }, deps);
-  expect(result.checks).toContainEqual({ entryId: item.view.id, status: 'needs-attention', message: 'SOURCE_AUTOMATION_INVALID' });
-  expect(result.savedEntryIds).not.toContain(item.view.id);
-  expect(deps.createRoutine).not.toHaveBeenCalled();
+  const original = { id: 'unsupported', ...job, delivery: { channel: 'unavailable-channel', to: 'original-target' } };
+  const item = normalizeAutomation(source, original, [], 'UTC');
+  expect(item.automation?.input).toMatchObject({ enabled: false });
+  expect(item.view.issues?.length).toBeGreaterThan(0);
+  const input = { ...selection, entryIds: [item.view.id], deferSetup: true, takeover: false };
+  const content = { ...snapshot, source, items: [item] };
+  const result = await transferCompanion(content, input, deps);
+  expect(result.savedEntryIds).toContain(item.view.id);
+  expect(result.checks).toContainEqual({ entryId: item.view.id, status: 'needs-attention', message: item.view.issues![0] });
+  expect(deps.createRoutine).toHaveBeenCalledWith(expect.any(String), item.automation!.input, expect.any(String), item);
+  expect(vi.mocked(deps.saveEnvironment).mock.calls[0]![1][0]!.automation?.original).toEqual(original);
+  expect(receipt()?.routines[item.view.id]?.phase).toBe('created');
+  await transferCompanion(content, input, deps);
+  expect(deps.createRoutine).toHaveBeenCalledOnce();
+  expect(deps.pauseSource).not.toHaveBeenCalled();
+  expect(deps.enableRoutine).not.toHaveBeenCalled();
+  expect(deps.verifyAutomation).not.toHaveBeenCalled();
+});
+
+it('recovers legacy checkpoints that had no converted routine input', async () => {
+  const { deps } = harness();
+  const item = normalizeAutomation(snapshot.source, { id: 'legacy', schedule: { kind: 'unknown' } }, [], 'UTC');
+  delete item.automation!.input;
+  const result = await transferCompanion({ ...snapshot, items: [item] }, { ...selection, entryIds: [item.view.id], deferSetup: true }, deps);
+  expect(result.savedEntryIds).toContain(item.view.id);
+  expect(deps.createRoutine).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ enabled: false, triggers: [] }), expect.any(String), item);
   expect(deps.pauseSource).not.toHaveBeenCalled();
 });
 

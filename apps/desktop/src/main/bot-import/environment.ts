@@ -15,7 +15,7 @@ export interface CompanionEnvironment {
   credentials: Array<{ id: string; format: string; value: unknown }>;
   files?: Record<string, string>;
   /** Originals behind redacted skill projections; only materialized for authorized host commands. */
-  skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean }>>;
+  skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean; interpreterLink?: string }>>;
   /** Original selected documents; model-readable profile/memory copies redact known credentials. */
   documents?: Record<string, string>;
   /** Redaction only: known values embedded in selected originals, never injected into processes. */

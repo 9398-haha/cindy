@@ -1,7 +1,6 @@
 import { markImportEnvironmentChoices, previewImportRedactions, resolveImportEnvironmentDependencies } from './environmentSelection.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { importedScriptName, isImportedScriptDependency } from './scripts.js';
 import JSON5 from 'json5';
 import { redactEnvironmentValues } from './process.js';
 import yaml from 'js-yaml';
@@ -114,7 +113,11 @@ function entryId(prefix: string, name: string): string { return `${prefix}-${fin
 async function document(items: ImportItem[], root: string, name: string, role: ImportItem['role'], category: 'personality' | 'memory', budget: ImportReadBudget) {
   try {
     const text = await optionalText(root, path.join(root, name), budget);
-    if (!text?.trim()) return;
+    if (text === undefined) return;
+    if (!text.trim()) {
+      items.push({ view: { id: entryId(category, name), category, name, selected: true }, asset: { name, bytes: Buffer.from(text) } });
+      return;
+    }
     items.push({ view: { id: entryId(category, name), category, name, selected: true }, text, role });
   } catch (error) {
     items.push({ view: { id: entryId(category, name), category, name, selected: true }, role,
@@ -132,8 +135,7 @@ async function memoryDocuments(items: ImportItem[], root: string, prefix: string
   catch (error) { failed('', error, 'directory'); return; }
   for (const file of files) {
     const content = memoryFileContent(file);
-    if (content.kind === 'empty') continue;
-    if (content.kind === 'attachment') {
+    if (content.kind !== 'text') {
       items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: `${prefix}/${file.name}`, selected: true }, asset: { name: `${prefix}/${file.name}`, bytes: file.bytes } });
       continue;
     }
@@ -175,7 +177,7 @@ async function connections(items: ImportItem[], source: ImportSource, values: Re
         ? rawCwd.startsWith('~/') ? path.join(deps.home, rawCwd.slice(2)) : rawCwd
         : sourcePath(deps.home, rawCwd, source.workspace);
     }
-    items.push({ view: { id: entryId('mcp', name), category: 'connections', name, selected: enabled, enabled, dependsOn: [...references].map(key => entryId('env', key)) },
+    items.push({ view: { id: entryId('mcp', name), category: 'connections', name, selected: true, enabled, dependsOn: [...references].map(key => entryId('env', key)) },
       envDependencies: { names: [...references], entries: [] },
       mcp: { name, enabled, ...(command ? { command, args: Array.isArray(record.args) ? record.args.map(string) : [], cwd, transport: 'stdio' as const } : { url, transport: record.transport === 'sse' ? 'sse' as const : 'http' as const }),
         env: scalarEnv(record.env), headers: scalarEnvHeaders(record.headers) } });
@@ -300,7 +302,7 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
     await document(items, workspace, 'USER.md', 'user', 'memory', budget);
     await document(items, workspace, 'MEMORY.md', undefined, 'memory', budget);
     await memoryDocuments(items, workspace, 'memory', budget, sharedDocumentRoots);
-    await document(items, workspace, 'DREAMS.md', undefined, 'memory', budget);
+    for (const file of ['DREAMS.md', 'HEARTBEAT.md']) await document(items, workspace, file, undefined, 'memory', budget);
     const rows = agentRows(values);
     const defaultAgent = (rows.find(row => row.default === true) ?? rows[0])?.id === source.agentId;
     const storeKey = sourcePath(deps.home, string(object(values.cron).store) || path.join(source.root, 'cron', 'jobs.json'), source.root);
@@ -328,18 +330,12 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   }
   await connections(items, source, values, deps, budget);
   if (source.kind === 'hermes' && (await directories(source.root)).includes('scripts')) {
-    const usedScripts = jobs.flatMap(job => [string(job.script), string(job.monitor_script)]).filter(Boolean).flatMap(file => {
-      try { return [importedScriptName(source.root, sourcePath(deps.home, file, path.join(source.root, 'scripts')))]; }
-      catch { return []; }
-    });
-    for (const file of await readImportTree(path.join(source.root, 'scripts'), undefined, budget)) items.push({ view: { id: entryId('script', file.name), category: 'connections', name: `scripts/${file.name}`, selected: isImportedScriptDependency(`scripts/${file.name}`, usedScripts) }, asset: { name: `scripts/${file.name}`, bytes: file.bytes } });
+    for (const file of await readImportTree(path.join(source.root, 'scripts'), undefined, budget)) items.push({ view: { id: entryId('script', file.name), category: 'connections', name: `scripts/${file.name}`, selected: true }, asset: { name: `scripts/${file.name}`, bytes: file.bytes } });
   }
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   sourceConfiguration(items, source, values);
-  // Native heartbeat is not a portable scheduled job. Ordinary jobs named heartbeat remain below.
-  for (const job of jobs) {
-    if (source.kind === 'openclaw' && object(job.payload).kind === 'heartbeat') continue;
-    items.push(normalizeAutomation(source, job, items, string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone));
+  for (const [index, job] of jobs.entries()) {
+    items.push(normalizeAutomation(source, job, items, string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone, index));
   }
   const identity = items.find(item => item.view.name === 'IDENTITY.md')?.text ?? '';
   const avatar = string(object(row.identity).avatar) || string(row.avatar) || /^\s*[-*]?\s*\*{0,2}Avatar\*{0,2}:\s*(.+)$/im.exec(identity)?.[1]?.trim() || '';

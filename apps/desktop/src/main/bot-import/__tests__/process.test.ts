@@ -4,10 +4,10 @@ import { previewImportRedactions } from '../environmentSelection.js';
 import { connectionRedactions, importedContentRedactions, redactImportedResult } from '../connectionCatalog.js';
 
 it('preserves native boolean switches, local bind addresses and transport/policy enums without exempting credentials', () => {
-  const env = { AWS_BEDROCK_FORCE_HTTP1: '1', BROWSERBASE_PROXIES: 'true', BROWSERBASE_ADVANCED_STEALTH: 'false',
+  const env = { BLUEBUBBLES_SEND_READ_RECEIPTS: 'false', BLUEBUBBLES_WEBHOOK_HOST: '192.168.10.100', AWS_BEDROCK_FORCE_HTTP1: '1', BROWSERBASE_PROXIES: 'true', BROWSERBASE_ADVANCED_STEALTH: 'false',
     TELEGRAM_REQUIRE_MENTION: 'true', TELEGRAM_OBSERVE_UNMENTIONED_GROUP_MESSAGES: 'true', FEISHU_ALLOW_ALL_USERS: 'false',
     WEB_TOOLS_DEBUG: 'false', API_SERVER_HOST: '127.0.0.1', API_SERVER_PORT: '8080', FEISHU_CONNECTION_MODE: 'websocket', FEISHU_GROUP_POLICY: 'allowlist', FEISHU_BOT_NAME: 'Fixture', FEISHU_DOMAIN: 'feishu' };
-  const text = 'sys.exit(1) action="store_true" <path d="M1 1"/> false 127.0.0.1 8080 websocket allowlist Fixture feishu';
+  const text = '192.168.10.100 sys.exit(1) action="store_true" <path d="M1 1"/> false 127.0.0.1 8080 websocket allowlist Fixture feishu';
   expect(redactEnvironmentValues(text, env)).toBe(text);
   expect(redactEnvironmentValues('1 true websocket', { ...env, API_KEY: '1', AUTH_ALLOW_DEBUG: 'true', SECRET_MODE: 'websocket' })).toBe('[API_KEY] [AUTH_ALLOW_DEBUG] [SECRET_MODE]');
   const secrets = importedContentRedactions({ env, mcp: [{ name: 'fixture', headers: { Authorization: 'Bearer true' } }], credentials: [] });
@@ -62,7 +62,7 @@ it('preserves bounded ordinary settings even when deselected, while explicit sam
 it('does not turn ordinary scalar settings or MCP endpoint names into content credentials', () => {
   const env = { SOME_FEATURE_ENABLED: 'true', RETRY_COUNT: '1', TEMPERATURE: '0.5' };
   const secrets = importedContentRedactions({ env, mcp: [{ name: 'native-mcp', url: 'http://localhost:9000/native-mcp?enabled=true&retry=1' }, { name: 'touchdesigner-mcp', url: 'http://localhost:9001/touchdesigner-mcp' }], credentials: [] });
-  const text = 'sys.exit(1) action="store_true" <path d="M1 0.5"/> native-mcp touchdesigner-mcp';
+  const text = '192.168.10.100 sys.exit(1) action="store_true" <path d="M1 0.5"/> native-mcp touchdesigner-mcp';
   expect(redactEnvironmentValues(text, secrets)).toBe(text);
   expect(redactEnvironmentValues('secret=1', { API_KEY: '1' })).toBe('secret=[API_KEY]');
 });
