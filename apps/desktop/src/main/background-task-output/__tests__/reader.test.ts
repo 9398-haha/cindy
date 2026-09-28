@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { readBackgroundTaskOutputTail, readSessionBackgroundTaskOutputTail } from '../reader';
 
@@ -13,6 +13,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -59,8 +60,22 @@ describe('readBackgroundTaskOutputTail', () => {
     const target = path.join(dir, 'secret.txt');
     await fs.writeFile(target, 'secret');
     const link = path.join(dir, 'b6.output');
-    await fs.symlink(target, link);
+    try {
+      await fs.symlink(target, link, 'file');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EACCES')) throw error;
+      // Keep a real file alias on unprivileged Windows; simulate only the
+      // canonical-path result that a native file symlink would produce.
+      await fs.link(target, link);
+      const realpath = fs.realpath.bind(fs);
+      vi.spyOn(fs, 'realpath').mockImplementation(async (candidate, options) => {
+        return realpath(String(candidate) === link ? target : candidate, options);
+      });
+    }
+    const open = vi.spyOn(fs, 'open');
     expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
+    expect(open).not.toHaveBeenCalled();
   });
 
   it('reads through a symlinked parent directory by checking the canonical path', async () => {
@@ -69,7 +84,7 @@ describe('readBackgroundTaskOutputTail', () => {
     await fs.mkdir(realDir);
     await fs.writeFile(path.join(realDir, 'b7.output'), 'via link\n');
     const linkedDir = path.join(dir, 'linked');
-    await fs.symlink(realDir, linkedDir, 'dir');
+    await fs.symlink(realDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
     expect(await readBackgroundTaskOutputTail(path.join(linkedDir, 'b7.output'))).toMatchObject({
       ok: true,
       text: 'via link\n',
