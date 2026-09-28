@@ -219,7 +219,11 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
             throw error;
           });
           if (existing) {
-            if (existing.body.trim() !== body.trim()) throw new MemoryError('version-conflict', '[PRECONDITION_FAILED] Imported memory was edited');
+            // Exact-body imports include whitespace in their identity. Only old
+            // shards whose storage format discarded it use the legacy comparison.
+            const unchanged = existing.frontmatter.bodyLength === undefined
+              ? existing.body.trim() === body.trim() : existing.body === body;
+            if (!unchanged) throw new MemoryError('version-conflict', '[PRECONDITION_FAILED] Imported memory was edited');
             return;
           }
           await store.write({ type, name, title: title.slice(0, BOT_MEMORY_TITLE_MAX).replace(/[\uD800-\uDBFF]$/u, ''),

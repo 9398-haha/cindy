@@ -18,6 +18,7 @@ import {
 } from '@cindy/maker-core';
 
 import { BOT_MEMORY_CHANGED } from '../../../shared/botMemory';
+import { importFailureCode } from '../../bot-import/types.js';
 import { botMemoryDescriptionFromBody, createBotMemoryService } from '../botMemoryService';
 
 let dir = '';
@@ -264,4 +265,42 @@ it('reports a partial document write and retries missing chunks without duplicat
   await fs.appendFile(path.join(dir, first.filename), '\nUser added this later.');
   expect((await storage.read(first.filename)).body).toContain('User added this later.');
   await expect(service.importDocument('bot-1', 'retry-document', 'retry', original)).rejects.toThrow('PRECONDITION_FAILED');
+});
+
+it.each(['leading', 'trailing', 'same-length', 'blank-only', 'editor'] as const)('keeps a %s whitespace edit during partial-import retry', async edit => {
+  const { service } = setup();
+  const { BOT_MEMORY_BODY_MAX_BYTES } = await import('../../../shared/botMemory.js');
+  const firstBody = edit === 'blank-only' ? ' '.repeat(BOT_MEMORY_BODY_MAX_BYTES) : '  ' + 'x'.repeat(BOT_MEMORY_BODY_MAX_BYTES - 2);
+  const original = firstBody + '\nLast paragraph';
+  const write = storage.write.bind(storage);
+  const failure = vi.spyOn(storage, 'write').mockImplementation(async opts => {
+    if (opts.name.endsWith('_1')) throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+    return write(opts);
+  });
+  await expect(service.importDocument('bot-1', 'spaces', 'source', original)).rejects.toMatchObject({ code: 'ENOSPC', importProgress: { saved: 1, total: 2 } });
+  failure.mockRestore();
+  const filename = 'reference_import_spaces_0.md';
+  const file = path.join(dir, filename);
+  const first = await storage.read(filename);
+  expect(first.body).toBe(firstBody);
+  const edited = edit === 'trailing' ? firstBody + '\n\t' : edit === 'same-length' ? '\t ' + firstBody.slice(2) : firstBody.slice(1);
+  if (edit === 'editor') await storage.update(filename, first.frontmatter.updatedAt, { title: 'source', description: 'source', body: edited });
+  else await fs.writeFile(file, (await fs.readFile(file, 'utf8')).replace(firstBody, edited));
+  const changedFile = await fs.readFile(file, 'utf8');
+  const error = await service.importDocument('bot-1', 'spaces', 'source', original).then(() => null, error => error);
+  expect(error).toMatchObject({ code: 'version-conflict', importProgress: { saved: 0, total: 2 } });
+  expect(importFailureCode(error)).toBe('MEMORY_CHANGED');
+  expect(await fs.readFile(file, 'utf8')).toBe(changedFile);
+  await expect(storage.read('reference_import_spaces_1.md')).rejects.toMatchObject({ code: 'not-found' });
+});
+
+it('retries legacy imported shards using their original trimmed-body semantics', async () => {
+  const { service } = setup();
+  await storage.write({ type: 'reference', name: 'import_legacy_0', title: 'legacy', description: 'legacy', body: 'original' });
+  const file = path.join(dir, 'reference_import_legacy_0.md');
+  const before = await fs.readFile(file, 'utf8');
+  expect((await storage.read('reference_import_legacy_0.md')).frontmatter.bodyLength).toBeUndefined();
+  await service.importDocument('bot-1', 'legacy', 'legacy', '  original\n\n');
+  expect(await fs.readFile(file, 'utf8')).toBe(before);
+  await expect(service.importDocument('bot-1', 'legacy', 'legacy', 'different')).rejects.toMatchObject({ code: 'version-conflict' });
 });

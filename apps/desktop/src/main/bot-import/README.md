@@ -64,7 +64,12 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   length bounds, and document parts preserve source frontmatter and whitespace.
   Each new part is read back before it counts as saved; failures preserve part
   progress accumulated across all documents in a recovered directory, and safe storage
-  reasons. Existing edited parts are not overwritten. Env references and original credentials remain
+  reasons. Existing edited parts are not overwritten. New exact-body parts compare
+  their complete body on retry, including whitespace; `bodyLength` remains present
+  through storage reads and subsequent editor/tool writes. A whitespace-only edit
+  therefore reports `MEMORY_CHANGED` and keeps the checkpoint pending. Legacy parts
+  without that marker retain their historical trimmed-body comparison.
+  Env references and original credentials remain
   available to host execution; no model call or extra confirmation is added.
   Selected skill folders retain their
   real scripts, templates, executable bits and `SKILL.md`.

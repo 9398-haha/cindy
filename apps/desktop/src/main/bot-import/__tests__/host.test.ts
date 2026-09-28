@@ -1300,6 +1300,38 @@ it('archives unsupported automation definitions and blocks both management and r
   expect(h.routines).toHaveLength(1);
 });
 
+it('keeps a whitespace-edited partial memory retry pending instead of reporting it copied', async () => {
+  const directory = path.join(h.root, 'real-memory');
+  const storage = new MemoryStorage(directory, DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  const text = '  ' + 'x'.repeat(BOT_MEMORY_BODY_MAX_BYTES) + '\nLast paragraph';
+  h.snapshot.items = [{ view: { id: 'memory', name: 'Original', category: 'memory', selected: true }, text }];
+  const write = storage.write.bind(storage);
+  const failure = vi.spyOn(storage, 'write').mockImplementation(async opts => {
+    if (opts.name.endsWith('_1')) throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+    return write(opts);
+  });
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'whitespace-memory-retry', previewId: preview.id, name: 'Ada', entryIds: ['memory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first?.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 2 } });
+  failure.mockRestore();
+  const file = path.join(directory, 'reference_import_memory_0.md');
+  await fs.appendFile(file, '\n  ');
+  const edited = await fs.readFile(file, 'utf8');
+  await startCompanionImport(selection, 'fixture');
+  const retried = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(retried?.status).toBe('needs-attention');
+  expect(retried?.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'MEMORY_CHANGED', progress: { saved: 0, total: 2 } });
+  expect(retried?.savedEntryIds ?? []).not.toContain('memory');
+  expect(await fs.readFile(file, 'utf8')).toBe(edited);
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.pendingImport).toBeDefined();
+});
+
 it('continues healthy recovered documents when a sibling attachment fails', async () => {
   h.importMedia.mockRejectedValueOnce(Object.assign(new Error('media failed'), { code: 'ENOSPC' }));
   h.snapshot.items = [{ view: { id: 'mixed', name: 'Recovered', category: 'memory', selected: true },
