@@ -5,6 +5,13 @@ Remote Resource transport, and the `companion_import.import_agent` command.
 Desktop IPC encodes stable import errors through `throwIpcError`; the form uses
 the shared decoder to distinguish editable rejections from uncertain outcomes.
 Mobile retains the existing Remote Resource error codes and retry behavior.
+Controllers without `companion-import-chunks-v1` keep the complete legacy
+projection when its serialized UTF-8 JSON fits 1.5 MiB, leaving envelope space
+within the 2 MiB frame. Larger source lists, previews and results return the
+existing `UNSUPPORTED_CAPABILITY` error with `IMPORT_CLIENT_UPGRADE_REQUIRED`;
+no partial selection/catalog is presented. Older UI may show its generic error,
+so upgrading the controller is required for large reads. Chunk-capable clients
+and local imports keep the complete data; no import count cap is restored.
 The command has `sources`, `preview`, `start`, and `status` operations. Callers
 retain one `requestId` across reconnects and retries. Previews expose selectable
 metadata, never source paths, environment values or credential contents.
@@ -577,6 +584,10 @@ Readable import copies collect credentials from structured argv/stdin as well as
 command env. The same literal/JSON/URL traversal is shared with output masking;
 publication treats stdin and credential-named options as private literals and
 examines other arguments for structured credential fields and capability URLs.
+Authorization and Proxy-Authorization header literals also mask their credential
+payload without making the scheme or ordinary headers global masks. This covers
+separate `-H`/`--header` arguments, `--header=value`, and joined `-Hvalue` forms
+in both publication and execution-output paths; original argv remains intact.
 It does not blanket-mask ordinary positional arguments or command settings:
 doing so corrupts day counts, output formats and subcommands in imported text.
 Unlabelled opaque positional values are not newly classified as credentials by

@@ -8,6 +8,11 @@ export function commandLiteralRedactions(literals: string[], environmentValues: 
   const values = maskLiterals ? [...candidates] : [];
   const structured: { id: string; format: string; value: unknown }[] = [];
   for (const value of new Set([...candidates, ...environmentValues])) {
+    // curl accepts a separate -H/--header value, --header=value or -Hvalue.
+    // Strip the authorization scheme as with MCP headers: commands may echo
+    // only its credential payload. Public headers/scheme names are not masks.
+    const header = /^(?:-H)?[\t ]*(?:proxy-)?authorization[\t ]*:[\t ]*(\S+[\t ]+(.+?))[\t ]*$/i.exec(value);
+    if (header) values.push(header[1]!, header[2]!);
     // command-env applies both the credential-field rules and URL component
     // traversal, including URLs beneath ordinary structured keys like endpoint.
     structured.push({ id: `command_${structured.length}`, format: 'command-env', value });

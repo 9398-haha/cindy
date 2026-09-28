@@ -447,7 +447,7 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
 it.each([false, true])('publishes command env/argv/stdin credentials safely (command selected: %s)', async selected => {
   const secret = 'fixture-command-json-token';
   const nested = 'fixture-command-json-nested';
-  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token'];
+  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token'];
   const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
     'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment'];
   const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
@@ -455,7 +455,7 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
     unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
   const text = `Keep node --mode -e, Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')} ${literalSecrets.join(' ')}`;
   const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
-  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', '', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2]], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
+  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', '', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3]], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
   h.sourceEnabled = false;
   h.snapshot.items = [
     { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
@@ -1003,9 +1003,10 @@ it('transfers a 10,000-entry preview in bounded, immutable chunks and preserves 
   await expect(readRemoteCompanionImport(continuation, 'phone', true)).rejects.toThrow('OWNER_CHANGED');
   h.boundary = false;
   const [legacySource] = await listCompanionImportSources('old-phone');
-  const legacy = await readRemoteCompanionImport(`preview:${legacySource!.id}`, 'old-phone', false);
-  expect(legacy).not.toHaveProperty('chunk');
-  expect((legacy.preview as { entries: unknown[] }).entries).toHaveLength(10_000);
+  await expect(readRemoteCompanionImport(`preview:${legacySource!.id}`, 'old-phone', false)).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+  expect(h.created).toBe(false);
+  expect(h.snapshot.items).toHaveLength(10_000);
+  expect(await readRemoteCompanionImport(continuation, 'phone', true)).toEqual(again);
 });
 
 it.each(['directory', undefined] as const)('retries a repaired memory directory with its original request, including legacy kind=%s', async kind => {
@@ -1593,4 +1594,37 @@ it.each([false, true])('pages setup without vault reads after one-time legacy me
   const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8')); receipt.result.botId = 'another-bot';
   await fs.writeFile(receiptFile, JSON.stringify(receipt));
   await expect(getCompanionImportSetupStatus(result.botId, h.root, () => {}, 0)).rejects.toThrow('INVALID_COMPANION');
+});
+
+it.each(['short', 'unicode', 'escaped'] as const)('checks serialized bytes for legacy %s previews without truncating entries', async kind => {
+  const name = kind === 'unicode' ? '漢'.repeat(600_000) : kind === 'escaped' ? '\u0000'.repeat(300_000) : 'short';
+  h.snapshot.items = [{ view: { id: 'skill', name, category: 'skills', selected: true } }];
+  const [source] = await listCompanionImportSources('old-phone');
+  const read = readRemoteCompanionImport(`preview:${source!.id}`, 'old-phone', false);
+  if (kind === 'short') {
+    const data = await read;
+    expect(data).not.toHaveProperty('chunk');
+    expect(data.preview).toMatchObject({ entries: h.snapshot.items.map(item => item.view) });
+  } else {
+    await expect(read).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+    expect(h.created).toBe(false);
+  }
+});
+
+it('bounds legacy source lists and saved results while preserving the chunk-capable path', async () => {
+  h.readName.mockResolvedValue('漢'.repeat(600_000));
+  await expect(readRemoteCompanionImport('sources', 'old-phone', false)).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+  const requestId = 'fixture-legacy-large-result';
+  const result = { requestId, botId: 'bot', status: 'needs-attention', saved: true,
+    checks: Array.from({ length: 25_000 }, (_, index) => ({ entryId: `entry-${index}`, status: 'needs-attention', message: 'IMPORT_ITEM_FAILED' })) };
+  await fs.mkdir(path.join(h.root, 'companion-imports'), { recursive: true });
+  await fs.writeFile(path.join(h.root, 'companion-imports', `${requestId}.json`), JSON.stringify({
+    result, companionCreated: true, checkpointSaved: true, handoverMarkers: true,
+  }));
+  await expect(readRemoteCompanionImport(`result:${requestId}`, 'old-phone', false)).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+  const api = remoteCompanionImportApi(async id => ({ blocks: [{ primitive: 'companion-import',
+    data: await readRemoteCompanionImport(id, 'new-phone', true) }] }), async () => {});
+  expect((await api.sources())[0]?.name).toBe('漢'.repeat(600_000));
+  expect(await api.status(requestId)).toEqual(result);
+  expect(h.created).toBe(false);
 });

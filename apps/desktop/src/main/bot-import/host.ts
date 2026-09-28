@@ -147,8 +147,13 @@ export async function readRemoteCompanionImport(id: string, controller: string, 
       : id.startsWith('result:') ? { result: await getCompanionImportResult(id.slice(7)) ?? null } : undefined;
   scope.assert();
   if (!data) throw new CompanionImportError('INVALID_REQUEST');
-  if (!chunked) return data;
   const text = JSON.stringify(data);
+  if (!chunked) {
+    // Keep the original shape for older controllers, with room for the resource
+    // and invoke envelopes inside a 2 MiB frame. Never silently omit entries.
+    if (Buffer.byteLength(text) > 1.5 * 1024 * 1024) throw new CompanionImportError('IMPORT_CLIENT_UPGRADE_REQUIRED');
+    return data;
+  }
   if (text.length <= COMPANION_IMPORT_CHUNK_LENGTH) return data;
   if (text.length > COMPANION_IMPORT_READ_MAX_LENGTH || text.length * 2 > MAX_SNAPSHOT_BYTES) throw new CompanionImportError('SOURCE_SNAPSHOT_TOO_LARGE');
   prune(remoteReads);

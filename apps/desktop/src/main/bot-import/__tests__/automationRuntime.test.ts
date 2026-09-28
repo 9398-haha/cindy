@@ -319,3 +319,27 @@ it.each(['env', 'inherited-env', 'stdin', 'argv', 'assignment'] as const)('masks
   await finishImportedAutomation(root, routine, 'chat', 'retry-run', 'must reuse pending output', true, signal, () => {});
   expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
 });
+
+it.each(['-H', '--header=', '-Hjoined', '--proxy-header'])('masks an echoed authorization payload from %s before caching and publishing', async option => {
+  const header = `${option === '--proxy-header' ? 'Proxy-' : ''}Authorization: Bearer fixture-header-token`;
+  const args = option === '--header=' ? [option + header] : option === '-Hjoined' ? ['-H' + header] : [option, header];
+  const code = 'const header=process.argv.slice(1).find(arg=>arg.includes("Authorization:")); process.stdout.write(header.split("Bearer ")[1]+" public report");';
+  const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code, '--', ...args], cwd: root } };
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture header report' } as Routine;
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root },
+  } }, () => {});
+  const signal = new AbortController().signal;
+  const result = await prepareImportedAutomation(root, routine, 'header-run', signal, () => {});
+  expect(result!.direct).not.toContain('fixture-header-token');
+  expect(result!.direct).toContain('public report');
+  const saved = (await shared.store.read(root, 'bot', () => {}))!;
+  expect(saved.automations!.routine!.original).toEqual(original);
+  expect(saved.automations!.routine!.prepared?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => {
+    env.automations!.routine!.prepared = { runId: 'header-run', prompt: '', direct: 'fixture-header-token public report' };
+  });
+  expect((await prepareImportedAutomation(root, routine, 'header-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await finishImportedAutomation(root, routine, 'chat', 'header-run', 'fixture-header-token public report', true, signal, () => {});
+  expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
+});

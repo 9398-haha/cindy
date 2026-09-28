@@ -56,3 +56,10 @@ it('acknowledges a selection chunk without navigating before the host accepts th
   h.start.mockResolvedValueOnce(undefined);
   expect(await invoke()).toMatchObject({ effects: [] });
 });
+
+it('returns a bounded upgrade error through the legacy Remote Resource IPC', async () => {
+  h.channel = 'maker:remote-resources:get';
+  h.remote.mockRejectedValueOnce(new CompanionImportError('IMPORT_CLIENT_UPGRADE_REQUIRED'));
+  await expect(h.handlers.get(h.channel)!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' },
+    client: { protocolVersion: 1, primitives: ['companion-import'] } })).rejects.toThrow('[UNSUPPORTED_CAPABILITY] IMPORT_CLIENT_UPGRADE_REQUIRED');
+});

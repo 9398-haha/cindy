@@ -47,3 +47,23 @@ it.each(['stdin-object', 'stdin-string', 'argv-json', 'argv-assignment', 'argv-v
   }
   expect(items).toEqual(before);
 });
+
+it.each([
+  ['-H', 'Authorization: Bearer fixture-header-token'],
+  ['--header', 'authorization:   bearer fixture-header-token  '],
+  ['--header=Authorization: Bearer fixture-header-token'],
+  ['-HAuthorization: Bearer fixture-header-token'],
+  ['--proxy-header', 'Proxy-Authorization: Bearer fixture-header-token'],
+  ['-H', 'Authorization: Basic fixture-header-token'],
+])('masks the credential payload in command headers %j without masking public header settings', (...args) => {
+  const payload = { kind: 'command', argv: ['curl', ...args, '-H', 'Accept: application/json', '--header=Content-Type: application/json'] };
+  const items: ImportItem[] = [{ view: { id: 'job', category: 'automations', name: 'Job', selected: true },
+    automation: { sourceId: 'job', fingerprint: 'fixture', original: { payload } } }];
+  const before = structuredClone(items);
+  for (const collect of [previewImportRedactions, selectedImportRedactions]) {
+    const readable = redactEnvironmentValues('fixture-header-token curl -H --header Authorization Bearer Basic Accept: application/json Content-Type: application/json', collect(items));
+    expect(readable).not.toContain('fixture-header-token');
+    expect(readable).toContain('curl -H --header Authorization Bearer Basic Accept: application/json Content-Type: application/json');
+  }
+  expect(items).toEqual(before);
+});

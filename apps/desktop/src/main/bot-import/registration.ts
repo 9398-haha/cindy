@@ -34,7 +34,10 @@ export function registerCompanionImport(): void {
         return { ref: request.ref, revision: '1', display: { title: 'Import' }, links: [],
           blocks: [{ id: 'import', primitive: 'companion-import', fallbackMarkdown: 'Hermes / OpenClaw', data }],
           actions: id.startsWith('preview:') ? [{ id: 'import', label: 'Import' }] : [] };
-      } catch (error) { throw new RemoteResourceRegistryError('NOT_FOUND', error instanceof CompanionImportError ? error.code : 'IMPORT_FAILED'); }
+      } catch (error) {
+        const code = error instanceof CompanionImportError ? error.code : 'IMPORT_FAILED';
+        throw new RemoteResourceRegistryError(code === 'IMPORT_CLIENT_UPGRADE_REQUIRED' ? 'UNSUPPORTED_CAPABILITY' : 'NOT_FOUND', code);
+      }
     },
     async invoke(context, request) {
       try {
