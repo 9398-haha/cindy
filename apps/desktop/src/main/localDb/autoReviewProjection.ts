@@ -31,6 +31,38 @@ export function readAutoReviewProjection(
     .get() as { count: number };
   if (installed.count !== 4)
     throw new Error('Authorization projection invalidation is unavailable');
+  type State = {
+    sessionIntent: AutoReviewUserIntent;
+    reviewIntent: AutoReviewUserIntent;
+    lastEventAt: number;
+    sessionAmbiguous: boolean;
+    reviewUnverified: boolean;
+  };
+  const validIntent = (intent: unknown): boolean => {
+    if (typeof intent === 'string') return intent.length <= 2000;
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return false;
+    const value = intent as Record<string, unknown>;
+    return (
+      typeof value.currentUserMessage === 'string' &&
+      Array.isArray(value.earlierUserMessages) &&
+      value.earlierUserMessages.every((x) => typeof x === 'string') &&
+      (value.historyOmitted === undefined || value.historyOmitted === true) &&
+      JSON.stringify(value).length <= 2100
+    );
+  };
+  const parseState = (raw: unknown): State | null => {
+    try {
+      const value = JSON.parse(String(raw)) as State | null;
+      return value &&
+        typeof value.reviewUnverified === 'boolean' &&
+        typeof value.sessionAmbiguous === 'boolean' &&
+        Number.isFinite(value.lastEventAt) &&
+        validIntent(value.sessionIntent) && validIntent(value.reviewIntent)
+        ? value : null;
+    } catch {
+      return null;
+    }
+  };
   const projector = createProjection();
   // Durable triggers only invalidate. The connection-local trigger is allowed
   // to call a UDF; older clients can still write, but can never retain a valid
@@ -42,14 +74,8 @@ export function readAutoReviewProjection(
       )
       .get()
   ) {
+    db.function('cindy_authority_projection_valid_v1', (raw) => parseState(raw) ? 1 : 0);
     db.function('cindy_authority_projection_v1', (raw, target, previous, event) => {
-      type State = {
-        sessionIntent: AutoReviewUserIntent;
-        reviewIntent: AutoReviewUserIntent;
-        lastEventAt: number;
-        sessionAmbiguous: boolean;
-        reviewUnverified: boolean;
-      };
       if (raw === null) {
         const state = JSON.parse(String(previous)) as State;
         const row = JSON.parse(String(event)) as AutoReviewHistoryMessage & { sessionId: string };
@@ -122,6 +148,7 @@ export function readAutoReviewProjection(
       WHEN (SELECT depth FROM auto_review_projection_batch) = 0
       BEGIN
         UPDATE auto_review_projections SET payload = cindy_authority_projection_v1(CASE WHEN OLD.projected_revision = OLD.revision AND OLD.version = 3
+          AND cindy_authority_projection_valid_v1(OLD.payload) = 1
           AND json_extract(NEW.payload, '$.appendEvent.role') = 'user'
           AND json_extract(NEW.payload, '$.appendEvent.visible') = 1
           AND (coalesce(CASE WHEN json_valid(OLD.payload) THEN json_extract(OLD.payload, '$.sessionIntent.historyOmitted') ELSE NULL END, 0) = 0
@@ -168,7 +195,7 @@ export function readAutoReviewProjection(
     let row = select.get(sessionId, leadId) as Row;
     // First use after upgrade or a legacy writer rebuilds from current evidence
     // inside this transaction. Never fall back to the previous payload.
-    if (row.version !== 3 || row.projected_revision !== row.revision || row.payload === null) {
+    if (row.version !== 3 || row.projected_revision !== row.revision || !parseState(row.payload)) {
       db.prepare(
         "UPDATE auto_review_projections SET revision = revision + 1, payload = CASE WHEN json_valid(payload) THEN json_remove(payload, '$.appendEvent') ELSE NULL END WHERE session_id = ? AND lead_id = ?",
       ).run(sessionId, leadId);
@@ -176,30 +203,8 @@ export function readAutoReviewProjection(
     }
     if (row.version !== 3 || row.projected_revision !== row.revision || !row.payload)
       throw new Error('Authorization projection is not synchronized');
-    const value = JSON.parse(row.payload) as StoredAutoReviewProjection & {
-      reviewUnverified: boolean;
-      sessionAmbiguous: boolean;
-      lastEventAt: number;
-    };
-    const validIntent = (intent: AutoReviewUserIntent): boolean => {
-      if (typeof intent === 'string') return intent.length <= 2000;
-      return (
-        !!intent &&
-        typeof intent.currentUserMessage === 'string' &&
-        Array.isArray(intent.earlierUserMessages) &&
-        intent.earlierUserMessages.every((x) => typeof x === 'string') &&
-        (intent.historyOmitted === undefined || intent.historyOmitted === true) &&
-        JSON.stringify(intent).length <= 2100
-      );
-    };
-    if (
-      !Number.isSafeInteger(row.revision) ||
-      typeof value.reviewUnverified !== 'boolean' ||
-      typeof value.sessionAmbiguous !== 'boolean' ||
-      !Number.isFinite(value.lastEventAt) ||
-      !validIntent(value.sessionIntent) ||
-      !validIntent(value.reviewIntent)
-    ) {
+    const value = parseState(row.payload);
+    if (!Number.isSafeInteger(row.revision) || !value) {
       throw new Error('Invalid authorization projection');
     }
     return {

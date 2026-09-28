@@ -103,6 +103,40 @@ describe('durable Auto authority projection', () => {
     },
   );
 
+  it.each([
+    { sessionIntent: {} },
+    { reviewIntent: { currentUserMessage: 'allow' } },
+    { sessionIntent: { currentUserMessage: 'allow', earlierUserMessages: [42] } },
+    { reviewIntent: null },
+    { sessionAmbiguous: 'false' },
+    { reviewUnverified: null },
+    { reviewIntent: 'x'.repeat(2001) },
+    { lastEventAt: '1' },
+  ])('rebuilds structurally corrupt summaries before append and direct read: %j', (damage) => {
+    for (const append of [true, false]) {
+      const db = open();
+      add(db, 'grant', 'worker', 1, 'allow');
+      add(db, 'restriction', 'lead', 2, 'read only');
+      read(db);
+      const original = JSON.parse(stored(db).payload);
+      db.prepare('UPDATE auto_review_projections SET payload=?').run(
+        JSON.stringify({ ...original, ...damage }),
+      );
+      if (append) {
+        expect(() => add(db, 'latest', 'worker', 3, 'never publish')).not.toThrow();
+        expect(db.prepare("SELECT count(*) AS n FROM messages WHERE id='latest'").get()).toEqual({ n: 1 });
+      }
+      const repaired = read(db);
+      expect(JSON.stringify(repaired.reviewIntent)).toContain('read only');
+      if (append) expect(JSON.stringify(repaired.sessionIntent)).toContain('never publish');
+      // Force complete replay and compare both intents, not merely successful writes.
+      db.prepare('UPDATE auto_review_projections SET projected_revision=-1').run();
+      const replayed = read(db);
+      expect(repaired.sessionIntent).toEqual(replayed.sessionIntent);
+      expect(repaired.reviewIntent).toEqual(replayed.reviewIntent);
+    }
+  });
+
   it.each(['lead', 'worker'])('keeps literal trigger restrictions and rejects ambiguous provenance in %s', session => {
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cindy-authority-literal-'));
     directories.push(dir);const filename=path.join(dir,'test.sqlite');const db=open(filename);
@@ -375,11 +409,11 @@ describe('durable Auto authority projection', () => {
     expect(stored(restarted).revision).toBe(stored(restarted).projected_revision);
   });
 
-  it('rejects malformed evidence instead of falling back to an old payload', () => {
+  it('rebuilds an empty malformed summary from current evidence', () => {
     const db = open();
     read(db);
     db.prepare("UPDATE auto_review_projections SET payload='{}'").run();
-    expect(() => read(db)).toThrow('Invalid authorization projection');
+    expect(read(db)).toMatchObject({ sessionIntent: '', reviewIntent: '' });
   });
 
   it('runs the identical factory in the inline worker without Main imports', () => {
@@ -394,5 +428,8 @@ describe('durable Auto authority projection', () => {
     expect(inline(db, { sessionId: 'worker', leadId: 'lead' }, factory).sessionIntent).toBe(
       'read only',
     );
+    db.prepare("UPDATE auto_review_projections SET payload='{}'").run();
+    add(db, 'restriction', 'worker', 2, 'never publish');
+    expect(JSON.stringify(inline(db, { sessionId: 'worker', leadId: 'lead' }, factory).reviewIntent)).toContain('never publish');
   });
 });
