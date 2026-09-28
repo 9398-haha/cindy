@@ -73,7 +73,12 @@ const terminal = (run: PluginTaskRun) =>
   ['completed', 'failed', 'cancelled', 'interrupted'].includes(run.status);
 const ownsInput = (run: PluginTaskRun, value: string) =>
   value === run.inputMessageId || run.inputClientIds?.includes(value) === true;
-const hash = (data: unknown) => createHash('sha256').update(JSON.stringify(data)).digest('hex');
+// Object insertion order is not part of the task API; array order still is.
+const hash = (data: unknown) => createHash('sha256').update(JSON.stringify(data, (_key, value) =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
+    : value,
+)).digest('hex');
 export interface PluginTaskServiceDeps {
   store: PluginTaskStore;
   /** Bound to the captured account/database epoch and plugin availability. */
@@ -87,6 +92,7 @@ export interface PluginTaskServiceDeps {
     title: string,
     route: PluginTaskRoute,
     isolatedWorkspace?: boolean,
+    requestedRoute?: PluginTaskRoute,
   ): Promise<void>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
   assertTeamPlanUnstarted?(taskId: string): Promise<void>;
@@ -165,8 +171,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     await ownTask(pluginId, row.targetId);
     return row;
   };
-  const replay = (row: PluginTaskReceipt | undefined, fingerprint: string) => {
-    if (row && row.fingerprint !== fingerprint)
+  const replay = (row: PluginTaskReceipt | undefined, fingerprint: string, legacyFingerprint?: string) => {
+    if (row && row.fingerprint !== fingerprint && row.fingerprint !== legacyFingerprint)
       fail('IDEMPOTENCY_CONFLICT', 'Request key was used with different input');
     return row;
   };
@@ -232,10 +238,13 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     ) =>
       exclusive(async () => {
         deps.assertAuthorized(pluginId);
-        const fingerprint = hash([request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : [])]);
+        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : [])];
+        const fingerprint = hash(input);
         let row = replay(
           await deps.store.find(pluginId, 'create', '', request.requestKey),
           fingerprint,
+          // Preserve exact retries of receipts written by earlier development builds.
+          createHash('sha256').update(JSON.stringify(input)).digest('hex'),
         );
         if (row) {
           // Do not recreate a deleted/ambiguous task on replay.
@@ -255,7 +264,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         );
         await deps.store.insert(row);
         deps.assertCurrent();
-        await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace);
+        await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace, request.route);
         return ownTask(pluginId, taskId);
       }),
     setTeamPlan: (pluginId: string, taskId: string, plan: PluginTeamPlan) => exclusive(async () => {

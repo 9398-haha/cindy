@@ -10472,13 +10472,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         if (workers.length || reservations.length) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before creating Workers');
       },
-      createSession: async (pluginId, taskId, title, route, isolatedWorkspace) => {
+      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute) => {
         assertPlugin(pluginId);
         const cfg = readGhostErrandConfig(pluginId);
         const configurationIsCurrent = () => {
           const current = readGhostErrandConfig(pluginId);
-          return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode;
+          return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode
+            && current.agentKind === cfg.agentKind && current.model === cfg.model
+            && current.providerId === cfg.providerId && current.effort === cfg.effort
+            && current.fastMode === cfg.fastMode;
         };
+        // Receipt persistence/provider lookup can yield after the first resolution.
+        // Reuse the resolver with the original request, then guard this configuration
+        // through directory validation and the creator's final continuation.
+        const currentRoute = await resolveRoute(pluginId, requestedRoute);
+        if ((Object.keys(currentRoute) as Array<keyof PluginTaskRoute>).some(key => currentRoute[key] !== route[key]))
+          throw new PluginTaskError('ROUTE_UNAVAILABLE', 'Plugin task route changed');
         const workingDir = !isolatedWorkspace && cfg.workingDir
           ? await resolvePluginWorkerDirectory({
               requested: cfg.workingDir, configuredDirectory: cfg.workingDir,
@@ -10721,11 +10730,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const assertCurrent = () => {
           if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(pluginId) || cfg.workingDir !== readGhostErrandConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
         };
-        for (const item of request.plan.items) await resolvePluginWorkerDirectory({requested:item.workingDir,leadDirectory:task.workingDir,configuredDirectory:cfg.workingDir,isPickedDirectory:dir=>isGhostPickedDir(pluginId,dir),assertCurrent});
+        const items = [];
+        for (const item of request.plan.items) {
+          const workingDir = await resolvePluginWorkerDirectory({requested:item.workingDir,leadDirectory:task.workingDir,configuredDirectory:cfg.workingDir,isPickedDirectory:dir=>isGhostPickedDir(pluginId,dir),assertCurrent});
+          items.push({...item, workingDir});
+        }
         const current = await service.get(pluginId, request.taskId);
         assertCurrent();
         if (current.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during directory validation');
-        return service.setTeamPlan(pluginId, request.taskId, request.plan);
+        return service.setTeamPlan(pluginId, request.taskId, {...request.plan, items});
       });
       case 'releaseWorker': {
         return service.completeOperation(async () => {
@@ -10763,6 +10776,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const epoch = getCurrentDbClientSnapshot();
         if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
         await service.get(pluginId, request.taskId);
+        await inputCoordinator.ensureQueueRestored(request.taskId);
+        if (!inputCoordinator.isQueueRestored(request.taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task input queue is unavailable', true);
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        await service.get(pluginId, request.taskId);
         const team = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), request.taskId);
         if (!team.ok) throw new PluginTaskError('HOST_NOT_READY', 'Collaboration state unavailable', true);
         const workers = await Promise.all(team.workers.map(async worker => {
@@ -10773,7 +10790,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }));
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
         await service.get(pluginId, request.taskId);
-        const live = maker.getSession(request.taskId);
         const [leadRow] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id,request.taskId)).limit(1);
         const reservations = team.workflow ? await epoch.client.drizzle.select({id:orcaWorkerCreationReservations.id}).from(orcaWorkerCreationReservations).where(and(eq(orcaWorkerCreationReservations.teamId,team.workflow.workflow_id),gte(orcaWorkerCreationReservations.expiresAt,Date.now()))) : [];
         const occupiedSlots=workers.length+reservations.length;
@@ -10782,6 +10798,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
         await service.get(pluginId,request.taskId);
         const hardLimit = Math.min(readCollaborationSettings().workerHardLimit, plan?.concurrency ?? Infinity);
+        const live = maker.getSession(request.taskId);
         return {...team, capacity:{hardLimit,occupiedSlots,remainingSlots:Math.max(0,hardLimit-occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
       }
       case 'create': return service.create(pluginId, request);
