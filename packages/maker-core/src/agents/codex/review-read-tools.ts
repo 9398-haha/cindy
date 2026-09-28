@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveReviewReadPath, type ReviewReadGrant } from '../shared/review-read-scope.js';
 import type { DynamicToolCallResponse, DynamicToolSpec } from './app-server/protocol.js';
 
@@ -7,6 +8,18 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PAGE_SIZE = 200;
 const DENIED = 'Review refused this read: invalid arguments, unavailable file, or outside the approved read scope.';
+
+/** Also used before startup so an unreadable network scope never starts Review. */
+export function isWindowsReviewLocalPath(rawPath: string, workingDir: string): boolean {
+  try {
+    const value = rawPath.trim();
+    const target = /^file:/i.test(value) ? fileURLToPath(value) : value;
+    const resolved = path.win32.resolve(workingDir, target);
+    return /^[a-z]:\\/i.test(resolved) && !resolved.slice(2).includes(':');
+  } catch {
+    return false;
+  }
+}
 
 export const REVIEW_READ_TOOLS: DynamicToolSpec[] = [
   {
@@ -47,8 +60,7 @@ export async function callReviewReadTool(
   }
   // Reject Windows device paths, network shares and alternate data streams
   // before making any filesystem request (including realpath).
-  const localPath = path.resolve(workingDir, input.path);
-  if (process.platform === 'win32' && (localPath.startsWith('\\\\') || localPath.slice(2).includes(':'))) {
+  if (process.platform === 'win32' && !isWindowsReviewLocalPath(input.path, workingDir)) {
     return reviewReadDenied();
   }
   try {

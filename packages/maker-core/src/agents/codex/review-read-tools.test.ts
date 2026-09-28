@@ -3,7 +3,19 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildReviewReadGrants, type ReviewReadGrant } from '../shared/review-read-scope.js';
-import { callReviewReadTool } from './review-read-tools.js';
+import { callReviewReadTool, isWindowsReviewLocalPath } from './review-read-tools.js';
+
+describe('Windows Review path support', () => {
+  it.each(['C:\\review', 'c:/review/file.md', './file.md', '../artifact.md'])('accepts local drive evidence %s', (target) => {
+    expect(isWindowsReviewLocalPath(target, 'C:\\review')).toBe(true);
+  });
+  it.each(['\\\\server\\share\\file', '//server/share/file', '\\\\?\\C:\\file', '\\\\.\\pipe\\name', 'C:\\file:stream'])('rejects unsupported evidence %s', (target) => {
+    expect(isWindowsReviewLocalPath(target, 'C:\\review')).toBe(false);
+  });
+  it('rejects relative paths rooted at a network share', () => {
+    expect(isWindowsReviewLocalPath('file.md', '\\\\server\\share\\review')).toBe(false);
+  });
+});
 
 describe('Windows Review host reads', () => {
   let root: string;
