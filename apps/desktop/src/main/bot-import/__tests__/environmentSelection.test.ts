@@ -3,6 +3,52 @@ import { previewImportRedactions, resolveImportReferences, retainedImportRedacti
 import { redactEnvironmentValues } from '../process.js';
 import type { ImportItem } from '../types.js';
 import { commandArgumentRedactions } from '../commandRedactions.js';
+import { headerCredentialValues } from '../connectionCatalog.js';
+
+it.each(['command', 'mcp'])('masks decoded Basic userinfo and passwords in %s publication masks', source => {
+  const userinfo = 'alice:fixture-basic:password';
+  const encoded = Buffer.from(userinfo).toString('base64');
+  for (const name of ['Authorization', 'Proxy-Authorization']) {
+    const header = `bAsIc ${encoded}`;
+    const items: ImportItem[] = [{ view: { id: 'source', name: 'Data', category: 'connections', selected: true },
+      ...(source === 'mcp' ? { mcp: { name: 'data', headers: { [name]: header } } }
+        : { automation: { sourceId: 'job', fingerprint: 'fixture', original: { payload: { kind: 'command', argv: ['curl', '--header=' + name + ': ' + header] } } } }) }];
+    const before = structuredClone(items);
+    for (const collect of [previewImportRedactions, selectedImportRedactions]) {
+      const result = redactEnvironmentValues(`${header}\n${encoded}\n${userinfo}\nfixture-basic:password\nalice Basic ordinary data`, collect(items));
+      expect(result).toMatch(/^(?:\[[^\]]+\]\n){4}alice Basic ordinary data$/);
+    }
+    expect(items).toEqual(before);
+  }
+});
+
+it.each([
+  ['alice:fixture-pass:with:colons', 'utf8'], ['alice: 密码🔑 ', 'utf8'], ['alice:pässwörd', 'latin1'],
+  [':fixture-empty-user-password', 'utf8'], ['alice:', 'utf8'],
+] as const)('decodes canonical Basic text %j (%s) without trimming passwords or masking usernames', (userinfo, encoding) => {
+  const encoded = Buffer.from(userinfo, encoding).toString('base64');
+  const password = userinfo.slice(userinfo.indexOf(':') + 1);
+  for (const wire of new Set([encoded, encoded.replace(/=+$/, '')])) {
+    const values = headerCredentialValues('Authorization', `Basic ${wire}`);
+    expect(values).toContain(userinfo);
+    if (password) expect(values).toContain(password);
+    expect(values).not.toContain('alice');
+    expect(values).not.toContain('');
+  }
+});
+
+it.each(['YWxpY2U6eB==', 'YWxpY2U6eA=', 'YWxpY2U6eA===', 'YWxpY2U6 eA==', 'YWxpY2U6eA==!',
+  'YWxpY2U6__8=', 'YW=x', 'A', Buffer.from('alice-without-password').toString('base64')])
+('does not derive plaintext masks from invalid Basic userinfo %j', encoded => {
+  expect(headerCredentialValues('Authorization', `Basic ${encoded}`)).toEqual([`Basic ${encoded}`, encoded]);
+});
+
+it('does not decode other schemes or introduce a colon mask for empty Basic credentials', () => {
+  const encoded = Buffer.from('alice:fixture-basic-password').toString('base64');
+  expect(headerCredentialValues('Authorization', `Bearer ${encoded}`)).toEqual([`Bearer ${encoded}`, encoded]);
+  expect(headerCredentialValues('X-API-Key', `Basic ${encoded}`)).toEqual([`Basic ${encoded}`]);
+  expect(headerCredentialValues('Authorization', 'Basic Og==')).toEqual(['Basic Og==', 'Og==']);
+});
 
 it('retains matched credentials across selected strings and buffers with one matcher', () => {
   let reads = 0;

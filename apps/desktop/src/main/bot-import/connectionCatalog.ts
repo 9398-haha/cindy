@@ -15,6 +15,23 @@ const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decrypti
 
 export function isImportedCredentialField(name: string): boolean { return CREDENTIAL_FIELD.test(name); }
 
+function basicCredentialValues(encoded: string): string[] {
+  // Buffer's decoder ignores invalid characters and padding. Accept only a
+  // canonical standard-base64 payload (with or without its complete padding).
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return [];
+  const bytes = Buffer.from(encoded, 'base64');
+  const canonical = bytes.toString('base64');
+  if (encoded !== canonical && encoded !== canonical.replace(/=+$/, '')) return [];
+  // Preserve UTF-8 text and legacy single-byte Basic credentials without
+  // producing replacement characters that were never part of the password.
+  const utf8 = bytes.toString('utf8');
+  const userinfo = Buffer.from(utf8, 'utf8').equals(bytes) ? utf8 : bytes.toString('latin1');
+  const separator = userinfo.indexOf(':');
+  if (separator < 0 || userinfo.length === 1) return [];
+  const password = userinfo.slice(separator + 1);
+  return password ? [userinfo, password] : [userinfo];
+}
+
 /** Shared transport-header decomposition for MCP and imported commands. Cookie
  * names are application-defined, so every nonempty cookie value stays private. */
 export function headerCredentialValues(name: string, value: string): string[] {
@@ -25,6 +42,7 @@ export function headerCredentialValues(name: string, value: string): string[] {
   if (authorization) {
     const credential = /^\S+\s+(.+)$/.exec(payload)?.[1];
     if (credential) values.push(credential);
+    if (credential && /^Basic[\t ]/i.test(payload)) values.push(...basicCredentialValues(credential));
   }
   if (/^cookie$/i.test(header)) for (const part of payload.split(';')) {
     const separator = part.indexOf('=');

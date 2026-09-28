@@ -607,7 +607,12 @@ publication treats stdin and credential-named options as private literals and
 examines other arguments for structured credential fields and capability URLs.
 Credential-named header literals (including X-API-Key and X-Auth-Token) mask
 their payload; Authorization/Proxy-Authorization additionally mask the credential
-after the scheme. MCP and commands share Cookie decomposition: every nonempty
+after the scheme. For Basic authentication, canonical standard Base64 (padded or
+unpadded) also supplies the decoded userinfo and the entire password after its
+first colon; UTF-8 and legacy single-byte text are preserved. Invalid encoding
+or userinfo without a colon adds no decoded guesses; usernames alone and the
+empty `:` pair do not become masks. Original headers are never rewritten.
+MCP and commands share Cookie decomposition: every nonempty
 cookie value, including quoted and percent-decoded forms, stays private because
 cookie names are application-defined. This does not make scheme names or ordinary
 Accept/Content-Type values global masks. This covers

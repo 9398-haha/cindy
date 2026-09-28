@@ -312,11 +312,14 @@ it.each([true, false])('preserves MCP response syntax and isError=%s when enviro
 
 it('redacts resolved catalog credentials without changing schema syntax, tool dispatch or connection configuration', async () => {
   const env = { TOKEN: 'fixture-global-token', TYPE: 'object' };
+  const basicUserinfo = 'alice:fixture-mcp-basic:password';
+  const basicEncoded = Buffer.from(basicUserinfo).toString('base64');
   const connection = { name: 'fixture-server', url: 'https://fixture-user:fixture-password@example.invalid/mcp/fixture-path%2Ftoken?key=fixture-url-key#access_token=fixture%2Ffragment%2Bsecret',
     env: { TOKEN: 'fixture-local-token' }, headers: { Authorization: 'Bearer fixture-header-token', 'X-Api-Key': 'fixture-api-key',
+      'Proxy-Authorization': `Basic ${basicEncoded}`,
       cOoKiE: 'session=fixture-cookie-session; alternate="fixture-cookie%2Fquoted=="; preference=dark' } };
   const secrets = [env.TOKEN, connection.env.TOKEN, connection.headers.Authorization, 'fixture-header-token', connection.headers['X-Api-Key'], connection.url, 'fixture-user', 'fixture-password', 'fixture-url-key', 'fixture-path%2Ftoken', 'fixture-path/token', 'fixture/fragment+secret', 'fixture%2Ffragment%2Bsecret',
-    'fixture-cookie-session', 'fixture-cookie%2Fquoted==', 'fixture-cookie/quoted==', 'dark'];
+    'fixture-cookie-session', 'fixture-cookie%2Fquoted==', 'fixture-cookie/quoted==', 'dark', basicUserinfo, basicEncoded, 'fixture-mcp-basic:password'];
   const echo = secrets.join(' ');
   const secretKey = 'argument_fixture-path/token';
   const tool: Tool = { name: `read_${connection.env.TOKEN}`, title: echo, description: echo,

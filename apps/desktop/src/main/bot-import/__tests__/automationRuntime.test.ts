@@ -379,6 +379,30 @@ it.each(['stdin', 'argv', 'assignment', 'env', 'inherited-env'])('masks form cre
   expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
 });
 
+it.each(['Authorization', 'Proxy-Authorization'])('masks decoded Basic %s credentials from command output, caches and final chat', async name => {
+  const userinfo = 'alice:fixture-basic:password';
+  const header = `${name}: Basic ${Buffer.from(userinfo).toString('base64')}`;
+  const code = 'const u=Buffer.from(process.argv[1].split(/\\s+/).at(-1),"base64").toString();process.stdout.write(u+" | "+u.slice(u.indexOf(":")+1)+" | alice | public report");';
+  const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code, header], cwd: root } };
+  const output = `${userinfo} | fixture-basic:password | alice | public report`;
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture Basic report' } as Routine;
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root },
+  } }, () => {});
+  const signal = new AbortController().signal;
+  const result = await prepareImportedAutomation(root, routine, 'basic-run', signal, () => {});
+  expect(result!.direct).toMatch(/^(?:\[command_literal_\w+\] \| ){2}alice \| public report$/);
+  const saved = (await shared.store.read(root, 'bot', () => {}))!;
+  expect(saved.automations!.routine!.original).toEqual(original);
+  expect(saved.automations!.routine!.prepared?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => { env.automations!.routine!.prepared = { runId: 'basic-run', prompt: '', direct: output }; });
+  expect((await prepareImportedAutomation(root, routine, 'basic-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => { env.automations!.routine!.deliveryProgress = { runId: 'basic-run', text: output, direct: true, deliveries: [], next: 0 }; });
+  expect((await prepareImportedAutomation(root, routine, 'retry-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await finishImportedAutomation(root, routine, 'chat', 'retry-run', output, true, signal, () => {});
+  expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
+});
+
 it.each(['X-API-Key', 'X-Auth-Token', 'Cookie'])('masks independently echoed %s header values through command execution and retry publication', async name => {
   const header = `${name}: ${name === 'Cookie' ? 'session=fixture-session%2Fsecret; second="fixture-second-cookie"' : 'fixture-header-secret'}`;
   const code = 'const h=process.argv[1];const v=h.slice(h.indexOf(":")+1).trim();process.stdout.write((/^cookie:/i.test(h)?v.split(";").map(p=>decodeURIComponent(p.slice(p.indexOf("=")+1).trim().replace(/^"|"$/g,""))).join(" | "):v)+" | public report");';
