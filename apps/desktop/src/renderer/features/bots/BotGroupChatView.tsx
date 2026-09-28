@@ -65,6 +65,7 @@ import {
   openBotGroupPlan,
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction } from './botGroupStore';
+import { botGroupReadKey, markBotRead } from './botReadState';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from './botConversationTimeline';
 
 type GroupViewState =
@@ -120,6 +121,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const readOwner = useRef(getDataOwnerGeneration());
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
 
   useEffect(() => {
@@ -139,6 +141,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         const result = await api.getBotGroup(groupId);
         if (!isCurrent()) return;
         if (result.ok) {
+          readOwner.current = owner;
           setState((previous) =>
             previous.kind === 'ready'
               ? { ...previous, group: result.group }
@@ -185,6 +188,18 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages) : []),
     [state],
   );
+  const acknowledge = useCallback(() => {
+    if (!isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    const at = messages.reduce((latest, message) => message.kind === 'message' && message.authorKind === 'bot'
+      ? Math.max(latest, message.createdAt) : latest, 0);
+    if (at > 0) markBotRead(botGroupReadKey(groupId), at);
+  }, [groupId, messages]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(acknowledge);
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('focus', acknowledge); document.removeEventListener('visibilitychange', acknowledge); };
+  }, [acknowledge]);
   const plans = useMemo(
     () => (state.kind === 'ready' ? mergeBotGroupPlans(state.olderPlans, state.group.plans) : []),
     [state],
@@ -432,6 +447,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         onScroll={(event) => {
           const element = event.currentTarget;
           stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+          acknowledge();
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-6"
       >

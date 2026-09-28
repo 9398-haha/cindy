@@ -19,6 +19,14 @@ export interface PluginTaskReceipt {
   revision: number;
   createdAt: number;
 }
+function ownsTaskReceipt(receipt: PluginTaskReceipt | undefined, pluginId: string): boolean {
+  if (!receipt || receipt.pluginId !== pluginId || receipt.operation !== 'create') return false;
+  try {
+    const payload = JSON.parse(receipt.payload);
+    return !!payload && typeof payload === 'object' && !Array.isArray(payload)
+      && payload.ownershipRevoked !== true;
+  } catch { return false; }
+}
 export interface PluginTaskStore {
   get(id: string): Promise<PluginTaskReceipt | undefined>;
   find(
@@ -37,6 +45,7 @@ export interface PluginTaskStore {
   forSession(taskId: string): Promise<PluginTaskReceipt[]>;
   insert(row: PluginTaskReceipt): Promise<void>;
   save(row: PluginTaskReceipt): Promise<void>;
+  revokePlugin(pluginId: string): Promise<void>;
 }
 export class PluginTaskError extends Error {
   constructor(
@@ -149,10 +158,14 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
   const ownTask = async (pluginId: string, taskId: string) => {
     deps.assertAuthorized(pluginId);
     const receipt = await deps.store.get(taskId);
-    if (!receipt || receipt.pluginId !== pluginId || receipt.operation !== 'create')
+    if (!ownsTaskReceipt(receipt, pluginId))
       return fail('TASK_NOT_FOUND', 'Task not found');
     const view = await deps.readSession(taskId);
     if (!view || view.status === 'deleted') return fail('TASK_NOT_FOUND', 'Task not found');
+    if (!ownsTaskReceipt(await deps.store.get(taskId), pluginId))
+      return fail('TASK_NOT_FOUND', 'Task not found');
+    deps.assertCurrent();
+    deps.assertAuthorized(pluginId);
     return view;
   };
   const ownRun = async (pluginId: string, runId: string) => {
@@ -190,21 +203,31 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     const run = JSON.parse(row.payload) as PluginTaskRun;
     if (terminal(run)) return run;
     const observed = await deps.inspect(run.taskId);
-    if (
-      observed.pending.some((item) => queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
-    )
-      return run;
-    if (isSameSessionExecution(observed.execution, run.execution)) return run;
-    // Lack of a terminal is not success. Never replay an ambiguously dispatched input.
-    run.status = 'reconciling';
-    run.error =
-      'No matching live execution or pending input; inspect the task before sending a new request.';
-    return run;
+    return exclusive(async () => {
+      // Native settlement/acceptance may have committed while inspection waited.
+      // Re-read behind that same receipt queue, with uninstall ownership checked.
+      const latest = await ownRun(row.pluginId, row.id);
+      const current = JSON.parse(latest.payload) as PluginTaskRun;
+      if (terminal(current) || latest.revision !== row.revision) return current;
+      if (observed.pending.some((item) => queuedInputBelongsTo(item, (value) => ownsInput(current, value))))
+        return current;
+      if (isSameSessionExecution(observed.execution, current.execution)) return current;
+      // Lack of a terminal is not success. Never replay an ambiguously dispatched input.
+      current.status = 'reconciling';
+      current.error = 'No matching live execution or pending input; inspect the task before sending a new request.';
+      return current;
+    });
   };
   return {
     // Host-only native lifecycle work shares send/cancel's drain. Do not use
     // exclusive here: native close callbacks may enqueue receipt writes.
     completeOperation,
+    /** Retain receipts and user content, but never reuse an uninstalled installation's ownership. */
+    withUninstall: (pluginId: string, remove: () => Promise<void>) => exclusive(async () => {
+      await deps.store.revokePlugin(pluginId);
+      deps.assertCurrent();
+      await remove();
+    }),
     /** Account teardown awaits already accepted writes before closing this DB. */
     drain: async () => {
       let pending: Promise<unknown>, active: Promise<unknown>;
@@ -277,6 +300,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         const rows = await deps.store.list(pluginId, 'create', null, after, limit);
         const items = [];
         for (const row of rows) {
+          // The store projects valid create payloads as empty to avoid loading plans.
+          if (row.payload !== '' && !ownsTaskReceipt(row, pluginId)) continue;
           const view = await deps.readSession(row.id);
           if (view && view.status !== 'deleted') items.push(view);
         }
@@ -357,6 +382,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         return deps.store.list(pluginId, 'send', taskId, after, limit);
       });
       const items = await Promise.all(rows.map(reconcile));
+      await exclusive(() => ownTask(pluginId, taskId));
       deps.assertCurrent();
       deps.assertAuthorized(pluginId);
       return { items, nextCursor: rows.length === limit ? rows.at(-1)!.id : null };

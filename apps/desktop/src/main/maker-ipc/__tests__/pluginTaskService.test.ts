@@ -12,6 +12,7 @@ import {
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
 import type { PluginTaskView } from '../../../shared/pluginTasks.js';
+import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
@@ -26,6 +27,29 @@ it('rejects oversized plans before saving and refuses oversized legacy receipts 
   await expect(f.service.settleWorkerLabel('p',task.taskId,'w0')).rejects.toMatchObject({code:'INVALID_REQUEST'});
 });
 
+it.each([false,true])('production Auto context checks uninstall after its projection await (worker=%s)', async worker => {
+  for (const revoked of [false,true]) {
+    const f=fixture(),task=await f.create();
+    const session={...f.route,source:'plugin',workingDir:'/answer',permissionMode:'auto',status:'active'};
+    const results=[[session],worker?[{leadId:task.taskId,label:'w',teamId:'team',teamStatus:'active'}]:[],[session]];
+    const query={from:()=>query,where:()=>query,innerJoin:()=>query,limit:async()=>results.shift()};
+    const epoch={client:{drizzle:{select:()=>query},tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
+    let load!:(id:string)=>Promise<unknown>;
+    const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
+      getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,
+      createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
+      pluginTaskServiceForCurrentOwner:()=>f.service,readGhostErrandConfig:()=>({permissionMode:'auto'}),
+      readPluginTaskPlanReceipt,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
+    const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+    const start=source.indexOf('  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {');
+    const block=source.slice(start,source.indexOf('\n  }));',start)+7);
+    const js=ts.transpileModule(block,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+    new Function(...Object.keys(deps),js)(...Object.values(deps));
+    if(revoked)await expect(load(worker?'worker':task.taskId)).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+    else await expect(load(worker?'worker':task.taskId)).resolves.toMatchObject({authorized:true,pluginId:'p'});
+  }
+});
+
 function fixture() {
   let seq = 0;
   let current = true;
@@ -33,6 +57,12 @@ function fixture() {
   const tasks = new Map<string, PluginTaskView>();
   const copy = <T>(v: T): T => structuredClone(v);
   const store: PluginTaskStore = {
+    revokePlugin: async pluginId => {
+      for (const row of rows.values()) if (row.pluginId === pluginId && row.operation === 'create') {
+        row.payload = JSON.stringify({...JSON.parse(row.payload),ownershipRevoked:true});
+        row.revision++;
+      }
+    },
     get: async (id) => copy(rows.get(id)),
     find: async (p, op, t, k) =>
       copy(
@@ -117,7 +147,112 @@ function fixture() {
   };
 }
 
+it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a newly persisted %s terminal over stale inspection for getRun and listRuns', async status => {
+  for (const kind of ['getRun','listRuns'] as const) {
+    const f=fixture(),run=await f.send();
+    await f.service.accept(run.taskId,{clientId:run.inputMessageId},f.execution);
+    f.deps.inspect=async()=>{
+      await f.service.settle(run.taskId,f.execution,status,'output');
+      return {execution:null,pending:[]};
+    };
+    const result=kind==='getRun'?await f.service.getRun('p',run.runId):(await f.service.listRuns('p',run.taskId)).items[0];
+    expect(result).toMatchObject({status,outputMessageId:'output'});
+    expect(result).not.toHaveProperty('error');
+  }
+});
+
+it.each(['restore','restart'] as const)('the production cancel adapter rechecks revoked ownership after %s waits', async point => {
+  const f=fixture(),run=await f.send();
+  let release!:()=>void,entered!:()=>void,restores=0;
+  const barrier=new Promise<void>(resolve=>{release=resolve;});
+  const started=new Promise<void>(resolve=>{entered=resolve;});
+  const pause=async()=>{entered();await barrier;};
+  const remove=vi.fn(),stop=vi.fn(async()=>({ok:true,status:'stopping'}));
+  const snapshot={};
+  const deps={assertPlugin:()=>{},assertCurrent:()=>{},snapshot,
+    getCurrentDbClientSnapshot:()=>snapshot,isPluginTaskAuthorized:()=>true,
+    pluginTaskServiceForCurrentOwner:()=>f.service,PluginTaskError,
+    inputCoordinator:{ensureQueueRestored:async()=>{if(++restores===2&&point==='restore')await pause();},
+      isQueueRestored:()=>true,getQueueControlSnapshot:()=>({pendingQueue:[{clientId:run.inputMessageId}]}),remove},
+    withdrawOwnedSessionInputs,controlOwnedSessionExecution,isSameSessionExecution,
+    awaitAgentInputQueueSnapshotPersistence:async()=>{},
+    withSessionRestartLock:async(_id:string,operation:()=>Promise<void>)=>{if(point==='restart')await pause();await operation();},
+    readExecution:()=>f.execution,resetAutomaticRecoveryForExplicitStop:vi.fn(),contextOverflowRolloverHolder:null,
+    sessionControlService:{stopSessionTurn:stop}};
+  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution) => {');
+  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
+  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const cancel=new Function(...Object.keys(deps),js)(...Object.values(deps));
+  const operation=cancel('p',run.taskId,[run.inputMessageId],f.execution);
+  const result=expect(operation).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+  await started;await f.service.withUninstall('p',async()=>{});release();await result;
+  if(point==='restore')expect(remove).not.toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+});
+
 describe('plugin ordinary task receipts', () => {
+  it('retains user tasks and receipts but denies every old task capability after reinstall and restart', async () => {
+    const f = fixture(); const task = await f.create(); const run = await f.send();
+    const before = structuredClone([...f.tasks]);
+    const remove = vi.fn(async () => {});
+    await f.service.withUninstall('p',remove);
+    expect(remove).toHaveBeenCalledOnce();
+    expect([...f.tasks]).toEqual(before);
+    expect(f.rows.has(task.taskId)).toBe(true);
+    expect(f.rows.has(run.runId)).toBe(true);
+    // The new installation remains authorized under the same plugin ID.
+    const restarted = createPluginTaskService(f.deps);
+    for (const service of [f.service,restarted]) {
+      expect((await service.list('p')).items).toEqual([]);
+      const denied = [
+        () => service.get('p',task.taskId),
+        () => service.create('p',{requestKey:'create',title:'Test'}),
+        () => service.send('p',{taskId:task.taskId,requestKey:'new',expectedRevision:1,text:'hello'}),
+        () => service.getRun('p',run.runId), () => service.listRuns('p',task.taskId),
+        () => service.cancel('p',run.runId),
+        () => service.accept(task.taskId,{clientId:run.inputMessageId},f.execution),
+        () => service.assertDispatch('p',task.taskId),
+      ];
+      for (const operation of denied) await expect(operation()).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+    }
+    const fresh = await restarted.create('p',{requestKey:'new-install',title:'Test'});
+    expect(fresh.taskId).not.toBe(task.taskId);
+    expect(f.tasks.size).toBe(2);
+    expect(f.deps.cancel).not.toHaveBeenCalled();
+  });
+  it('serializes uninstall after an admitted create and retains normal-update ownership', async () => {
+    const f = fixture(); let release!:()=>void, entered!:()=>void;
+    const barrier=new Promise<void>(resolve=>{release=resolve;});
+    const started=new Promise<void>(resolve=>{entered=resolve;});
+    f.deps.resolveRoute=async()=>{entered();await barrier;return f.route;};
+    const create=f.create(); await started;
+    let removed=false;
+    const uninstall=f.service.withUninstall('p',async()=>{removed=true;});
+    await Promise.resolve();expect(removed).toBe(false);
+    release();const task=await create;await uninstall;
+    await expect(f.service.get('p',task.taskId)).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+    const other=fixture();const original=await other.create();
+    expect(await createPluginTaskService(other.deps).create('p',{requestKey:'create',title:'Test'})).toEqual(original);
+  });
+  it.each(['getRun','listRuns'] as const)('rechecks ownership after delayed %s observation', async kind => {
+    const f=fixture();const run=await f.send();let release!:()=>void,entered!:()=>void;
+    const barrier=new Promise<void>(resolve=>{release=resolve;});const started=new Promise<void>(resolve=>{entered=resolve;});
+    f.deps.inspect=async()=>{entered();await barrier;return {execution:null,pending:[]};};
+    const operation=kind==='getRun'?f.service.getRun('p',run.runId):f.service.listRuns('p',run.taskId);
+    const result=expect(operation).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+    await started;await f.service.withUninstall('p',async()=>{});release();await result;
+  });
+  it('does not remove the package if durable revocation fails and keeps revocation on removal failure', async () => {
+    const f=fixture();const task=await f.create();const remove=vi.fn(async()=>{});
+    const revoke=f.deps.store.revokePlugin;
+    f.deps.store.revokePlugin=async()=>{throw Error('storage unavailable');};
+    await expect(f.service.withUninstall('p',remove)).rejects.toThrow('storage unavailable');
+    expect(remove).not.toHaveBeenCalled();
+    f.deps.store.revokePlugin=revoke;
+    await expect(f.service.withUninstall('p',async()=>{throw Error('package removal failed');})).rejects.toThrow('package removal failed');
+    await expect(f.service.get('p',task.taskId)).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+  });
   it('binds isolated workspace intent to creation and idempotency', async () => {
     const f = fixture();
     const input = { requestKey: 'isolated', title: 'Test', isolatedWorkspace: true };

@@ -47,10 +47,9 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
       return db.drizzle
         .select({
           ...getTableColumns(table),
-          // Task listing only needs receipt IDs to read session views. Keep
-          // large creation plans inside SQLite; run listing still reconciles
-          // send payloads and therefore must retain them.
-          payload: operation === 'create' ? sql<string>`''` : table.payload,
+          // Keep valid creation plans inside SQLite. Project only revocation
+          // (including malformed receipts), never the potentially large plan.
+          payload: operation === 'create' ? sql<string>`CASE WHEN json_valid(${table.payload}) THEN CASE WHEN json_type(${table.payload}) = 'object' AND coalesce(json_type(${table.payload}, '$.ownershipRevoked'), 'null') != 'true' THEN '' ELSE '{"ownershipRevoked":true}' END ELSE '{"ownershipRevoked":true}' END` : table.payload,
         })
         .from(table)
         .where(
@@ -70,6 +69,13 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .where(and(eq(table.operation, 'send'), eq(table.targetId, taskId))),
     insert: async (row) => {
       await db.drizzle.insert(table).values(row);
+    },
+    revokePlugin: async (pluginId) => {
+      // Keep the identity/request key so reinstall cannot replay or recreate old tasks.
+      await db.drizzle.update(table).set({
+        payload: sql`json_set(CASE WHEN json_valid(${table.payload}) THEN CASE WHEN json_type(${table.payload}) = 'object' THEN ${table.payload} ELSE '{}' END ELSE '{}' END, '$.ownershipRevoked', json('true'))`,
+        revision: sql`${table.revision} + 1`,
+      }).where(and(eq(table.pluginId, pluginId), eq(table.operation, 'create')));
     },
     save: async (row) => {
       const result = await db.drizzle

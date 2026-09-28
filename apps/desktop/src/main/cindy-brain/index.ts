@@ -1722,6 +1722,8 @@ export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | 
 
 let pluginTaskHandler: PluginTaskHandler | null = null;
 export function setPluginTaskHandler(handler: PluginTaskHandler | null): void { pluginTaskHandler = handler; }
+let pluginTaskUninstaller: ((pluginId: string, remove: () => Promise<void>) => Promise<void>) | null = null;
+export function setPluginTaskUninstaller(handler: typeof pluginTaskUninstaller): void { pluginTaskUninstaller = handler; }
 
 /** Approval revision participates in Auto decision cache identity (including reinstall/update). */
 export function pluginTaskAuthorizationRevision(id: string): string | null {
@@ -6528,8 +6530,11 @@ async function uninstallGhostAndCleanupLocked(
     getGhostAgentSlot().clearGhost(id);
     getGhostErrandSlot().clearGhost(id);
     getGhostSubscriptionGateway().dropGhost(id);
-    const result = await manager.uninstall(id, { notify: false });
-    if ('rejection' in result) throwUninstallError(result.rejection);
+    if (!pluginTaskUninstaller) throw new Error('Plugin task storage is not ready for uninstall');
+    await pluginTaskUninstaller(id, async () => {
+      const result = await manager.uninstall(id, { notify: false });
+      if ('rejection' in result) throwUninstallError(result.rejection);
+    });
     removeGhostSecrets(id);
     removeGhostKvBestEffort(
       createGhostKvStore({
