@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
-  BOT_SKILL_MAX_BODY_BYTES, botSkillsDir, readCompatibleBotSkillSource,
+  BOT_SKILL_MAX_BODY_BYTES, botSkillRootDir, botSkillsDir, readCompatibleBotSkillSource,
   unescapeFrontmatterValue, type BotSkillSummary,
 } from './botSkillStore.js';
 
@@ -9,7 +9,7 @@ import {
 const LINE_PREVIEW_BYTES = 4096;
 const READ_BYTES = 8192;
 
-async function readRuntimeHeader(filePath: string, slug: string, migrate = true): Promise<BotSkillSummary> {
+async function readRuntimeHeader(filePath: string, slug: string, migrate = true, fullMetadata = false): Promise<BotSkillSummary> {
   const handle = await fs.open(filePath, 'r');
   const fields = new Map<string, string>();
   let frontmatterBytes = 0;
@@ -22,12 +22,13 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true)
     size = (await handle.stat()).size;
     const buffer = Buffer.alloc(READ_BYTES);
     let line = Buffer.alloc(0);
+    let lineParts: Buffer[] = [];
     let lineBytes = 0;
     let lineNumber = 0;
     let done = false;
     const finishLine = (newline: boolean) => {
       lineNumber++;
-      const text = line.toString('utf8').replace(/\r$/, '');
+      const text = (fullMetadata ? Buffer.concat(lineParts) : line).toString('utf8').replace(/\r$/, '');
       const entire = lineBytes === line.length;
       frontmatterBytes += lineBytes + (newline ? 1 : 0);
       if (lineNumber === 1) {
@@ -45,11 +46,12 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true)
         if (separator > 0 && ['name', 'displayName', 'description', 'updatedAt'].includes(key)) {
           let value = text.slice(separator + 1).trim();
           // Close only the preview's quote. The original scalar stays untouched.
-          if (!entire && /^["']/.test(value) && !value.endsWith(value[0])) value += value[0];
+          if (!fullMetadata && !entire && /^["']/.test(value) && !value.endsWith(value[0])) value += value[0];
           fields.set(key, unescapeFrontmatterValue(value));
         }
       }
       line = Buffer.alloc(0);
+      lineParts = [];
       lineBytes = 0;
     };
     while (!done) {
@@ -64,6 +66,7 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true)
         const end = found >= 0 && found < bytesRead ? found : bytesRead;
         const segment = buffer.subarray(offset, end);
         lineBytes += segment.length;
+        if (fullMetadata) lineParts.push(Buffer.from(segment));
         if (line.length < LINE_PREVIEW_BYTES) line = Buffer.concat([line, segment.subarray(0, LINE_PREVIEW_BYTES - line.length)]);
         if (end < bytesRead) finishLine(true);
         offset = end + 1;
@@ -75,7 +78,7 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true)
   // files. Huge hand-written legacy files remain intact and use body discovery.
   if (migrate && legacy && size <= BOT_SKILL_MAX_BODY_BYTES + 16 * 1024) {
     await readCompatibleBotSkillSource(filePath, slug);
-    return readRuntimeHeader(filePath, slug, false);
+    return readRuntimeHeader(filePath, slug, false, fullMetadata);
   }
   return {
     slug,
@@ -89,9 +92,8 @@ async function readRuntimeHeader(filePath: string, slug: string, migrate = true)
   };
 }
 
-/** Runtime-only streaming view; full authoring/query APIs retain original text. */
-export async function* iterateBotSkillRuntimeSummaries(userDataDir: string, botId: string): AsyncGenerator<BotSkillSummary> {
-  const root = botSkillsDir(userDataDir, botId);
+async function* iterateHeaders(userDataDir: string, botId: string, enabled: boolean, fullMetadata: boolean): AsyncGenerator<BotSkillSummary> {
+  const root = enabled ? botSkillsDir(userDataDir, botId) : path.join(botSkillRootDir(userDataDir, botId), 'disabled-skills');
   let directory;
   try { directory = await fs.opendir(root, { bufferSize: 32 }); }
   catch (error) {
@@ -104,7 +106,7 @@ export async function* iterateBotSkillRuntimeSummaries(userDataDir: string, botI
       const filePath = path.join(root, entry.name, name);
       try {
         if (!(await fs.stat(filePath)).isFile()) continue;
-        yield await readRuntimeHeader(filePath, entry.name);
+        yield { ...await readRuntimeHeader(filePath, entry.name, true, fullMetadata), ...(enabled ? {} : { enabled: false }) };
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
@@ -114,4 +116,15 @@ export async function* iterateBotSkillRuntimeSummaries(userDataDir: string, botI
       }
     }
   }
+}
+
+/** Runtime startup retains only short metadata previews. */
+export async function* iterateBotSkillRuntimeSummaries(userDataDir: string, botId: string): AsyncGenerator<BotSkillSummary> {
+  yield* iterateHeaders(userDataDir, botId, true, false);
+}
+
+/** Query-index construction retains one full header at a time, never Skill bodies. */
+export async function* iterateBotSkillQuerySummaries(userDataDir: string, botId: string): AsyncGenerator<BotSkillSummary> {
+  yield* iterateHeaders(userDataDir, botId, true, true);
+  yield* iterateHeaders(userDataDir, botId, false, true);
 }

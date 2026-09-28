@@ -3,6 +3,7 @@ import path from 'node:path';
 
 type Projection = {
   pluginRoot: string;
+  artifacts?: string[];
   skills: { name: string; description: string; path: string; filePath: string }[];
 };
 type Entry = {
@@ -23,8 +24,10 @@ const MAX_CACHED_ROOTS = 32;
 const writers = new Map<string, Promise<Projection>>();
 
 export function invalidateBotSkillRuntime(root: string): void {
-  const entry = entries.get(path.resolve(root));
-  if (entry) entry.revision++;
+  for (const key of [path.resolve(root), `${path.resolve(root)}\0query`]) {
+    const entry = entries.get(key);
+    if (entry) entry.revision++;
+  }
 }
 
 function discard(root: string, entry: Entry) {
@@ -35,21 +38,22 @@ function discard(root: string, entry: Entry) {
 }
 
 /** Constant-size directory identity checks also detect delete/recreate and moves. */
-async function sourceStamp(root: string): Promise<string> {
-  const [parent, skills] = await Promise.all([
-    fs.stat(root).catch(() => null), fs.stat(path.join(root, 'skills')).catch(() => null),
-  ]);
-  return `${parent?.dev}:${parent?.ino}/${skills?.dev}:${skills?.ino}:${skills?.mtimeMs}:${skills?.ctimeMs}`;
+async function sourceStamp(root: string, shelves: string[]): Promise<string> {
+  const parent = await fs.stat(root).catch(() => null);
+  const children = await Promise.all(shelves.map(shelf => fs.stat(path.join(root, shelf)).catch(() => null)));
+  return `${parent?.dev}:${parent?.ino}/` + children.map(child => `${child?.dev}:${child?.ino}:${child?.mtimeMs}:${child?.ctimeMs}`).join('/');
 }
 
 /** Rebuild once per mutation, share concurrent hydrations, observe external edits. */
-export async function cachedBotSkillRuntime(root: string, build: () => Promise<Projection>): Promise<Projection> {
+export async function cachedBotSkillRuntime(root: string, build: () => Promise<Projection>, kind: 'runtime' | 'query' = 'runtime'): Promise<Projection> {
   root = path.resolve(root);
-  const stamp = await sourceStamp(root);
-  let entry = entries.get(root);
+  const key = kind === 'runtime' ? root : `${root}\0query`;
+  const shelves = kind === 'runtime' ? ['skills'] : ['skills', 'disabled-skills'];
+  const stamp = await sourceStamp(root, shelves);
+  let entry = entries.get(key);
   if (!entry) {
     entry = { revision: 0, loadedRevision: -1, stamp: '', watchers: [] };
-    entries.set(root, entry);
+    entries.set(key, entry);
   }
   if (entry.stamp !== stamp || !entry.watchers.length) {
     // Reattach on directory replacement without forking an in-flight build.
@@ -64,10 +68,10 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
       // watcher covers a missing/replaced skills directory; recursive watching
       // catches SKILL.md edits that do not change the directory timestamps.
       observed.watchers.push(watch(root, { persistent: false }, (_event, filename) => {
-        if (!filename || filename.toString() === 'skills') observed.revision++;
+        if (!filename || shelves.includes(filename.toString())) observed.revision++;
       }));
-      try {
-        observed.watchers.push(watch(path.join(root, 'skills'), { recursive: true, persistent: false }, (_event, filename) => {
+      for (const shelf of shelves) try {
+        observed.watchers.push(watch(path.join(root, shelf), { recursive: true, persistent: false }, (_event, filename) => {
           // Script outputs/venv caches do not alter the Skill metadata index.
           if (!filename || /^[^/\\]+(?:[/\\]skill\.md)?$/i.test(filename.toString())) observed.revision++;
         }));
@@ -86,8 +90,8 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
     }
   }
   // LRU eviction closes native handles; it does not remove any saved catalog.
-  entries.delete(root);
-  entries.set(root, entry);
+  entries.delete(key);
+  entries.set(key, entry);
   while (entries.size > MAX_CACHED_ROOTS) {
     const [oldRoot, oldEntry] = entries.entries().next().value!;
     discard(oldRoot, oldEntry);
@@ -96,19 +100,19 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
   if (current.loading) return structuredClone(await current.loading);
   if (current.watchers.length && current.value && current.loadedRevision === current.revision) {
     // Generated files are disposable: deleting them must rebuild the catalog.
-    const present = current.value.pluginRoot === root || await Promise.all([
-      fs.access(path.join(current.value.pluginRoot, 'catalog.jsonl')),
-      fs.access(current.value.skills[0].filePath),
-    ]).then(() => true, () => false);
+    const artifacts = current.value.artifacts ?? (current.value.pluginRoot === root ? [] : [
+      path.join(current.value.pluginRoot, 'catalog.jsonl'), current.value.skills[0].filePath,
+    ]);
+    const present = await Promise.all(artifacts.map(file => fs.access(file))).then(() => true, () => false);
     // Eviction may happen while checking generated files. Rejoin the active
     // entry rather than enqueueing work from a now-discarded cache entry.
-    if (entries.get(root) !== current) return cachedBotSkillRuntime(root, build);
+    if (entries.get(key) !== current) return cachedBotSkillRuntime(root, build, kind);
     if (present && current.loadedRevision === current.revision) return structuredClone(current.value);
     if (!present) current.revision++;
   }
   // Another hydration may have started rebuilding during the artifact check.
   if (current.loading) return structuredClone(await current.loading);
-  const previous = writers.get(root);
+  const previous = writers.get(key);
   const loading = (async () => {
     // A failed predecessor has already cleaned up its staging files; it must
     // neither poison this retry nor race its final writes against this build.
@@ -118,17 +122,17 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
     do {
       revision = current.revision;
       value = await build();
-    } while (revision !== current.revision && entries.get(root) === current);
+    } while (revision !== current.revision && entries.get(key) === current);
     current.value = value;
     current.loadedRevision = revision;
     return structuredClone(value);
   })();
   current.loading = loading;
-  writers.set(root, loading);
+  writers.set(key, loading);
   try { return await loading; }
-  catch (error) { discard(root, current); throw error; }
+  catch (error) { discard(key, current); throw error; }
   finally {
-    if (writers.get(root) === loading) writers.delete(root);
+    if (writers.get(key) === loading) writers.delete(key);
     current.loading = undefined;
   }
 }

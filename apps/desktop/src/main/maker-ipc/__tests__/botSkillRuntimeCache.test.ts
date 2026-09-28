@@ -11,6 +11,24 @@ afterEach(async () => { vi.restoreAllMocks(); await fs.rm(root, { recursive: tru
 const projection = (name: string) => ({ pluginRoot: root,
   skills: [{ name, description: name, path: root, filePath: path.join(root, 'SKILL.md') }] });
 
+it('keeps query artifacts separate from runtime mounts and invalidates both on a Skill write', async () => {
+  const catalog = path.join(root, 'query-catalog.jsonl');
+  const runtime = vi.fn(async () => projection('runtime'));
+  const query = vi.fn(async () => {
+    await fs.writeFile(catalog, 'fixture');
+    return { pluginRoot: root, skills: [], artifacts: [catalog] };
+  });
+  for (let turn = 0; turn < 2; turn++) {
+    expect((await cachedBotSkillRuntime(root, runtime)).skills[0].name).toBe('runtime');
+    expect((await cachedBotSkillRuntime(root, query, 'query')).artifacts).toEqual([catalog]);
+  }
+  expect(runtime).toHaveBeenCalledTimes(1); expect(query).toHaveBeenCalledTimes(1);
+  invalidateBotSkillRuntime(root);
+  await cachedBotSkillRuntime(root, runtime);
+  await cachedBotSkillRuntime(root, query, 'query');
+  expect(runtime).toHaveBeenCalledTimes(2); expect(query).toHaveBeenCalledTimes(2);
+});
+
 it('shares concurrent hydration work and reconciles mutations during the read', async () => {
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });

@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { iterateBotSkillRuntimeSummaries } from '../botSkillRuntimeSource';
+import { iterateBotSkillRuntimeSummaries, iterateBotSkillQuerySummaries } from '../botSkillRuntimeSource';
 import { botSkillsDir } from '../botSkillStore';
 
 let home: string;
@@ -15,13 +15,13 @@ async function source(slug: string, text: string) {
   await fs.writeFile(file, text);
   return file;
 }
-async function read() {
+async function read(iterate = iterateBotSkillRuntimeSummaries) {
   const items = [];
-  for await (const item of iterateBotSkillRuntimeSummaries(home, 'bot')) items.push(item);
+  for await (const item of iterate(home, 'bot')) items.push(item);
   return items;
 }
 
-it('uses directory streaming and header-only reads for a large Skill body', async () => {
+it.each([['runtime', iterateBotSkillRuntimeSummaries], ['query', iterateBotSkillQuerySummaries]] as const)('%s uses directory streaming and header-only reads for a large Skill body', async (_kind, iterate) => {
   const file = await source('large-body', `---\nname: fixture\ndescription: Preview\n---\n${'Body '.repeat(2 * 1024 * 1024)}`);
   const readdir = vi.spyOn(fs, 'readdir').mockRejectedValue(new Error('unbounded enumeration'));
   const readFile = vi.spyOn(fs, 'readFile').mockRejectedValue(new Error('full file read'));
@@ -37,7 +37,7 @@ it('uses directory streaming and header-only reads for a large Skill body', asyn
     });
     return handle;
   });
-  expect(await read()).toMatchObject([{ name: 'fixture', description: 'Preview', filePath: file, bodyStartLine: 5 }]);
+  expect(await read(iterate)).toMatchObject([{ name: 'fixture', description: 'Preview', filePath: file, bodyStartLine: 5 }]);
   expect(bytesRead).toBeLessThanOrEqual(8192);
   expect(readdir).not.toHaveBeenCalled(); expect(readFile).not.toHaveBeenCalled();
   open.mockRestore();

@@ -9,7 +9,8 @@
 
 import { app } from 'electron';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
-import { BOT_SKILL_RUNTIME_INDEX_BYTES, botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
+import { botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
+import { queryBotSkillIndex } from './botSkillQueryIndex.js';
 import { cachedBotSkillRuntime } from './botSkillRuntimeCache.js';
 import { iterateBotSkillRuntimeSummaries } from './botSkillRuntimeSource.js';
 import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js';
@@ -228,27 +229,11 @@ export async function listBotSkillsForSession(
     const owner = await (deps.resolveBotId ?? defaultResolveBotId)(params.callerSessionId);
     if (!owner.ok) return owner;
     assertOwnerBoundary(deps, boundary);
-    const all = await listBotSkills(await skillHomeOf(deps, owner.botId, boundary), owner.botId);
+    const home = await skillHomeOf(deps, owner.botId, boundary);
     assertOwnerBoundary(deps, boundary);
-    const terms = (params.query ?? '').toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    const matches = terms.length ? all.filter(item => {
-      const text = `${item.slug}\n${item.name}\n${item.description}`.toLocaleLowerCase();
-      return terms.every(term => text.includes(term));
-    }) : all;
-    const offset = Math.max(0, Math.floor(params.offset ?? 0));
-    const limit = Math.max(1, Math.min(50, Math.floor(params.limit ?? 20)));
-    const skills: ReturnType<typeof botSkillRuntimeSummary>[] = [];
-    let bytes = 0;
-    for (let index = offset; index < matches.length && skills.length < limit; index++) {
-      const summary = botSkillRuntimeSummary(matches[index]);
-      const size = Buffer.byteLength(JSON.stringify(summary));
-      if (skills.length && bytes + size > BOT_SKILL_RUNTIME_INDEX_BYTES) break;
-      skills.push(summary);
-      bytes += size;
-    }
-    const next = offset + skills.length;
-    return { ok: true, skills, total: matches.length,
-      ...(next < matches.length ? { nextOffset: next } : {}) };
+    const result = await queryBotSkillIndex(botSkillRootDir(home, owner.botId), home, owner.botId, params);
+    assertOwnerBoundary(deps, boundary);
+    return { ok: true, ...result };
   } catch (cause) {
     return storeError(cause);
   }

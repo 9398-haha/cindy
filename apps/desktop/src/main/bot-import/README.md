@@ -105,7 +105,7 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   catalog. Typed writes invalidate it synchronously; filesystem observation plus
   directory identity checks cover hand edits, moves and replacement. Watcher
   errors fall back to rebuilding, and missing generated catalogs are recreated.
-  The cache retains at most 32 roots, not a maximum number of stored Skills.
+  The cache retains at most 32 runtime/query entries, not a maximum number of stored Skills.
   In-flight catalog writers are serialized per root independently of cache
   eviction, so an evicted snapshot cannot overwrite its newer replacement.
   Failed writers release their successor; idle writer records are removed.
@@ -115,7 +115,16 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   previews while the scanner finds the original body offset; ordinary Skill
   bodies are not loaded/parsed in full for indexing. Existing legacy migration
   remains for small authored files; oversized legacy files retain their original
-  bytes and use discovery. Full-text query/authoring APIs still read the originals.
+  bytes and use discovery. Authoring/detail APIs still read the originals.
+  Full-metadata queries reuse a separate disk index of enabled and disabled
+  headers. Construction streams headers (never bodies), sorts byte-bounded runs
+  and merges two records at a time; an oversized header occupies its own run.
+  Warm search and pagination stream that index and retain only the requested
+  response page, without reopening each source file. Full name/description
+  matching, stable name/slug ordering and disabled entries remain available.
+  Mutation invalidation and watcher recovery also cover this query index and
+  disabled metadata. A cold cache builds it once; subsequent queries still scan
+  index bytes for exact matching/counts, rather than maintaining a search database.
   Failed directory scans leave the last complete catalog intact for retry.
 - Skill discovery follows grouped Hermes directories, configured external roots,
   native directory links and disabled lists. OpenClaw discovery covers workspace,
