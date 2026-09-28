@@ -580,8 +580,11 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           result.status = 'needs-attention';
         }
         if (selection.deferSetup && result.saved && result.canonicalSessionId) {
-          await createMessage(result.canonicalSessionId, { clientId: `companion-import:${selection.requestId}`, role: 'assistant',
-            content: t(`bots.import.${result.checks.some(check => check.status === 'needs-attention') ? 'chatSetup' : 'chatReady'}`) });
+          const pending = result.checks.some(check => check.status === 'needs-attention');
+          // Keep the legacy setup ID across upgrades, but do not let its
+          // idempotency key swallow the later successful completion message.
+          await createMessage(result.canonicalSessionId, { clientId: `companion-import:${selection.requestId}${pending ? '' : ':ready'}`, role: 'assistant',
+            content: t(`bots.import.${pending ? 'chatSetup' : 'chatReady'}`) });
           scope.assert();
         }
         if (result.status === 'complete') await companionEnvironmentStore.update(scope.root, result.botId, scope.assert, env => { delete env.pendingImport; });

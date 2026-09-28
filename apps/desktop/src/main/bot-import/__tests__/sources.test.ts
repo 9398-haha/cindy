@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
 import { transferCompanion, validateImportSelection, type TransferDeps } from '../transfer.js';
 import { resolveImportReferences, selectedImportEnvironment } from '../environmentSelection.js';
+import { discoverImportSkills } from '../skills.js';
 import { createImportBudget } from '../files.js';
 
 let home: string;
@@ -457,4 +458,45 @@ it.each(['hermes', 'openclaw'] as const)('records a failed %s memory subtree sep
   expect(snapshot.items.find(item => item.view.name === 'broken')?.sourceFile).toMatchObject({ root: path.join(home, folder), file: path.join(home, folder, 'broken'), kind: 'directory' });
   expect(snapshot.items.find(item => item.view.name === 'bad.md')?.sourceFile?.kind).toBe('file');
   expect(snapshot.items.find(item => item.view.name === 'healthy.md')?.text).toBe('Keep healthy');
+});
+
+it.each(['package.json', 'openclaw.plugin.json'])('bounds %s before allocating or parsing during skill discovery', async filename => {
+  const directory = filename === 'package.json' ? 'bin/node_modules/openclaw' : 'plugin';
+  const manifest = path.join(home, directory, filename);
+  await write(`${directory}/${filename}`, '{}');
+  await fs.truncate(manifest, 16 * 1024 * 1024 + 1);
+  const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
+  const config = { plugins: { load: { paths: [path.join(home, 'plugin')] } } };
+  const env = { PATH: path.join(home, 'bin') };
+  const allocate = vi.spyOn(Buffer, 'alloc');
+  const parse = vi.spyOn(JSON, 'parse');
+  await expect(discoverImportSkills(source, config, home, env, createImportBudget())).rejects.toThrow('SOURCE_FILE_TOO_LARGE');
+  expect(allocate).not.toHaveBeenCalled();
+  expect(parse).not.toHaveBeenCalled();
+  allocate.mockRestore(); parse.mockRestore();
+  await write(`${directory}/${filename}`, JSON.stringify(filename === 'package.json' ? { name: 'openclaw' } : { id: 'plugin', skills: ['skills'] }));
+  await write(`${directory}/skills/report/SKILL.md`, '# Report');
+  const skills = await discoverImportSkills(source, config, home, env, createImportBudget());
+  expect(skills.map(item => item.view.name)).toEqual(['report']);
+});
+
+it('charges installed-package and plugin manifests to the same source budget before parsing the next one', async () => {
+  await write('bin/node_modules/openclaw/package.json', JSON.stringify({ name: 'openclaw', padding: 'x'.repeat(600) }));
+  await write('plugin/openclaw.plugin.json', JSON.stringify({ id: 'plugin', skills: ['skills'], padding: 'x'.repeat(600) }));
+  const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
+  const parse = vi.spyOn(JSON, 'parse');
+  await expect(discoverImportSkills(source, { plugins: { load: { paths: [path.join(home, 'plugin')] } } }, home,
+    { PATH: path.join(home, 'bin') }, createImportBudget(1500))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(parse).toHaveBeenCalledTimes(1);
+});
+
+// Windows file symlinks require Developer Mode/admin; size/budget cases run on every OS.
+it.skipIf(process.platform === 'win32')('preserves native manifest file symlinks while charging their contents', async () => {
+  await write('shared/plugin.json', JSON.stringify({ id: 'plugin', skills: ['skills'] }));
+  await write('plugin/skills/report/SKILL.md', '# Report');
+  await fs.symlink(path.join(home, 'shared/plugin.json'), path.join(home, 'plugin/openclaw.plugin.json'));
+  const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
+  const config = { plugins: { load: { paths: [path.join(home, 'plugin')] } } };
+  expect((await discoverImportSkills(source, config, home, {}, createImportBudget())).map(item => item.view.name)).toEqual(['report']);
+  await expect(discoverImportSkills(source, config, home, {}, createImportBudget(10))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
 });

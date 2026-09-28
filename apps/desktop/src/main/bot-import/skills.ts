@@ -15,26 +15,31 @@ function sourcePath(value: string, base: string, home: string, env: NodeJS.Proce
   return path.resolve(base, expanded === '~' ? home : expanded.startsWith('~/') ? path.join(home, expanded.slice(2)) : expanded);
 }
 
-async function readJson(file: string): Promise<Record<string, unknown>> {
-  try { return object(JSON.parse(await fs.readFile(file, 'utf8'))); }
+async function readJson(file: string, budget: ImportReadBudget): Promise<Record<string, unknown>> {
+  try {
+    // Native package managers may symlink the manifest itself. Preserve that
+    // discovery behavior while bounding the resolved file before allocation.
+    const real = await fs.realpath(file);
+    return object(JSON.parse((await readImportFile(path.dirname(real), real, budget)).bytes.toString('utf8')));
+  }
   catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '') || error instanceof SyntaxError) return {}; throw error; }
 }
 
 /** Locate the installed package through its executable; don't run source code during discovery. */
-async function openClawInstall(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+async function openClawInstall(env: NodeJS.ProcessEnv, budget: ImportReadBudget): Promise<string | undefined> {
   const candidates = (env.PATH ?? '').split(path.delimiter).filter(Boolean).flatMap(dir => [path.join(dir, 'openclaw'), path.join(dir, 'node_modules', 'openclaw', 'package.json')]);
   for (const candidate of candidates) {
     let real: string;
     try { real = await fs.realpath(candidate); } catch { continue; }
     let dir = path.dirname(real);
     for (let depth = 0; depth < 5; depth++) {
-      if ((await readJson(path.join(dir, 'package.json'))).name === 'openclaw') return dir;
+      if ((await readJson(path.join(dir, 'package.json'), budget)).name === 'openclaw') return dir;
       const parent = path.dirname(dir); if (parent === dir) break; dir = parent;
     }
   }
 }
 
-async function rootsFor(source: ImportSource, values: Record<string, unknown>, home: string, env: NodeJS.ProcessEnv): Promise<SkillRoot[]> {
+async function rootsFor(source: ImportSource, values: Record<string, unknown>, home: string, env: NodeJS.ProcessEnv, budget: ImportReadBudget): Promise<SkillRoot[]> {
   const config = object(values.skills);
   const resolve = (v: string) => sourcePath(v, source.root, home, env);
   if (source.kind === 'hermes') return [path.join(source.root, 'skills'), ...strings(config.external_dirs).map(resolve)].map(directory => ({ directory, links: 'any' }));
@@ -47,7 +52,7 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
     { directory: path.join(source.root, 'skills'), links: 'any' },
     { directory: path.join(source.root, 'agents', source.agentId, 'agent', 'workshop-skills'), links: trusted },
   ];
-  const install = await openClawInstall(env);
+  const install = await openClawInstall(env, budget);
   if (install) roots.push({ directory: path.join(install, 'skills'), links: trusted, bundled: true });
   for (const directory of strings(load.extraDirs).map(resolve)) roots.push({ directory, links: trusted });
   // A plugin's manifest declares its skill roots. Disabled plugins stay out of the catalog.
@@ -60,7 +65,7 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
     for (const location of new Set(locations)) {
-      const manifest = await readJson(path.join(location, 'openclaw.plugin.json'));
+      const manifest = await readJson(path.join(location, 'openclaw.plugin.json'), budget);
       const id = string(manifest.id) || path.basename(location);
       if (object(object(plugins.entries)[id]).enabled === false || strings(plugins.deny).includes(id)) continue;
       if (Array.isArray(plugins.allow) && !strings(plugins.allow).includes(id)) continue;
@@ -82,7 +87,7 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
   const disabled = new Set(strings(config.disabled));
   const platformDisabled = object(config.platform_disabled);
   for (const name of strings(platformDisabled.cli)) disabled.add(name);
-  for (const root of await rootsFor(source, values, home, env)) {
+  for (const root of await rootsFor(source, values, home, env, budget)) {
     let realRoot: string;
     try { realRoot = await fs.realpath(root.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }

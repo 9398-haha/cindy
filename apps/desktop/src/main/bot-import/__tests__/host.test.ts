@@ -9,6 +9,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
 import { fingerprint } from '../files.js';
+import { createMessage } from '../../localDb/ipc/messages.js';
+import { t } from '../../i18n.js';
 import { createBotProfile, getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
 import type { ImportSnapshot } from '../types.js';
 import { CompanionImportError } from '../types.js';
@@ -80,6 +82,7 @@ beforeEach(async () => {
   vi.mocked(verifyImportedAutomation).mockClear();
   vi.mocked(getBotRemoteResourceSource).mockReset().mockImplementation(async () => { if (!h.created) throw new Error('[NOT_FOUND]'); return { canonicalSessionId: 'chat' } as never; });
   vi.mocked(createBotProfile).mockReset().mockImplementation(async input => { h.created = true; h.botId = (input as { id: string }).id; return {} as never; });
+  vi.mocked(createMessage).mockReset();
   h.writeProfile.mockReset().mockResolvedValue(undefined); h.importDocument.mockReset().mockResolvedValue(undefined);
   vi.mocked(decodeBotAvatarImage).mockReset();
   vi.mocked(discoverImportSources).mockReset().mockImplementation(async () => [h.snapshot.source]);
@@ -941,4 +944,38 @@ it.each(['directory', undefined] as const)('retries a repaired memory directory 
   expect(Object.values(environment!.documents!)).toEqual(expect.arrayContaining(['Healthy', 'Recovered note', 'User preferences']));
   await startCompanionImport(selection, 'phone');
   expect(h.importDocument).toHaveBeenCalledTimes(3);
+});
+
+it.each([false, true])('publishes completion after deferred setup without duplicate notices (legacy setup: %s)', async legacySetup => {
+  const requestId = 'fixture-setup-to-ready';
+  const rows = new Map<string, string>();
+  if (legacySetup) rows.set(`chat:companion-import:${requestId}`, t('bots.import.chatSetup'));
+  // Match createMessage's persisted (sessionId, clientId) uniqueness contract.
+  vi.mocked(createMessage).mockImplementation(async (sessionId, body) => {
+    const key = `${sessionId}:${body.clientId}`;
+    if (typeof body.content !== 'string') throw new Error('Expected a text import notice');
+    if (!rows.has(key)) rows.set(key, body.content);
+    return {} as never;
+  });
+  const { continueCompanionImport } = await import('../host.js');
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId, previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  await vi.waitFor(() => expect(rows.size).toBe(1));
+  const result = (await getCompanionImportResult(requestId))!;
+  // An unsuccessful setup retry must not spam another setup notice.
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  expect(rows.size).toBe(1);
+  h.verified = true;
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('complete'));
+  await vi.waitFor(() => expect(rows.size).toBe(2));
+  expect([...rows.values()]).toEqual([t('bots.import.chatSetup'), t('bots.import.chatReady')]);
+  expect([...rows.keys()]).toEqual([`chat:companion-import:${requestId}`, `chat:companion-import:${requestId}:ready`]);
+  await startCompanionImport(selection, 'fixture');
+  expect(rows.size).toBe(2);
+  expect(h.pause).toHaveBeenCalledTimes(1);
 });
