@@ -4,7 +4,7 @@ import { ArrowLeft, Check, Clock, FileText, Link2, Users, X } from 'lucide-react
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
-  parseSharedTaskPeer, sharedTaskHostPeer, SHARED_TASK_HOST_CHANNEL,
+  parseSharedTaskPeer, sharedTaskHostPeer, sharedTaskAccountName, SHARED_TASK_HOST_CHANNEL,
   type SharedTaskDetail, type SharedTaskHostCommand,
   type SharedTaskHostState, type SharedTaskListItem, type SharedTaskOwnedItem,
 } from '@cindy/device-link';
@@ -36,12 +36,14 @@ function host(target: Target, command: SharedTaskHostCommand) {
 }
 
 /** Both entry points share one window. Confirmations replace its content, not its identity. */
-export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
-  open: boolean; onOpenChange(open: boolean): void; session?: Session; returnFocus?(): void;
+export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, initialInvitation }: {
+  open: boolean; onOpenChange(open: boolean): void; session?: Session; returnFocus?(): void; initialInvitation?: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { dataOwnerId, isAuthenticated } = useAuth();
+  const { dataOwnerId, isAuthenticated, user } = useAuth();
+  const invitationOwner = useRef(getDataOwnerGeneration());
+  const autoAttempted = useRef<string | null>(null);
   const ownerGeneration = getDataOwnerGeneration().generation;
   const initialTarget = useMemo<Target | null>(() => {
     if (!session) return null;
@@ -57,8 +59,7 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
   const [joined, setJoined] = useState<SharedTaskListItem[] | null>(null);
   const [listErrors, setListErrors] = useState({ owned: false, joined: false });
   const [invitation, setInvitation] = useState('');
-  const [nickname, setNickname] = useState('');
-  const [errors, setErrors] = useState<{ invitation?: string; nickname?: string }>({});
+  const [errors, setErrors] = useState<{ invitation?: string }>({});
   const [success, setSuccess] = useState<{ sharedTaskId: string; title: string } | null>(null);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,7 +69,6 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
   const pending = useRef(false);
   const lists = useRef({ owned: { sequence: 0, loading: false }, joined: { sequence: 0, loading: false } });
   const codeInput = useRef<HTMLInputElement>(null);
-  const nicknameInput = useRef<HTMLInputElement>(null);
   const keep = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const confirmationOrigin = useRef<Origin>(null);
@@ -128,11 +128,12 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
     epoch.current++; targetEpoch.current++; invalidateLists();
     setTab('join'); setTarget(initialTarget); setState(null); setDetailError(null);
     setOwned(null); setJoined(null); setListErrors({ owned: false, joined: false });
-    setInvitation(''); setNickname(''); setErrors({}); setSuccess(null); setConfirm(null);
+    setInvitation(isDataOwnerGenerationCurrent(invitationOwner.current) ? initialInvitation ?? '' : '');
+    setErrors({}); setSuccess(null); setConfirm(null);
     pending.current = false; setBusy(false);
     if (open && isAuthenticated) { void loadList('owned'); void loadList('joined'); }
     return () => { epoch.current++; targetEpoch.current++; invalidateLists(); };
-  }, [open, dataOwnerId, ownerGeneration, isAuthenticated, initialTarget, loadList]);
+  }, [open, dataOwnerId, ownerGeneration, isAuthenticated, initialTarget, initialInvitation, loadList]);
   useEffect(() => {
     setState(null); setDetailError(null);
     if (open && target && isAuthenticated) void loadDetail(target, target.connect);
@@ -232,23 +233,23 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
       void loadList('joined');
     }
   });
-  const join = () => {
-    const next = { invitation: !/^[A-Za-z0-9_-]{43}$/.test(invitation.trim()) ? 'sharedTask.invalidInvitation' : undefined,
-      nickname: !nickname.trim() ? 'sharedTask.missingNickname' : undefined };
+  const join = (enter = false) => {
+    const next = { invitation: !invitation.trim() || invitation.length > 8192 ? 'sharedTask.invalidInvitation' : undefined };
     setErrors(next);
-    if (next.invitation || next.nickname) { (next.invitation ? codeInput : nicknameInput).current?.focus(); return; }
+    if (next.invitation) { codeInput.current?.focus(); return; }
     void run(async current => {
       try {
-        const result = await window.electronAPI.sharedTask.account({ action: 'join', invitation: invitation.trim(), displayName: nickname.trim() }) as { sharedTaskId: string };
+        const result = await window.electronAPI.sharedTask.account({ action: 'join', invitation: invitation.trim(), displayName: sharedTaskAccountName(user?.name) }) as { sharedTaskId: string };
         if (!current()) return;
         setInvitation(''); setSuccess({ sharedTaskId: result.sharedTaskId, title: '' });
         invalidateLists(); void loadList('joined');
         const joinedDetail = await window.electronAPI.sharedTask.account({ action: 'get', sharedTaskId: result.sharedTaskId }) as SharedTaskDetail;
         if (current()) setSuccess({ sharedTaskId: result.sharedTaskId, title: joinedDetail.title });
+        if (enter && current()) await enterTask(result.sharedTaskId, current);
       } catch (error) { if (current()) toast.error(t(sharedTaskErrorKey(error, 'join'))); }
     });
   };
-  const openTask = (sharedTaskId: string) => void run(async current => {
+  const enterTask = async (sharedTaskId: string, current: Current) => {
     const item = await window.electronAPI.sharedTask.account({ action: 'get', sharedTaskId }) as SharedTaskDetail;
     if (!current()) return;
     const peer = sharedTaskHostPeer(item.sharedTaskId, item.hostDeviceId);
@@ -263,12 +264,19 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
     if (!current() || remoteSession?.id !== item.sessionId) return;
     remoteProjectsStore.setDeviceSessions(peer, item.title, [remoteSession]);
     navigate('/cc-agent/' + encodeURIComponent(item.sessionId)); onOpenChange(false);
-  });
+  };
+  const openTask = (sharedTaskId: string) => void run(current => enterTask(sharedTaskId, current));
+  useEffect(() => {
+    if (!open || !isAuthenticated || !initialInvitation || invitation !== initialInvitation
+        || autoAttempted.current === initialInvitation || !isDataOwnerGenerationCurrent(invitationOwner.current)) return;
+    autoAttempted.current = initialInvitation;
+    join(true);
+  }, [open, isAuthenticated, initialInvitation, invitation, ownerGeneration]);
   const invite = () => void run(async current => {
     if (!detail || !target) return;
-    const result = await host(target, { action: 'invite', sharedTaskId: detail.sharedTaskId }) as { invitation: string };
+    const result = await host(target, { action: 'invite', sharedTaskId: detail.sharedTaskId }) as { invitation: string; invitationLink?: string };
     if (!current()) return;
-    try { await navigator.clipboard.writeText(result.invitation); }
+    try { await navigator.clipboard.writeText(result.invitationLink ?? result.invitation); }
     catch { if (current()) toast.error(t('sharedTask.invitationCopyFailed')); return; }
     if (current()) toast.success(t('sharedTask.invitationCopied'));
   });
@@ -363,7 +371,6 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus }: {
       <p className="mb-5 text-13 text-[var(--text-secondary)]">{t('sharedTask.joinIntro')}</p>
       <form onSubmit={event => { event.preventDefault(); join(); }} className="space-y-3">
         <FormField label={t('sharedTask.invitation')} required reserveFeedback error={errors.invitation && t(errors.invitation)}>{props => <Input {...props} inputRef={codeInput} value={invitation} onChange={value => { setInvitation(value); setErrors(previous => ({ ...previous, invitation: undefined })); }} disabled={busy} surface="ivory" autoComplete="off" spellCheck={false} placeholder={t('sharedTask.invitationPlaceholder')} />}</FormField>
-        <FormField label={t('sharedTask.joinNickname')} required reserveFeedback error={errors.nickname && t(errors.nickname)}>{props => <Input {...props} inputRef={nicknameInput} value={nickname} onChange={value => { setNickname(value); setErrors(previous => ({ ...previous, nickname: undefined })); }} maxLength={32} disabled={busy} surface="ivory" autoComplete="off" placeholder={t('sharedTask.nicknamePlaceholder')} />}</FormField>
         {notice(t('sharedTask.joinNotice'))}<div className="flex justify-end pt-3"><Button type="submit" variant="cta" size="lg" loading={busy}>{t('sharedTask.join')}</Button></div>
       </form>
     </div>

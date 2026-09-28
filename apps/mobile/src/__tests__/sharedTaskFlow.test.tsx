@@ -6,6 +6,8 @@ import { sharedTaskHostPeer } from '@cindy/device-link';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { ApiError } from '@/api/client';
 import { Platform } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { clearSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import SharedSessionScreen from '../../app/shared-session';
 
 const h = vi.hoisted(() => ({
@@ -17,6 +19,8 @@ const h = vi.hoisted(() => ({
   t: (key: string, options?: { title?: string }) => options?.title ? key + ':' + options.title : key,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: h.t }) }));
+vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test', APP_SCHEME: 'cindy' }));
+vi.mock('expo-clipboard', () => ({ getStringAsync: vi.fn(), isPasteButtonAvailable: false }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('lucide-react-native', () => ({ Check: () => null, Laptop: () => null, Link: () => null, Users: () => null, Clock: () => null, FileText: () => null, Square: () => null, X: () => null }));
 vi.mock('@/device-link/accessRevoked', () => ({ markDeviceAccessRevoked: h.revoked }));
@@ -24,7 +28,7 @@ vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return { Stack: { Screen: () => null }, useLocalSearchParams: () => h.params, useRouter: () => h.router, useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) };
 });
-vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ isAuthenticated: true, accountGeneration: h.generation }) }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ isAuthenticated: true, accountGeneration: h.generation, user: { name: 'Account Guest' } }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/useSharedTaskApi', () => ({ useSharedTaskApi: () => h.api }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: h.store }));
@@ -77,7 +81,7 @@ async function fill(label: string, value: string) {
 const confirmation = () => h.alert.mock.lastCall![2] as { style: string; onPress(): void }[];
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers(); vi.resetAllMocks(); h.params = {}; h.generation = 1;
+  vi.useFakeTimers(); vi.resetAllMocks(); clearSharedTaskInvitationIntent(); h.params = {}; h.generation = 1;
   Platform.OS = 'android';
   setMobileAuthOwner('owner'); h.link.sharedTaskAvailable = true;
   h.api.list.mockResolvedValue([]); h.api.get.mockResolvedValue(detail);
@@ -86,7 +90,63 @@ beforeEach(() => {
   h.link.readDeviceList.mockResolvedValue({ devices: [{ deviceId: 'host', name: 'Test computer' }] });
   element = document.createElement('div'); root = createRoot(element);
 });
-afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
+afterEach(async () => { await act(async () => root.unmount()); clearSharedTaskInvitationIntent(); vi.useRealTimers(); });
+const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
+const invitationIntent = 'cindy://shared-session?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
+it('reads the clipboard only on request and joins a pasted link with the account nickname', async () => {
+  vi.mocked(Clipboard.getStringAsync).mockResolvedValue('Join me: ' + invitationLink);
+  await render();
+  expect(Clipboard.getStringAsync).not.toHaveBeenCalled();
+  await click('sharedTask.pasteInvitation');
+  expect((element.querySelector('textarea') as HTMLTextAreaElement).value).toContain(invitationLink);
+  await click('sharedTask.join');
+  expect(h.api.join).toHaveBeenCalledExactlyOnceWith('A'.repeat(43), 'Account Guest');
+  expect(element.querySelector('[aria-label="sharedTask.joinNickname"]')).toBeNull();
+});
+it('rejects an invitation from another service without joining', async () => {
+  await render(); await fill('sharedTask.invitation', invitationLink.replace('relay.example.test', 'other.example.test'));
+  await click('sharedTask.join');
+  expect(h.api.join).not.toHaveBeenCalled();
+  expect(element.textContent).toContain('sharedTask.invitationDifferentServer');
+});
+it('does not overwrite manual input with a delayed clipboard read', async () => {
+  let finish!: (value: string) => void;
+  vi.mocked(Clipboard.getStringAsync).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render(); await click('sharedTask.pasteInvitation');
+  await fill('sharedTask.invitation', 'B'.repeat(43));
+  await act(async () => finish(invitationLink));
+  expect((element.querySelector('textarea') as HTMLTextAreaElement).value).toBe('B'.repeat(43));
+});
+it('claims a received invitation while capability loads, then joins and enters only once', async () => {
+  h.link.sharedTaskAvailable = false;
+  receiveSharedTaskInvitationIntent(invitationIntent);
+  h.link.invoke.mockResolvedValue({ id: 'task' });
+  await render();
+  expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  expect(h.api.join).not.toHaveBeenCalled();
+  h.link.sharedTaskAvailable = true;
+  await render(); await render();
+  expect(h.api.join).toHaveBeenCalledExactlyOnceWith('A'.repeat(43), 'Account Guest');
+  expect(h.router.replace).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: {
+    sessionId: 'task', deviceId: sharedTaskHostPeer('shared', 'desktop'), deviceName: 'Design review',
+  } });
+});
+it('does not carry a claimed invitation across an account change', async () => {
+  h.link.sharedTaskAvailable = false;
+  receiveSharedTaskInvitationIntent(invitationIntent);
+  await render();
+  setMobileAuthOwner('other'); h.generation++;
+  h.link.sharedTaskAvailable = true;
+  await render();
+  expect(h.api.join).not.toHaveBeenCalled();
+});
+it('can receive another link while the previous joined task is still shown', async () => {
+  await render(); await fill('sharedTask.invitation', invitationLink); await click('sharedTask.join');
+  h.link.invoke.mockResolvedValue({ id: 'task' });
+  await act(async () => { receiveSharedTaskInvitationIntent(invitationIntent); });
+  expect(h.api.join).toHaveBeenCalledTimes(2);
+  expect(h.router.replace).toHaveBeenCalledOnce();
+});
 it('keeps joined tasks out of the invitation form while retaining the owner tab', async () => {
   h.api.list.mockResolvedValue([{ ...owned('Already joined'), ownerAccountId: 'someone' }, owned('My share')]);
   await render();
@@ -163,7 +223,7 @@ it.each([['NOT_FOUND', 'sharedTask.invitationUnavailable'], ['PERMISSION_DENIED'
   'keeps the invitation form and explains joining failure %s', async (code, key) => {
     h.api.join.mockRejectedValue({ code });
     await render();
-    await fill('sharedTask.invitation', 'a'.repeat(43)); await fill('sharedTask.joinNickname', 'Guest');
+    await fill('sharedTask.invitation', 'a'.repeat(43));
     await click('sharedTask.join');
     expect(element.textContent).toContain(key);
     expect(element.querySelector('textarea')?.value).toBe('a'.repeat(43));
@@ -172,10 +232,10 @@ it.each([['NOT_FOUND', 'sharedTask.invitationUnavailable'], ['PERMISSION_DENIED'
 it('uses a multiline invitation and stops at the joined screen before opening the task', async () => {
   await render();
   expect(element.querySelector('textarea')).not.toBeNull();
-  expect(element.querySelector('input')?.maxLength).toBe(32);
-  await fill('sharedTask.invitation', 'a'.repeat(43)); await fill('sharedTask.joinNickname', ' Guest ');
+  expect(element.querySelector('input')).toBeNull();
+  await fill('sharedTask.invitation', 'a'.repeat(43));
   await click('sharedTask.join');
-  expect(h.api.join).toHaveBeenCalledWith('a'.repeat(43), 'Guest');
+  expect(h.api.join).toHaveBeenCalledWith('a'.repeat(43), 'Account Guest');
   expect(element.textContent).toContain('sharedTask.joinedTitle:Design review');
   expect(element.querySelector('textarea')).toBeNull();
   expect(h.link.openLink).not.toHaveBeenCalled();

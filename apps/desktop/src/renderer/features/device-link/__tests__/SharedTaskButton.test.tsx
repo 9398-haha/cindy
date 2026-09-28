@@ -75,10 +75,12 @@ it('starts an unshared task and loads its members', async () => {
 it('distinguishes a clipboard failure from a request failure and allows retry', async () => {
   const copy = vi.fn().mockRejectedValue(new DOMException('Not focused', 'NotAllowedError'));
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
-  state.host.mockImplementation(async c => c.action === 'invite' ? { invitation: 'test-invitation' } : { available: true, detail });
+  const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
+  state.host.mockImplementation(async c => c.action === 'invite' ? { invitation: 'test-invitation', invitationLink } : { available: true, detail });
   await openWindow(); click('invite'); await waitFor(() => expect(toast.error).toHaveBeenCalledWith('sharedTask.invitationCopyFailed'));
   expect(toast.success).not.toHaveBeenCalled(); copy.mockResolvedValue(undefined); click('invite');
   await waitFor(() => expect(toast.success).toHaveBeenCalledWith('sharedTask.invitationCopied'));
+  expect(copy).toHaveBeenLastCalledWith(invitationLink);
 });
 it('does not copy when generating an invitation fails', async () => {
   const copy = vi.fn(); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });

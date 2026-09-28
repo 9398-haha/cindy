@@ -77,12 +77,14 @@ import {
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
+import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
 const holdSplash = () => undefined;
 
 function NavigationGate() {
+  const pendingSharedTaskInvitation = usePendingSharedTaskInvitationIntent();
   const windowGeometry = useAdaptiveWindow();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
   const sessionHeaderShown = Platform.OS === 'ios'
@@ -131,9 +133,12 @@ function NavigationGate() {
       return;
     }
     if (auth.isAuthenticated && inAuthGroup) {
-      router.replace('/');
+      if (pendingSharedTaskInvitation) router.replace('/shared-session');
+      else router.replace('/');
+    } else if (auth.isAuthenticated && pendingSharedTaskInvitation && segments.join('/') !== 'shared-session') {
+      router.replace('/shared-session');
     }
-  }, [auth.initialized, auth.isAuthenticated, router, segments]);
+  }, [auth.initialized, auth.isAuthenticated, pendingSharedTaskInvitation, router, segments]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.accountDeletionRestored) return;
