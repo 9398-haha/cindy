@@ -867,6 +867,11 @@
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환",
+      "botGroupPlan": {
+        "stepDone": "{{name}} 님이 「{{task}}」를 끝냈어요. 계속을 기다려요",
+        "stepFailed": "{{name}} 님이 「{{task}}」를 끝내지 못했어요. 다시 시도할 수 있어요",
+        "planDone": "역할 분담이 모두 끝났어요. 마지막은 {{name}} 님의 「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "제목 없는 세션",
         "done": "완료됨 ✓",
@@ -1536,6 +1541,11 @@
         "label": "음성 입력 빠른 시작",
         "hint": "사용 후 잠시 마이크를 대기 상태로 유지해 단축키나 버튼을 누른 뒤 녹음이 시작되기까지의 시간을 줄입니다. 보통 약 100 ms 빨라집니다. 30분 동안 다시 사용하지 않으면 마이크를 자동으로 해제합니다.",
         "ariaLabel": "음성 입력 빠른 시작 전환"
+      },
+      "composerLongPress": {
+        "label": "입력창 길게 눌러 음성 입력",
+        "hint": "입력창에서 마우스 왼쪽 버튼을 잠시 길게 누르면 음성 입력이 시작되고, 버튼을 놓으면 종료되어 텍스트가 입력됩니다.",
+        "ariaLabel": "입력창 길게 눌러 음성 입력 전환"
       },
       "refinement": {
         "enabled": {

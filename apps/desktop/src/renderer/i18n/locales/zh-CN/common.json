@@ -867,6 +867,11 @@
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
       "feishuAria": "切换任务完成的飞书通知",
+      "botGroupPlan": {
+        "stepDone": "{{name}}做完了「{{task}}」，等你继续",
+        "stepFailed": "{{name}}没做完「{{task}}」，可以重试",
+        "planDone": "分工全部做完了，最后一步是{{name}}的「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "未命名任务",
         "done": "已完成 ✓",
@@ -1536,6 +1541,11 @@
         "label": "快速启动语音输入",
         "hint": "用完后让麦克风短暂待命，缩短按下快捷键或按钮到开始录音的等待；通常可快约 100 毫秒。若 30 分钟内没有再次使用，会自动释放麦克风。",
         "ariaLabel": "切换快速启动语音输入"
+      },
+      "composerLongPress": {
+        "label": "长按输入框语音输入",
+        "hint": "在输入框里按住鼠标左键片刻即开始语音输入，松开后结束并填入文字。",
+        "ariaLabel": "切换长按输入框语音输入"
       },
       "refinement": {
         "enabled": {

@@ -867,6 +867,11 @@
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications",
+      "botGroupPlan": {
+        "stepDone": "{{name}} finished “{{task}}” — continue when ready",
+        "stepFailed": "{{name}} didn't finish “{{task}}” — you can retry",
+        "planDone": "The work split is done; the last step was {{name}}’s “{{task}}”"
+      },
       "sessionEvent": {
         "untitled": "Untitled session",
         "done": "Completed ✓",
@@ -1536,6 +1541,11 @@
         "label": "Fast voice activation",
         "hint": "Keeps the microphone ready briefly after use so recording starts sooner after pressing the shortcut or button; usually about 100 ms faster. The microphone is released automatically after 30 minutes of no use.",
         "ariaLabel": "Toggle fast voice activation"
+      },
+      "composerLongPress": {
+        "label": "Hold composer for voice input",
+        "hint": "Press and hold the left mouse button in the composer for a moment to start voice input. Release to stop and insert the text.",
+        "ariaLabel": "Toggle hold composer for voice input"
       },
       "refinement": {
         "enabled": {
