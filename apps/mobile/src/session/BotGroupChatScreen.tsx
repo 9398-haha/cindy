@@ -1,6 +1,7 @@
 /**
  * 手机上的群聊页（docs/product-rules/bot-group-chat.md §8，对照桌面 BotGroupChatView.tsx）：
- * 顶栏（叠放头像、群名、成员名单、群设置）+ 多作者时间线 + 输入框。
+ * 顶栏（叠放头像、群名、成员名单、群设置）+ 多作者时间线 + 输入框。用户消息的附件见
+ * BotGroupMessageAttachments（图片从电脑取缩略图，文件只显示名字）。
  *
  * 群在电脑上，电脑执行全部规则；这里整页读电脑给的群快照（最新 100 条消息与涉及的安排），
  * 每次电脑推送变化就重读，不在本地拼时间线。分工的安排卡、交接文件、「下一步 · 继续」
@@ -61,6 +62,7 @@ import {
   useBotGroupIdentities,
 } from './BotGroupAvatars';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
+import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
 import {
   BOT_GROUP_COMPACT_HIT_SLOP,
@@ -78,7 +80,9 @@ import { BotGroupSettingsSheet } from './BotGroupSettingsSheet';
 import { BotGroupSpeakerRow } from './BotGroupSpeakerRow';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
+import type { ResolveRemoteMediaFn } from './remoteMedia';
 import { useBotGroupChat } from './useBotGroupChat';
+import { useBotGroupRemoteMedia } from './useBotGroupRemoteMedia';
 
 /** Toast copy when a plan action fails without a more specific cause. */
 const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
@@ -101,6 +105,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const host = useMemo<RemoteResourceHostTarget>(() => ({ deviceId, deviceName: deviceName || deviceId }), [deviceId, deviceName]);
   const chat = useBotGroupChat(host, groupId);
   const identity = useBotGroupIdentities(deviceId);
+  const resolveMedia = useBotGroupRemoteMedia(deviceId);
   const [settings, setSettings] = useState(false);
   const leaveAfterSettings = useRef(false);
   const [continuing, setContinuing] = useState(false);
@@ -208,6 +213,8 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
         mentions: input.mentions,
         clientId: input.clientId,
         ...(input.division ? { division: true } : {}),
+        // Only a computer that declared `supportsAttachments` is offered any (see the composer).
+        ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
       });
     } catch (error) {
       report(error, 'groupChat.composer.sendFailed');
@@ -290,7 +297,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
         }}
         testID="botGroup.timeline">
         <BotGroupTimeline group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
-          continuing={continuing} planPending={planPending}
+          resolveMedia={resolveMedia} continuing={continuing} planPending={planPending}
           onContinue={() => void continueRound()}
           onPlanAction={(action, planId) => void runPlanAction(action, planId)}
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
@@ -298,7 +305,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
       </ScrollView>
       <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={chat.online}
         running={group.round.status === 'running'} planState={botGroupComposerPlanState(openBotGroupPlan(group))}
-        onSend={send} onStop={stop} />
+        attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
     </KeyboardAvoidingView>;
   }
 
@@ -322,12 +329,14 @@ function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUp
 }
 
 export function BotGroupTimeline({
-  group, deviceId, online, identityFor, continuing, planPending, onContinue, onPlanAction, onEditStep, onInteractionError,
+  group, deviceId, online, identityFor, resolveMedia, continuing, planPending, onContinue, onPlanAction, onEditStep, onInteractionError,
 }: {
   group: BotGroupRemoteChatData;
   deviceId: string;
   online: boolean;
   identityFor: BotGroupIdentityLookup;
+  /** Reads a picture attached to a message from the computer. */
+  resolveMedia: ResolveRemoteMediaFn;
   continuing: boolean;
   planPending: PlanPending | null;
   onContinue(): void;
@@ -361,6 +370,7 @@ export function BotGroupTimeline({
         {groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
         <BotGroupTimelineItem message={message} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
+          resolveMedia={resolveMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
           plan={message.planId ? planById.get(message.planId) : undefined}
           planActionable={message.kind === 'plan' && openPlan?.id === message.planId && openPlan.status === 'proposed'}
@@ -387,7 +397,7 @@ export function BotGroupTimeline({
 }
 
 function BotGroupTimelineItem({
-  message, member, members, deviceId, online, identityFor, mentionLabels, canContinue, continuing, onContinue,
+  message, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, canContinue, continuing, onContinue,
   plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep,
 }: {
   message: BotGroupMessageView;
@@ -397,6 +407,7 @@ function BotGroupTimelineItem({
   online: boolean;
   identityFor: BotGroupIdentityLookup;
   mentionLabels: readonly string[];
+  resolveMedia: ResolveRemoteMediaFn;
   canContinue: boolean;
   continuing: boolean;
   onContinue(): void;
@@ -424,8 +435,18 @@ function BotGroupTimelineItem({
     return <Text style={styles.notice} testID="botGroup.notice">{variant ? t(`groupChat.notice.${variant}`, { name }) : message.content}</Text>;
   }
   if (message.authorKind === 'user') {
+    // Older computers send no attachments; a message with only attachments has no bubble.
+    const attachments = message.attachments ?? [];
+    const bubble = message.content.trim().length > 0 || attachments.length === 0;
     return <View style={styles.userRow} testID="botGroup.message.user">
-      <View style={styles.userBubble}><BotGroupUserText content={message.content} mentionLabels={mentionLabels} /></View>
+      <View style={styles.userColumn}>
+        {attachments.length > 0
+          ? <BotGroupMessageAttachments messageId={message.id} attachments={attachments} onResolveRemoteMedia={resolveMedia} />
+          : null}
+        {bubble ? <View style={styles.userBubble} testID="botGroup.message.userBubble">
+          <BotGroupUserText content={message.content} mentionLabels={mentionLabels} />
+        </View> : null}
+      </View>
     </View>;
   }
   // Name snapshot from when it was said; the avatar follows the live profile.
@@ -472,6 +493,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   notice: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   dividerText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
+  // Full width so the bubble keeps its 82% cap and attachments their own size limits.
+  userColumn: { flex: 1, minWidth: 0, alignItems: 'flex-end', gap: spacing.xs },
   userBubble: { maxWidth: '82%', backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   botRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
