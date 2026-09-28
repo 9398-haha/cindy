@@ -490,11 +490,16 @@ it('charges installed-package and plugin manifests to the same source budget bef
   expect(parse).toHaveBeenCalledTimes(1);
 });
 
-// Windows file symlinks require Developer Mode/admin; size/budget cases run on every OS.
-it.skipIf(process.platform === 'win32')('preserves native manifest file symlinks while charging their contents', async () => {
+it('preserves native manifest file symlinks while charging their contents', async ctx => {
   await write('shared/plugin.json', JSON.stringify({ id: 'plugin', skills: ['skills'] }));
   await write('plugin/skills/report/SKILL.md', '# Report');
-  await fs.symlink(path.join(home, 'shared/plugin.json'), path.join(home, 'plugin/openclaw.plugin.json'));
+  // Probe the actual filesystem capability, including Windows runners with
+  // symlink support. Unsupported local permissions must not skip other cases.
+  try { await fs.symlink(path.join(home, 'shared/plugin.json'), path.join(home, 'plugin/openclaw.plugin.json'), 'file'); }
+  catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) { ctx.skip(); return; }
+    throw error;
+  }
   const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
   const config = { plugins: { load: { paths: [path.join(home, 'plugin')] } } };
   expect((await discoverImportSkills(source, config, home, {}, createImportBudget())).map(item => item.view.name)).toEqual(['report']);
