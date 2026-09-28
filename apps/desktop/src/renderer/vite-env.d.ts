@@ -2940,6 +2940,7 @@ interface ElectronAPI {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
+        | { type: 'shared-task-join'; invitation: string; server: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ) => () => void;
@@ -2956,6 +2957,7 @@ interface ElectronAPI {
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
+    | { type: 'shared-task-join'; invitation: string; server: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   >;
