@@ -7,6 +7,42 @@ vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: gua
 import { PluginDownloadSlot } from '../downloadSlot';
 import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
+import { createDownloader } from '../../downloader';
+import { createHash } from 'node:crypto';
+
+it('rechecks replacement quota only after a real downloader cache miss and before network', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-miss-quota-')));
+  const original = PluginDownloadCache.prototype.reserve;
+  const reserve = vi.spyOn(PluginDownloadCache.prototype, 'reserve').mockImplementation(function (this: PluginDownloadCache, root, dir, bytes, replacing) {
+    if (replacing) throw Error('Download cache is full');
+    return original.call(this, root, dir, bytes, replacing);
+  });
+  const download = createDownloader();
+  let target = '';
+  guarded.fetch.mockReset();
+  const slot = new PluginDownloadSlot({
+    root: id => path.join(root, id), scope: () => 'owner', send() {},
+    getGhost: () => ({ enabled: true, approval: {}, manifest: { node: {}, network: { hosts: ['github.com'] } } }) as unknown as InstalledGhost,
+    download: async options => {
+      if (!target) await fs.writeFile(options.targetPath, 'ok');
+      target = options.targetPath;
+      return download(options);
+    },
+  });
+  try {
+    const request = { kind: 'start', id: 'same', url: 'https://github.com/file', bytes: 2, sha256: createHash('sha256').update('ok').digest('hex') };
+    expect(await slot.handle('p', request)).toMatchObject({ ok: true });
+    expect(reserve.mock.calls.some(x => x[3])).toBe(false);
+    await fs.writeFile(target, 'no');
+    expect(await slot.handle('p', request)).toMatchObject({ ok: false });
+    expect(reserve.mock.calls.filter(x => x[3])).toHaveLength(1);
+    expect(guarded.fetch).not.toHaveBeenCalled();
+    expect(await fs.readFile(target, 'utf8')).toBe('no');
+    await expect(fs.stat(target + '.part')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    reserve.mockRestore(); await slot.stopAndWait(); await fs.rm(root, { recursive: true, force: true });
+  }
+});
 it('drains a destroyed page before a new page resumes the same download id', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-page-')));
   let oldPage = true, calls = 0, started!: () => void, release!: () => void;

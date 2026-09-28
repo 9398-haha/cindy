@@ -32,11 +32,12 @@ export class PluginDownloadCache {
     for (const [token, receipt] of this.receipts)
       if (receipt.dir === dir) this.receipts.delete(token);
   }
-  async reserve(root: string, dir: string, bytes: number): Promise<void> {
+  async reserve(root: string, dir: string, bytes: number, replacing = false): Promise<void> {
     return this.locked(async () => {
       await fs.mkdir(root, { recursive: true });
       if ((await fs.realpath(root)) !== path.resolve(root)) throw Error('Unsafe cache root');
       const entries: Array<{ dir: string; bytes: number; time: number }> = [];
+      let replacementBytes = bytes + 65536;
       for (const plugin of await fs.readdir(root, { withFileTypes: true })) {
         if (!plugin.isDirectory()) throw Error('Unsafe download cache');
         const pluginRoot = path.join(root, plugin.name);
@@ -45,13 +46,17 @@ export class PluginDownloadCache {
             throw Error('Unsafe download cache');
           const entryDir = path.join(pluginRoot, artifact.name);
           let size = 0,
-            time = 0;
+            time = 0,
+            partialSize = 0;
           for (const name of await fs.readdir(entryDir)) {
             const stat = await fs.lstat(path.join(entryDir, name));
             if (!stat.isFile()) throw Error('Unsafe download cache');
             size += stat.size;
+            if (name === 'artifact.part') partialSize = stat.size;
             time = Math.max(time, stat.mtimeMs);
           }
+          if (entryDir === dir)
+            replacementBytes = size - partialSize + Math.max(bytes, partialSize) + 65536;
           // Charge directory/receipt overhead too: empty failed attempts are not free forever.
           entries.push({
             dir: entryDir,
@@ -61,7 +66,10 @@ export class PluginDownloadCache {
         }
       }
       // Reserve before dispatch: concurrent queued downloads cannot oversubscribe disk.
-      const planned = Math.max(bytes + 65536, entries.find((e) => e.dir === dir)?.bytes ?? 0);
+      const planned = Math.max(
+        replacing ? replacementBytes : bytes + 65536,
+        entries.find((e) => e.dir === dir)?.bytes ?? 0,
+      );
       let total = entries.filter((e) => e.dir !== dir).reduce((sum, e) => sum + e.bytes, planned);
       for (const entry of entries.sort((a, b) => a.time - b.time)) {
         if (total <= this.limit) break;

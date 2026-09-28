@@ -4,6 +4,26 @@ import os from 'node:os';
 import path from 'node:path';
 import { PluginDownloadCache } from '../downloadCache';
 
+it('charges retained targets plus replacement growth without double charging partial files', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-replace-')));
+  const dir = path.join(root, 'p', 'a'.repeat(64));
+  const cache = new PluginDownloadCache(65536 + 200);
+  try {
+    await cache.reserve(root, dir, 100);
+    await fs.writeFile(path.join(dir, 'artifact'), Buffer.alloc(100));
+    cache.release(dir);
+    // A cache hit still fits; a miss must reserve the retained target as well.
+    await cache.reserve(root, dir, 100);
+    await cache.reserve(root, dir, 100, true);
+    await fs.writeFile(path.join(dir, 'artifact.part'), Buffer.alloc(60));
+    await cache.reserve(root, dir, 100, true);
+    await expect(cache.reserve(root, dir, 101, true)).rejects.toThrow('full');
+    expect((await fs.stat(path.join(dir, 'artifact'))).size).toBe(100);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 it('reserves an 8 GiB question with metadata without allocating its contents', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-large-quota-')));
   const cache = new PluginDownloadCache();

@@ -238,13 +238,22 @@ export class PluginDownloadSlot {
           }, 250);
           // Plugin-supplied URLs: one SSRF-guarded hop at a time (DNS pinning, HTTPS only,
           // no ambient cookies), re-checking the owner before every connection.
-          const request: DownloadRequest = (url, init) =>
-            guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {
+          const request: DownloadRequest = async (url, init) => {
+            controller.signal.throwIfAborted();
+            // Cache hits never reach this callback. On a miss, the old target
+            // remains beside the growing .part until the downloader publishes it.
+            try {
+              await this.cache.reserve(path.dirname(root), dir, p.bytes as number, true);
+            } catch {
+              throw new DownloadError('SIZE', 'Download cache cannot reserve replacement space');
+            }
+            return guardedOutboundFetch(url, { ...init, credentials: 'omit' }, () => {
               controller.signal.throwIfAborted();
               // A revoked owner is final: do not let the downloader retry this hop.
               if (!isUrlAllowed(url))
                 throw new DownloadError('URL_POLICY', 'Download URL is not allowed');
             });
+          };
           try {
             const result = await this.deps.download({
               url: p.url as string,
