@@ -32,10 +32,17 @@ it.skipIf(process.platform !== "darwin")(
       const { stdout } = await run(binary, [], { timeout: 5_000 });
       expect(JSON.parse(stdout)).toEqual([
         "legacy target",
+        "legacy built-in target with screen API",
+        "legacy built-in still requires matching screen identity",
+        "Xcode 2700 built-in screen keeps screen-addressed input",
+        "Xcode 2710 built-in screen keeps screen-addressed input",
+        "unknown built-in routing fails closed",
         "screen 1 target",
         "non-default screen target",
         "screen identity mismatch",
         "screen ID flag collision",
+        "screen-addressed type 4",
+        "screen-addressed type 5",
         "indirect screen 1",
         "indirect screen 2",
         "missing screen",

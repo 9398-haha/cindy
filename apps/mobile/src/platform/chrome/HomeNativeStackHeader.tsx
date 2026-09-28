@@ -68,9 +68,10 @@ export function HomeNativeStackHeader({
   const { width } = useSafeAreaFrame();
   const insets = useSafeAreaInsets();
   // Keep the native title view's width independent of the selected device and
-  // sync indicator. Reserve the two-action toolbar footprint on both sides so
-  // UIKit can keep the title centered, including when the device name is long.
-  const sideSpace = navigationChrome.target * 2 + spacing.lg * 2;
+  // sync indicator. Reserve the two-action toolbar, outer margin and UIKit's
+  // title clearance on both sides. Without the extra clearance, iOS 26 moves
+  // an otherwise centered title toward the leading edge to avoid the toolbar.
+  const sideSpace = navigationChrome.target * 2 + spacing.lg * 2 + spacing.md;
   const titleWidth = Math.max(navigationChrome.target,
     Math.min(220, width - insets.left - insets.right - sideSpace * 2));
 
