@@ -160,7 +160,7 @@ export function SharedTasksSection({ activeSessionId, localSessions = [], runnin
         {collapsed ? <ChevronRight size={14} aria-hidden /> : <ChevronDown size={14} aria-hidden />}
         {t('sharedTask.title')}
       </button>
-      <button type="button" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]" aria-label={t('sharedTask.join')} title={t('sharedTask.join')} onClick={() => setJoinOpen(true)}><Plus size={15} aria-hidden /></button>
+      <button type="button" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]" aria-label={t('sharedTask.join')} title={t('sharedTask.join')} onClick={() => setJoinOpen(true)}><Plus size={15} aria-hidden /></button>
     </div>
     {!collapsed && rows.map(row => {
       if (row.role === 'joined') {
