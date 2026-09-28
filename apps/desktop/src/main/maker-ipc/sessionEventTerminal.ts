@@ -51,7 +51,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
-  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed', outputMessageId?: string) => void;
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -525,6 +525,18 @@ export function finishSessionTerminalEvent(
       // gateway persistence, overflow surface, or auto-resume abandonment).
       const unsuccessfulBoundary =
         isTerminalTurnErrorEvent(event) || !isSuccessfulAssistantReplyDoneData(event.data);
+      if (typeof event.sessionTurnGeneration === 'number' && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist) {
+        const nativeStatus = (event.data as { status?: unknown } | null)?.status;
+        const outcome = !isTerminalTurnErrorEvent(event)
+          && (nativeStatus === 'cancelled' || nativeStatus === 'interrupted')
+          ? nativeStatus : unsuccessfulBoundary ? 'failed' : 'completed';
+        // Settle the precise native outcome before generic unsuccessful-turn
+        // bookkeeping can enqueue its fallback failure for the same execution.
+        deps.onPluginTaskTerminal?.(session.id, {
+          instanceId: event.sessionInstanceId ?? session.instanceId,
+          generation: event.sessionTurnGeneration,
+        }, outcome, turnAssistantPersistId ?? undefined);
+      }
       if (
         unsuccessfulBoundary &&
         !recoveryOwnsUnsuccessfulBoundary &&
@@ -543,12 +555,6 @@ export function finishSessionTerminalEvent(
             ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
             ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
           ]) ?? [];
-      if (typeof event.sessionTurnGeneration === 'number' && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist) {
-        deps.onPluginTaskTerminal?.(session.id, {
-          instanceId: event.sessionInstanceId ?? session.instanceId,
-          generation: event.sessionTurnGeneration,
-        }, unsuccessfulBoundary ? 'failed' : 'completed', turnAssistantPersistId ?? undefined);
-      }
       void (async () => {
         try {
           const doneData = event.data as {

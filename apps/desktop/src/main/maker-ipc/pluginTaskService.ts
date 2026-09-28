@@ -407,7 +407,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     settle: (
       taskId: string,
       execution: SessionExecutionIdentity,
-      status: 'completed' | 'failed',
+      status: 'completed' | 'failed' | 'cancelled' | 'interrupted',
       outputMessageId?: string,
     ) =>
       exclusive(async () => {
