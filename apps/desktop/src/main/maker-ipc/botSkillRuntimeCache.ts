@@ -17,6 +17,10 @@ type Entry = {
 // This bounds idle watcher handles across owners/bots without limiting Skills.
 const entries = new Map<string, Entry>();
 const MAX_CACHED_ROOTS = 32;
+// Writer ownership outlives LRU entries: an evicted build can still rename its
+// staged catalog. Queue replacements per root until that build has fully settled.
+// Only pending work is retained here; idle roots still use the bounded LRU above.
+const writers = new Map<string, Promise<Projection>>();
 
 export function invalidateBotSkillRuntime(root: string): void {
   const entry = entries.get(path.resolve(root));
@@ -96,12 +100,19 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
       fs.access(path.join(current.value.pluginRoot, 'catalog.jsonl')),
       fs.access(current.value.skills[0].filePath),
     ]).then(() => true, () => false);
+    // Eviction may happen while checking generated files. Rejoin the active
+    // entry rather than enqueueing work from a now-discarded cache entry.
+    if (entries.get(root) !== current) return cachedBotSkillRuntime(root, build);
     if (present && current.loadedRevision === current.revision) return structuredClone(current.value);
     if (!present) current.revision++;
   }
   // Another hydration may have started rebuilding during the artifact check.
   if (current.loading) return structuredClone(await current.loading);
-  current.loading = (async () => {
+  const previous = writers.get(root);
+  const loading = (async () => {
+    // A failed predecessor has already cleaned up its staging files; it must
+    // neither poison this retry nor race its final writes against this build.
+    await previous?.catch(() => undefined);
     let value: Projection;
     let revision: number;
     do {
@@ -112,7 +123,12 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
     current.loadedRevision = revision;
     return structuredClone(value);
   })();
-  try { return await current.loading; }
+  current.loading = loading;
+  writers.set(root, loading);
+  try { return await loading; }
   catch (error) { discard(root, current); throw error; }
-  finally { current.loading = undefined; }
+  finally {
+    if (writers.get(root) === loading) writers.delete(root);
+    current.loading = undefined;
+  }
 }

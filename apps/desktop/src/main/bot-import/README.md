@@ -101,6 +101,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   directory identity checks cover hand edits, moves and replacement. Watcher
   errors fall back to rebuilding, and missing generated catalogs are recreated.
   The cache retains at most 32 roots, not a maximum number of stored Skills.
+  In-flight catalog writers are serialized per root independently of cache
+  eviction, so an evicted snapshot cannot overwrite its newer replacement.
+  Failed writers release their successor; idle writer records are removed.
   Initial hydration uses `opendir` and bounded header reads, writing JSONL chunks
   as entries arrive. Only the native-mount byte budget is retained/sorted; a large
   shelf is never collected into a runtime array. Giant metadata lines keep short
