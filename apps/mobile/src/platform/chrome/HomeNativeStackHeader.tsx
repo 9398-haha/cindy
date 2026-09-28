@@ -68,10 +68,12 @@ export function HomeNativeStackHeader({
   const { width } = useSafeAreaFrame();
   const insets = useSafeAreaInsets();
   // Keep the native title view's width independent of the selected device and
-  // sync indicator. Reserve the two-action toolbar, outer margin and UIKit's
-  // title clearance on both sides. Without the extra clearance, iOS 26 moves
+  // sync indicator. The guide only has the left menu; otherwise reserve the
+  // two-action toolbar. Mirror that space, outer margin and UIKit's title
+  // clearance on both sides. Without the extra clearance, iOS 26 moves
   // an otherwise centered title toward the leading edge to avoid the toolbar.
-  const sideSpace = navigationChrome.target * 2 + spacing.lg * 2 + spacing.md;
+  const actionCount = showRemoteGuide ? 1 : 2;
+  const sideSpace = navigationChrome.target * actionCount + spacing.lg * 2 + spacing.md;
   const titleWidth = Math.max(navigationChrome.target,
     Math.min(220, width - insets.left - insets.right - sideSpace * 2));
 
