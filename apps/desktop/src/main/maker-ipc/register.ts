@@ -11845,7 +11845,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       const directory = await resolveAuthorizedDirectory(params.workingDir ?? task.workingDir ?? '');
       if (resolvedWorkingDir !== undefined && directory !== await resolveAuthorizedDirectory(resolvedWorkingDir)) throw new PluginTaskError('PERMISSION_DENIED','Worker directory changed during creation');
-      // get() waits behind plan registration in the existing receipt queue.
+      // Drain plan registration before taking the receipt snapshot. Waiting only
+      // after this read leaves a stale no-plan payload even when get() sees the
+      // newly persisted plan. Keep the final task check after directory awaits.
+      await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
+      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
       const currentReceipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
       if (!currentReceipt) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
       const data = JSON.parse(currentReceipt.payload);
