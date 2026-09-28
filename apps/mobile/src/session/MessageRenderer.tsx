@@ -6235,7 +6235,8 @@ function MarkdownSessionLinkSpan({
   );
 }
 
-function AttachmentStrip({
+/** 用户消息的附件条(图片缩略图 + 文件 chip);群聊时间线复用同一实现。 */
+export function AttachmentStrip({
   attachments,
   messageKey,
   clientId,
