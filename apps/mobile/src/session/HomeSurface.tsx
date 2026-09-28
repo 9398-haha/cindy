@@ -3025,12 +3025,6 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           setChromeMenuCloseInstant(true);
           setChromeMenuOpen(false);
         }}
-        onOpenSharedSession={() => {
-          pendingMenuActionRef.current = null;
-          guardedPush('/shared-session');
-          setChromeMenuCloseInstant(true);
-          setChromeMenuOpen(false);
-        }}
         onLogout={() => void logout()}
         open={chromeMenuOpen}
         user={user}

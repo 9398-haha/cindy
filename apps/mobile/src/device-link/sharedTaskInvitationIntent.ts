@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { parseSharedTaskInvitationIntent, type SharedTaskInvitationIntent } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
-let pending: (SharedTaskInvitationIntent & { id: number }) | null = null;
+let pending: (SharedTaskInvitationIntent & { id: number; source: 'link' | 'clipboard' }) | null = null;
 let sequence = 0;
 let stopWatching: (() => void) | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
@@ -17,13 +17,13 @@ export function clearSharedTaskInvitationIntent(): void {
   notify();
 }
 
-export function receiveSharedTaskInvitationIntent(url: string): boolean {
+export function receiveSharedTaskInvitationIntent(url: string, source: 'link' | 'clipboard' = 'link'): boolean {
   const value = parseSharedTaskInvitationIntent(url);
   if (!value) return false;
   clearSharedTaskInvitationIntent();
   let owner = getMobileAuthOwner();
   if (owner.switching) return true;
-  pending = { ...value, id: ++sequence };
+  pending = { ...value, id: ++sequence, source };
   stopWatching = subscribeMobileAuthOwner(() => {
     const next = getMobileAuthOwner();
     if (next.switching || (owner.accountKey && !isMobileAuthOwnerCurrent(owner))) clearSharedTaskInvitationIntent();
@@ -35,5 +35,6 @@ export function receiveSharedTaskInvitationIntent(url: string): boolean {
 }
 
 export const getPendingSharedTaskInvitationIntent = () => pending;
+export const getSharedTaskInvitationIntentSequence = () => sequence;
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const usePendingSharedTaskInvitationIntent = () => useSyncExternalStore(subscribe, getPendingSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent);

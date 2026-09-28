@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { JoinSharedTaskDialog } from '../JoinSharedTaskDialog';
+import { SharedTaskDialog } from '../SharedTaskDialog';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 
@@ -43,7 +44,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 function open(onOpenChange = vi.fn()) {
-  render(<MemoryRouter><JoinSharedTaskDialog open onOpenChange={onOpenChange} /></MemoryRouter>);
+  render(<MemoryRouter><SharedTaskDialog open onOpenChange={onOpenChange} /></MemoryRouter>);
   return onOpenChange;
 }
 function tab(kind: 'join' | 'joined' | 'owned') {
@@ -55,12 +56,72 @@ function fill(submit = true) {
   fireEvent.change(screen.getByLabelText('sharedTask.invitation'), { target: { value: 'A'.repeat(43) } });
   if (submit) click('join');
 }
+it('embeds two management tabs in settings and keeps manual join available on an empty list', async () => {
+  ownedItems = []; joinedItems = [];
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={vi.fn()} /></MemoryRouter>);
+  await screen.findByText('sharedTask.ownedEmptyTitle');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getAllByRole('tab')).toHaveLength(2);
+  click('join');
+  const dialog = screen.getByRole('dialog');
+  expect(dialog.querySelectorAll('textarea')).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText('sharedTask.invitation'), { target: { value: 'A'.repeat(43) } });
+  click('dismiss');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByRole('tab', { name: /sharedTask.tabOwned/ }).getAttribute('aria-selected')).toBe('true');
+  expect(state.account).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'join' }));
+});
+it('enters a manually joined task directly from settings', async () => {
+  const close = vi.fn();
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={close} /></MemoryRouter>);
+  await act(async () => {}); click('join');
+  fireEvent.change(screen.getByLabelText('sharedTask.invitation'), { target: { value: 'A'.repeat(43) } });
+  fireEvent.submit(screen.getByLabelText('sharedTask.invitation').closest('form')!);
+  await waitFor(() => expect(close).toHaveBeenCalledWith(false));
+  expect(state.account).toHaveBeenCalledWith({ action: 'join', invitation: 'A'.repeat(43), displayName: 'Account Guest' });
+  expect(state.openLink).toHaveBeenCalledWith(sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId));
+});
+
+it('keeps settings tabs keyboard accessible when switching between owned and joined tasks', async () => {
+  render(<MemoryRouter><SharedTaskDialog open presentation="settings" onOpenChange={vi.fn()} /></MemoryRouter>);
+  await screen.findByRole('button', { name: owned[0].title });
+  const ownerTab = screen.getByRole('tab', { name: /sharedTask.tabOwned/ });
+  const joinedTab = screen.getByRole('tab', { name: /sharedTask.joinedTab/ });
+  fireEvent.keyDown(ownerTab, { key: 'ArrowRight' });
+  await screen.findByRole('button', { name: joinedTask.title });
+  expect(joinedTab.getAttribute('aria-selected')).toBe('true');
+  expect(document.activeElement).toBe(joinedTab);
+  fireEvent.keyDown(joinedTab, { key: 'ArrowRight' });
+  await screen.findByRole('button', { name: owned[0].title });
+  expect(ownerTab.getAttribute('aria-selected')).toBe('true');
+  expect(document.activeElement).toBe(ownerTab);
+  fireEvent.keyDown(ownerTab, { key: 'End' });
+  expect(document.activeElement).toBe(joinedTab);
+  fireEvent.keyDown(joinedTab, { key: 'Home' });
+  expect(document.activeElement).toBe(ownerTab);
+  await act(async () => {});
+});
 async function closeAll() { tab('owned'); await screen.findByRole('button', { name: 'sharedTask.closeAll' }); click('closeAll'); }
+
+it.each(['A'.repeat(43), 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43)])('enters directly through the compact sidebar admission for %s', async invitation => {
+  const close = vi.fn();
+  render(<MemoryRouter><JoinSharedTaskDialog open onOpenChange={close} /></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.queryByRole('tab')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'sharedTask.cancelOperation' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'sharedTask.dismiss' })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('sharedTask.invitation'), { target: { value: invitation } });
+  click('join');
+  await waitFor(() => expect(close).toHaveBeenCalledWith(false));
+  expect(state.account).toHaveBeenCalledWith({ action: 'join', invitation, displayName: 'Account Guest' });
+  expect(state.openLink).toHaveBeenCalledWith(sharedTaskHostPeer(joinedTask.sharedTaskId, joinedTask.hostDeviceId));
+  expect(state.setSessions).toHaveBeenCalled();
+});
 
 it('starts with three tabs and a compact join form without host actions', async () => {
   open(); await act(async () => {});
   expect(screen.getAllByRole('tab')).toHaveLength(3);
-  expect(screen.getByLabelText('sharedTask.invitation').tagName).toBe('INPUT');
+  expect(screen.getByLabelText('sharedTask.invitation').tagName).toBe('TEXTAREA');
   expect(screen.queryByLabelText('sharedTask.joinNickname')).toBeNull();
   expect(screen.queryByRole('button', { name: 'sharedTask.closeAll' })).toBeNull();
   expect(document.activeElement).toBe(screen.getByLabelText('sharedTask.invitation'));

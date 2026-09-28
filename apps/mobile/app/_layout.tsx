@@ -78,6 +78,7 @@ import {
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardSharedTaskInvitation';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
@@ -92,6 +93,7 @@ function NavigationGate() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  useClipboardSharedTaskInvitation(auth.initialized && auth.isAuthenticated, segments.join('/') === 'shared-session');
   const { mode, colors, preferenceReady } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
   // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
