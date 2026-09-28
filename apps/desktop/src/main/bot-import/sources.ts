@@ -122,13 +122,13 @@ async function document(items: ImportItem[], root: string, name: string, role: I
   }
 }
 
-async function memoryDocuments(items: ImportItem[], root: string, prefix: string, budget: ImportReadBudget) {
+async function memoryDocuments(items: ImportItem[], root: string, prefix: string, budget: ImportReadBudget, sharedDocumentRoots: string[]) {
   if (!(await directories(root)).includes(prefix)) return;
   const directory = path.join(root, prefix);
   const failed = (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name: name || prefix, selected: true },
-    sourceFile: { root: directory, file: path.join(directory, name), kind, nativeFileLinks: true }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
+    sourceFile: { root: directory, file: path.join(directory, name), kind, sharedDocumentRoots }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
   let files;
-  try { files = await readImportTree(directory, undefined, budget, failed, directory, true); }
+  try { files = await readImportTree(directory, undefined, budget, failed, directory, sharedDocumentRoots); }
   catch (error) { failed('', error, 'directory'); return; }
   for (const file of files) {
     const content = memoryFileContent(file);
@@ -262,6 +262,18 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   const values = await config(path.dirname(source.configFile), source.configFile, budget);
   const items: ImportItem[] = [];
   const workspace = source.workspace;
+  // A memory-tree symlink cannot grant access to arbitrary account files. Only
+  // the source's explicitly configured document vault supplies external roots;
+  // do not infer trust from filenames, all PATH-like env values or Cindy's env.
+  const envConfig = object(values.env);
+  const sourceEnv = { ...parseEnv(await optionalText(source.root, path.join(source.root, '.env'), budget) ?? ''), ...scalarEnv(envConfig), ...scalarEnv(envConfig.vars) };
+  const sharedDocumentRoots: string[] = [];
+  if (sourceEnv.OBSIDIAN_VAULT_PATH) {
+    try {
+      const vault = await fs.realpath(sourcePath(deps.home, sourceEnv.OBSIDIAN_VAULT_PATH, source.root));
+      if ((await fs.stat(vault)).isDirectory()) sharedDocumentRoots.push(vault);
+    } catch { /* An unavailable vault does not grant a fallback to another root. */ }
+  }
   let jobs: Record<string, unknown>[];
   if (source.kind === 'hermes') {
     await document(items, source.root, 'SOUL.md', 'identity', 'personality', budget);
@@ -272,10 +284,10 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
       await document(items, workspace, filename, 'instructions', 'personality', budget);
       if (items.length !== before) break;
     }
-    await memoryDocuments(items, source.root, 'memories', budget);
+    await memoryDocuments(items, source.root, 'memories', budget, sharedDocumentRoots);
     // Some installations keep their own archive alongside Hermes' built-in memories.
     // Keep distinct paths/IDs; this does not redefine the upstream layout.
-    await memoryDocuments(items, source.root, 'memory', budget);
+    await memoryDocuments(items, source.root, 'memory', budget, sharedDocumentRoots);
     await document(items, source.root, 'MEMORY.md', undefined, 'memory', budget);
     const raw = await optionalText(source.root, path.join(source.root, 'cron', 'jobs.json'), budget);
     let decoded: unknown;
@@ -287,7 +299,7 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
     for (const file of ['AGENTS.md', 'TOOLS.md']) await document(items, workspace, file, 'instructions', 'personality', budget);
     await document(items, workspace, 'USER.md', 'user', 'memory', budget);
     await document(items, workspace, 'MEMORY.md', undefined, 'memory', budget);
-    await memoryDocuments(items, workspace, 'memory', budget);
+    await memoryDocuments(items, workspace, 'memory', budget, sharedDocumentRoots);
     await document(items, workspace, 'DREAMS.md', undefined, 'memory', budget);
     const rows = agentRows(values);
     const defaultAgent = (rows.find(row => row.default === true) ?? rows[0])?.id === source.agentId;

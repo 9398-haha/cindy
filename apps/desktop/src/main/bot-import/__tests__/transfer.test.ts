@@ -443,3 +443,22 @@ it('resumes an interrupted progress batch using stable item IDs without replayin
   expect(calls.filter(id => id === 'memory-4')).toHaveLength(2);
   expect(calls.filter(id => id === 'memory-5')).toHaveLength(2);
 });
+
+it('does not reuse a legacy boolean link exception to read an external credential on retry', async ctx => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-legacy-memory-link-'));
+  try {
+    const memory = path.join(root, 'memory'); await fs.mkdir(memory);
+    const secret = path.join(root, 'credential'); await fs.writeFile(secret, 'fixture-private-token');
+    const file = path.join(memory, 'note.json');
+    try { await fs.symlink(secret, file, 'file'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+    const sourceFile = { root: memory, file, nativeFileLinks: true };
+    const input = { ...snapshot, items: [{ view: { id: 'memory', name: 'Note', category: 'memory' as const, selected: true }, captureIssue: 'IMPORT_ITEM_FAILED', sourceFile }] };
+    const { deps } = harness();
+    const chosen = { ...selection, entryIds: ['memory'], takeover: false };
+    await transferCompanion(input, chosen, deps);
+    const result = await transferCompanion(input, chosen, deps);
+    expect(result.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'SOURCE_LINK_OUTSIDE_FOLDER' });
+    expect(deps.importItem).not.toHaveBeenCalled();
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

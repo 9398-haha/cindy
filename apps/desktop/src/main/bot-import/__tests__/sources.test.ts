@@ -582,3 +582,25 @@ it('saves native command jobs as disabled routines and excludes only native hear
   expect(tasks[0]?.view.issues).toBeUndefined();
   expect(tasks[1]?.view.name).toBe('heartbeat-main');
 });
+
+for (const kind of ['hermes', 'openclaw'] as const) it(`imports ${kind} memory links only from its declared document vault`, async ctx => {
+  const vault = path.join(home, 'vault');
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  await write(`.${kind}/.env`, `OBSIDIAN_VAULT_PATH=${vault}`);
+  await write('vault/data/state.json', '{"cursor":7}');
+  await write('private/auth.json', 'fixture-private-credential');
+  const folder = path.join(home, `.${kind}/${kind === 'hermes' ? 'memories' : 'workspace/memory'}`);
+  await fs.mkdir(folder, { recursive: true });
+  try { await fs.symlink(path.join(vault, 'data/state.json'), path.join(folder, 'state.json'), 'file'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+  await fs.symlink(path.join(home, 'private/auth.json'), path.join(folder, 'credentials.json'), 'file');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const memory = snapshot.items.filter(item => item.view.category === 'memory');
+  expect(memory.find(item => item.view.name === 'state.json')?.text).toBe('{"cursor":7}');
+  expect(memory.find(item => item.view.name === 'credentials.json')).toMatchObject({ captureIssue: 'SOURCE_LINK_OUTSIDE_FOLDER' });
+  expect(JSON.stringify(snapshot)).not.toContain('fixture-private-credential');
+  await fs.unlink(path.join(home, `.${kind}/.env`));
+  const withoutDeclaration = await inspectImportSource(source!, { ...reader, env: { ...reader.env, OBSIDIAN_VAULT_PATH: vault } });
+  expect(withoutDeclaration.items.find(item => item.view.name === 'state.json')).toMatchObject({ captureIssue: 'SOURCE_LINK_OUTSIDE_FOLDER' });
+});

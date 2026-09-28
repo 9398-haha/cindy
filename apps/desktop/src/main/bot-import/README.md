@@ -54,7 +54,7 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   originals enter the shared media ledger with a companion-owned import reference
   and a memory document linking the managed URL. Retry reuses that reference;
   companion deletion releases only its own refs through recoverable cleanup.
-  Empty files such as delivery/lock markers do not become attachment failures. Explicit native memory file links retain their logical names and bounded file reads; external directory links remain rejected. Retry applies the same classification to legacy checkpoints. Unsupported binary attachments remain visible failures, not silently omitted files.
+  Empty files such as delivery/lock markers do not become attachment failures. Explicit native memory file links into the source-declared document vault retain their logical names and bounded file reads; undeclared external files and external directory links remain rejected. Retry applies the same classification to legacy checkpoints. Unsupported binary attachments remain visible failures, not silently omitted files.
 - Selected identity/user/instruction documents and memories retain their original
   text in the encrypted environment. Profile prompt fields and the native memory
   store receive copies with known selected env/MCP/auth credentials masked, while
@@ -489,3 +489,12 @@ the same request ID. This recovery affects only that import, never reconnects th
 peer or replays other actions. Old hosts keep their original single-action path;
 old clients continue sending plain selections to new hosts. No relay or server
 change is required.
+
+Native memory file links are restricted to canonical document vault roots named
+by `OBSIDIAN_VAULT_PATH` in the selected source's own config/.env. Memory files
+cannot add roots, and Cindy's process environment is not a grant. Other external
+files and all external directory traversal remain rejected, including retries of
+old checkpoints that only contained a boolean link exception. Native command
+argv, cwd and stdin are now opaque to the read planner, even when a literal secret
+is absent from every configured credential map; the original payload remains in
+local encrypted storage for authorized execution.

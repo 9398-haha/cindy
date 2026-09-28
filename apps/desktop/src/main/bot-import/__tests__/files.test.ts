@@ -10,22 +10,28 @@ it('reads an explicit native memory file link without granting traversal of exte
   try {
     const memory = path.join(root, 'memory'), shared = path.join(root, 'shared');
     await fs.mkdir(memory); await fs.mkdir(shared);
+    const sharedRoot = await fs.realpath(shared);
     const target = path.join(shared, 'state.json'), link = path.join(memory, 'state.json');
     await fs.writeFile(target, '{"cursor":7}');
     try { await fs.symlink(target, link, 'file'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
     await expect(readImportFile(memory, link)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
-    expect(await readImportTree(memory, undefined, createImportBudget(), undefined, memory, true)).toMatchObject([
+    expect(await readImportTree(memory, undefined, createImportBudget(), undefined, memory, [sharedRoot])).toMatchObject([
       { name: 'state.json', bytes: Buffer.from('{"cursor":7}') },
     ]);
-    await expect(readImportFile(memory, link, createImportBudget(1), true)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    await expect(readImportFile(memory, link, createImportBudget(1), [sharedRoot])).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    const credential = path.join(root, 'private-token');
+    await fs.writeFile(credential, 'fixture-private-credential');
+    await fs.unlink(link); await fs.symlink(credential, link, 'file');
+    await expect(readImportFile(memory, link, undefined, [sharedRoot])).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    await fs.unlink(link); await fs.symlink(target, link, 'file');
     const directory = path.join(memory, 'external');
     await fs.symlink(shared, directory, process.platform === 'win32' ? 'junction' : 'dir');
     const errors = vi.fn();
-    expect(await readImportTree(memory, undefined, createImportBudget(), errors, memory, true)).toHaveLength(1);
+    expect(await readImportTree(memory, undefined, createImportBudget(), errors, memory, [sharedRoot])).toHaveLength(1);
     expect(errors).toHaveBeenCalledWith('external', expect.objectContaining({ code: 'SOURCE_LINK_OUTSIDE_FOLDER' }), 'directory');
-    await expect(readImportFile(memory, path.join(directory, 'state.json'), undefined, true)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
-    await expect(readImportFile(memory, target, undefined, true)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    await expect(readImportFile(memory, path.join(directory, 'state.json'), undefined, [sharedRoot])).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    await expect(readImportFile(memory, target, undefined, [sharedRoot])).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 

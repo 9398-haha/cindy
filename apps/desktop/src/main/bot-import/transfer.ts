@@ -154,12 +154,12 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       if (item.captureIssue && item.sourceFile) {
         try {
           const source = item.sourceFile;
-          const nativeFileLinks = source.nativeFileLinks ?? item.view.category === 'memory';
+          const sharedDocumentRoots = source.sharedDocumentRoots ?? [];
           // Missing kind is a legacy checkpoint. Re-evaluate repaired paths, but
           // keep containment anchored to the original memory root in either case.
           const directory = source.kind === 'directory' || source.kind !== 'file' && (await fs.stat(source.file)).isDirectory();
           if (directory) {
-            const files = await readImportTree(source.root, undefined, budget, undefined, source.file, nativeFileLinks);
+            const files = await readImportTree(source.root, undefined, budget, undefined, source.file, sharedDocumentRoots);
             item.files = []; item.documents = [];
             for (const file of files) {
               const content = memoryFileContent(file);
@@ -170,7 +170,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
               });
             }
           } else {
-            const file = await readImportFile(source.root, source.file, budget, nativeFileLinks);
+            const file = await readImportFile(source.root, source.file, budget, sharedDocumentRoots);
             const content = memoryFileContent(file);
             if (content.kind === 'text') item.text = content.text;
             else if (content.kind === 'attachment') item.asset = { name: file.name, bytes: file.bytes };
