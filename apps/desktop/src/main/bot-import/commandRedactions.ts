@@ -13,6 +13,17 @@ export function commandLiteralRedactions(literals: string[], environmentValues: 
     // only its credential payload. Public headers/scheme names are not masks.
     const header = /^(?:-H)?[\t ]*(?:proxy-)?authorization[\t ]*:[\t ]*(\S+[\t ]+(.+?))[\t ]*$/i.exec(value);
     if (header) values.push(header[1]!, header[2]!);
+    // Form bodies can echo one field independently of the original scalar.
+    // Keep both wire and decoded values, including repeated/encoded field names;
+    // ordinary form settings are not credentials. Do not interpret URLs or JSON
+    // as form bodies (they have their own traversal below).
+    if (/^[\w.%+-]+=/.test(value)) for (const match of value.matchAll(/(?:^|&)([^=&]+)=([^&]*)/g)) {
+      const pair = `${match[1]}=${match[2]}`;
+      const [field] = new URLSearchParams(pair);
+      if (field && /^[\w.-]+$/.test(field[0]) && isImportedCredentialField(field[0]) && field[1]) {
+        values.push(match[2]!, field[1]);
+      }
+    }
     // command-env applies both the credential-field rules and URL component
     // traversal, including URLs beneath ordinary structured keys like endpoint.
     structured.push({ id: `command_${structured.length}`, format: 'command-env', value });

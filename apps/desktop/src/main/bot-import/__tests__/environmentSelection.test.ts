@@ -67,3 +67,19 @@ it.each([
   }
   expect(items).toEqual(before);
 });
+
+it.each(['stdin', 'argv', 'assignment', 'env'])('masks credential fields in form-encoded command %s while retaining public values', source => {
+  const form = 'access_token=fixture-form%2Fsecret%2Bvalue&access_token=fixture+second+secret&%70assword=fixture%3Dpassword&city=Paris&days=7&token_type=Bearer';
+  const payload = { kind: 'command', argv: ['curl', '--data', ...(source === 'argv' ? [form] : source === 'assignment' ? [`--config=${form}`] : [])],
+    ...(source === 'stdin' ? { input: form } : {}), ...(source === 'env' ? { env: { CONFIG: form } } : {}) };
+  const items: ImportItem[] = [{ view: { id: 'job', category: 'automations', name: 'Job', selected: true },
+    automation: { sourceId: 'job', fingerprint: 'fixture', original: { payload } } }];
+  const before = structuredClone(items);
+  const secrets = ['fixture-form/secret+value', 'fixture-form%2Fsecret%2Bvalue', 'fixture second secret', 'fixture+second+secret', 'fixture=password', 'fixture%3Dpassword'];
+  for (const collect of [previewImportRedactions, selectedImportRedactions]) {
+    const readable = redactEnvironmentValues(`${secrets.join('\n')}\nParis 7 Bearer curl --data`, collect(items));
+    for (const secret of secrets) expect(readable).not.toContain(secret);
+    expect(readable).toContain('Paris 7 Bearer curl --data');
+  }
+  expect(items).toEqual(before);
+});

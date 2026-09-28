@@ -343,3 +343,37 @@ it.each(['-H', '--header=', '-Hjoined', '--proxy-header'])('masks an echoed auth
   await finishImportedAutomation(root, routine, 'chat', 'header-run', 'fixture-header-token public report', true, signal, () => {});
   expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
 });
+
+it.each(['stdin', 'argv', 'assignment', 'env', 'inherited-env'])('masks form credential values from command %s in execution, retries and final publication', async source => {
+  const form = 'access_token=fixture-form%2Fsecret%2Bvalue&password=fixture+second+secret&city=Paris&days=7';
+  const read = source === 'stdin' ? 'require("node:fs").readFileSync(0,"utf8")'
+    : source === 'env' || source === 'inherited-env' ? 'process.env.CONFIG' : 'process.argv[1].replace(/^--data=/, "")';
+  const code = `const form=new URLSearchParams(${read});process.stdout.write([form.get("access_token"),form.get("password"),form.get("city"),form.get("days")].join(" | "));`;
+  const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code,
+    ...(['argv', 'assignment'].includes(source) ? ['--', source === 'assignment' ? `--data=${form}` : form] : [])], cwd: root,
+    ...(source === 'stdin' ? { input: form } : {}), ...(source === 'env' ? { env: { CONFIG: form } } : {}) } };
+  const environment: Record<string, string> = source === 'inherited-env' ? { CONFIG: form } : {};
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture form report' } as Routine;
+  await shared.store.write(root, 'bot', { version: 1, env: environment, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'ready', original, sourceRoot: root },
+  } }, () => {});
+  const signal = new AbortController().signal;
+  const result = await prepareImportedAutomation(root, routine, 'form-run', signal, () => {});
+  for (const secret of ['fixture-form/secret+value', 'fixture second secret']) expect(result!.direct).not.toContain(secret);
+  expect(result!.direct).toContain('Paris | 7');
+  const saved = (await shared.store.read(root, 'bot', () => {}))!;
+  expect(saved.env).toEqual(environment);
+  expect(saved.automations!.routine!.original).toEqual(original);
+  expect(saved.automations!.routine!.prepared?.direct).toBe(result!.direct);
+  const legacy = 'fixture-form/secret+value | fixture second secret | Paris | 7';
+  await shared.store.update(root, 'bot', () => {}, env => {
+    env.automations!.routine!.prepared = { runId: 'form-run', prompt: '', direct: legacy };
+  });
+  expect((await prepareImportedAutomation(root, routine, 'form-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await shared.store.update(root, 'bot', () => {}, env => {
+    env.automations!.routine!.deliveryProgress = { runId: 'form-run', text: legacy, direct: true, deliveries: [], next: 0 };
+  });
+  expect((await prepareImportedAutomation(root, routine, 'retry-run', signal, () => {}))?.direct).toBe(result!.direct);
+  await finishImportedAutomation(root, routine, 'chat', 'retry-run', 'must reuse pending output', true, signal, () => {});
+  expect(shared.message.mock.calls[0]![1].content).toBe(result!.direct);
+});

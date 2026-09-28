@@ -590,13 +590,18 @@ is absent from every configured credential map; the original payload remains in
 local encrypted storage for authorized execution.
 
 Readable import copies collect credentials from structured argv/stdin as well as
-command env. The same literal/JSON/URL traversal is shared with output masking;
+command env. The same literal/JSON/URL/form traversal is shared with output masking;
 publication treats stdin and credential-named options as private literals and
 examines other arguments for structured credential fields and capability URLs.
 Authorization and Proxy-Authorization header literals also mask their credential
 payload without making the scheme or ordinary headers global masks. This covers
 separate `-H`/`--header` arguments, `--header=value`, and joined `-Hvalue` forms
 in both publication and execution-output paths; original argv remains intact.
+Form-encoded stdin, argv and command environment values collect credential-named
+fields in both wire and decoded form, including repeated fields, percent-encoded
+names and `+` spaces. Ordinary form values such as city/day-count/token type stay
+readable. Execution retries and final chat publication apply the same masks;
+the original form bytes remain in the encrypted command archive.
 It does not blanket-mask ordinary positional arguments or command settings:
 doing so corrupts day counts, output formats and subcommands in imported text.
 Unlabelled opaque positional values are not newly classified as credentials by

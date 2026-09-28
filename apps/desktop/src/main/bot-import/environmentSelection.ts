@@ -80,17 +80,11 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
     Object.entries(object(object(item.automation?.original.payload).env))
       .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
   ));
-  // Command env JSON and raw capability URLs can occur in readable copies.
-  // Reuse the credential-field classifier before preview and publication, not
-  // just after command execution. Ordinary JSON scalar settings stay unchanged.
-  const structured = commandEnvironments.flatMap(environment => Object.values(environment)).flatMap<{ id: string; format: string; value: unknown }>((value, index) => {
-    const resolved = String(resolve(value));
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(resolved)) return [{ id: `command_${index}`, format: 'command-env', value: resolved }];
-    try {
-      const parsed: unknown = JSON.parse(resolved);
-      return parsed && typeof parsed === 'object' ? [{ id: `command_${index}`, format: 'command-env', value: parsed }] : [];
-    } catch { return []; }
-  });
+  // Env, stdin and argv share form/JSON/URL/header decomposition with execution
+  // output. Env values retain their existing whole-value masks below; public
+  // scalar settings must not gain blanket decoded-literal masks.
+  const environmentValues = Object.values(commandLiteralRedactions([], commandEnvironments
+    .flatMap(environment => Object.values(environment)).map(value => String(resolve(value))), false));
   const commandValues = items.flatMap(item => {
     const payload = object(item.automation?.original.payload);
     if (payload.kind !== 'command') return [];
@@ -100,12 +94,12 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
       ...Object.values(commandArgumentRedactions(args.map(arg => String(resolve(arg))))),
     ];
   });
-  const literalMasks = Object.fromEntries([...new Set(commandValues)].map((value, index) => [`command_input_${index}`, value]));
+  const literalMasks = Object.fromEntries([...new Set([...commandValues, ...environmentValues])].map((value, index) => [`command_input_${index}`, value]));
   return importedContentRedactions({ env,
     contentRedactions: { ...Object.fromEntries(commandEnvironments.flatMap(environment => Object.entries(environmentRedactions(environment)))
       .map(([name, value], index) => [`command_${index}_${name}`, value])), ...literalMasks },
     mcp: items.flatMap(item => item.mcp ? [resolve(item.mcp) as NonNullable<typeof item.mcp>] : []),
-    credentials: [...items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []), ...structured],
+    credentials: items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []),
   });
 }
 

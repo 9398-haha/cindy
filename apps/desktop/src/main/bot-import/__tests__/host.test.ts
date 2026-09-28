@@ -447,7 +447,7 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
 it.each([false, true])('publishes command env/argv/stdin credentials safely (command selected: %s)', async selected => {
   const secret = 'fixture-command-json-token';
   const nested = 'fixture-command-json-nested';
-  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token'];
+  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token', 'fixture-form argv', 'fixture-form%20argv', 'fixture-form/env', 'fixture-form%2Fenv'];
   const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
     'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment'];
   const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
@@ -455,7 +455,7 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
     unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
   const text = `Keep node --mode -e, Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')} ${literalSecrets.join(' ')}`;
   const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
-  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', '', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3]], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
+  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', '', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3], '--data', 'access_token=fixture-form%20argv&city=Paris'], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, FORM: 'password=fixture-form%2Fenv&days=7', WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
   h.sourceEnabled = false;
   h.snapshot.items = [
     { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
