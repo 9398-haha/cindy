@@ -109,6 +109,37 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.restoreAllMocks(); await fs.rm(h.root, { recursive: true, force: true }); });
 
+it('bounds actual receipt writes with long entry names while retaining retryable failures', async () => {
+  const count = 1_000;
+  h.snapshot.items = Array.from({ length: count }, (_, index) => ({
+    view: { id: `memory-${index}`, name: `${'长名称'.repeat(60)}-${index}`, category: 'memory', selected: true }, text: `Original ${index}`,
+  }));
+  h.importDocument.mockImplementation(async (_bot, id) => { if (id === 'memory-999') throw Object.assign(new Error('full'), { code: 'ENOSPC' }); });
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'receipt-byte-budget-fixture', previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false, deferSetup: true };
+  const receiptPath = path.join(h.root, 'companion-imports', `${selection.requestId}.json`);
+  let writtenBytes = 0;
+  const write = fsSync.writeFileSync;
+  vi.spyOn(fsSync, 'writeFileSync').mockImplementation((file, data, options) => {
+    if (String(file).startsWith(`${receiptPath}.`) && typeof data === 'string') writtenBytes += Buffer.byteLength(data);
+    return write(file, data, options);
+  });
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const saved = JSON.parse(await fs.readFile(receiptPath, 'utf8'));
+  expect(writtenBytes).toBeGreaterThan(0);
+  expect(writtenBytes).toBeLessThan((await fs.stat(receiptPath)).size * 12);
+  expect(Object.keys(saved.entryNames)).toHaveLength(count);
+  expect(result?.savedEntryIds).toHaveLength(count - 1);
+  expect(result?.checks.find(check => check.entryId === 'memory-999')).toMatchObject({ status: 'needs-attention', message: 'IMPORT_DISK_FULL' });
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.pendingImport).toBeDefined();
+  h.importDocument.mockResolvedValue(undefined);
+  await startCompanionImport(selection, 'after-restart');
+  const retried = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(retried?.status).toBe('complete'); expect(retried?.savedEntryIds).toHaveLength(count);
+}, 10_000);
+
 it('rejects a simultaneous normalized-name conflict, removes only the loser checkpoint, and accepts a renamed request', async () => {
   h.snapshot.items = [{ view: { id: 'env', name: 'Key', category: 'connections', selected: true }, env: { API_KEY: 'fixture-private-key' } }];
   const profiles = new Map<string, string>();

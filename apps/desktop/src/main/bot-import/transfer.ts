@@ -36,7 +36,8 @@ export interface TransferDeps {
   readReceipt(requestId: string): Promise<ImportReceipt | undefined>;
   readLegacyDeferSetup?(botId: string): Promise<boolean | undefined>;
   readSkillConfig?(source: ImportSource, budget: ImportReadBudget): Promise<Record<string, unknown>>;
-  saveReceipt(receipt: ImportReceipt): Promise<void>;
+  /** Return serialized UTF-8 bytes when available, avoiding a second full serialization. */
+  saveReceipt(receipt: ImportReceipt): Promise<number | void>;
   createCompanion(botId: string, selection: CompanionImportSelection): Promise<void>;
   validateItems?(items: ImportItem[]): void;
   importItem(botId: string, item: ImportItem, snapshot: ImportSnapshot): Promise<void>;
@@ -132,13 +133,23 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   const copied = new Set(receipt.copied);
   const checkIndexes = new Map(receipt.result.checks.map((item, index) => [item.entryId, index]));
   const selected = new Set(selectedIds);
-  // Cap full progress snapshots per pass, not imported items. A lost batch is
-  // replayed through idempotent content writes/createOnce; source handover
-  // milestones still call save immediately before/after each external mutation.
-  const progressBatchSize = Math.max(1, Math.ceil(items.length / 100));
-  let pendingProgress = 0;
-  const save = async () => { deps.assertOwner(); await deps.saveReceipt(receipt); deps.assertOwner(); pendingProgress = 0; };
-  const saveProgress = async () => { if (++pendingProgress >= progressBatchSize) await save(); };
+  // Charge changed records against the last serialized receipt (including the
+  // immutable name index). As the receipt grows, ordinary snapshots get farther
+  // apart instead of rewriting the full catalog ~100 times. Lost batches replay
+  // idempotently; source handover milestones still save before/after mutations.
+  let progressBatchBytes = 64 * 1024, pendingProgressBytes = 0;
+  const save = async () => {
+    deps.assertOwner();
+    const bytes = await deps.saveReceipt(receipt);
+    deps.assertOwner();
+    progressBatchBytes = Math.max(64 * 1024, bytes ?? Buffer.byteLength(JSON.stringify(receipt)));
+    pendingProgressBytes = 0;
+  };
+  const saveProgress = async (entryId: string) => {
+    const index = checkIndexes.get(entryId);
+    pendingProgressBytes += Buffer.byteLength(JSON.stringify([entryId, index === undefined ? null : receipt.result.checks[index], receipt.routines[entryId]]));
+    if (pendingProgressBytes >= progressBatchBytes) await save();
+  };
   const check = (entryId: string, status: CompanionImportResult['checks'][number]['status'], message?: string, progress?: { saved: number; total: number }) => {
     const index = checkIndexes.get(entryId) ?? receipt.result.checks.length;
     checkIndexes.set(entryId, index);
@@ -252,7 +263,7 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       deps.assertOwner();
       check(item.view.id, 'needs-attention', importFailureCode(error), (error as { importProgress?: { saved: number; total: number } })?.importProgress);
     }
-    await saveProgress();
+    await saveProgress(item.view.id);
   }
   await save();
   if (!receipt.environmentSaved) {
@@ -300,21 +311,21 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       } catch (error) {
         deps.assertOwner();
         check(item.view.id, 'needs-attention', importFailureCode(error));
-        await saveProgress(); continue;
+        await saveProgress(item.view.id); continue;
       }
     }
     if (record.phase === 'complete') { check(item.view.id, item.view.enabled && selection.takeover ? 'taken-over' : 'paused'); continue; }
     if (item.view.issues?.length) {
-      check(item.view.id, 'needs-attention', item.view.issues[0]); await saveProgress(); continue;
+      check(item.view.id, 'needs-attention', item.view.issues[0]); await saveProgress(item.view.id); continue;
     }
     if (!item.view.enabled || !selection.takeover) {
-      record.phase = 'complete'; check(item.view.id, 'paused'); await saveProgress(); continue;
+      record.phase = 'complete'; check(item.view.id, 'paused'); await saveProgress(item.view.id); continue;
     }
     if (selection.deferSetup && !resumeSetup && record.phase === 'created') {
-      check(item.view.id, 'needs-attention', 'IMPORT_SETUP_DEFERRED'); await saveProgress(); continue;
+      check(item.view.id, 'needs-attention', 'IMPORT_SETUP_DEFERRED'); await saveProgress(item.view.id); continue;
     }
     if (item.view.dependsOn?.some(id => missingDependency(id))) {
-      check(item.view.id, 'needs-attention', 'AUTOMATION_DEPENDENCY_NOT_SELECTED'); await saveProgress(); continue;
+      check(item.view.id, 'needs-attention', 'AUTOMATION_DEPENDENCY_NOT_SELECTED'); await saveProgress(item.view.id); continue;
     }
     if (record.phase === 'created') {
       try {

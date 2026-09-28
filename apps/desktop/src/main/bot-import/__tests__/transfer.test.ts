@@ -138,10 +138,10 @@ it.each(['created', 'source-paused'] as const)('resumes a pre-upgrade %s receipt
 
 describe('companion takeover transaction', () => {
   it('copies exactly the selection and verifies before pausing source, idempotently', async () => {
-    const { deps } = harness(); const order: string[] = [];
+    const { deps, receipt } = harness(); const order: string[] = [];
     vi.mocked(deps.verifyAutomation).mockImplementation(async () => { order.push('verify'); return { verified: true }; });
-    vi.mocked(deps.pauseSource).mockImplementation(async () => { order.push('pause'); });
-    vi.mocked(deps.enableRoutine).mockImplementation(async () => { order.push('enable'); });
+    vi.mocked(deps.pauseSource).mockImplementation(async () => { expect(receipt()?.routines.task?.phase).toBe('pausing-source'); order.push('pause'); });
+    vi.mocked(deps.enableRoutine).mockImplementation(async () => { expect(receipt()?.routines.task?.phase).toBe('source-paused'); order.push('enable'); });
     const result = await transferCompanion(snapshot, selection, deps);
     expect(result.status).toBe('complete'); expect(order).toEqual(['verify', 'pause', 'enable']);
     expect(deps.importItem).toHaveBeenCalledTimes(1);
@@ -438,36 +438,63 @@ it('validates 100,000 sparse selections in linear work and rejects oversized ran
     .toThrow('SELECTION_CHANGED');
 });
 
-it('saves 100,000 content entries with bounded receipt rewrites and indexed progress', async () => {
+it.each([{ count: 100_000, name: 'Note' }, { count: 5_000, name: '长名称'.repeat(60) }])('bounds serialized receipt bytes for $count entries including the name index', async ({ count, name }) => {
   const { deps } = harness();
-  const count = 100_000;
-  const items = Array.from({ length: count }, (_, index) => ({ view: { id: `memory-${index}`, name: 'Note', category: 'memory' as const, selected: true }, text: 'Original' }));
-  let writes = 0, serializedChecks = 0;
-  deps.saveReceipt = async receipt => { writes++; serializedChecks += receipt.result.checks.length; };
+  const items = Array.from({ length: count }, (_, index) => ({ view: { id: `memory-${index}`, name, category: 'memory' as const, selected: true }, text: 'Original' }));
+  const entryNames = Object.fromEntries(items.map(item => [item.view.id, item.view.name]));
+  let serializedBytes = 0, finalBytes = 0;
+  deps.saveReceipt = async receipt => {
+    receipt.entryNames = entryNames;
+    finalBytes = Buffer.byteLength(JSON.stringify(receipt)); serializedBytes += finalBytes;
+    return finalBytes;
+  };
   const result = await transferCompanion({ ...snapshot, items }, { ...selection, entryIds: items.map(item => item.view.id), takeover: false, deferSetup: true }, deps);
   expect(result.savedEntryIds).toHaveLength(count);
   expect(result.checks).toHaveLength(count);
-  expect(writes).toBeLessThan(110);
-  expect(serializedChecks).toBeLessThan(count * 60);
+  expect(serializedBytes).toBeLessThan(finalBytes * 10);
   expect(deps.importItem).toHaveBeenCalledTimes(count);
+}, 30_000);
+
+it('batches disabled and deferred routine records without losing their durable states', async () => {
+  const { deps } = harness();
+  const count = 10_000;
+  const template = snapshot.items.find(item => item.automation)!;
+  const items = Array.from({ length: count }, (_, index) => ({ ...template,
+    view: { ...template.view, id: `task-${index}`, enabled: index % 2 === 0, dependsOn: [] },
+  }));
+  let bytes = 0, finalText = '';
+  deps.saveReceipt = async value => { finalText = JSON.stringify(value); const length = Buffer.byteLength(finalText); bytes += length; return length; };
+  const result = await transferCompanion({ ...snapshot, items }, { ...selection, entryIds: items.map(item => item.view.id), deferSetup: true }, deps);
+  expect(bytes).toBeLessThan(Buffer.byteLength(finalText) * 10);
+  const saved = JSON.parse(finalText) as ImportReceipt;
+  expect(Object.keys(saved.routines)).toHaveLength(count);
+  expect(saved.routines['task-0']?.phase).toBe('created');
+  expect(saved.routines['task-1']?.phase).toBe('complete');
+  expect(saved.result).toEqual(result);
+  expect(result.savedEntryIds).toHaveLength(count);
+  expect(deps.pauseSource).not.toHaveBeenCalled(); expect(deps.enableRoutine).not.toHaveBeenCalled();
 }, 10_000);
 
 it('resumes an interrupted progress batch using stable item IDs without replaying saved batches', async () => {
   const { deps, receipt } = harness();
-  const items = Array.from({ length: 400 }, (_, index) => ({ view: { id: `memory-${index}`, name: 'Note', category: 'memory' as const, selected: true }, text: 'Original' }));
+  const items = Array.from({ length: 3_000 }, (_, index) => ({ view: { id: `memory-${index}`, name: 'Note', category: 'memory' as const, selected: true }, text: 'Original' }));
   const input = { ...selection, entryIds: items.map(item => item.view.id), takeover: false, deferSetup: true };
-  let interrupted = false;
+  let interrupted = false, durableCount = 0;
   const calls: string[] = [];
+  const save = deps.saveReceipt;
+  deps.saveReceipt = async value => { await save(value); durableCount = value.copied.length; };
   deps.assertOwner = () => { if (interrupted) throw new Error('OWNER_CHANGED'); };
-  deps.importItem = async (_bot, item) => { calls.push(item.view.id); if (calls.length === 6) interrupted = true; };
+  deps.importItem = async (_bot, item) => { calls.push(item.view.id); if (durableCount && calls.length === durableCount + 2) interrupted = true; };
   await expect(transferCompanion({ ...snapshot, items }, input, deps)).rejects.toThrow('OWNER_CHANGED');
-  expect(receipt()?.copied).toEqual(items.slice(0, 4).map(item => item.view.id));
+  const savedCount = durableCount;
+  expect(savedCount).toBeGreaterThan(0); expect(savedCount).toBeLessThan(items.length - 2);
+  expect(receipt()?.copied).toEqual(items.slice(0, savedCount).map(item => item.view.id));
   interrupted = false;
   const result = await transferCompanion({ ...snapshot, items }, input, deps);
-  expect(result.savedEntryIds).toHaveLength(400);
+  expect(result.savedEntryIds).toHaveLength(items.length);
   expect(calls.filter(id => id === 'memory-0')).toHaveLength(1);
-  expect(calls.filter(id => id === 'memory-4')).toHaveLength(2);
-  expect(calls.filter(id => id === 'memory-5')).toHaveLength(2);
+  expect(calls.filter(id => id === `memory-${savedCount}`)).toHaveLength(2);
+  expect(calls.filter(id => id === `memory-${savedCount + 1}`)).toHaveLength(2);
 });
 
 it('does not reuse a legacy boolean link exception to read an external credential on retry', async ctx => {

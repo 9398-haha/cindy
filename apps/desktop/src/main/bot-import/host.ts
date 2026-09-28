@@ -247,7 +247,9 @@ async function readReceipt(root: string, requestId: string): Promise<ImportRecei
 async function saveReceipt(root: string, receipt: ImportReceipt) {
   const file = receiptFile(root, receipt.result.requestId);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  atomicWriteFileSync(file, JSON.stringify(receipt));
+  const contents = JSON.stringify(receipt);
+  atomicWriteFileSync(file, contents);
+  return Buffer.byteLength(contents);
 }
 
 /** A definite DB rejection must not strand credentials without a deletable profile. */

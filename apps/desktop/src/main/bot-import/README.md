@@ -535,9 +535,15 @@ it cannot accept a command as a simple local reminder. Native `heartbeat` payloa
 are preserved disabled with their schedule and original definition; native context
 semantics remain explicitly pending, rather than being silently reduced to a reminder.
 
-Ordinary content/routine progress uses indexed checks and at most about 100 full
-receipt snapshots per pass, sized from the selected input. An interrupted batch
-replays idempotent writes and `createOnce` under the same IDs. Handover intent,
+Ordinary content/routine progress uses indexed checks and batches by serialized
+UTF-8 bytes. Each changed record is charged against the last complete receipt's
+size (including the display-name index), with a 64 KiB floor. Growing receipts
+therefore save progressively less often instead of rewriting every name/check
+roughly 100 times; measuring a change never scans the accumulated receipt. The
+host returns the byte count from its single serialization. Phase boundaries and
+terminal results still save complete, backward-compatible atomic receipts.
+An interrupted batch replays idempotent writes and `createOnce` under the same
+IDs; a large name index can mean replaying a larger unsaved batch. Handover intent,
 source pause, target enable and rollback milestones still persist immediately.
 
 New hosts also advertise `selectionChunks` on previews. The shared remote client
