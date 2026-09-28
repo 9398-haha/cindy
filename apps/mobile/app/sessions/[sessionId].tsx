@@ -9324,7 +9324,7 @@ export default function SessionScreen() {
         <View style={styles.sessionMainLayer} testID="session.mainLayer">
           {isSharedTaskAccessRevoked ? (
             <ScrollView contentContainerStyle={{ paddingTop: topOverlayHeight + spacing.lg, paddingHorizontal: spacing.lg }}>
-              <SharedTaskEndedState onRejoin={() => router.replace('/shared-session')} />
+              <SharedTaskEndedState onReturnToTasks={() => router.replace('/devices')} />
             </ScrollView>
           ) : sessionOperationLayout.composerSlot === 'missing-session' && remoteUnavailableReason ? (
             // 会话行尚未到达时保留状态占位；自动恢复类错误不再提供手动同步入口。
@@ -9365,7 +9365,8 @@ export default function SessionScreen() {
                   interactive={!sessionListDrawerOverlayMounted}>
 
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
-                  <MessageRenderer companion={companionChat} companionWorkingLabel={companionWorkGroupLabel}
+                  <MessageRenderer companion={companionChat}
+                    onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}

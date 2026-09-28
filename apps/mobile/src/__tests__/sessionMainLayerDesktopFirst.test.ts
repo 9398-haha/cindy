@@ -52,7 +52,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(revokedEnd).toBeGreaterThan(revokedStart);
     expect(source.slice(revokedStart, revokedEnd)).toContain('paddingTop: topOverlayHeight + spacing.lg');
     expect(source.slice(revokedStart, revokedEnd)).toContain('<SharedTaskEndedState');
-    expect(source.slice(revokedStart, revokedEnd)).toContain("router.replace('/shared-session')");
+    expect(source.slice(revokedStart, revokedEnd)).toContain("router.replace('/devices')");
     expect(routeSource).toContain('cachedOnly={showCachedHistoryNotice}');
     expect(source.replace(/\r\n/g, '\n'))
       .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');

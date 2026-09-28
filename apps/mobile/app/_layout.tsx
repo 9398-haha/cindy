@@ -77,12 +77,16 @@ import {
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
+import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardSharedTaskInvitation';
+import { ClipboardSharedTaskPrompt } from '@/session/ClipboardSharedTaskPrompt';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
 const holdSplash = () => undefined;
 
 function NavigationGate() {
+  const pendingSharedTaskInvitation = usePendingSharedTaskInvitationIntent();
   const windowGeometry = useAdaptiveWindow();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
   const sessionHeaderShown = Platform.OS === 'ios'
@@ -90,6 +94,7 @@ function NavigationGate() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  useClipboardSharedTaskInvitation(auth.initialized && auth.isAuthenticated, segments.join('/') === 'shared-session');
   const { mode, colors, preferenceReady } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
   // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
@@ -131,9 +136,12 @@ function NavigationGate() {
       return;
     }
     if (auth.isAuthenticated && inAuthGroup) {
-      router.replace('/');
+      if (pendingSharedTaskInvitation?.source === 'link') router.replace('/shared-session');
+      else router.replace('/');
+    } else if (auth.isAuthenticated && pendingSharedTaskInvitation?.source === 'link' && segments.join('/') !== 'shared-session') {
+      router.replace('/shared-session');
     }
-  }, [auth.initialized, auth.isAuthenticated, router, segments]);
+  }, [auth.initialized, auth.isAuthenticated, pendingSharedTaskInvitation, router, segments]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.accountDeletionRestored) return;
@@ -194,6 +202,7 @@ function NavigationGate() {
         </RecentMessageHistoriesProvider>
         </ResidentHomeListProvider>
       </RemoteDesktopHost>
+      {auth.initialized && auth.isAuthenticated && !splashActive && <ClipboardSharedTaskPrompt accountName={auth.user?.name} />}
     </NavigationThemeProvider>
   );
 }

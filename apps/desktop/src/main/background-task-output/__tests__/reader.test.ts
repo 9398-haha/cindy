@@ -13,7 +13,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -58,24 +57,20 @@ describe('readBackgroundTaskOutputTail', () => {
 
   it('rejects a link whose real target is not an output file', async () => {
     const target = path.join(dir, 'secret.txt');
-    await fs.writeFile(target, 'secret');
+    // Junctions need no file-symlink privilege on Windows. Canonical extension
+    // validation must reject either target before inspecting or opening it.
+    if (process.platform === 'win32') await fs.mkdir(target);
+    else await fs.writeFile(target, 'secret');
     const link = path.join(dir, 'b6.output');
-    try {
-      await fs.symlink(target, link, 'file');
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EACCES')) throw error;
-      // Keep a real file alias on unprivileged Windows; simulate only the
-      // canonical-path result that a native file symlink would produce.
-      await fs.link(target, link);
-      const realpath = fs.realpath.bind(fs);
-      vi.spyOn(fs, 'realpath').mockImplementation(async (candidate, options) => {
-        return realpath(String(candidate) === link ? target : candidate, options);
-      });
-    }
+    await fs.symlink(target, link, process.platform === 'win32' ? 'junction' : 'file');
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    const stat = vi.spyOn(fs, 'stat');
     const open = vi.spyOn(fs, 'open');
-    expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
-    expect(open).not.toHaveBeenCalled();
+    try {
+      expect(await readBackgroundTaskOutputTail(link)).toEqual({ ok: false, reason: 'forbidden' });
+      expect(stat).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    } finally { stat.mockRestore(); open.mockRestore(); }
   });
 
   it('reads through a symlinked parent directory by checking the canonical path', async () => {
