@@ -281,11 +281,11 @@ it.each(['stdin', 'argv', 'assignment'] as const)('masks nested JSON credentials
 
 it.each(['env', 'inherited-env', 'stdin', 'argv', 'assignment'] as const)('masks capability URL components from command %s before caching or publishing', async source => {
   const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture URL report' } as Routine;
-  const url = 'https://fixture-user:fixture-password@example.invalid/hooks/fixture%2Fpath?token=fixture%2Bquery&enabled=true';
+  const url = 'https://fixture-user:fixture-password@example.invalid/hooks/fixture%2Fpath?token=fixture%2Bquery&enabled=true#access_token=fixture%2Ffragment%2Bsecret&token_type=Bearer&section=Introduction';
   const input = JSON.stringify({ destinations: [{ endpoint: url }], city: 'Paris' });
   const read = source === 'env' || source === 'inherited-env' ? 'process.env.WEBHOOK_URL'
     : `JSON.parse(${source === 'stdin' ? 'require("node:fs").readFileSync(0,"utf8")' : 'process.argv[1].replace(/^--config=/, "")'}).destinations[0].endpoint`;
-  const code = `const url=new URL(${read}); const encoded=url.pathname.split("/").pop(); process.stdout.write(JSON.stringify({user:url.username,password:url.password,path:decodeURIComponent(encoded),encoded,query:url.searchParams.get("token"),wireQuery:url.search.slice(1).split("&")[0].split("=")[1],enabled:url.searchParams.get("enabled"),route:url.pathname.split("/")[1],city:"Paris"}));`;
+  const code = `const url=new URL(${read}); const encoded=url.pathname.split("/").pop(); const fragment=new URLSearchParams(url.hash.slice(1)); process.stdout.write(JSON.stringify({user:url.username,password:url.password,path:decodeURIComponent(encoded),encoded,query:url.searchParams.get("token"),wireQuery:url.search.slice(1).split("&")[0].split("=")[1],fragment:fragment.get("access_token"),wireFragment:url.hash.slice(1).split("&")[0].split("=")[1],tokenType:fragment.get("token_type"),section:fragment.get("section"),enabled:url.searchParams.get("enabled"),route:url.pathname.split("/")[1],city:"Paris"}));`;
   const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code,
     ...(['argv', 'assignment'].includes(source) ? ['--', source === 'assignment' ? `--config=${input}` : input] : [])], cwd: root,
     ...(source === 'stdin' ? { input } : {}), ...(source === 'env' ? { env: { WEBHOOK_URL: url } } : {}) } };
@@ -296,13 +296,13 @@ it.each(['env', 'inherited-env', 'stdin', 'argv', 'assignment'] as const)('masks
   const signal = new AbortController().signal;
   const result = await prepareImportedAutomation(root, routine, 'url-run', signal, () => {});
   const output = JSON.parse(result!.direct!);
-  expect(output).toMatchObject({ enabled: 'true', route: 'hooks', city: 'Paris' });
-  for (const value of ['fixture-user', 'fixture-password', 'fixture/path', 'fixture%2Fpath', 'fixture+query', 'fixture%2Bquery']) expect(result!.direct).not.toContain(value);
+  expect(output).toMatchObject({ enabled: 'true', route: 'hooks', city: 'Paris', tokenType: 'Bearer', section: 'Introduction' });
+  for (const value of ['fixture-user', 'fixture-password', 'fixture/path', 'fixture%2Fpath', 'fixture+query', 'fixture%2Bquery', 'fixture/fragment+secret', 'fixture%2Ffragment%2Bsecret']) expect(result!.direct).not.toContain(value);
   const saved = (await shared.store.read(root, 'bot', () => {}))!;
   expect(saved.automations!.routine!.original).toEqual(original);
   expect(saved.env).toEqual(environment.env);
   expect(saved.automations!.routine!.prepared?.direct).toBe(result!.direct);
-  const legacy = JSON.stringify({ user: 'fixture-user', password: 'fixture-password', path: 'fixture/path', encoded: 'fixture%2Fpath', query: 'fixture+query', wireQuery: 'fixture%2Bquery', enabled: 'true', route: 'hooks', city: 'Paris' });
+  const legacy = JSON.stringify({ user: 'fixture-user', password: 'fixture-password', path: 'fixture/path', encoded: 'fixture%2Fpath', query: 'fixture+query', wireQuery: 'fixture%2Bquery', fragment: 'fixture/fragment+secret', wireFragment: 'fixture%2Ffragment%2Bsecret', tokenType: 'Bearer', section: 'Introduction', enabled: 'true', route: 'hooks', city: 'Paris' });
   await shared.store.update(root, 'bot', () => {}, env => { env.automations!.routine!.prepared = { runId: 'url-run', prompt: '', direct: legacy }; });
   expect((await prepareImportedAutomation(root, routine, 'url-run', signal, () => {}))?.direct).toBe(result!.direct);
   await shared.store.update(root, 'bot', () => {}, env => {

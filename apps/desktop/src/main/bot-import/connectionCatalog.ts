@@ -40,6 +40,13 @@ export function urlCredentialValues(raw: string, includePath = false): string[] 
       const [name, value] = [...params.entries()][0] ?? [];
       if (name && value && !isPublicImportSetting(name, value)) values.push(pair.slice(pair.indexOf('=') + 1));
     }
+    // OAuth-style fragments carry named credentials, but ordinary document
+    // anchors and fragment metadata must not become global source-text masks.
+    for (const pair of url.hash.slice(1).split('&')) {
+      if (!pair.includes('=')) continue;
+      const [name, value] = [...new URLSearchParams(pair).entries()][0] ?? [];
+      if (name && value && CREDENTIAL_FIELD.test(name)) values.push(value, pair.slice(pair.indexOf('=') + 1));
+    }
     if (includePath) {
       const parts = url.pathname.split('/').filter(Boolean);
       const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);

@@ -26,6 +26,24 @@ it('masks encoded and decoded URL credentials without mutating the private conne
   expect(output).not.toContain('fake-collision-token');
 });
 
+it.each(['access_token', 'id_token', 'refresh_token'])('masks encoded and decoded %s fragment values while preserving ordinary anchors', field => {
+  const secret = 'fixture/fragment+secret';
+  const encoded = encodeURIComponent(secret);
+  const url = `https://example.invalid/mcp#${field}=${encoded}&token_type=Bearer&section=Introduction&count=7`;
+  const server = { name: 'fixture', url };
+  const environment = { env: {}, mcp: [server], credentials: [] };
+  for (const masks of [connectionRedactions(server, {}), importedContentRedactions(environment),
+    importedContentRedactions({ ...environment, mcp: [] }, [url])]) {
+    const output = redactEnvironmentValues(`${secret} ${encoded} Bearer Introduction 7`, masks);
+    expect(output).not.toContain(secret);
+    expect(output).not.toContain(encoded);
+    expect(output).toContain('Bearer Introduction 7');
+  }
+  expect(server.url).toBe(url);
+  const anchors = connectionRedactions({ name: 'fixture', url: 'https://example.invalid/mcp#getting-started' }, {});
+  expect(redactEnvironmentValues('getting-started', anchors)).toBe('getting-started');
+});
+
 it('keeps credential context through array and object values without masking ordinary siblings', () => {
   const original = {
     token: ['fixture-first-secret', ['fixture-second-secret', { value: 'fixture-third-secret' }]],
