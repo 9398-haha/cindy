@@ -22,53 +22,66 @@ export function botSkillRuntimeSummary(item: BotSkillSummary) {
   };
 }
 
-async function writeSkillCatalog(catalogPath: string, skills: BotSkillSummary[]) {
-  // Stream a complete index in bounded chunks; no second full-catalog string or
-  // per-entry synchronous rewrite. Atomic replacement also supports live updates.
-  const temporary = `${catalogPath}.${randomUUID()}.tmp`;
-  try {
-    const handle = await fs.open(temporary, 'wx', 0o600);
-    try {
-      let chunk = '';
-      for (const item of skills) {
-        chunk += `${JSON.stringify(botSkillRuntimeSummary(item))}\n`;
-        if (Buffer.byteLength(chunk) >= 64 * 1024) {
-          await handle.writeFile(chunk);
-          chunk = '';
-        }
-      }
-      if (chunk) await handle.writeFile(chunk);
-    } finally { await handle.close(); }
-    await fs.rename(temporary, catalogPath);
-  } finally { await fs.rm(temporary, { force: true }); }
-}
-
 /**
  * All three harnesses consume this same projection. Small shelves retain native
  * mounts. Large shelves (or headers) mount one discovery Skill instead of passing
  * every path on argv / injecting every raw YAML description into the prompt.
  * Originals and relative resources stay in place; nothing is truncated on disk.
  */
-export async function projectBotSkillMounts(root: string, skills: BotSkillSummary[]) {
+export async function projectBotSkillMounts(root: string, skills: Iterable<BotSkillSummary> | AsyncIterable<BotSkillSummary>) {
   const pluginRoot = path.join(root, '.runtime-skills');
   const catalogPath = path.join(pluginRoot, 'catalog.jsonl');
+  const hadCatalog = !!await fs.stat(catalogPath).catch(() => null);
+  const temporary = `${catalogPath}.${randomUUID()}.tmp`;
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let chunk = '';
   let bytes = 0;
-  const direct = skills.every(item => {
-    bytes += item.frontmatterBytes + Buffer.byteLength(JSON.stringify(botSkillRuntimeSummary(item)));
-    return bytes <= BOT_SKILL_RUNTIME_INDEX_BYTES
-      && item.name.length <= BOT_SKILL_MAX_NAME_CHARS
-      && item.description.length <= BOT_SKILL_MAX_DESCRIPTION_CHARS;
-  });
-  if (direct) {
-    // A previous large shelf may still be open in an active harness. Remove
-    // deleted/disabled entries from its discovery surface even after shrinking.
-    if (await fs.stat(catalogPath).catch(() => null)) await writeSkillCatalog(catalogPath, skills);
-    return {
-      pluginRoot: root,
-      skills: skills.map(item => ({ name: item.name, description: item.description,
-        path: item.dirPath, filePath: item.filePath })),
-    };
+  let direct = true;
+  let small: BotSkillSummary[] = [];
+  const write = async (item: BotSkillSummary) => {
+    if (!handle) {
+      await fs.mkdir(pluginRoot, { recursive: true });
+      handle = await fs.open(temporary, 'wx', 0o600);
+    }
+    chunk += `${JSON.stringify(botSkillRuntimeSummary(item))}\n`;
+    if (Buffer.byteLength(chunk) >= 64 * 1024) {
+      await handle.writeFile(chunk);
+      chunk = '';
+    }
+  };
+  try {
+    // Refresh even an empty catalog when a formerly large shelf shrinks.
+    if (hadCatalog) handle = await fs.open(temporary, 'wx', 0o600);
+    for await (const item of skills) {
+      if (direct) {
+        bytes += item.frontmatterBytes + Buffer.byteLength(JSON.stringify(botSkillRuntimeSummary(item)));
+        direct = bytes <= BOT_SKILL_RUNTIME_INDEX_BYTES && !item.requiresDiscovery
+          && item.name.length <= BOT_SKILL_MAX_NAME_CHARS
+          && item.description.length <= BOT_SKILL_MAX_DESCRIPTION_CHARS;
+        if (direct) small.push(item);
+        else {
+          if (!hadCatalog) for (const previous of small) await write(previous);
+          small = [];
+        }
+      }
+      if (!direct || hadCatalog) await write(item);
+    }
+    if (handle) {
+      if (chunk) await handle.writeFile(chunk);
+      await handle.close(); handle = undefined;
+      await fs.rename(temporary, catalogPath);
+    }
+  } finally {
+    try { await handle?.close(); }
+    finally { await fs.rm(temporary, { force: true }); }
   }
+  if (direct) return {
+    pluginRoot: root,
+    // Only the byte-bounded native prefix is sorted/retained in memory.
+    skills: small.sort((a, b) => a.name.localeCompare(b.name)).map(item => ({
+      name: item.name, description: item.description, path: item.dirPath, filePath: item.filePath,
+    })),
+  };
 
   const name = 'personal-skill-library';
   const description = 'Search your complete personal Skill library before choosing how to do a task. Read the matching original Skill and use its resources on demand; the library includes all enabled personal Skills.';
@@ -88,7 +101,6 @@ export async function projectBotSkillMounts(root: string, skills: BotSkillSummar
   await fs.mkdir(skillPath, { recursive: true });
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
 
-  await writeSkillCatalog(catalogPath, skills);
   for (const [target, content] of [
     [filePath, source],
     [manifestPath, JSON.stringify({ name, version: '1.0.0', description })],

@@ -1,0 +1,93 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { iterateBotSkillRuntimeSummaries } from '../botSkillRuntimeSource';
+import { botSkillsDir } from '../botSkillStore';
+
+let home: string;
+beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-stream-')); });
+afterEach(async () => { vi.restoreAllMocks(); await fs.rm(home, { recursive: true, force: true }); });
+async function source(slug: string, text: string) {
+  const dir = path.join(botSkillsDir(home, 'bot'), slug);
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, 'SKILL.md');
+  await fs.writeFile(file, text);
+  return file;
+}
+async function read() {
+  const items = [];
+  for await (const item of iterateBotSkillRuntimeSummaries(home, 'bot')) items.push(item);
+  return items;
+}
+
+it('uses directory streaming and header-only reads for a large Skill body', async () => {
+  const file = await source('large-body', `---\nname: fixture\ndescription: Preview\n---\n${'Body '.repeat(2 * 1024 * 1024)}`);
+  const readdir = vi.spyOn(fs, 'readdir').mockRejectedValue(new Error('unbounded enumeration'));
+  const readFile = vi.spyOn(fs, 'readFile').mockRejectedValue(new Error('full file read'));
+  const originalOpen = fs.open.bind(fs);
+  let bytesRead = 0;
+  const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    const originalRead = handle.read.bind(handle);
+    vi.spyOn(handle, 'read').mockImplementation(async (...readArgs: any[]) => {
+      const result = await (originalRead as any)(...readArgs);
+      bytesRead += result.bytesRead;
+      return result;
+    });
+    return handle;
+  });
+  expect(await read()).toMatchObject([{ name: 'fixture', description: 'Preview', filePath: file, bodyStartLine: 5 }]);
+  expect(bytesRead).toBeLessThanOrEqual(8192);
+  expect(readdir).not.toHaveBeenCalled(); expect(readFile).not.toHaveBeenCalled();
+  open.mockRestore();
+});
+
+it('bounds giant scalar previews, scans later metadata, and counts CRLF/EOF body offsets', async () => {
+  const text = `---\r\nunknown: ${'x'.repeat(4 * 1024 * 1024)}\r\nname: "${'名'.repeat(2 * 1024 * 1024)}"\r\ndescription: "Quoted \\"value\\""\r\n---`;
+  const file = await source('wide-header', text);
+  const [item] = await read();
+  expect(Buffer.byteLength(JSON.stringify(item))).toBeLessThan(8192);
+  expect(item.name).toMatch(/^名/);
+  expect(item.description).toBe('Quoted "value"');
+  expect(item.bodyStartLine).toBe(5);
+  expect(item.frontmatterBytes).toBe(Buffer.byteLength(text));
+  expect(await fs.readFile(file, 'utf8')).toBe(text);
+});
+
+it('preserves bounded legacy migration and routes oversized legacy bodies to original-file discovery', async () => {
+  const header = '---\nname: "旧技能"\ndescription: "Preview"\nupdatedAt: "2026-09-29"\n---\n';
+  const small = await source('old-small', header + 'Original steps');
+  const bigText = header + 'Large original body\n'.repeat(8192);
+  const large = await source('old-large', bigText);
+  const items = await read();
+  expect(items.find(item => item.slug === 'old-small')).toMatchObject({ name: '旧技能', bodyStartLine: 8 });
+  expect(await fs.readFile(small, 'utf8')).toContain('displayName: "旧技能"');
+  expect(items.find(item => item.slug === 'old-large')).toMatchObject({ name: '旧技能', requiresDiscovery: true, bodyStartLine: 6 });
+  expect(await fs.readFile(large, 'utf8')).toBe(bigText);
+});
+
+it('handles absent or unfinished frontmatter and excludes disabled/hidden/non-directory entries', async () => {
+  await source('raw', 'Just a body');
+  await source('unfinished', '---\nname: ignored\nNo closing header');
+  await source('.hidden', '---\nname: hidden\n---\n');
+  await fs.writeFile(path.join(botSkillsDir(home, 'bot'), 'not-a-directory'), 'Not a Skill');
+  const disabled = path.join(home, 'bots/bot/disabled-skills/disabled');
+  await fs.mkdir(disabled, { recursive: true });
+  await fs.writeFile(path.join(disabled, 'SKILL.md'), '---\nname: disabled\n---\n');
+  const items = await read();
+  expect(items.map(item => item.slug).sort()).toEqual(['raw', 'unfinished']);
+  expect(items.every(item => item.name === item.slug && item.description === '' && item.bodyStartLine === 1)).toBe(true);
+});
+
+it('keeps healthy siblings when one existing Skill cannot be read', async () => {
+  const broken = await source('unreadable', '---\nname: unreadable\n---\n');
+  await source('healthy', '---\nname: healthy\n---\n');
+  const originalOpen = fs.open.bind(fs);
+  vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+    if (args[0] === broken) throw Object.assign(new Error('fixture permission'), { code: 'EACCES' });
+    return originalOpen(...args);
+  });
+  expect((await read()).map(item => item.slug)).toEqual(['healthy']);
+  expect(await fs.readFile(broken, 'utf8')).toContain('name: unreadable');
+});

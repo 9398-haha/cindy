@@ -61,6 +61,8 @@ export type BotSkillSummary = Omit<BotSkillRecord, 'body'> & {
   frontmatterBytes: number;
   /** One-based line at which a bounded read can skip even a very large header. */
   bodyStartLine: number;
+  /** Legacy headers that cannot safely be handed to a native Skill parser. */
+  requiresDiscovery?: boolean;
 };
 
 export const BOT_SKILL_MAX_NAME_CHARS = 64;
@@ -166,7 +168,7 @@ function escapeFrontmatterValue(value: string): string {
     .replace(/[\r\n]+/g, ' ')}"`;
 }
 
-function unescapeFrontmatterValue(raw: string): string {
+export function unescapeFrontmatterValue(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
     return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
@@ -225,7 +227,7 @@ export function parseBotSkillFile(source: string): {
  * frontmatter。只迁移这一个可精确识别的三字段旧格式，正文与用户编辑全部保留；
  * 含有任何其它字段的手写 Skill 不动。
  */
-async function readCompatibleBotSkillSource(filePath: string, slug: string): Promise<string> {
+export async function readCompatibleBotSkillSource(filePath: string, slug: string): Promise<string> {
   const source = await fs.readFile(filePath, 'utf8');
   const normalized = source.replace(/\r\n/g, '\n');
   const match = /^---\n([\s\S]*?)\n---\n?/.exec(normalized);

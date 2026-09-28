@@ -11,6 +11,7 @@ import { app } from 'electron';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { BOT_SKILL_RUNTIME_INDEX_BYTES, botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
 import { cachedBotSkillRuntime } from './botSkillRuntimeCache.js';
+import { iterateBotSkillRuntimeSummaries } from './botSkillRuntimeSource.js';
 import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js';
 import { and, eq } from 'drizzle-orm';
 
@@ -315,7 +316,7 @@ export async function collectBotOwnSkillMounts(
   const baseline = await collectTeammateGuideMount(userDataDir);
   const root = botSkillRootDir(userDataDir, botId);
   const projected = await cachedBotSkillRuntime(root, async () =>
-    projectBotSkillMounts(root, await listBotSkills(userDataDir, botId, false)));
+    projectBotSkillMounts(root, iterateBotSkillRuntimeSummaries(userDataDir, botId)));
   assertOwnerBoundary(deps, boundary);
   return { ...projected, baseline };
 }

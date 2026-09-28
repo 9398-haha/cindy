@@ -101,6 +101,14 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   directory identity checks cover hand edits, moves and replacement. Watcher
   errors fall back to rebuilding, and missing generated catalogs are recreated.
   The cache retains at most 32 roots, not a maximum number of stored Skills.
+  Initial hydration uses `opendir` and bounded header reads, writing JSONL chunks
+  as entries arrive. Only the native-mount byte budget is retained/sorted; a large
+  shelf is never collected into a runtime array. Giant metadata lines keep short
+  previews while the scanner finds the original body offset; ordinary Skill
+  bodies are not loaded/parsed in full for indexing. Existing legacy migration
+  remains for small authored files; oversized legacy files retain their original
+  bytes and use discovery. Full-text query/authoring APIs still read the originals.
+  Failed directory scans leave the last complete catalog intact for retry.
 - Skill discovery follows grouped Hermes directories, configured external roots,
   native directory links and disabled lists. OpenClaw discovery covers workspace,
   workspace `.agents`, personal/managed/workshop, installed bundled, extra and

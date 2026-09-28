@@ -3,6 +3,15 @@ import { importedProcessEnvironment, redactEnvironmentData, redactEnvironmentVal
 import { previewImportRedactions } from '../environmentSelection.js';
 import { connectionRedactions, importedContentRedactions, redactImportedResult } from '../connectionCatalog.js';
 
+it.each(['json', 'command-env'])('limits structured URL decomposition to command env, preserving provider paths (%s)', format => {
+  const masks = importedContentRedactions({ env: {}, mcp: [], credentials: [{ id: 'fixture', format,
+    value: { base_url: 'https://model.example/codex', api_key: 'fixture-private-key' } }] });
+  const output = redactEnvironmentValues('Use codex with fixture-private-key', masks);
+  expect(output).not.toContain('fixture-private-key');
+  if (format === 'json') expect(output).toContain('Use codex with');
+  else expect(output).not.toContain('codex');
+});
+
 it('preserves native boolean switches, local bind addresses and transport/policy enums without exempting credentials', () => {
   const env = { BLUEBUBBLES_SEND_READ_RECEIPTS: 'false', BLUEBUBBLES_WEBHOOK_HOST: '192.168.10.100', AWS_BEDROCK_FORCE_HTTP1: '1', BROWSERBASE_PROXIES: 'true', BROWSERBASE_ADVANCED_STEALTH: 'false',
     TELEGRAM_REQUIRE_MENTION: 'true', TELEGRAM_OBSERVE_UNMENTIONED_GROUP_MESSAGES: 'true', FEISHU_ALLOW_ALL_USERS: 'false',

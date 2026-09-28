@@ -71,12 +71,13 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
     ...Object.values(environment.contentRedactions ?? {}),
     ...environment.mcp.flatMap(server => Object.values(connectionRedactions(server, environment.env))),
     ...monitorUrls.flatMap(url => urlCredentialValues(url, true))];
-  const collect = (value: unknown, credentialValue = false): void => {
+  const collect = (value: unknown, credentialValue = false, commandEnv = false): void => {
     if (typeof value === 'string') {
       if (credentialValue) values.push(value);
       // Structured command env may put capability URLs under ordinary names
-      // such as endpoint. Apply the same URL policy as command output masks.
-      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) values.push(...urlCredentialValues(value, true));
+      // such as endpoint. Ordinary provider config/base URLs are not capability
+      // grants; their public path names must not become global content masks.
+      if (commandEnv && /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) values.push(...urlCredentialValues(value, true));
       return;
     }
     if (!value || typeof value !== 'object') return;
@@ -87,10 +88,10 @@ export function importedContentRedactions(environment: Pick<CompanionEnvironment
       if (/^token[_-]?type$/i.test(key) && typeof child === 'string' && /^(?:Bearer|DPoP)$/i.test(child)) continue;
       // Credential-bearing containers remain private through array indices and
       // nested objects; unrelated sibling fields keep their own classification.
-      collect(child, credentialValue || CREDENTIAL_FIELD.test(key));
+      collect(child, credentialValue || CREDENTIAL_FIELD.test(key), commandEnv);
     }
   };
-  for (const credential of environment.credentials) collect(credential.value);
+  for (const credential of environment.credentials) collect(credential.value, false, credential.format === 'command-env');
   const named = environmentRedactions(environment.env);
   const namedValues = new Set(Object.values(named));
   let index = 0;

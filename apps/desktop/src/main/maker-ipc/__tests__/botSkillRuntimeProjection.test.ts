@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectBotOwnSkillMounts, listBotSkillsForSession } from '../botSkillService';
-import { BOT_SKILL_RUNTIME_INDEX_BYTES } from '../botSkillRuntimeProjection';
+import { BOT_SKILL_RUNTIME_INDEX_BYTES, projectBotSkillMounts } from '../botSkillRuntimeProjection';
 import { botSkillRootDir, parseBotSkillFile, saveBotSkill, seedBotSkillIfMissing, importBotSkillFiles, deleteBotSkill } from '../botSkillStore';
 import { buildBotSkillIndex } from '../botSystemPrompt';
 import { applyPiBotSkillPolicy } from '../../../../../../packages/maker-core/src/agents/pi/bot-skill-policy';
@@ -90,8 +90,8 @@ describe('complete personal Skills with bounded startup projection', () => {
     let catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(catalog).toHaveLength(count);
     expect(new Set(catalog.map(item => item.slug)).size).toBe(count);
-    const last = catalog.at(-1);
-    expect(last.slug).toBe('skill-02047');
+    const last = catalog.find(item => item.slug === 'skill-02047');
+    expect(last).toBeDefined();
     expect(await fs.readFile(last.filePath, 'utf8')).toContain('Instructions for skill-02047');
     const reads = vi.spyOn(fs, 'readFile');
     const opens = vi.spyOn(fs, 'open');
@@ -111,11 +111,41 @@ describe('complete personal Skills with bounded startup projection', () => {
     await collectBotOwnSkillMounts(botId, deps());
     catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(catalog).toHaveLength(count + 1);
-    expect(catalog.at(-1).slug).toBe('z-new');
+    expect(catalog.some(item => item.slug === 'z-new')).toBe(true);
     await fs.unlink(path.join(mounts.pluginRoot, 'catalog.jsonl'));
     await collectBotOwnSkillMounts(botId, deps());
     expect((await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(count + 1);
     expect(await fs.readdir(path.join(mounts.pluginRoot))).not.toEqual(expect.arrayContaining([expect.stringMatching(/\.tmp$/)]));
+  }, 30_000);
+
+  it('writes a 100,000-entry stream before enumeration finishes, with atomic failure recovery', async () => {
+    const root = botSkillRootDir(userDataDir, botId);
+    const catalogRoot = path.join(root, '.runtime-skills');
+    async function* items() {
+      for (let index = 0; index < 100_000; index++) {
+        if (index === 2000) {
+          const staging = (await fs.readdir(catalogRoot)).find(file => file.endsWith('.tmp'))!;
+          expect((await fs.stat(path.join(catalogRoot, staging))).size).toBeGreaterThan(0);
+          await expect(fs.stat(path.join(catalogRoot, 'catalog.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+        }
+        yield { slug: `s-${index}`, name: `Skill ${index}`, description: 'Fixture', updatedAt: '',
+          dirPath: `/fixture/s-${index}`, filePath: `/fixture/s-${index}/SKILL.md`, frontmatterBytes: 60, bodyStartLine: 5 };
+      }
+    }
+    const mounts = await projectBotSkillMounts(root, items());
+    expect(mounts.skills).toHaveLength(1);
+    const catalogPath = path.join(catalogRoot, 'catalog.jsonl');
+    const original = await fs.readFile(catalogPath, 'utf8');
+    expect(original.trim().split('\n')).toHaveLength(100_000);
+    expect(original).toContain('"slug":"s-99999"');
+    async function* failed() {
+      yield { slug: 'partial', name: 'Partial', description: '', updatedAt: '',
+        dirPath: '/fixture/partial', filePath: '/fixture/partial/SKILL.md', frontmatterBytes: 60, bodyStartLine: 5 };
+      throw new Error('fixture enumeration failure');
+    }
+    await expect(projectBotSkillMounts(root, failed())).rejects.toThrow('fixture enumeration failure');
+    expect(await fs.readFile(catalogPath, 'utf8')).toBe(original);
+    expect((await fs.readdir(catalogRoot)).some(file => file.endsWith('.tmp'))).toBe(false);
   }, 30_000);
 
   it('refreshes after typed mutations, hand edits, disabling and directory replacement without mixing owners', async () => {
