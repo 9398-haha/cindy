@@ -970,6 +970,8 @@ export interface ImRotateSessionArgs {
     agentKind: string;
     source: string;
     providerId: string | null;
+    /** 跟随渠道默认的记录(JSON, 见 im/shared/channelDefaultRoute.ts)。 */
+    imDefaultRoute?: string | null;
     imBotContextId: string;
     imUserId: string;
   };

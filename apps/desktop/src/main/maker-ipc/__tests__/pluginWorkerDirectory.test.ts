@@ -1,8 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, realpath, rename, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, stat, rename, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return {...fs, realpath: vi.fn(fs.realpath), stat: vi.fn(fs.stat)};
+});
+
+it.each(['\\\\attacker\\share', '//attacker/share', '/\\attacker/share', '\\\\?\\UNC\\attacker\\share', '\\\\.\\pipe\\name', '\\??\\UNC\\attacker\\share', '//?/GLOBALROOT/Device/Mup/attacker/share'])('rejects network/device path %s without filesystem lookup', async requested => {
+  vi.clearAllMocks();
+  await expect(resolvePluginWorkerDirectory({requested, configuredDirectory: requested, isPickedDirectory: () => true, assertCurrent: () => {}})).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
+  expect(realpath).not.toHaveBeenCalled();
+  expect(stat).not.toHaveBeenCalled();
+});
+
+it('rejects ungranted local candidates and traversal before lookup', async () => {
+  const leadDirectory = path.resolve('allowed');
+  for (const requested of [path.resolve('elsewhere'), path.join(leadDirectory, '..', 'private')]) {
+    vi.clearAllMocks();
+    await expect(resolvePluginWorkerDirectory({requested, leadDirectory, isPickedDirectory: () => false, assertCurrent: () => {}})).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
+    expect(realpath).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+  }
+});
 
 describe('plugin Worker directory authorization', () => {
   const roots: string[] = [];
@@ -12,7 +34,9 @@ describe('plugin Worker directory authorization', () => {
     const selected = path.join(root, 'selected'), other = path.join(root, 'other'), alias = path.join(root, 'alias');
     await mkdir(selected); await mkdir(other); await mkdir(path.join(selected, 'child'));
     await symlink(selected, alias, 'junction');
-    const input = {requested: alias, isPickedDirectory: (dir: string) => dir === selected, assertCurrent: () => {}};
+    const input = {requested: alias, isPickedDirectory: (dir: string) => dir === selected || dir === alias, assertCurrent: () => {}};
+    // An unregistered alias cannot be probed merely to discover a picked target.
+    await expect(resolvePluginWorkerDirectory({...input, isPickedDirectory: dir => dir === selected})).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
     expect(await resolvePluginWorkerDirectory(input)).toBe(selected);
     await expect(resolvePluginWorkerDirectory({...input, requested: path.join(selected, 'child')})).rejects.toMatchObject({code: 'PERMISSION_DENIED'});
     await rm(alias); await symlink(other, alias, 'junction');
