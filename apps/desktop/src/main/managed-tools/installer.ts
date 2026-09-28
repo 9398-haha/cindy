@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'no
 import path from 'node:path';
 import { download, type DownloadOptions } from '../downloader/index.js';
 import { createLogger } from '../logger.js';
+import { replaceFile } from '../utils/replaceFile.js';
 import type { ToolArtifact, ToolInstallProgress } from './types.js';
 import { extractToolArchive, safeArchivePath, MAX_ARCHIVE_BYTES } from './archive.js';
 
@@ -119,7 +120,7 @@ export async function installTool(
       flag: 'wx',
     });
     signal.throwIfAborted();
-    await rename(recordTemp, recordPath(root, artifact));
+    await replaceFile(recordTemp, recordPath(root, artifact));
     promoted = true;
     return path.join(target, ...artifact.executable.split('/'));
   } finally {

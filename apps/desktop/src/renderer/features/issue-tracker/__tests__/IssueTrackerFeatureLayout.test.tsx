@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 describe('IssueTrackerFeatureLayout 内容区分支', () => {
-  it('hides connect for a working GitHub account and restores it when the connection fails', () => {
+  it('keeps connect hidden when search fails for a resolved GitHub account', () => {
     const connected = result([], { githubEnhancement: { login: 'test', source: 'gh-cli' } });
     useMyIssuesMock.mockReturnValue(state({ data: connected }));
     const { rerender } = render(<IssueTrackerFeatureLayout />);
@@ -101,6 +101,9 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
     useMyIssuesMock.mockReturnValue(
       state({ data: { ...connected, githubEnhancementFailed: true } }),
     );
+    rerender(<IssueTrackerFeatureLayout />);
+    expect(screen.queryByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeNull();
+    useMyIssuesMock.mockReturnValue(state({ data: result([], { githubEnhancementFailed: true }) }));
     rerender(<IssueTrackerFeatureLayout />);
     expect(screen.getByText('ccAgent.gitContext.pr.setup.stages.login.title')).toBeTruthy();
   });

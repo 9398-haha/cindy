@@ -31,6 +31,29 @@ async function setup() {
   };
 }
 describe('shared tool installer', () => {
+  it('keeps the previous generation until a repair passes validation and publishes its record', async () => {
+    const input = await setup();
+    const archive = await new JSZip()
+      .file('gh/bin/gh', 'executable')
+      .generateAsync({ type: 'nodebuffer' });
+    const deps = {
+      download: async (opts: { targetPath: string }) => {
+        await writeFile(opts.targetPath, archive);
+      },
+    };
+    const previous = await installTool(input, deps);
+    input.validate.mockImplementation(async () => {
+      expect(await installedTool(input.root, input.artifact)).toBe(previous);
+      return false;
+    });
+    await expect(installTool(input, deps)).rejects.toThrow('version check');
+    expect(await installedTool(input.root, input.artifact)).toBe(previous);
+    input.validate.mockResolvedValue(true);
+    const repaired = await installTool(input, deps);
+    expect(repaired).not.toBe(previous);
+    expect(await installedTool(input.root, input.artifact)).toBe(repaired);
+    expect(await readFile(previous, 'utf8')).toBe('executable');
+  });
   it('installs a non-Make CLI to an absolute path and can rediscover it without PATH', async () => {
     const input = await setup();
     const archive = await new JSZip()

@@ -18,6 +18,8 @@ Agent runtime、Cindy Make 工具、Ollama runtime、插件包、Skill 包及更
   调用方只有在下载 Promise 结束后才可 `cleanup()` 或删除暂存目录。
 - 默认校验成功后替换目标，下载失败保留原目标；`existingTarget: 'error'`
   原子地拒绝覆盖已有文件。不要让多个进程共写同一个暂存路径。
+  下载成品与工具 `current.json` 共用 `replaceFile` 发布；Windows 拒绝 rename 覆盖时
+  复用原生原子替换工具，不先删除旧目标。校验失败或发布失败不能主动删除旧目标。
 - 同一目标同时只能有一份下载；完全相同的参数可复用在途 Promise，来源、策略、回调或
   取消信号不同则拒绝冲突，不能共享另一调用方更宽松的校验结果。
 - `download()` resolve 表示大小和 SHA-256 已通过且文件已就位。
@@ -46,6 +48,7 @@ Ollama 本次共用下载层，仍保留其现有 runtime 解压和启动布局�
 GitHub 插件详情与「我的 Issues」通过 `GithubConnectButton` 复用同一窗口。
 连接成功后分别重新加载插件配置区与强制刷新 Issues；列表已有请求时排队刷新，避免漏掉新登录态。
 Issues 连接入口是可选增强，不作为原有 Cindy Issue 列表和提交能力的前置条件。
+已解析到 GitHub 身份时，搜索失败保留账号并使用刷新入口，不再次显示连接按钮。
 GitHub 插件由宿主显示单一账号区，通过固定 GitHub `/user` 请求验证用户名与当前来源；
 优先 gh，取不到凭证时才使用备用 PAT，不把网络或单项操作权限错误当作退出登录。
 插件 1.2.8 起在 `/secrets` 的 `hostManagedSetup` 为 true 时仅显示折叠的备用 Token 区，

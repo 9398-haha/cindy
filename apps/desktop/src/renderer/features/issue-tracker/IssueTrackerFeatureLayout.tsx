@@ -67,9 +67,7 @@ export function IssueTrackerFeatureLayout() {
         <h1 className="text-15 font-medium text-foreground">{t('issueTracker.list.header')}</h1>
         {data ? <ViewerLine data={data} /> : null}
         <div className="flex-1" />
-        <GithubConnectButton
-          visible={!loading && (!data?.githubEnhancement || data.githubEnhancementFailed)}
-        />
+        <GithubConnectButton visible={!loading && !data?.githubEnhancement} />
         <button
           type="button"
           onClick={refresh}

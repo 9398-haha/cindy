@@ -15,6 +15,7 @@ import {
 } from './resume';
 import { createStreamingHasher } from './integrity';
 import { ProgressTracker } from './progress';
+import { replaceFile } from '../utils/replaceFile';
 
 export interface TransportContext {
   opts: DownloadOptions;
@@ -258,7 +259,7 @@ export async function executeOnce(ctx: TransportContext): Promise<TransportResul
       await fs.promises.link(partPath(opts.targetPath), opts.targetPath);
       deletePart(opts.targetPath);
     } else {
-      await fs.promises.rename(partPath(opts.targetPath), opts.targetPath);
+      await replaceFile(partPath(opts.targetPath), opts.targetPath);
     }
     complete = true;
     deleteMeta(opts.targetPath);
