@@ -42,5 +42,5 @@ export function confirmClipboardSharedTaskInvitation(id: number): void {
   notify();
 }
 export const getSharedTaskInvitationIntentSequence = () => sequence;
-const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
-export const usePendingSharedTaskInvitationIntent = () => useSyncExternalStore(subscribe, getPendingSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent);
+export const subscribeSharedTaskInvitationIntent = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+export const usePendingSharedTaskInvitationIntent = () => useSyncExternalStore(subscribeSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent);

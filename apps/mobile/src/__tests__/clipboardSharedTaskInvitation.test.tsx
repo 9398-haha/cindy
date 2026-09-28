@@ -38,6 +38,34 @@ it('reads on startup and identifies the invitation as clipboard admission', asyn
   expect(h.read).toHaveBeenCalledTimes(1);
   expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
 });
+it('recognizes an invitation message whose task title contains an ordinary URL', async () => {
+  h.read.mockResolvedValue(`邀请你加入「检查 https://docs.example.test/page」\n${link}\n复制后打开 Cindy`);
+  await render();
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
+});
+it.each(['before-mount', 'before-login', 'while-running'] as const)('does not reoffer an explicit invitation from the clipboard: %s', async when => {
+  const intent = 'cindy://shared-session?invitation=' + token + '&server=https%3A%2F%2Frelay.example.test';
+  h.read.mockResolvedValue('');
+  if (when !== 'before-mount') await render(when !== 'before-login');
+  await act(async () => { receiveSharedTaskInvitationIntent(intent); });
+  if (when === 'before-mount') await render();
+  clearSharedTaskInvitationIntent(); // Explicit admission has consumed the link.
+  h.read.mockResolvedValue(link);
+  await render(); await state('background'); await state('active');
+  expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  // Dedupe does not block explicit retry or a newly copied invitation.
+  expect(receiveSharedTaskInvitationIntent(intent)).toBe(true);
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'link' });
+  clearSharedTaskInvitationIntent(); h.read.mockResolvedValue(link.replace(token, 'B'.repeat(43)));
+  await state('background'); await state('active');
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: 'B'.repeat(43), source: 'clipboard' });
+});
+it('does not let a foreign-server explicit invitation suppress the current service clipboard', async () => {
+  receiveSharedTaskInvitationIntent('cindy://shared-session?invitation=' + token + '&server=https%3A%2F%2Fother.example.test');
+  await render(); clearSharedTaskInvitationIntent();
+  await state('background'); await state('active');
+  expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation: token, source: 'clipboard' });
+});
 it.each(['account', 'new-link', 'expired'] as const)('ignores confirmation after the visible clipboard invitation is superseded by %s', async reason => {
   await render();
   const id = getPendingSharedTaskInvitationIntent()!.id;

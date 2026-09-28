@@ -25,6 +25,17 @@ describe('shared task invitation handoff', () => {
       expect(parseSharedTaskInvitation(link + hint, server)).toEqual({ ok: false, reason: 'invalid' });
     }
   });
+  it('extracts the unique invitation when the task title contains ordinary URLs', () => {
+    const message = `邀请你加入「检查 https://docs.example.test/ 和 http://example.test/page」\n${link}?app=cindycn\n复制后打开 Cindy`;
+    expect(parseSharedTaskInvitation(message, server)).toEqual({ ok: true, invitation: token });
+    expect(parseSharedTaskInvitation(message, 'https://other.example.test')).toEqual({ ok: false, reason: 'different-server' });
+    expect(parseSharedTaskInvitation('https://docs.example.test/#' + token, server)).toEqual({ ok: false, reason: 'invalid' });
+  });
+  it('still rejects multiple invitations, including invalid and foreign-server candidates', () => {
+    for (const other of [link.replace(token, 'B'.repeat(43)), link.replace(server, 'https://other.example.test'), link + '?app=unknown', link.replace(token, 'invalid')]) {
+      expect(parseSharedTaskInvitation(`https://docs.example.test/\n${other}\n${link}`, server)).toEqual({ ok: false, reason: 'invalid' });
+    }
+  });
   it('does not extract credentials from arbitrary URLs or ambiguous invitations', () => {
     for (const input of [link + 'B', link + '/more', link.replace('/join#', '/join?token='), link.replace('https:', 'javascript:'),
       link.replace('https://', 'https://user:password@'), `${link} ${link}`, 'a'.repeat(8193)]) {

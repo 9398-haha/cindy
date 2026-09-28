@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { parseSharedTaskInvitation } from '@cindy/device-link';
+import { parseSharedTaskInvitation, sharedTaskInvitationServer } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import {
   getPendingSharedTaskInvitationIntent, getSharedTaskInvitationIntentSequence,
-  receiveSharedTaskInvitationIntent,
+  receiveSharedTaskInvitationIntent, subscribeSharedTaskInvitationIntent,
 } from './sharedTaskInvitationIntent';
 
 /** Clipboard contents stay in memory. Only a valid link for this service opens admission. */
@@ -14,6 +14,19 @@ export function useClipboardSharedTaskInvitation(enabled: boolean, joining: bool
   const joiningRef = useRef(joining);
   joiningRef.current = joining;
   const seenInvitations = useRef(new Set<string>());
+  useEffect(() => {
+    const rememberExplicitInvitation = () => {
+      const intent = getPendingSharedTaskInvitationIntent();
+      if (intent?.source === 'link' && intent.server === sharedTaskInvitationServer(DEVICE_LINK_API_BASE_URL)) {
+        seenInvitations.current.add(intent.invitation);
+      }
+    };
+    // Observe even before login enables clipboard reads, and before admission clears
+    // the pending intent. Explicit links remain usable; only clipboard offers dedupe.
+    const stopWatching = subscribeSharedTaskInvitationIntent(rememberExplicitInvitation);
+    rememberExplicitInvitation();
+    return stopWatching;
+  }, []);
   useEffect(() => {
     if (!enabled) return;
     let disposed = false;

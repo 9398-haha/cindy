@@ -86,6 +86,20 @@ it('distinguishes a clipboard failure from a request failure and allows retry', 
   expect(content).toContain('copy it and open Cindy on mobile');
   expect(parseSharedTaskInvitation(content, 'https://relay.example.test')).toEqual({ ok: true, invitation: 'A'.repeat(43) });
 });
+it('copies a usable invitation when the task title contains a web link', async () => {
+  const copy = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
+  const title = 'Review https://docs.example.test/page';
+  const invitation = 'A'.repeat(43);
+  const invitationLink = 'https://relay.example.test/shared-task/join#' + invitation;
+  state.host.mockImplementation(async command => command.action === 'invite'
+    ? { invitation, invitationLink } : { available: true, detail: { ...detail, title } });
+  await openWindow(); click('invite');
+  await waitFor(() => expect(copy).toHaveBeenCalled());
+  const content = copy.mock.lastCall![0] as string;
+  expect(content).toContain(title);
+  expect(parseSharedTaskInvitation(content, 'https://relay.example.test')).toEqual({ ok: true, invitation });
+});
 it('does not copy when generating an invitation fails', async () => {
   const copy = vi.fn(); Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: copy } });
   state.host.mockImplementation(async c => { if (c.action === 'invite') throw new Error('[DEVICE_LINK_TIMEOUT] timeout'); return { available: true, detail }; });

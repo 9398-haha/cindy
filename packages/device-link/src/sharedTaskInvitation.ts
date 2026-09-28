@@ -35,7 +35,12 @@ export function parseSharedTaskInvitation(input: string, server: string): Shared
   if (input.length > 8192) return invalid;
   const text = input.trim();
   if (TOKEN.test(text)) return { ok: true, invitation: text };
-  const links = text.match(/https?:\/\/[^\s<>"'，。！？、（）「」“”‘’\[\])]+/g);
+  // Task titles may contain ordinary URLs. Count all invitation-shaped URLs (even
+  // invalid or foreign-server ones) so multiple invitations remain ambiguous.
+  const links = text.match(/https?:\/\/[^\s<>"'，。！？、（）「」“”‘’\[\])]+/g)?.filter(link => {
+    try { return new URL(link.replace(/[.,;!?]+$/, '')).pathname.endsWith(SHARED_TASK_INVITATION_PATH); }
+    catch { return false; }
+  });
   if (links?.length !== 1) return invalid;
   try {
     const url = new URL(links[0].replace(/[.,;!?]+$/, ''));
