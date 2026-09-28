@@ -116,6 +116,15 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   native directory links and disabled lists. OpenClaw discovery covers workspace,
   workspace `.agents`, personal/managed/workshop, installed bundled, extra and
   enabled plugin manifest roots, with native precedence and symlink trust rules.
+  Hermes personal/external roots and OpenClaw managed/personal roots intentionally
+  accept directory links outside their lexical root, as their native loaders do.
+  Selecting such a source trusts that source's Skill catalog and link targets;
+  this importer does not sandbox a compromised source home. Other OpenClaw roots
+  retain canonical containment / configured target checks. Once a Skill is found,
+  only its canonical subtree is captured (including ordinary hidden resources);
+  unrelated resource-link escapes remain rejected. Adding a new folder-grant flow
+  or disallowing native personal links would change the full-import contract and
+  is not part of this fix.
   Nested archive/environment/support directories are excluded. Names and skillKey
   overrides are resolved before deduplication; skill-owned credential alternatives
   are selected separately so credential ambiguity cannot deselect a skill.

@@ -5,6 +5,10 @@ import { fingerprint, inside, readImportFile, readImportTree, type ImportReadBud
 import { CompanionImportError, object, string, type ImportItem, type ImportSource } from './types.js';
 
 /** Discovery roots are derived on the host from the selected source, never from IPC paths. */
+// `any` preserves native Hermes personal/external and OpenClaw managed/personal
+// directory-link semantics. Selecting that source trusts its Skill catalog; it
+// is not an arbitrary IPC folder grant. Once a Skill is found, resource capture
+// is confined to its canonical directory by readImportSkillTree/readImportTree.
 interface SkillRoot { directory: string; links: 'any' | string[]; bundled?: boolean }
 const ignored = new Set(['.git', '.github', '.hub', '.archive', '_archive', '.venv', 'venv', 'node_modules', 'site-packages', '__pycache__', '.tox', '.nox', '.pytest_cache', '.mypy_cache', '.ruff_cache']);
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && !!v.trim()) : [];

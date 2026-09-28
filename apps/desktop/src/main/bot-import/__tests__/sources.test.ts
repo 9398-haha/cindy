@@ -458,18 +458,55 @@ it('uses OpenClaw declared names, skillKey, grouped roots and plugin sources in 
   expect(snapshot.items.find(item => item.env?.SERVICE_TOKEN)?.view.selected).toBe(true);
 });
 
-it('follows trusted skill directory links without following resource escapes or cycles', async () => {
-  await write('.hermes/config.yaml', 'name: Ada');
+it.for([
+  { kind: 'hermes', folder: '.hermes/skills' },
+  { kind: 'openclaw', folder: '.openclaw/skills' },
+  { kind: 'openclaw', folder: '.agents/skills' },
+] as const)('preserves native $folder directory links but bounds their resource subtree', async ({ kind, folder }, ctx) => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
   await write('shared/report/SKILL.md', '---\nname: report\n---\nRead report');
-  await fs.mkdir(path.join(home, '.hermes/skills'), { recursive: true });
-  try { await fs.symlink(path.join(home, 'shared/report'), path.join(home, '.hermes/skills/report'), 'junction'); }
-  catch (error) { if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) return; throw error; }
-  await fs.symlink(path.join(home, '.hermes/skills'), path.join(home, '.hermes/skills/loop'), 'junction');
+  await write('shared/report/scripts/report.py', '# Skill resource');
+  await write('shared/report/.env', 'REPORT_MODE=fixture');
+  await write('private/account.txt', 'Unrelated fixture');
+  await fs.mkdir(path.join(home, folder), { recursive: true });
+  try { await fs.symlink(path.join(home, 'shared/report'), path.join(home, folder, 'report'), 'junction'); }
+  catch (error) { if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { ctx.skip(); return; } throw error; }
+  await fs.symlink(path.join(home, folder), path.join(home, folder, 'loop'), 'junction');
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader);
-  expect(snapshot.items.filter(item => item.view.category === 'skills')).toHaveLength(1);
-  expect(snapshot.items[0]?.sourceDirectory).toBe(await fs.realpath(path.join(home, 'shared/report')));
+  const skills = snapshot.items.filter(item => item.view.category === 'skills');
+  expect(skills).toHaveLength(1);
+  const directory = skills[0]!.sourceDirectory!;
+  expect(directory).toBe(await fs.realpath(path.join(home, 'shared/report')));
+  const resources = await readImportSkillTree(directory);
+  expect(resources.map(file => file.name).sort()).toEqual(['.env', 'SKILL.md', 'scripts/report.py']);
+  expect(resources.find(file => file.name === '.env')?.bytes.toString()).toBe('REPORT_MODE=fixture');
+  // Trust in this Skill's canonical root does not grant its resources a second
+  // escape into an unrelated directory, even when the Skill itself was linked.
+  await fs.symlink(path.join(home, 'private'), path.join(directory, 'outside'), 'junction');
+  await expect(readImportSkillTree(directory)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
 });
+
+it.for(['workspace/skills', 'workspace/.agents/skills', '../extra-skills'])(
+  'requires native allowed targets for OpenClaw %s directory links', async (folder, ctx) => {
+    await write('.openclaw/openclaw.json', '{}');
+    await write('shared/report/SKILL.md', '---\nname: report\n---\nRead report');
+    const sourceRoot = path.join(home, '.openclaw');
+    const directory = path.resolve(sourceRoot, folder);
+    await fs.mkdir(directory, { recursive: true });
+    try { await fs.symlink(path.join(home, 'shared/report'), path.join(directory, 'report'), 'junction'); }
+    catch (error) { if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { ctx.skip(); return; } throw error; }
+    const [source] = await discoverImportSources(deps());
+    const inspect = (allowed: string[]) => discoverImportSkills(source!, {
+      skills: { load: { extraDirs: ['../extra-skills'], allowSymlinkTargets: allowed } },
+    }, home, {}, createImportBudget());
+    expect(await inspect([])).toEqual([]);
+    expect(await inspect(['../unrelated'])).toEqual([]);
+    const allowed = await inspect(['../shared']);
+    expect(allowed.map(item => item.view.name)).toEqual(['report']);
+    expect(allowed[0]?.sourceDirectory).toBe(await fs.realpath(path.join(home, 'shared/report')));
+  },
+);
 
 it('retains unmapped skill authentication privately without deselecting the skill', async () => {
   const secret = 'fixture-skill-key-without-env';
