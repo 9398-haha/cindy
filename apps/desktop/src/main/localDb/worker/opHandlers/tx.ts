@@ -2185,8 +2185,8 @@ function imRotateSession(
     `INSERT INTO sessions (
       id, title, working_dir, workspace_kind, model, effort, permission_mode,
       fast_mode, status, agent_kind, provider_id, source, im_bot_context_id,
-      im_user_id, created_at, updated_at, user_send_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      im_user_id, im_default_route, created_at, updated_at, user_send_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const retirePrevious = db.prepare(
     `UPDATE sessions
@@ -2219,6 +2219,7 @@ function imRotateSession(
       expectString(session.source, 'session.source'),
       expectString(session.imBotContextId, 'session.imBotContextId'),
       expectString(session.imUserId, 'session.imUserId'),
+      nullableString(session.imDefaultRoute),
       now,
       now,
       now,

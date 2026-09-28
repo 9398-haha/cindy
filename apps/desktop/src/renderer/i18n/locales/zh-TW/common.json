@@ -4309,13 +4309,13 @@
       "defaults": {
         "title": "新對話配置",
         "channelDescriptions": {
-          "feishu": "飛書新對話會使用這組 Agent 和模型；已有私聊傳送 /new 後應用。",
+          "feishu": "飛書新對話會使用這組 Agent 和模型；已有任務若沒有單獨改過模型，會在收到下一則訊息時切換過來。",
           "slack": "Slack 新 thread 會使用這組 Agent 和模型。",
-          "discord": "Discord 新對話會使用這組 Agent 和模型；已有私聊傳送 /new 後應用。",
-          "wechat": "微信新對話會使用這組 Agent、模型和權限模式；已有私聊傳送 /new 後應用。",
-          "telegram": "Telegram 新對話會使用這組 Agent 和模型；已有對話傳送 /new 後應用。",
-          "dingtalk": "釘釘新對話會使用這組 Agent 和模型；已有對話傳送 /new 後應用。",
-          "wecom": "企業微信新對話會使用這組 Agent、模型和權限模式；已有對話傳送 /new 後應用。"
+          "discord": "Discord 新對話會使用這組 Agent 和模型；已有任務若沒有單獨改過模型，會在收到下一則訊息時切換過來。",
+          "wechat": "微信新對話會使用這組 Agent、模型和權限模式；已有任務若沒有單獨改過模型，會在收到下一則訊息時換用這組 Agent 和模型，權限模式仍在已有私聊傳送 /new 後應用。",
+          "telegram": "Telegram 新對話會使用這組 Agent 和模型；已有任務若沒有單獨改過模型，會在收到下一則訊息時切換過來。",
+          "dingtalk": "釘釘新對話會使用這組 Agent 和模型；已有任務若沒有單獨改過模型，會在收到下一則訊息時切換過來。",
+          "wecom": "企業微信新對話會使用這組 Agent、模型和權限模式；已有任務若沒有單獨改過模型，會在收到下一則訊息時換用這組 Agent 和模型，權限模式仍在已有對話傳送 /new 後應用。"
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent 不支援此渠道的逐條權限確認，訊息將無法處理。請改用 Claude Code 或 Codex。",
