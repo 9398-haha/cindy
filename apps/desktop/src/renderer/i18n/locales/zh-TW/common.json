@@ -8258,13 +8258,13 @@
       "automations": "自動化",
       "paused": "匯入後仍停用",
       "itemAttention": "需要處理",
-      "takeover": "檢查通過後，由夥伴接管自動化",
+      "takeover": "匯入後檢查並接管自動化",
       "takeoverNote": "資料連線驗證通過後才暫停原任務。取消所需依賴時，原任務繼續執行。",
       "submit": "匯入",
       "back": "上一步",
       "open": "開啟夥伴",
       "running": "正在匯入並檢查連線…",
-      "complete": "匯入完成",
+      "complete": "匯入已儲存",
       "attention": "部分內容需要處理，詳見下方。",
       "error": "未能完成匯入，可按原選擇重試。",
       "keptAtSource": "尚未完成接管",
@@ -8279,7 +8279,13 @@
       "credentialFailed": "憑證未能安全儲存。",
       "scriptMissing": "缺少這項任務所需的指令碼。",
       "sourceCommand": "找不到原 Agent 的控制命令。",
-      "readFailed": "尚未驗證這項任務實際需要的資料查詢。"
+      "readFailed": "尚未驗證這項任務實際需要的資料查詢。",
+      "search": "搜尋",
+      "selectAll": "全選",
+      "previous": "上一頁",
+      "next": "下一頁",
+      "chatSetup": "已儲存可匯入的資料，可以開始交流了。部分內容還需要登入或檢查，你方便時我們再繼續。接管前，原來的自動化保持原狀。",
+      "chatReady": "資料已經匯入，可以開始交流了。"
     }
   },
   "common": {

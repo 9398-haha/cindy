@@ -83,7 +83,7 @@ beforeEach(async () => {
   vi.mocked(decodeBotAvatarImage).mockReset();
   vi.mocked(discoverImportSources).mockReset().mockImplementation(async () => [h.snapshot.source]);
   vi.mocked(inspectImportSource).mockReset().mockImplementation(async () => h.snapshot);
-  vi.mocked(createImportSourceReader).mockReset().mockImplementation(() => ({ readName: h.readName }) as never);
+  vi.mocked(createImportSourceReader).mockReset().mockImplementation(() => ({ readName: h.readName, readRedactions: async () => previewImportRedactions(h.snapshot.items) }) as never);
   h.readName.mockReset().mockImplementation(async source => redactEnvironmentValues(source.name, previewImportRedactions(h.snapshot.items)));
   const values = h.secretValues; values.clear();
   h.store = createCompanionEnvironmentStore({ read: key => values.get(key) ?? null, write: (key, value) => {
@@ -709,8 +709,8 @@ it('keeps the source paused and execution deferred when the ready marker write f
 }, 10000);
 
 
-it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])('rejects skill %s limits before storing a checkpoint or creating a companion, then accepts a corrected selection', async mode => {
-  const count = mode === 'count' ? 101 : 1;
+it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])('imports skill %s beyond the old authoring and count quotas', async mode => {
+  const count = mode === 'count' ? 142 : 1;
   h.snapshot.items = Array.from({ length: count }, (_, index) => ({
     view: { id: `skill-${index}`, category: 'skills' as const, name: `skill-${index}`, selected: true }, filesComplete: true,
     files: [{ name: 'SKILL.md', bytes: Buffer.alloc(mode === 'entrypoint' ? 65537 : mode === 'projected-entrypoint' ? 65536 : 10, 'a'), executable: false }],
@@ -727,18 +727,12 @@ it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])(
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: `fixture-skill-limit-${mode}`, previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false };
-  await expect(startCompanionImport(selection, 'fixture')).rejects.toThrow('INVALID_SELECTION');
-  expect(createBotProfile).not.toHaveBeenCalled();
-  expect(h.secretValues.size).toBe(0);
-  expect(await getCompanionImportResult(selection.requestId)).toBeUndefined();
-  await expect(fs.access(path.join(h.root, 'companion-imports'))).rejects.toThrow();
-  // The same preview remains editable; existing INVALID_SELECTION handling clears intent.
-  const entryIds = mode === 'count' ? ['skill-0'] : [];
-  await startCompanionImport({ ...selection, requestId: `${selection.requestId}-retry`, entryIds }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(`${selection.requestId}-retry`))?.status).toBe('complete'));
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  expect(createBotProfile).toHaveBeenCalledOnce();
 });
 
-it.each(['oversized', 'symlink'])('rejects a lazily selected %s resource before a receipt, then imports after deselection', async mode => {
+it.each(['oversized', 'symlink'])('retains a failed %s skill for retry while saving the companion and healthy content', async mode => {
   const directory = path.join(h.root, 'source-skill');
   await fs.mkdir(directory);
   if (mode === 'oversized') {
@@ -754,12 +748,15 @@ it.each(['oversized', 'symlink'])('rejects a lazily selected %s resource before 
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: `fixture-capture-${mode}`, previewId: preview.id, name: 'Ada', entryIds: ['skill'], takeover: false };
-  await expect(startCompanionImport(selection, 'fixture')).rejects.toThrow(mode === 'oversized' ? 'SOURCE_FILE_TOO_LARGE' : 'SOURCE_LINK_OUTSIDE_FOLDER');
-  expect(createBotProfile).not.toHaveBeenCalled(); expect(h.secretValues.size).toBe(0);
-  expect(await getCompanionImportResult(selection.requestId)).toBeUndefined();
-  await expect(fs.access(path.join(h.root, 'companion-imports'))).rejects.toThrow();
-  await startCompanionImport({ ...selection, requestId: `${selection.requestId}-retry`, entryIds: [] }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(`${selection.requestId}-retry`))?.status).toBe('complete'));
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
+  expect(createBotProfile).toHaveBeenCalled();
+  expect((await getCompanionImportResult(selection.requestId))?.checks).toContainEqual({ entryId: 'skill', status: 'needs-attention', message: mode === 'oversized' ? 'SOURCE_FILE_TOO_LARGE' : 'SOURCE_LINK_OUTSIDE_FOLDER' });
+  expect(h.secretValues.size).toBeGreaterThan(0);
+  // A corrected resource can finish under the same request; no second companion is needed.
+  await fs.rm(path.join(directory, mode === 'oversized' ? 'resource.bin' : 'linked'), { recursive: true });
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
 });
 
 it('replaces previous previews for the same controller and keeps the latest usable', async () => {
@@ -837,4 +834,48 @@ it.each(['readback', 'binding'] as const)('cleans an unbound first checkpoint af
   await recoverCompanionImports();
   expect(values.size).toBe(0); expect(remove).toHaveBeenCalledTimes(2);
   expect(h.created).toBe(false);
+});
+
+it('adopts Cindy settings only for explicitly selected items and still requires takeover verification', async () => {
+  const { useCindyImportSettings, continueCompanionImport } = await import('../host.js');
+  h.snapshot.items = [{ view: { id: 'task', name: 'Report', category: 'automations', selected: true, enabled: true, issues: ['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING', 'AUTOMATION_CONTEXT_NEEDS_MAPPING'] },
+    automation: { sourceId: 'source-task', fingerprint: 'fixture', original: {}, input: { name: 'Report', prompt: 'Read data', enabled: false, triggers: [{ id: 'time', kind: 'interval', intervalMs: 60000 }] } } }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-cindy-settings', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  await expect(useCindyImportSettings(result.botId, h.root, ['unknown'], () => {})).rejects.toThrow('INVALID_SELECTION');
+  await useCindyImportSettings(result.botId, h.root, ['task'], () => {});
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.checks).toContainEqual({ entryId: 'task', status: 'needs-attention', message: 'AUTOMATION_CONTEXT_NEEDS_MAPPING' }));
+});
+
+it('refreshes masks and encrypted originals when a previously failed credential-bearing resource is repaired', async () => {
+  const directory = path.join(h.root, 'source-skill');
+  const outside = path.join(h.root, 'outside');
+  await fs.mkdir(directory); await fs.mkdir(outside); await fs.writeFile(path.join(outside, 'read.txt'), 'outside');
+  await fs.symlink(outside, path.join(directory, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  const secret = 'fixture-unselected-resource-secret';
+  h.snapshot.items = [
+    { view: { id: 'skill', name: 'report', category: 'skills', selected: true }, sourceDirectory: directory, files: [{ name: 'SKILL.md', bytes: Buffer.from('# Report'), executable: false }], filesComplete: false, envDependencies: { names: [], entries: [] } },
+    { view: { id: 'unselected', name: 'PRIVATE', category: 'connections', selected: false }, env: { PRIVATE: secret } },
+  ];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-repaired-private-skill', previewId: preview.id, name: 'Ada', entryIds: ['skill'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
+  await fs.rm(path.join(directory, 'escape'), { recursive: true });
+  await fs.writeFile(path.join(directory, 'read.txt'), `Token ${secret}`);
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/read.txt'), 'utf8')).not.toContain(secret);
+  const environment = (await h.store.read(h.root, result.botId, () => {}))!;
+  expect(environment.env).toEqual({});
+  const original = environment.skillFiles?.report?.find(file => file.name === 'read.txt');
+  expect(Buffer.from(original!.bytes, 'base64').toString()).toContain(secret);
+  expect(Object.values(environment.contentRedactions ?? {})).toContain(secret);
 });

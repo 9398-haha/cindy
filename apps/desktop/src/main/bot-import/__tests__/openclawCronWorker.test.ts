@@ -18,13 +18,15 @@ it.each(['esm', 'cjs'] as const)('reads committed WAL jobs for exactly the selec
   insert.run('store', 'main', null, 1, JSON.stringify({ id: 'mine', enabled: true }), JSON.stringify({ lastRunAtMs: 123 }));
   insert.run('store', 'other', null, 2, JSON.stringify({ id: 'other' }), '{}');
   insert.run('other-store', 'main', null, 3, JSON.stringify({ id: 'other-store' }), '{}');
+  const extra = Array.from({ length: 1100 }, (_, index) => ({ id: `extra-${index}` }));
+  db.transaction(() => { for (const [index, job] of extra.entries()) insert.run('store', 'main', null, index + 4, JSON.stringify(job), '{}'); })();
   const source = await fs.readFile(new URL('../openclawCronWorker.ts', import.meta.url), 'utf8');
   const module = path.join(root, format === 'cjs' ? 'worker.cjs' : 'worker.mjs');
   await fs.writeFile(module, transformSync(source, { loader: 'ts', format, platform: 'node', target: 'node22', logLevel: 'silent' }).code);
   const worker = new Worker(module, { workerData: { database, storeKey: 'store', agentId: 'main', defaultAgent: true, modulePath: createRequire(import.meta.url).resolve('better-sqlite3') } });
   try {
     const reply = await new Promise<unknown>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
-    expect(reply).toEqual({ ok: true, jobs: [{ id: 'mine', enabled: true, state: { lastRunAtMs: 123 } }] });
-    expect(db.prepare('SELECT COUNT(*) AS count FROM cron_jobs').get()).toEqual({ count: 3 });
+    expect(reply).toEqual({ ok: true, jobs: [{ id: 'mine', enabled: true, state: { lastRunAtMs: 123 } }, ...extra.map(job => ({ ...job, state: {} }))] });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM cron_jobs').get()).toEqual({ count: 1103 });
   } finally { await worker.terminate(); db.close(); }
 });

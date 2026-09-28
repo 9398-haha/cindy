@@ -38,10 +38,17 @@ export interface ImportedDelivery { connectionId: string; chatId: string; thread
 /** Private, host-only content. Do not serialize this into IPC, logs or model messages. */
 export interface ImportItem {
   view: CompanionImportEntry;
+  /** Stable index in the originating preview, retained in selected-only checkpoints. */
+  sourceIndex?: number;
   files?: ImportFile[];
   sourceDirectory?: string;
+  sourceAlias?: string;
+  /** Failed individual document read; retained for an explicit retry. */
+  sourceFile?: { root: string; file: string };
   /** Selected skill resources have been captured for copying, verification and restart. */
   filesComplete?: boolean;
+  /** Item-level capture failure retained for a later retry, without discarding healthy siblings. */
+  captureIssue?: string;
   text?: string;
   role?: 'identity' | 'user' | 'instructions';
   env?: Record<string, string>;

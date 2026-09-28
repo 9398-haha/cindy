@@ -73,13 +73,15 @@ it.each(['SOURCE_FILE_TOO_LARGE', 'SOURCE_ITEM_TOO_LARGE', 'SOURCE_LINK_OUTSIDE_
     start: vi.fn<CompanionImportApi['start']>().mockRejectedValueOnce(new Error(`Error invoking remote method 'companion-import': Error: [${code}] Import rejected; INVALID_SELECTION PREVIEW_EXPIRED`)).mockImplementation(async input => ({ requestId: input.requestId, botId: 'bot', status: 'complete', checks: [] })) };
   render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
-  fireEvent.click(await screen.findByText('bots.import.skills', { selector: 'summary' }));
+  fireEvent.click(await screen.findByRole('button', { name: /bots.import.skills/ }));
   fireEvent.click(screen.getByLabelText('Optional skill'));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await screen.findByRole('alert');
   expect((screen.getByRole('textbox') as HTMLInputElement).disabled).toBe(['INTERNAL', 'IMPORT_FAILED'].includes(code));
-  expect((screen.getByLabelText('Optional skill').closest('fieldset') as HTMLFieldSetElement).disabled).toBe(['INTERNAL', 'IMPORT_FAILED'].includes(code));
-  if (!['INTERNAL', 'IMPORT_FAILED'].includes(code)) fireEvent.click(screen.getByLabelText('Optional skill'));
+  expect((screen.getByRole('checkbox', { name: 'bots.import.skills' }) as HTMLInputElement).disabled).toBe(['INTERNAL', 'IMPORT_FAILED'].includes(code));
+  if (!['INTERNAL', 'IMPORT_FAILED'].includes(code)) fireEvent.click(screen.getByRole('checkbox', { name: 'bots.import.skills' }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await screen.findByRole('button', { name: 'bots.import.open' });
   const [first, second] = vi.mocked(api.start).mock.calls.map(call => call[0]);
@@ -135,13 +137,37 @@ it('uses the existing credential checkboxes as alternatives without selecting an
   render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
   await screen.findByRole('button', { name: 'existing-portrait-picker' });
-  fireEvent.click(screen.getByText('bots.import.connections', { selector: 'summary' }));
-  fireEvent.click(screen.getByRole('checkbox', { name: 'bots.import.connections' }));
+  fireEvent.click(screen.getByRole('button', { name: /bots.import.connections/ }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'bots.import.selectAll' }));
   expect((screen.getByLabelText('Work') as HTMLInputElement).checked).toBe(false);
   fireEvent.click(screen.getByLabelText('Work'));
   fireEvent.click(screen.getByLabelText('Personal'));
   expect((screen.getByLabelText('Work') as HTMLInputElement).checked).toBe(false);
   expect((screen.getByLabelText('Personal') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await waitFor(() => expect(api.start).toHaveBeenCalledWith(expect.objectContaining({ entryIds: ['personal'] })));
+});
+
+it('shows 142 selected skills in a flat searchable paginated list and opens chat after deferred setup', async () => {
+  const entries = Array.from({ length: 142 }, (_, i) => ({ id: `skill-${i}`, category: 'skills' as const, name: `Skill ${i}`, selected: true }));
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }],
+    preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries }), status: async () => undefined,
+    start: async input => ({ requestId: input.requestId, botId: 'bot', canonicalSessionId: 'chat', status: 'needs-attention', saved: true, savedEntryIds: entries.map(entry => entry.id), checks: [{ entryId: 'skill-0', status: 'needs-attention', message: 'NATIVE_AUTH_REFRESH_REQUIRED' }] }) };
+  const open = vi.fn();
+  const { container } = render(<BotImportForm api={api} onCreated={open} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /bots.import.skills/ }));
+  expect(screen.getAllByRole('checkbox')).toHaveLength(21);
+  expect(container.querySelector('details')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.next' }));
+  expect(screen.getByLabelText('Skill 20')).toBeDefined();
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Skill 141' } });
+  expect((screen.getByLabelText('Skill 141') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.import.open' }));
+  expect(open).toHaveBeenCalledWith('bot');
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'bots.import.retry' })).toBeNull();
 });

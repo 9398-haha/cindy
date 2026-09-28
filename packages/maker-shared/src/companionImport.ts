@@ -29,6 +29,8 @@ export interface CompanionImportPreview {
   name: string;
   avatarImageBase64?: string;
   entries: CompanionImportEntry[];
+  /** Host understands compact immutable preview-index ranges. */
+  selectionRanges?: true;
 }
 
 export interface CompanionImportSelection {
@@ -38,7 +40,11 @@ export interface CompanionImportSelection {
   name: string;
   avatarImageBase64?: string;
   entryIds: string[];
+  /** Inclusive preview-index ranges, only when advertised; mutually exclusive with entryIds. */
+  entryRanges?: Array<[number, number]>;
   takeover: boolean;
+  /** Save first; connection checks and source handover continue from the teammate chat. */
+  deferSetup?: boolean;
 }
 
 export interface CompanionImportCheck {
@@ -53,6 +59,10 @@ export interface CompanionImportResult {
   canonicalSessionId?: string;
   status: 'running' | 'complete' | 'needs-attention';
   checks: CompanionImportCheck[];
+  /** The companion and selected content have finished their save pass. */
+  saved?: boolean;
+  /** Saved definitions/content, independently of later authorization and activation. */
+  savedEntryIds?: string[];
 }
 
 export interface CompanionImportApi {
@@ -64,9 +74,25 @@ export interface CompanionImportApi {
 
 export const companionImportCategories: CompanionImportCategory[] = ['personality', 'memory', 'skills', 'connections', 'automations'];
 
+/** Preserve exact choices while keeping large selections below the existing action budget. */
+export function compactCompanionImportSelection(preview: CompanionImportPreview, selected: string[]): Pick<CompanionImportSelection, 'entryIds' | 'entryRanges'> {
+  if (!preview.selectionRanges || selected.length < 200) return { entryIds: selected };
+  const ids = new Set(selected);
+  const ranges: Array<[number, number]> = [];
+  preview.entries.forEach((entry, index) => {
+    if (!ids.has(entry.id)) return;
+    const last = ranges.at(-1);
+    if (last && last[1] + 1 === index) last[1] = index;
+    else ranges.push([index, index]);
+  });
+  return JSON.stringify(ranges).length < JSON.stringify(selected).length
+    ? { entryIds: [], entryRanges: ranges } : { entryIds: selected };
+}
+
 /** An alternative already chosen within this category also satisfies its group checkbox. */
 export function areCompanionImportEntriesSelected(entries: CompanionImportEntry[], selected: string[]): boolean {
-  const selectedHere = new Set(entries.filter(entry => selected.includes(entry.id)).map(entry => entry.id));
+  const all = new Set(selected);
+  const selectedHere = new Set(entries.filter(entry => all.has(entry.id)).map(entry => entry.id));
   return entries.every(entry => selectedHere.has(entry.id) || entry.exclusiveWith?.some(id => selectedHere.has(id)));
 }
 
@@ -112,7 +138,7 @@ export function remoteCompanionImportApi(
   };
   const status = async (requestId: string) => {
     const result = (await data(`result:${requestId}`)).result as CompanionImportResult | null;
-    if (result && (result.requestId !== requestId || !Array.isArray(result.checks) || result.checks.length > 2001
+    if (result && (result.requestId !== requestId || !Array.isArray(result.checks)
       || !['running', 'complete', 'needs-attention'].includes(result.status))) throw new Error('INVALID_IMPORT_RESPONSE');
     return result ?? undefined;
   };
@@ -120,12 +146,12 @@ export function remoteCompanionImportApi(
   return {
     async sources() {
       const result = (await data('sources')).sources as CompanionImportSource[];
-      if (!Array.isArray(result) || result.length > 2000 || result.some(source => !source.id || !source.name || !['hermes', 'openclaw'].includes(source.kind))) throw new Error('INVALID_IMPORT_RESPONSE');
+      if (!Array.isArray(result) || result.some(source => !source.id || !source.name || !['hermes', 'openclaw'].includes(source.kind))) throw new Error('INVALID_IMPORT_RESPONSE');
       return result;
     },
     async preview(sourceId) {
       const result = (await data(`preview:${sourceId}`)).preview as CompanionImportPreview;
-      if (!result?.id || !Array.isArray(result.entries) || result.entries.length > 2000
+      if (!result?.id || !Array.isArray(result.entries)
         || result.entries.some(entry => !entry.id || typeof entry.name !== 'string' || !companionImportCategories.includes(entry.category))) throw new Error('INVALID_IMPORT_RESPONSE');
       sources.set(result.id, sourceId);
       return result;

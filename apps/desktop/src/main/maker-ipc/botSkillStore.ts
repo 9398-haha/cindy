@@ -27,7 +27,7 @@
  *   绝不退化成随机名(用户在设置页看到的必须是他能认出来的东西)。
  * - 所有对外入口都用 `resolveSkillDir` 解析并断言落在自己的 `skills/` 下,
  *   `../` 一类穿越在这一步被挡掉,不依赖调用方先做净化。
- * - 单个技能正文与技能条数都有硬上限:模型可以自己写,但不能把用户磁盘写满。
+ * - 单次生成正文有界；存储容量不按技能条数限制。
  */
 
 import { promises as fs } from 'node:fs';
@@ -50,6 +50,8 @@ export interface BotSkillRecord {
   dirPath: string;
   /** SKILL.md 的绝对路径。 */
   filePath: string;
+  /** Imported disabled skills are retained outside the native plugin scan. */
+  enabled?: boolean;
 }
 
 /** list 只需要元信息时用的轻量形态(不读正文,省 IO)。 */
@@ -59,8 +61,6 @@ export const BOT_SKILL_MAX_NAME_CHARS = 64;
 export const BOT_SKILL_MAX_DESCRIPTION_CHARS = 280;
 /** 单个 SKILL.md 正文上限。技能是「怎么做」的清单,不是知识库。 */
 export const BOT_SKILL_MAX_BODY_BYTES = 64 * 1024;
-/** 每个伙伴的技能条数上限。超过就必须先删旧的,避免无声膨胀。 */
-export const BOT_SKILL_MAX_COUNT = 100;
 
 export interface BotSkillWriteInput {
   name: string;
@@ -137,8 +137,8 @@ export function normalizeBotSkillSlug(value: string): string | null {
 }
 
 /** 解析并断言目标目录仍在这个伙伴的 `skills/` 下 —— 路径穿越在这里止步。 */
-function resolveSkillDir(userDataDir: string, botId: string, slug: string): string {
-  const root = path.resolve(botSkillsDir(userDataDir, botId));
+function resolveSkillDir(userDataDir: string, botId: string, slug: string, enabled = true): string {
+  const root = path.resolve(enabled ? botSkillsDir(userDataDir, botId) : path.join(botSkillRootDir(userDataDir, botId), 'disabled-skills'));
   const resolved = path.resolve(root, slug);
   const relative = path.relative(root, resolved);
   if (
@@ -296,15 +296,17 @@ async function readSkillFilePath(skillDir: string): Promise<string | null> {
 export async function listBotSkills(
   userDataDir: string,
   botId: string,
+  includeDisabled = true,
+  enabled = true,
 ): Promise<BotSkillSummary[]> {
-  const dir = botSkillsDir(userDataDir, botId);
+  const dir = enabled ? botSkillsDir(userDataDir, botId) : path.join(botSkillRootDir(userDataDir, botId), 'disabled-skills');
   let entries: string[];
   try {
     entries = (await fs.readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name);
   } catch {
-    return [];
+    entries = [];
   }
   const out: BotSkillSummary[] = [];
   for (const slug of entries.sort()) {
@@ -324,8 +326,10 @@ export async function listBotSkills(
       updatedAt: parsed.updatedAt,
       dirPath: skillDir,
       filePath,
+      ...(enabled ? {} : { enabled: false }),
     });
   }
+  if (includeDisabled && enabled) out.push(...await listBotSkills(userDataDir, botId, false, false));
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -335,8 +339,10 @@ export async function readBotSkill(
   botId: string,
   slug: string,
 ): Promise<BotSkillRecord | null> {
-  const skillDir = resolveSkillDir(userDataDir, botId, slug);
-  const filePath = await readSkillFilePath(skillDir);
+  let skillDir = resolveSkillDir(userDataDir, botId, slug);
+  let filePath = await readSkillFilePath(skillDir);
+  let enabled = true;
+  if (!filePath) { enabled = false; skillDir = resolveSkillDir(userDataDir, botId, slug, false); filePath = await readSkillFilePath(skillDir); }
   if (!filePath) return null;
   const parsed = parseBotSkillFile(await readCompatibleBotSkillSource(filePath, slug));
   return {
@@ -347,6 +353,7 @@ export async function readBotSkill(
     body: parsed.body,
     dirPath: skillDir,
     filePath,
+    ...(enabled ? {} : { enabled: false }),
   };
 }
 
@@ -413,14 +420,6 @@ export async function seedBotSkillIfMissing(
   const existing = await readBotSkill(userDataDir, botId, normalized.slug);
   if (existing) return { record: existing, created: false };
 
-  const skills = await listBotSkills(userDataDir, botId);
-  if (skills.length >= BOT_SKILL_MAX_COUNT) {
-    throw new BotSkillStoreError(
-      'SKILL_LIMIT_REACHED',
-      `this Bot already has ${BOT_SKILL_MAX_COUNT} skills; delete one before adding another`,
-    );
-  }
-
   await ensureLayout(userDataDir, botId);
   const skillDir = resolveSkillDir(userDataDir, botId, normalized.slug);
   await fs.mkdir(skillDir, { recursive: true });
@@ -460,16 +459,10 @@ export async function saveBotSkill(
   input: BotSkillWriteInput,
 ): Promise<{ record: BotSkillRecord; created: boolean }> {
   const { name, description, body, slug, updatedAt } = normalizeBotSkillWriteInput(input);
-  const existing = await listBotSkills(userDataDir, botId);
-  const created = !existing.some((item) => item.slug === slug);
-  if (created && existing.length >= BOT_SKILL_MAX_COUNT) {
-    throw new BotSkillStoreError(
-      'SKILL_LIMIT_REACHED',
-      `this Bot already has ${BOT_SKILL_MAX_COUNT} skills; delete one before adding another`,
-    );
-  }
+  const previous = await readBotSkill(userDataDir, botId, slug);
+  const created = !previous;
   await ensureLayout(userDataDir, botId);
-  const skillDir = resolveSkillDir(userDataDir, botId, slug);
+  const skillDir = resolveSkillDir(userDataDir, botId, slug, previous?.enabled !== false);
   await fs.mkdir(skillDir, { recursive: true });
   const filePath = path.join(skillDir, 'SKILL.md');
   // 只写 SKILL.md,不去删同目录的 skill.md:macOS / Windows 的文件系统大小写不敏感,
@@ -480,7 +473,7 @@ export async function saveBotSkill(
     'utf8',
   );
   return {
-    record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath },
+    record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath, ...(previous?.enabled === false ? { enabled: false } : {}) },
     created,
   };
 }
@@ -491,7 +484,7 @@ export function validateBotSkillFiles(slug: string,
   if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug)
     throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill');
   const entrypoint = files.find(file => file.name === 'SKILL.md');
-  if (!entrypoint || entrypoint.bytes.length > BOT_SKILL_MAX_BODY_BYTES)
+  if (!entrypoint || !entrypoint.bytes.length)
     throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Invalid skill entrypoint');
   for (const file of files) {
     if (file.name.includes('\\') || file.name.split('/').some(part => !part || part === '.' || part === '..') || path.isAbsolute(file.name))
@@ -501,15 +494,12 @@ export function validateBotSkillFiles(slug: string,
 
 /** Import a selected real skill with its scripts/templates; keep the native SKILL.md bytes. */
 export async function importBotSkillFiles(userDataDir: string, botId: string, slug: string,
-  files: readonly { name: string; bytes: Buffer; executable: boolean }[], assertOwner: () => void): Promise<void> {
+  files: readonly { name: string; bytes: Buffer; executable: boolean }[], assertOwner: () => void, enabled = true): Promise<void> {
   validateBotSkillFiles(slug, files);
-  const existing = await listBotSkills(userDataDir, botId);
-  assertOwner();
-  if (!existing.some(skill => skill.slug === slug) && existing.length >= BOT_SKILL_MAX_COUNT)
-    throw new BotSkillStoreError('SKILL_LIMIT_REACHED', 'Too many selected skills');
   await ensureLayout(userDataDir, botId);
   assertOwner();
-  const target = resolveSkillDir(userDataDir, botId, slug);
+  const target = resolveSkillDir(userDataDir, botId, slug, enabled);
+  await fs.mkdir(path.dirname(target), { recursive: true });
   const temporary = path.join(botSkillRootDir(userDataDir, botId), `.import-skill-${randomUUID()}`);
   await fs.mkdir(temporary, { mode: 0o700 });
   try {
@@ -545,12 +535,13 @@ export async function deleteBotSkill(
   botId: string,
   slug: string,
 ): Promise<boolean> {
-  const skillDir = resolveSkillDir(userDataDir, botId, slug);
-  try {
-    if (!(await fs.stat(skillDir)).isDirectory()) return false;
-  } catch {
-    return false;
+  let deleted = false;
+  for (const enabled of [true, false]) {
+    const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
+    try { if (!(await fs.stat(skillDir)).isDirectory()) continue; }
+    catch { continue; }
+    await fs.rm(skillDir, { recursive: true, force: true });
+    deleted = true;
   }
-  await fs.rm(skillDir, { recursive: true, force: true });
-  return true;
+  return deleted;
 }

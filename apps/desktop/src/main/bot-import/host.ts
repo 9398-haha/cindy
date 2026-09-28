@@ -1,3 +1,5 @@
+import { createMessage } from '../localDb/ipc/messages.js';
+import { t } from '../i18n.js';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -12,7 +14,7 @@ import type { CompanionImportPreview, CompanionImportResult, CompanionImportSele
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBotRemoteResourceSource, reconcileBotProfileFolder } from '../localDb/ipc/bots.js';
 import { readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
-import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles, BOT_SKILL_MAX_COUNT } from '../maker-ipc/botSkillStore.js';
+import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
 import { previewImportRedactions, retainedImportRedactions, resolveImportReferences, selectedImportEnvironment, selectedImportRedactions } from './environmentSelection.js';
@@ -99,7 +101,8 @@ function retainPreview(id: string, entry: Owned<ImportSnapshot>) {
 export async function previewCompanionImport(sourceId: string, controller: string): Promise<CompanionImportPreview> {
   const scope = owner();
   const source = owned(sources, sourceId, controller);
-  const snapshot = await inspectImportSource(source, readers()); scope.assert();
+  const inspected = await inspectImportSource(source, readers()); scope.assert();
+  const snapshot = { ...inspected, items: inspected.items.map((item, index) => ({ ...item, sourceIndex: index })) };
   if (snapshot.avatarImageBase64) {
     const buffer = Buffer.from(snapshot.avatarImageBase64, 'base64');
     validateBotAvatarBuffer(buffer);
@@ -110,7 +113,7 @@ export async function previewCompanionImport(sourceId: string, controller: strin
   retainPreview(id, { owner: scope.scope, controller, value: snapshot, createdAt: Date.now() });
   const secrets = previewImportRedactions(snapshot.items);
   const redact = (text: string) => redactEnvironmentValues(text, secrets);
-  return { id, source: { id: sourceId, kind: source.kind, name: redact(source.name) }, name: redact(source.name),
+  return { id, selectionRanges: true, source: { id: sourceId, kind: source.kind, name: redact(source.name) }, name: redact(source.name),
     ...(snapshot.avatarImageBase64 ? { avatarImageBase64: snapshot.avatarImageBase64 } : {}),
     entries: snapshot.items.map(({ view }) => ({ ...view, name: redact(view.name),
       ...(view.description === undefined ? {} : { description: redact(view.description) }) })) };
@@ -284,7 +287,7 @@ export async function ensureImportedAutomationReady(root: string, botId: string,
   if (!current || request?.expectedRevision !== undefined && request.expectedRevision !== current.revision
     || request?.input && JSON.stringify(parseRoutineInput({ ...request.input, enabled: false })) !== expectedInput)
     throw new CompanionImportError('TARGET_AUTOMATION_CHANGED');
-  await startCompanionImport(pending.selection, `routine:${routineId}`);
+  await startCompanionImport(pending.selection, `routine:${routineId}`, false, true);
   await jobs.get(`${scope.scope}:${pending.selection.requestId}`);
   assertOwner(); scope.assert();
   await assertImportedAutomationReady(root, botId, routineId, assertOwner);
@@ -295,13 +298,18 @@ export async function ensureImportedAutomationReady(root: string, botId: string,
 }
 
 /** Main-owned work survives closing the import dialog. Repeated request IDs join the same work. */
-export async function startCompanionImport(selection: CompanionImportSelection, controller: string, reconcileOnly = false): Promise<CompanionImportResult> {
+export async function startCompanionImport(selection: CompanionImportSelection, controller: string, reconcileOnly = false, resumeSetup = false): Promise<CompanionImportResult> {
   const scope = owner();
   if (!selection || typeof selection.previewId !== 'string') throw new CompanionImportError('INVALID_SELECTION');
   const rejected = await readReceipt(scope.root, selection.requestId); scope.assert();
+  if (rejected?.cancelled) return rejected.result;
   if (rejected?.creationRejected) return withBotProfileLocks([rejected.result.botId], () => cleanRejectedCreation(scope.root, rejected, scope.assert));
   let snapshot: ImportSnapshot;
-  try { snapshot = owned(previews, selection.previewId, controller); }
+  try {
+    // Once accepted, the durable selected snapshot is authoritative, including failed captures.
+    if (rejected?.checkpointSaved && rejected.result.status !== 'complete') throw new CompanionImportError('PREVIEW_EXPIRED');
+    snapshot = owned(previews, selection.previewId, controller);
+  }
   catch (error) {
     if (!(error instanceof CompanionImportError) || error.code !== 'PREVIEW_EXPIRED') throw error;
     const receipt = await readReceipt(scope.root, selection.requestId); scope.assert();
@@ -311,28 +319,34 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     snapshot = await deserializeImportSnapshotAsync(pending.snapshotJson, scope.assert);
   }
   const selected = validateImportSelection(selection, snapshot);
-  if (selected.filter(item => item.view.category === 'skills').length > BOT_SKILL_MAX_COUNT) throw new CompanionImportError('INVALID_SELECTION');
   if (selection.avatarImageBase64 !== undefined) {
     try { decodeBotAvatarImage(selection.avatarImageBase64); } catch { throw new CompanionImportError('INVALID_SELECTION'); }
   }
-  const contentSecrets = snapshot.publicationRedactions ?? Object.fromEntries([...new Set([
-    ...Object.values(previewImportRedactions(snapshot.items)), ...Object.values(selectedImportRedactions(selected)),
-  ])].map((value, index) => [`content_credential_${index}`, value]));
+  // A failed resource is read afresh on retry. Refresh masking metadata as well,
+  // without retaining unselected credential values that never occur in selected content.
+  const freshMasks = snapshot.publicationRedactions && selected.some(item => item.captureIssue)
+    ? await createImportSourceReader(readers()).readRedactions(snapshot.source) : {};
+  scope.assert();
+  const contentSecrets = snapshot.publicationRedactions ? { ...snapshot.publicationRedactions }
+    : Object.fromEntries(Object.values(previewImportRedactions(snapshot.items)).map((value, index) => [`content_credential_${index}`, value]));
+  const knownValues = new Set(Object.values(contentSecrets));
+  let nextMask = 0;
+  for (const value of [...Object.values(selectedImportRedactions(selected)), ...Object.values(freshMasks)]) {
+    if (knownValues.has(value)) continue;
+    while (`content_retry_${nextMask}` in contentSecrets) nextMask++;
+    contentSecrets[`content_retry_${nextMask++}`] = value;
+    knownValues.add(value);
+  }
   const redactText = (text: string) => redactEnvironmentValues(text, contentSecrets);
   const publicRoutine = (input: RoutineInput): RoutineInput => ({ ...input, name: redactText(input.name), prompt: redactText(input.prompt) });
-  let retainedRedactions = snapshot.publicationRedactions;
   // Resource capture finishes before saveCheckpoint; retain only selected embedded values.
-  const publicationRedactions = (items: ImportSnapshot['items']) => retainedRedactions ??= retainedImportRedactions(items, contentSecrets);
+  const publicationRedactions = (items: ImportSnapshot['items']) => retainedImportRedactions(items, contentSecrets);
   const skillSlug = (item: ImportSnapshot['items'][number]) => {
-    const original = path.basename(item.sourceDirectory ?? item.view.name);
+    const original = item.view.name;
     if (redactText(original) !== original) return `import-${fingerprint(item.view.id).slice(0, 16)}`;
     const normalized = normalizeBotSkillSlug(original);
     return normalized === original ? original : `${normalized?.slice(0, 35) || 'import'}-${fingerprint(item.view.id).slice(0, 8)}`;
   };
-  for (const role of ['identity', 'user', 'instructions'] as const) {
-    const text = redactText(selected.filter(item => item.role === role).map(item => item.text).join('\n\n'));
-    if (Buffer.byteLength(text, 'utf8') > BOT_PROFILE_TEXT_MAX_BYTES) throw new CompanionImportError('PROFILE_TEXT_TOO_LARGE');
-  }
   const prior = await readReceipt(scope.root, selection.requestId); scope.assert();
   if (prior?.cancelled) return prior.result;
   if (!prior) {
@@ -348,12 +362,12 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       // Capturing lazily selected resources may grow even a rejected selection.
       const cached = previews.get(selection.previewId);
       if (cached?.value === snapshot) retainPreview(selection.previewId, cached);
-      try {
-        for (const item of items.filter(item => item.view.category === 'skills')) {
+      for (const item of items.filter(item => item.view.category === 'skills' && !item.captureIssue)) {
+        try {
           const slug = skillSlug(item);
           validateBotSkillFiles(slug, projectImportedSkill(item.files ?? [], slug, contentSecrets).files);
-        }
-      } catch { throw new CompanionImportError('INVALID_SELECTION'); }
+        } catch { item.captureIssue = 'IMPORT_ITEM_FAILED'; }
+      }
     },
     readReceipt: requestId => readReceipt(scope.root, requestId),
     saveReceipt: receipt => saveReceipt(scope.root, receipt),
@@ -379,10 +393,20 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     async importItem(botId, item) {
       if (item.view.category === 'skills') {
         const slug = skillSlug(item);
-        await importBotSkillFiles(scope.root, botId, slug, projectImportedSkill(item.files ?? [], slug, contentSecrets).files, scope.assert);
-      } else if (item.text && item.view.category === 'memory') {
+        const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
+        await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
+      } else if (item.text && (item.view.category === 'memory' || item.view.category === 'personality')) {
         await getBotMemoryService().importDocument(botId, item.view.id, redactText(item.view.name), redactText(item.text), item.role === 'user' ? 'user' : 'reference');
       }
+      if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
+        if (item.text !== undefined) { environment.documents ??= {}; environment.documents[item.view.id] = item.text; }
+        if (item.view.category === 'skills') {
+          const slug = skillSlug(item);
+          const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
+          if (originals) { environment.skillFiles ??= {}; environment.skillFiles[slug] = originals; }
+        }
+        environment.contentRedactions = { ...environment.contentRedactions, ...publicationRedactions([item]) };
+      });
     },
     async saveCheckpoint(botId, items) {
       const previous = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
@@ -420,12 +444,15 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         pendingImport: previous?.pendingImport ?? { selection, snapshotJson: await serializeImportSnapshotAsync({ ...snapshot, avatarImageBase64: selection.avatarImageBase64, items, publicationRedactions: publicationRedactions(items) }, scope.assert) },
         automations: previous?.automations ?? {},
       }, scope.assert);
-      const roleText = (role: 'identity' | 'user' | 'instructions') => redactText(items.filter(item => item.role === role).map(item => item.text).join('\n\n'));
+      const roleText = (role: 'identity' | 'user' | 'instructions') => {
+        const text = redactText(items.filter(item => item.role === role).map(item => item.text).join('\n\n'));
+        return Buffer.byteLength(text, 'utf8') <= BOT_PROFILE_TEXT_MAX_BYTES ? text : `The imported ${role} documents are preserved in your personal memory. Search and read those original documents when applying the imported profile.`;
+      };
       const folder = await readBotProfileFolder(scope.root, botId); scope.assert();
       await writeBotProfileFolder(scope.root, botId, {
         config: { ...folder.config, mcpMode: 'allowlist', mcpServers: [...new Set([
           ...(Array.isArray(folder.config.mcpServers) ? folder.config.mcpServers : []),
-          ...(items.some(item => item.mcp || item.env) || Object.keys(skillFiles).length ? ['companion_connections'] : []),
+          'companion_connections',
         ])] },
         ...(roleText('identity') ? { identitySource: roleText('identity') } : {}),
         ...(roleText('user') ? { userContextSource: roleText('user') } : {}),
@@ -448,7 +475,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         environment.automations[creationId] ??= { kind: snapshot.source.kind,
           handover: item.view.enabled ? 'pending' : 'ready',
           original: item.automation!.original, sourceId: item.automation!.sourceId, sourceRoot: snapshot.source.root, deliveries: item.automation!.deliveries,
-          issues: [...(item.view.issues ?? []), ...(item.view.dependsOn?.some(id => !selection.entryIds.includes(id)) ? ['AUTOMATION_DEPENDENCY_NOT_SELECTED'] : [])] };
+          issues: [...(item.view.issues ?? []), ...(item.view.dependsOn?.some(id => !selected.some(item => item.view.id === id)) ? ['AUTOMATION_DEPENDENCY_NOT_SELECTED'] : [])] };
       });
       const routine = await routineTools.createOnce(botId, publicRoutine(input), creationId); scope.assert();
       return routine.id;
@@ -499,11 +526,16 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       const botId = `import_${fingerprint(selection.requestId).slice(0, 24)}`;
       const result = await withBotProfileLocks([botId], async () => {
         scope.assert();
-        const result = await transferCompanion(snapshot, selection, transferDeps, reconcileOnly || pass > 0);
+        const result = await transferCompanion(snapshot, selection, transferDeps, reconcileOnly || pass > 0, resumeSetup);
         if (result.status === 'running' && pass >= 2) {
           const receipt = await readReceipt(scope.root, selection.requestId); scope.assert();
           if (receipt) { receipt.result.status = 'needs-attention'; await saveReceipt(scope.root, receipt); }
           result.status = 'needs-attention';
+        }
+        if (selection.deferSetup && result.saved && result.canonicalSessionId) {
+          await createMessage(result.canonicalSessionId, { clientId: `companion-import:${selection.requestId}`, role: 'assistant',
+            content: t(`bots.import.${result.checks.some(check => check.status === 'needs-attention') ? 'chatSetup' : 'chatReady'}`) });
+          scope.assert();
         }
         if (result.status === 'complete') await companionEnvironmentStore.update(scope.root, result.botId, scope.assert, env => { delete env.pendingImport; });
         return result;
@@ -548,4 +580,50 @@ async function accepted(task: Promise<CompanionImportResult>, root: string, requ
     return task;
   })();
   return Promise.race([task, receipt]);
+}
+
+/** Continue only this companion's durable request; no source discovery or new selection. */
+export async function continueCompanionImport(botId: string, root: string, assertOwner: () => void) {
+  const scope = owner();
+  assertOwner();
+  if (scope.root !== root) throw new CompanionImportError('OWNER_CHANGED');
+  const environment = await companionEnvironmentStore.read(root, botId, assertOwner);
+  const pending = environment?.pendingImport;
+  if (!pending) return undefined;
+  if (`import_${fingerprint(pending.selection.requestId).slice(0, 24)}` !== botId) throw new CompanionImportError('INVALID_COMPANION');
+  await startCompanionImport(pending.selection, `companion:${botId}`, false, true);
+  return getCompanionImportResult(pending.selection.requestId);
+}
+
+/** Explicit adoption of Cindy's runtime settings; source scheduling/data checks still apply. */
+export async function useCindyImportSettings(botId: string, root: string, entryIds: unknown, assertOwner: () => void): Promise<void> {
+  const scope = owner(); assertOwner();
+  if (scope.root !== root) throw new CompanionImportError('OWNER_CHANGED');
+  if (!Array.isArray(entryIds) || !entryIds.length || entryIds.some(id => typeof id !== 'string')) throw new CompanionImportError('INVALID_SELECTION');
+  await withBotProfileLocks([botId], async () => {
+    const environment = await companionEnvironmentStore.read(root, botId, assertOwner);
+    const pending = environment?.pendingImport;
+    if (!pending || `import_${fingerprint(pending.selection.requestId).slice(0, 24)}` !== botId) throw new CompanionImportError('INVALID_COMPANION');
+    const snapshot = await deserializeImportSnapshotAsync(pending.snapshotJson, assertOwner);
+    const selected = new Set(entryIds);
+    const items = snapshot.items.filter(item => selected.has(item.view.id));
+    if (items.length !== selected.size || items.some(item => !item.automation && !['source-model', 'source-tools'].includes(item.credential?.format ?? ''))) throw new CompanionImportError('INVALID_SELECTION');
+    const mappings = new Set(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
+    for (const item of items) item.view.issues = item.view.issues?.filter(issue => !mappings.has(issue));
+    const encoded = await serializeImportSnapshotAsync(snapshot, assertOwner);
+    await companionEnvironmentStore.update(root, botId, assertOwner, current => {
+      if (!current.pendingImport || current.pendingImport.selection.requestId !== pending.selection.requestId) throw new CompanionImportError('SELECTION_CHANGED');
+      current.pendingImport.snapshotJson = encoded;
+      for (const item of items) {
+        const binding = current.automations?.[fingerprint([pending.selection.requestId, item.view.id])];
+        if (binding) binding.issues = binding.issues?.filter(issue => !mappings.has(issue));
+      }
+    });
+    const receipt = await readReceipt(root, pending.selection.requestId); assertOwner();
+    if (receipt) {
+      receipt.result.checks = receipt.result.checks.map(check => selected.has(check.entryId) && mappings.has(check.message ?? '')
+        ? { ...check, status: items.find(item => item.view.id === check.entryId)?.automation ? 'needs-attention' : 'copied', message: 'IMPORT_SETUP_DEFERRED' } : check);
+      await saveReceipt(root, receipt);
+    }
+  });
 }

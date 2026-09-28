@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   BOT_SKILL_MAX_BODY_BYTES,
-  BOT_SKILL_MAX_COUNT,
   BotSkillStoreError,
   botSkillRootDir,
   botSkillsDir,
@@ -165,11 +164,11 @@ describe('saveBotSkill — 形成', () => {
     ).rejects.toMatchObject({ errorCode: 'SKILL_NAME_UNUSABLE' });
   });
 
-  it('caps how many skills one Bot can accumulate', async () => {
+  it('preserves more than 142 skills and allows continued learning', async () => {
     // Capture this test's directory so a timed-out continuation cannot use a later fixture.
     const testUserDataDir = userDataDir;
     // Seed existing files directly: saving each one repeatedly scans the growing directory.
-    for (let index = 0; index < BOT_SKILL_MAX_COUNT - 1; index += 1) {
+    for (let index = 0; index < 142 - 1; index += 1) {
       const slug = `skill-${index}`;
       const skillDir = path.join(botSkillsDir(testUserDataDir, 'bot-1'), slug);
       await fs.mkdir(skillDir, { recursive: true });
@@ -180,13 +179,13 @@ describe('saveBotSkill — 形成', () => {
         updatedAt: '2026-08-19T00:00:00.000Z',
       }));
     }
-    const lastSkill = { ...SAMPLE, name: `skill-${BOT_SKILL_MAX_COUNT - 1}` };
+    const lastSkill = { ...SAMPLE, name: `skill-${142 - 1}` };
     expect((await saveBotSkill(testUserDataDir, 'bot-1', lastSkill)).created).toBe(true);
     await expect(
       saveBotSkill(testUserDataDir, 'bot-1', { ...SAMPLE, name: 'one-too-many' }),
-    ).rejects.toMatchObject({ errorCode: 'SKILL_LIMIT_REACHED' });
+    ).resolves.toMatchObject({ created: true });
     expect((await saveBotSkill(testUserDataDir, 'bot-1', lastSkill)).created).toBe(false);
-    expect(await listBotSkills(testUserDataDir, 'bot-1')).toHaveLength(BOT_SKILL_MAX_COUNT);
+    expect(await listBotSkills(testUserDataDir, 'bot-1')).toHaveLength(143);
   });
 
   it('never lets a slug escape the per-bot skills dir', async () => {
@@ -305,4 +304,15 @@ it('imports real skill resources and preserves a user edit when the import is re
   await fs.writeFile(path.join(folder, 'templates/report.txt'), 'User changed it');
   await expect(importBotSkillFiles(userDataDir, 'bot-1', 'imported', files, () => {})).rejects.toThrow('Imported skill was edited');
   expect(await fs.readFile(path.join(folder, 'templates/report.txt'), 'utf8')).toBe('User changed it');
+});
+
+it('retains a disabled imported skill without mounting or re-enabling it when edited', async () => {
+  await importBotSkillFiles(userDataDir, 'bot-1', 'disabled', [{ name: 'SKILL.md', bytes: Buffer.from('# Original'), executable: false }], () => {}, false);
+  expect(await listBotSkills(userDataDir, 'bot-1', false)).toEqual([]);
+  expect(await listBotSkills(userDataDir, 'bot-1')).toMatchObject([{ slug: 'disabled', enabled: false }]);
+  const updated = await saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, slug: 'disabled' });
+  expect(updated.record.enabled).toBe(false);
+  expect(await listBotSkills(userDataDir, 'bot-1', false)).toEqual([]);
+  expect(await deleteBotSkill(userDataDir, 'bot-1', 'disabled')).toBe(true);
+  expect(await listBotSkills(userDataDir, 'bot-1')).toEqual([]);
 });

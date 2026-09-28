@@ -34,7 +34,8 @@ Mobile can select automations during import and request host-owned takeover.
 Reopening creation after dismissing import starts with the normal creation form;
 reconnecting an open import preserves its current selection and request.
 Import adds category/item selection, including
-unselecting defaults; unused skills start unselected. Both platforms use semantic
+unselecting defaults; every discovered skill starts selected. The summary has five flat
+category rows; category details use search and 20-row pages. Both platforms use semantic
 theme tokens. No new native Mobile dependencies or fingerprint inputs are added.
 Every supplied avatar uses the existing companion image validation before any
 receipt or credential checkpoint is written. An empty supplied image is invalid;
@@ -59,17 +60,26 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   These files remain individually deselectable; deselecting a subtree dependency
   prevents that automation's takeover, leaving its source running. Helper code
   contributes environment dependencies and bounded verification planning text.
-  A shared 128 MiB / 4096-file read budget bounds each source snapshot, including
+  A shared 128 MiB read budget bounds each source snapshot, including
   config includes, documents, credentials, scripts and all referenced skill trees.
   Additional selected skill resources use the same cumulative limit before any
-  import writes. Exceeding it fails explicitly without truncation; the existing
-  form unlocks on a definitive pre-import limit rejection. Fingerprints hash raw
+  import writes. An unreadable/oversized selected resource retains a per-item failure
+  for retry; healthy items and the conversation are saved. No item is truncated. Fingerprints hash raw
   file bytes, and encrypted checkpoints use base64 while still reading legacy
   numeric-array checkpoints.
-  Before the first receipt/checkpoint/profile write, selected skills also use the
-  existing store validation: at most 100 skills and a 64 KiB SKILL.md entrypoint,
-  measured after any publication guidance is appended. Invalid selections return
-  the existing editable-form error without leaving a partial companion.
+  Skill count, source entry count, resource file count and cron row count have no
+  fixed quota. Imported SKILL.md files preserve their full body rather than using
+  the interactive skill editor's 64 KiB authoring limit. Individual file and total
+  in-memory snapshot byte bounds remain; this is not an unlimited-byte importer.
+  Skills disabled at the source are saved outside the active native skills folder
+  and stay disabled when read or edited.
+- Skill discovery follows grouped Hermes directories, configured external roots,
+  native directory links and disabled lists. OpenClaw discovery covers workspace,
+  workspace `.agents`, personal/managed/workshop, installed bundled, extra and
+  enabled plugin manifest roots, with native precedence and symlink trust rules.
+  Nested archive/environment/support directories are excluded. Names and skillKey
+  overrides are resolved before deduplication; skill-owned credential alternatives
+  are selected separately so credential ambiguity cannot deselect a skill.
 - Selected variables, MCP env/headers, source credentials and automation assets
   use the existing account encrypted credential store. The teammate folder has
   a non-secret `environment.json` binding. Variable/connection names in that file
@@ -226,9 +236,10 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   with the final successful history entry. Failed result saves retry persistence
   without rerunning; recovery of an already exhausted counter also disables the
   routine. Ordinary unchanged-monitor skips remain eligible for the next trigger.
-  Pure-script output appears in the canonical teammate chat. Explicit Telegram
-  source destinations use the selected original bot credential; they do not
-  change Cindy's official/personal bot implementations.
+  All newly imported output goes to the canonical teammate chat. Source delivery
+  channels and failure delivery destinations do not gate selection or verification.
+  Existing imported bindings that already carry Telegram destinations retain their
+  legacy delivery behavior; no existing routine is silently rerouted.
   Each confirmed target/message chunk advances progress in the same encrypted
   automation binding. A retry or next occurrence resumes the captured output and
   destinations before rerunning the model/script; counters commit only after all
@@ -239,7 +250,7 @@ Copying and field conversion do not call a model. The optional takeover check
 uses the teammate's current model to plan bounded read-only probes, then the
 host executes real MCP/HTTP reads and validates response data. The planner sees
 variable names and redacted task/script text and Skill/file identifiers, not credential values. HTTP checks
-reject redirects; Telegram checks read identity/destination without test sends.
+reject redirects. Legacy Telegram bindings still check identity/destination without test sends.
 The MCP server's `readOnlyHint` only filters planning candidates; it does not
 authorize execution. Each planned MCP/HTTP call and literal monitor GET uses the companion's existing
 Auto/Ask/Full Access policy with its exact connection, tool and arguments. Auto
@@ -281,10 +292,10 @@ query values in encoded/decoded forms, even when they are absent from `.env`.
 The same known-credential mask applies to prior output, legacy prepared retries,
 script output, planning text and the final imported delivery boundary. Requests
 still use the private original URL; redacted output retains normal change detection.
-Verified delivery-only credentials are excluded from data-read dependencies, so
-local reminders can retain their Telegram destination. Variables also referenced
+Legacy delivery-only credentials are excluded from data-read dependencies. New
+imports have no source delivery dependency and local reminders use teammate chat. Variables also referenced
 by the task or its skills still require data verification.
-Telegram destinations without an explicit source account bind only when exactly
+For legacy bindings, Telegram destinations without an explicit source account bind only when exactly
 one source account is available. Multiple candidates or a missing explicit account
 use the existing `DELIVERY_NEEDS_ADAPTER` state and keep the source task running;
 being able to reach a chat does not identify the intended sending bot.
@@ -292,6 +303,23 @@ For scripts classified as local-only with no data/connection dependency, the sam
 runtime interpreter parses the selected script without executing business actions.
 This checks availability and syntax, not a full business execution; scripts with
 external data still require actual read evidence.
+
+## Save first, finish setup in chat
+
+GUI imports send the additive `deferSetup` flag (the command defaults it to true).
+Saving personality/memory/skills, private connections and disabled routine definitions
+finishes before any data probe, source pause or target activation. `savedEntryIds`
+counts saved definitions independently of activation status. The completion page
+opens the normal teammate chat, without a per-item warning wall. One idempotent
+chat message explains that remaining setup can wait. Native Heartbeat is omitted;
+ordinary cron jobs named heartbeat are still imported.
+
+The owner-scoped `companion_connections.import_setup` tool lists remaining checks
+in pages, retries from the encrypted checkpoint, and permits explicit adoption of
+Cindy model/tool settings for selected entries with `use_cindy_settings`. That
+operation does not activate anything or waive context/workdir/data checks. Login
+uses the real existing account/plugin connection UI; credentials are never requested
+in chat. Ordinary conversation remains available while setup is deferred.
 
 ## Handover and compatibility
 
@@ -358,9 +386,18 @@ Remote Resource boundary so the existing form can be edited and resubmitted.
 Expired or changed previews clear the frozen intent and refresh the existing
 source step on Desktop and Mobile; a new preview gets a fresh request.
 Mobile validates the complete action through the existing Remote Resource parser
-before freezing its request. A payload exceeding the 64 KiB input budget stays
-editable so the user can adjust the portrait/selection; no oversized write is sent.
-The wire format and limits are unchanged. Unexpected/ambiguous failures still
+before freezing its request. New hosts advertise `selectionRanges`; new clients can
+encode exact selections as inclusive immutable preview-index ranges. Selected-only
+checkpoints retain the original indexes. Old hosts receive the existing ID arrays;
+old clients can continue using ID arrays on a new host. The 64 KiB wire action
+budget is unchanged; 10,000 selected entries need one range, not 10,000 IDs.
+Previously released controllers retain their own 2,000-entry preview/result limits;
+large catalogs require an updated controller as well as host. A new controller with
+an old host retains the old ID-array/inline-check behavior and retry/open actions;
+it does not claim deferred setup when the host has not saved it. Existing receipts
+without range indexes, deferred-setup flags or saved counts remain resumable, and
+their existing delivery bindings are retained rather than rewritten on upgrade.
+Unexpected/ambiguous failures still
 retain the original request for reconciliation.
 The optional public credential-alternative IDs are additive: older clients may
 ignore them, but the host still rejects a conflicting selection before writing.
@@ -374,8 +411,7 @@ subscription authentication path. Preserving a source profile does not mean its
 OAuth refresh is supported or its subscription can be used by another harness.
 The preview/result explicitly retains and identifies configurations requiring
 an adapter: native subscription OAuth refresh, source-specific tool policies,
-per-job model/context/workspace overrides, staggered schedules, and delivery
-channels other than explicit Telegram/local chat. Their selected source values
+per-job model/context/workspace overrides and staggered schedules. Their selected source values
 are retained privately, the affected automation stays at the source, and its
 imported routine cannot execute with silently weakened semantics. Missing
 selected dependencies and failed data probes behave the same way.

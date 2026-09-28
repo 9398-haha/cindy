@@ -7,6 +7,7 @@ import { redactEnvironmentValues } from './process.js';
 import yaml from 'js-yaml';
 import { parse as parseEnv } from 'dotenv';
 import { createImportBudget, fingerprint, optionalText, readImportFile, readImportTree, snapshotFingerprint, type ImportReadBudget } from './files.js';
+import { discoverImportSkills } from './skills.js';
 import { normalizeAutomation } from './sourceAutomations.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 
@@ -101,7 +102,7 @@ export async function discoverImportSources(deps: SourceReaderDeps, reader = cre
       if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id)) throw new CompanionImportError('SOURCE_AGENT_INVALID');
       results.push({ kind: 'openclaw', agentId: id, name: string(row.name) || string(object(row.identity).name) || id,
         root: clawRoot, configFile,
-        workspace: sourcePath(deps.home, string(row.workspace) || string(defaults.workspace) || path.join(clawRoot, id === 'main' ? 'workspace' : `workspace-${id}`), clawRoot) });
+        workspace: sourcePath(deps.home, deps.env.OPENCLAW_WORKSPACE_DIR || string(row.workspace) || string(defaults.workspace) || path.join(clawRoot, id === 'main' ? 'workspace' : `workspace-${id}`), clawRoot) });
     }
   }
   return results;
@@ -110,15 +111,26 @@ export async function discoverImportSources(deps: SourceReaderDeps, reader = cre
 function entryId(prefix: string, name: string): string { return `${prefix}-${fingerprint(name).slice(0, 20)}`; }
 
 async function document(items: ImportItem[], root: string, name: string, role: ImportItem['role'], category: 'personality' | 'memory', budget: ImportReadBudget) {
-  const text = await optionalText(root, path.join(root, name), budget);
-  if (!text?.trim()) return;
-  items.push({ view: { id: entryId(category, name), category, name, selected: true }, text, role });
+  try {
+    const text = await optionalText(root, path.join(root, name), budget);
+    if (!text?.trim()) return;
+    items.push({ view: { id: entryId(category, name), category, name, selected: true }, text, role });
+  } catch (error) {
+    items.push({ view: { id: entryId(category, name), category, name, selected: true }, role,
+      sourceFile: { root, file: path.join(root, name) }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
+  }
 }
 
 async function memoryDocuments(items: ImportItem[], root: string, prefix: string, budget: ImportReadBudget) {
   if (!(await directories(root)).includes(prefix)) return;
-  const files = await readImportTree(path.join(root, prefix), name => /\.md$/i.test(name), budget);
+  const directory = path.join(root, prefix);
+  const failed = (name: string, error: unknown) => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name, selected: true },
+    sourceFile: { root: directory, file: path.join(directory, name) }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
+  let files;
+  try { files = await readImportTree(directory, name => /\.md$/i.test(name), budget, failed); }
+  catch (error) { failed(prefix, error); return; }
   for (const file of files.filter(file => /\.md$/i.test(file.name))) {
+    if (!file.bytes.toString('utf8').trim()) continue;
     items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: file.name, selected: true },
       text: file.bytes.toString('utf8'), role: /(^|\/)USER\.md$/i.test(file.name) ? 'user' : undefined });
   }
@@ -200,29 +212,6 @@ function scalarEnvHeaders(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(object(value)).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
 
-async function skills(items: ImportItem[], roots: string[], used: Set<string>, budget: ImportReadBudget) {
-  const names = new Set<string>();
-  for (const root of roots) {
-    for (const slug of await directories(root)) {
-      if (names.has(slug)) continue;
-      const dir = path.join(root, slug);
-      let manifest;
-      try { manifest = await readImportFile(dir, path.join(dir, 'SKILL.md'), budget); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-      const text = manifest.bytes.toString('utf8');
-      if (!text) continue;
-      names.add(slug);
-      let info: Record<string, unknown> = {};
-      const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-      if (front) try { info = object(yaml.load(front[1]!)); } catch { /* Raw skill is retained, and its native loader reports syntax errors. */ }
-      const name = string(info.name) || slug;
-      const referenced = used.has(slug) || used.has(name);
-      items.push({ view: { id: entryId('skill', slug), category: 'skills', name, description: string(info.description).slice(0, 280), selected: referenced },
-        sourceDirectory: dir, files: referenced ? [manifest, ...await readImportTree(dir, name => name !== 'SKILL.md', budget)] : [manifest], filesComplete: referenced });
-    }
-  }
-}
-
 function sourceConfiguration(items: ImportItem[], source: ImportSource, values: Record<string, unknown>) {
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   const tools = source.kind === 'openclaw' ? { ...(values.tools ? { global: values.tools } : {}), ...(row.tools ? { agent: row.tools } : {}) } : object(values.tools);
@@ -244,7 +233,7 @@ export function createImportSourceReader(deps: SourceReaderDeps, budget = create
     return pending;
   };
   const readConfig = (root: string, file: string) => config(root, file, budget, [], readText, configs);
-  const readName = async (source: ImportSource): Promise<string> => {
+  const readRedactions = async (source: ImportSource): Promise<Record<string, string>> => {
     const values = await readConfig(path.dirname(source.configFile), source.configFile);
     const items: ImportItem[] = [];
     // Skill credential settings live in config; no manifest/resource read is
@@ -257,9 +246,9 @@ export function createImportSourceReader(deps: SourceReaderDeps, budget = create
     }
     await connections(items, source, values, deps, budget, readText);
     sourceConfiguration(items, source, values);
-    return redactEnvironmentValues(source.name, previewImportRedactions(items));
+    return previewImportRedactions(items);
   };
-  return { readText: (root: string, file: string) => readText(root, file, budget), readConfig, readName };
+  return { readText: (root: string, file: string) => readText(root, file, budget), readConfig, readRedactions, readName: async (source: ImportSource) => redactEnvironmentValues(source.name, await readRedactions(source)) };
 }
 
 /** Snapshot immutable bytes once, then give the client only a safe selection projection. */
@@ -306,20 +295,13 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
       jobs = (Array.isArray(data.jobs) ? data.jobs : []).map(object).filter(job => (job.agentId ?? (defaultAgent ? source.agentId : undefined)) === source.agentId);
     }
   }
-  const usedSkills = new Set(jobs.flatMap(job => [string(job.skill), ...(Array.isArray(job.skills) ? job.skills.map(string) : [])]).filter(Boolean));
-  const skillRoots = source.kind === 'hermes' ? [path.join(source.root, 'skills')] : [path.join(workspace, 'skills'), path.join(source.root, 'skills')];
-  await skills(items, skillRoots, usedSkills, budget);
-  for (const item of items.filter(item => item.view.category === 'skills')) {
-    const slug = path.basename(item.sourceDirectory!);
-    const settings = object(object(object(values.skills).entries)[slug]);
-    if (settings.env) item.env = scalarEnv(settings.env);
-    if (settings.enabled === false) item.view.selected = false;
-    const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(item.files?.find(file => file.name === 'SKILL.md')?.bytes.toString('utf8') ?? '');
-    let metadata: Record<string, unknown> = {};
-    try { if (front) metadata = object(object(yaml.load(front[1]!)).metadata); } catch { /* The original skill loader reports malformed frontmatter. */ }
-    const primaryEnv = string(object(metadata.openclaw ?? metadata.clawdbot ?? metadata.hermes).primaryEnv);
-    if (typeof settings.apiKey === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(primaryEnv)) item.env = { ...item.env, [primaryEnv]: settings.apiKey };
-    else if (settings.apiKey) item.view.issues = ['MISSING_ENVIRONMENT_REFERENCE'];
+  items.push(...await discoverImportSkills(source, values, deps.home, deps.env, budget, new Set(jobs.flatMap(job => [string(job.skill), ...(Array.isArray(job.skills) ? job.skills.map(string) : [])]).filter(Boolean))));
+  // Credential alternatives must not deselect the skill that owns them.
+  for (const item of [...items]) if (item.view.category === 'skills' && item.env && Object.keys(item.env).length) {
+    const id = entryId('skill-env', item.view.id);
+    items.push({ view: { id, category: 'connections', name: item.view.name, selected: true }, env: item.env });
+    item.envDependencies = { names: Object.keys(item.env), entries: [] };
+    delete item.env;
   }
   await connections(items, source, values, deps, budget);
   if (source.kind === 'hermes' && (await directories(source.root)).includes('scripts')) {
@@ -331,13 +313,8 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   }
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   sourceConfiguration(items, source, values);
-  const heartbeat = source.kind === 'openclaw' ? object(row.heartbeat ?? object(object(values.agents).defaults).heartbeat) : object(values.heartbeat);
-  if (Object.keys(heartbeat).length) {
-    const heartbeatText = await optionalText(workspace, path.join(workspace, 'HEARTBEAT.md'), budget);
-    items.push({ view: { id: entryId('automation', 'heartbeat'), name: 'Heartbeat', category: 'automations', selected: true, enabled: heartbeat.enabled !== false && heartbeat.every !== '0s', issues: ['AUTOMATION_TRIGGER_NEEDS_ADAPTER'] }, automation: { sourceId: 'heartbeat', original: { ...heartbeat, ...(heartbeatText ? { prompt: heartbeatText } : {}) }, fingerprint: fingerprint(heartbeat) } });
-  }
+  // Native heartbeat is not a portable scheduled job. Ordinary jobs named heartbeat remain below.
   for (const job of jobs) items.push(normalizeAutomation(source, job, items, string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone));
-  if (items.length > 2000) throw new CompanionImportError('SOURCE_TOO_MANY_ITEMS');
   const identity = items.find(item => item.view.name === 'IDENTITY.md')?.text ?? '';
   const avatar = string(object(row.identity).avatar) || string(row.avatar) || /^\s*[-*]?\s*\*{0,2}Avatar\*{0,2}:\s*(.+)$/im.exec(identity)?.[1]?.trim() || '';
   let avatarImageBase64: string | undefined;

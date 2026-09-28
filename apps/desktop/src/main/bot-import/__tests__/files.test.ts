@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createImportBudget, deserializeImportSnapshot, readImportFile, serializeImportSnapshot, snapshotFingerprint } from '../files.js';
+import { createImportBudget, deserializeImportSnapshot, readImportFile, readImportTree, serializeImportSnapshot, snapshotFingerprint } from '../files.js';
 import type { ImportSnapshot } from '../types.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -41,4 +41,14 @@ it('hashes binary contents and checkpoints compactly without invoking Buffer.toJ
     expect(snapshotFingerprint(snapshot.items)).not.toBe(hash);
     expect(stringifyBuffer).not.toHaveBeenCalled();
   } finally { stringifyBuffer.mockRestore(); }
+});
+
+it('reads every resource in a skill with more than 4096 small files', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-many-files-'));
+  try {
+    for (let index = 0; index < 4100; index++) await fs.writeFile(path.join(root, `resource-${index}.txt`), `Resource ${index}`);
+    const files = await readImportTree(root, undefined, createImportBudget());
+    expect(files).toHaveLength(4100);
+    expect(files.find(file => file.name === 'resource-4099.txt')?.bytes.toString()).toBe('Resource 4099');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

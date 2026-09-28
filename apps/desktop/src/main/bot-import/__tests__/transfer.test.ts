@@ -6,6 +6,7 @@ import { transferCompanion, type ImportReceipt, type TransferDeps } from '../tra
 import { CompanionImportError, type ImportSnapshot } from '../types.js';
 import type { CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { normalizeAutomation } from '../sourceAutomations.js';
+import { fingerprint } from '../files.js';
 
 const snapshot: ImportSnapshot = { source: { kind: 'hermes', agentId: 'default', name: 'Ada', root: '/fixture/hermes', workspace: '/fixture/work', configFile: '/fixture/hermes/config.yaml' }, fingerprint: 'fixture', items: [
   { view: { id: 'memory', category: 'memory', name: 'memory', selected: true }, text: 'Keep this' },
@@ -88,24 +89,15 @@ it.each([
     const { deps } = harness();
     const items = [...candidates, task];
     const result = await transferCompanion({ ...snapshot, source, items }, { ...selection, entryIds: items.map(item => item.view.id) }, deps);
-    // Both accounts could pass the fake reachability check; ambiguity must stop before it.
-    if (candidates.length > 1) {
-      expect(task.automation?.deliveries).toEqual([]);
-      expect(result.checks.find(check => check.entryId === task.view.id)).toMatchObject({ status: 'needs-attention', message: 'DELIVERY_NEEDS_ADAPTER' });
-      expect(deps.verifyAutomation).not.toHaveBeenCalled();
-      expect(deps.pauseSource).not.toHaveBeenCalled();
-      expect(deps.enableRoutine).not.toHaveBeenCalled();
-    } else {
-      expect(task.automation?.deliveries).toEqual([{ connectionId: 'work', chatId: '123' }]);
-      expect(result.status).toBe('complete');
-      expect(deps.pauseSource).toHaveBeenCalledOnce();
-      expect(deps.enableRoutine).toHaveBeenCalledOnce();
-    }
+    expect(task.automation?.deliveries).toEqual([]);
+    expect(result.status).toBe('complete');
+    expect(deps.pauseSource).toHaveBeenCalledOnce();
+    expect(deps.enableRoutine).toHaveBeenCalledOnce();
     expect(vi.mocked(deps.saveEnvironment).mock.calls[0]![1]).toEqual(items);
   }
 });
 
-it.each(['personal', 'missing'])('binds an explicit Telegram account %s without falling back to another bot', async accountId => {
+it.each(['personal', 'missing'])('uses local delivery even when the source names Telegram account %s', async accountId => {
   const source = { ...snapshot.source, kind: 'openclaw' as const };
   const accounts = ['work', 'personal'].map(account => ({
     view: { id: account, name: account, category: 'connections' as const, selected: true },
@@ -115,15 +107,33 @@ it.each(['personal', 'missing'])('binds an explicit Telegram account %s without 
   const { deps } = harness();
   const items = [...accounts, task];
   await transferCompanion({ ...snapshot, source, items }, { ...selection, entryIds: items.map(item => item.view.id) }, deps);
-  if (accountId === 'personal') {
-    expect(task.automation?.deliveries).toEqual([{ connectionId: 'personal', chatId: '123' }]);
-    expect(deps.pauseSource).toHaveBeenCalledOnce();
-  } else {
-    expect(task.view.issues).toContain('DELIVERY_NEEDS_ADAPTER');
-    expect(task.automation?.deliveries).toEqual([]);
-    expect(deps.pauseSource).not.toHaveBeenCalled();
-    expect(deps.enableRoutine).not.toHaveBeenCalled();
-  }
+  expect(task.automation?.deliveries).toEqual([]);
+  expect(task.view.issues ?? []).not.toContain('DELIVERY_NEEDS_ADAPTER');
+  expect(deps.pauseSource).toHaveBeenCalledOnce();
+
+});
+
+it.each(['created', 'source-paused'] as const)('resumes a pre-upgrade %s receipt without recreating content or replacing its delivery binding', async phase => {
+  const { deps } = harness();
+  const legacy = structuredClone(snapshot);
+  legacy.items = legacy.items.filter(item => selection.entryIds.includes(item.view.id));
+  legacy.items.find(item => item.automation)!.automation!.deliveries = [{ connectionId: 'telegram', chatId: '123' }];
+  await deps.saveReceipt({
+    selectionHash: fingerprint([selection.name, undefined, selection.entryIds.toSorted(), true, legacy.source.kind, legacy.source.agentId, legacy.source.root]),
+    result: { requestId: selection.requestId, botId: 'existing-bot', canonicalSessionId: 'chat', status: 'needs-attention', checks: [{ entryId: 'memory', status: 'copied' }, { entryId: 'task', status: 'needs-attention' }] },
+    copied: ['memory'], environmentSaved: true, checkpointSaved: true, companionCreated: true,
+    routines: { task: { id: 'existing-routine', phase } },
+  });
+  const result = await transferCompanion(legacy, selection, deps);
+  expect(result).toMatchObject({ botId: 'existing-bot', status: 'complete', saved: true });
+  // The host reconciles creation idempotently under the original bot ID.
+  expect(deps.createCompanion).toHaveBeenCalledWith('existing-bot', selection);
+  expect(deps.importItem).not.toHaveBeenCalled();
+  expect(deps.saveCheckpoint).not.toHaveBeenCalled();
+  expect(deps.saveEnvironment).not.toHaveBeenCalled();
+  expect(deps.createRoutine).not.toHaveBeenCalled();
+  expect(deps.pauseSource).toHaveBeenCalledTimes(phase === 'created' ? 1 : 0);
+  expect(deps.enableRoutine).toHaveBeenCalledWith('existing-bot', 'existing-routine', expect.objectContaining({ automation: expect.objectContaining({ deliveries: [{ connectionId: 'telegram', chatId: '123' }] }) }));
 });
 
 describe('companion takeover transaction', () => {
@@ -223,8 +233,8 @@ it('checkpoints full selected skills before acknowledging or copying and resumes
       expect(durable?.items.find(item => item.view.id === 'skill')?.files?.map(file => file.name)).toEqual(['scripts/query.py', 'SKILL.md']);
     });
     vi.mocked(deps.importItem).mockRejectedValueOnce(new Error('process interrupted'));
-    await expect(transferCompanion(source, input, deps)).rejects.toThrow('process interrupted');
-    expect(receipt()?.result.status).toBe('running');
+    expect((await transferCompanion(source, input, deps)).status).toBe('needs-attention');
+    expect(receipt()?.result.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'IMPORT_ITEM_FAILED' });
     expect(durable).toBeDefined();
     await fs.rm(root, { recursive: true, force: true });
     vi.mocked(deps.verifyAutomation).mockImplementation(async () => {
@@ -257,4 +267,47 @@ it('takes over with either credential profile, blocks missing credentials, and r
   await expect(transferCompanion(original, { ...selection, entryIds: ['task', 'first', 'second'] }, conflict.deps)).rejects.toThrow('INVALID_SELECTION');
   expect(conflict.deps.saveCheckpoint).not.toHaveBeenCalled();
   expect(conflict.receipt()).toBeUndefined();
+});
+
+it('finishes saving before any login or read probe, then resumes takeover from chat', async () => {
+  const { deps, receipt } = harness();
+  const input = { ...selection, deferSetup: true };
+  const saved = await transferCompanion(snapshot, input, deps);
+  expect(saved.saved).toBe(true);
+  expect(saved.canonicalSessionId).toBe('chat');
+  expect(saved.checks).toContainEqual({ entryId: 'task', status: 'needs-attention', message: 'IMPORT_SETUP_DEFERRED' });
+  expect(deps.verifyAutomation).not.toHaveBeenCalled();
+  expect(deps.pauseSource).not.toHaveBeenCalled();
+  expect(receipt()?.checkpointSaved).toBe(true);
+  expect((await transferCompanion(snapshot, input, deps, false, true)).status).toBe('complete');
+  expect(deps.createRoutine).toHaveBeenCalledOnce();
+  expect(deps.pauseSource).toHaveBeenCalledOnce();
+});
+
+it('restores compact selections from a selected-only checkpoint without changing their meaning', async () => {
+  const { deps } = harness();
+  const indexed = { ...snapshot, items: snapshot.items.map((item, sourceIndex) => ({ ...item, sourceIndex })) };
+  const input: CompanionImportSelection = { ...selection, entryIds: [], entryRanges: [[0, 0], [2, 3]], deferSetup: true };
+  const first = await transferCompanion(indexed, input, deps);
+  expect(first.savedEntryIds).toEqual(['memory', 'env', 'task']);
+  const saved = vi.mocked(deps.saveCheckpoint).mock.calls[0]![1];
+  expect(saved.map(item => item.sourceIndex)).toEqual([0, 2, 3]);
+  expect((await transferCompanion({ ...indexed, items: saved }, input, deps, false, true)).status).toBe('complete');
+  expect(deps.importItem).toHaveBeenCalledTimes(1);
+});
+
+it.each(([[[0, 2], [2, 3]], [[-1, 0]], [[3, 2]], [[0, 99999]]] as Array<Array<[number, number]>>).map(entryRanges => ({ entryRanges })))('rejects invalid compact ranges $entryRanges before creating a companion', async ({ entryRanges }) => {
+  const { deps } = harness();
+  const indexed = { ...snapshot, items: snapshot.items.map((item, sourceIndex) => ({ ...item, sourceIndex })) };
+  await expect(transferCompanion(indexed, { ...selection, entryIds: [], entryRanges }, deps)).rejects.toThrow();
+  expect(deps.createCompanion).not.toHaveBeenCalled();
+});
+
+it('saves healthy content and a conversation when a single routine cannot be created', async () => {
+  const { deps } = harness();
+  vi.mocked(deps.createRoutine).mockRejectedValue(new Error('fixture write failed'));
+  const result = await transferCompanion(snapshot, { ...selection, deferSetup: true }, deps);
+  expect(result).toMatchObject({ saved: true, canonicalSessionId: 'chat', savedEntryIds: ['memory', 'env'] });
+  expect(result.checks).toContainEqual({ entryId: 'task', status: 'needs-attention', message: 'IMPORT_ITEM_FAILED' });
+  expect(deps.pauseSource).not.toHaveBeenCalled();
 });

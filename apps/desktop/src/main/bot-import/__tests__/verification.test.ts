@@ -178,7 +178,7 @@ it('rejects an oversized monitor response and cancels its body', async () => {
   expect(cancel).toHaveBeenCalledOnce();
 });
 
-it.each(['hermes', 'openclaw'] as const)('allows a %s reminder with a verified Telegram destination without skipping data or delivery checks', async kind => {
+it.each(['hermes', 'openclaw'] as const)('routes a %s reminder locally without probing its former Telegram destination', async kind => {
   const token = '12345:fixture-private-token';
   const selected: ImportItem[] = [
     { view: { id: 'token', name: 'TELEGRAM_BOT_TOKEN', category: 'connections', selected: true }, env: { TELEGRAM_BOT_TOKEN: token } },
@@ -203,20 +203,20 @@ it.each(['hermes', 'openclaw'] as const)('allows a %s reminder with a verified T
     deliver: 'telegram:123', delivery: { mode: 'announce', channel: 'telegram', to: '123' },
   }, selected, 'UTC')], selected)[0]!;
   const item = reminder('Remind me to stretch');
-  expect(item.view.dependsOn).toEqual(['telegram']);
+  expect(item.view.dependsOn).toEqual([]);
   expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(true);
-  expect(fetch.mock.calls.map(([url]) => new URL(url).pathname.split('/').at(-1))).toEqual(['getMe', 'getChat']);
+  expect(fetch).not.toHaveBeenCalled();
   expect(oneShot.mock.calls[0]![1]).not.toContain('TELEGRAM_BOT_TOKEN');
   expect(oneShot.mock.calls[0]![1]).not.toContain(token);
   // A variable also used for data is still required, even if delivery uses it too.
   for (const prompt of ['Read Telegram data using TELEGRAM_BOT_TOKEN', 'Read DATA_URL']) {
     expect((await verifyImportedAutomation('/fixture', 'bot', reminder(prompt), () => {}, selected)).verified).toBe(false);
   }
-  // Delivery validation remains mandatory and must precede planning.
+  // An unavailable former destination does not block local reminders.
   oneShot.mockClear();
   fetch.mockResolvedValue(Response.json({ ok: false }, { status: 403 }));
-  expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(false);
-  expect(oneShot).not.toHaveBeenCalled();
+  expect((await verifyImportedAutomation('/fixture', 'bot', item, () => {}, selected)).verified).toBe(true);
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it('finds a second-page read tool, redacts its catalog before planning and forwards its original identity privately', async () => {

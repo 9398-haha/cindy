@@ -50,6 +50,7 @@ function toWire(item: BotSkillSummary): BotSkillWireSummary {
     name: item.name,
     description: item.description,
     updatedAt: item.updatedAt,
+    ...(item.enabled === false ? { enabled: false } : {}),
   };
 }
 
@@ -291,7 +292,7 @@ export async function collectBotOwnSkillMounts(
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);
-  const skills = await listBotSkills(userDataDir, botId);
+  const skills = await listBotSkills(userDataDir, botId, false);
   const baseline = await collectTeammateGuideMount(userDataDir);
   assertOwnerBoundary(deps, boundary);
   return {

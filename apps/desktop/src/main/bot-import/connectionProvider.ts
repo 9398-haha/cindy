@@ -6,7 +6,8 @@ import type { McpProvider } from '@cindy/maker-core';
 import { resolveLiziMcpSessionContext } from '@cindy/mcps';
 import { readCompanionSessionEnvironment } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
-import { fingerprint } from './files.js';
+import { deserializeImportSnapshotAsync, fingerprint } from './files.js';
+import { continueCompanionImport, getCompanionImportResult, useCindyImportSettings } from './host.js';
 import { connectionRedactions, importedContentRedactions, publicConnectionName, redactImportedResult, redactImportedTool, restoreImportedArguments } from './connectionCatalog.js';
 import { withImportedSkillResources } from './skillResources.js';
 
@@ -28,6 +29,9 @@ export function createCompanionConnectionsProvider(): McpProvider {
         const scope = await resolve();
         if (!scope) return { tools: [] };
         const tools: Tool[] = [{ name: 'run_command', description: 'Run a command with this companion’s imported environment and API credentials. Use this for imported skills and data queries that require their original environment. This executes arbitrary shell code with private credentials and may write files or use the network; it requires the current task’s command authorization. Output masking is not a security sandbox.', annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }, inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false } }];
+        if (scope.environment.pendingImport) tools.push({ name: 'import_setup',
+          description: 'Inspect this teammate’s remaining import setup, or retry saved checks after the user is ready. Import is already saved; keep ordinary chat available and let the user defer setup. For login use the relevant existing account/plugin connection card, never ask for secrets in chat. The retry operation may check data connections and hand over originally selected automations only after verification. Source jobs keep running until then. If the user explicitly chooses this teammate’s current model and tool settings instead of source-specific model/tool settings, use_cindy_settings accepts entryIds from status; this saves that choice and never enables a task or bypasses a data check. Other unsupported semantics remain pending. Inspect first; never claim a connection or handover succeeded without its result.',
+          inputSchema: { type: 'object', properties: { operation: { type: 'string', enum: ['status', 'retry', 'use_cindy_settings'] }, offset: { type: 'integer', minimum: 0 }, entryIds: { type: 'array', items: { type: 'string' } } }, required: ['operation'], additionalProperties: false } });
         for (const connection of scope.environment.mcp.filter(connection => connection.enabled !== false)) {
           const secrets = connectionRedactions(connection, scope.environment.env);
           // Keep a failed or partially paginated catalog local to its connection.
@@ -52,6 +56,26 @@ export function createCompanionConnectionsProvider(): McpProvider {
       server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const scope = await resolve();
         if (!scope) throw new Error('Companion connection unavailable');
+        if (request.params.name === 'import_setup') {
+          const operation = request.params.arguments?.operation;
+          const offset = request.params.arguments?.offset ?? 0;
+          if (!['status', 'retry', 'use_cindy_settings'].includes(String(operation)) || !Number.isSafeInteger(offset) || Number(offset) < 0) throw new Error('Invalid import setup request');
+          const pending = scope.environment.pendingImport;
+          if (!pending) return { content: [{ type: 'text', text: JSON.stringify({ complete: true }) }] };
+          if (operation === 'use_cindy_settings') await useCindyImportSettings(scope.botId, scope.userData, request.params.arguments?.entryIds, scope.assertOwner);
+          const result = operation === 'retry'
+            ? await continueCompanionImport(scope.botId, scope.userData, scope.assertOwner)
+            : await getCompanionImportResult(pending.selection.requestId);
+          scope.assertOwner();
+          if (result && result.botId !== scope.botId) throw new Error('Companion import unavailable');
+          const remaining = result?.checks.filter(check => check.status === 'needs-attention') ?? [];
+          // Publish only names and host reason codes; the encrypted snapshot never leaves Main.
+          const snapshot = await deserializeImportSnapshotAsync(pending.snapshotJson, scope.assertOwner);
+          const names = new Map(snapshot.items.map(item => [item.view.id, item.view.name]));
+          const response = { status: result?.status, total: remaining.length, nextOffset: Number(offset) + 20 < remaining.length ? Number(offset) + 20 : undefined,
+            items: remaining.slice(Number(offset), Number(offset) + 20).map(check => ({ ...check, name: names.get(check.entryId) })) };
+          return { content: [{ type: 'text', text: redactEnvironmentValues(JSON.stringify(response), importedContentRedactions(scope.environment)) }] };
+        }
         if (request.params.name === 'run_command') {
           const command = request.params.arguments?.command;
           if (typeof command !== 'string' || !command.trim() || command.length > 32000) throw new Error('Invalid command');

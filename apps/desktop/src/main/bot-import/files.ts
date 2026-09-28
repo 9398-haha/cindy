@@ -6,19 +6,16 @@ import { CompanionImportError, type ImportFile, type ImportItem, type ImportSnap
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_ITEM_BYTES = 128 * 1024 * 1024;
-const MAX_FILES = 4096;
 export const MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024;
 
 /** Shared by every read contributing to one snapshot, before allocating bytes. */
 export function createImportBudget(limit = MAX_SNAPSHOT_BYTES) {
   let remaining = limit;
-  let files = 0;
   const reserve = (size: number) => {
     if (!Number.isSafeInteger(size) || size < 0 || size > remaining) throw new CompanionImportError('SOURCE_SNAPSHOT_TOO_LARGE');
     remaining -= size;
   };
   return { reserve, reserveFile(size: number) {
-    if (++files > MAX_FILES) throw new CompanionImportError('SOURCE_TOO_MANY_FILES');
     reserve(size);
   } };
 }
@@ -136,7 +133,7 @@ export async function optionalText(root: string, file: string, budget?: ImportRe
 }
 
 /** Only traverses the selected skill/document subtree; never copies a whole Agent home. */
-export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget): Promise<ImportFile[]> {
+export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown) => void): Promise<ImportFile[]> {
   const result: ImportFile[] = [];
   const visited = new Set<string>();
   let size = 0;
@@ -149,13 +146,18 @@ export async function readImportTree(root: string, include: (name: string) => bo
     for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
       if (entry.name === '.git' || entry.name === '__pycache__' || entry.name === '.DS_Store') continue;
       const file = path.join(dir, entry.name);
-      const target = entry.isSymbolicLink() ? await fs.stat(file) : entry;
-      if (target.isDirectory()) await visit(file);
-      else if (include(path.relative(root, file).split(path.sep).join('/'))) {
-        const item = await readImportFile(root, file, budget);
-        size += item.bytes.length;
-        if (size > MAX_ITEM_BYTES || result.length >= MAX_FILES) throw new CompanionImportError('SOURCE_ITEM_TOO_LARGE');
-        result.push(item);
+      try {
+        const target = entry.isSymbolicLink() ? await fs.stat(file) : entry;
+        if (target.isDirectory()) await visit(file);
+        else if (include(path.relative(root, file).split(path.sep).join('/'))) {
+          const item = await readImportFile(root, file, budget);
+          size += item.bytes.length;
+          if (size > MAX_ITEM_BYTES) throw new CompanionImportError('SOURCE_ITEM_TOO_LARGE');
+          result.push(item);
+        }
+      } catch (error) {
+        if (!onError) throw error;
+        onError(path.relative(root, file).split(path.sep).join('/'), error);
       }
     }
     visited.delete(real);

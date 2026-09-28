@@ -704,13 +704,13 @@
     "automations": "Automations",
     "paused": "Keep paused",
     "itemAttention": "Needs attention",
-    "takeover": "Take over automations after verification",
+    "takeover": "Check and take over automations after import",
     "takeoverNote": "Source tasks pause only after their data connections are verified. Unselected dependencies keep the source task running.",
     "submit": "Import",
     "back": "Back",
     "open": "Open teammate",
     "running": "Importing and checking connections…",
-    "complete": "Import complete",
+    "complete": "Import saved",
     "attention": "Some items need attention. See the details below.",
     "error": "Import could not finish. Retry with the same selection.",
     "keptAtSource": "Takeover is not complete",
@@ -725,6 +725,12 @@
     "credentialFailed": "Credentials could not be saved securely.",
     "scriptMissing": "A required script is missing.",
     "sourceCommand": "The original Agent command is unavailable.",
-    "readFailed": "The required data query has not been verified."
+    "readFailed": "The required data query has not been verified.",
+    "search": "Search",
+    "selectAll": "Select all",
+    "previous": "Previous",
+    "next": "Next",
+    "chatSetup": "Your imported information is saved. We can start talking. Some items still need a login or a check; we can finish those whenever you are ready. Source automations stay unchanged until takeover.",
+    "chatReady": "Your information has been imported. We can start talking."
   }
 }

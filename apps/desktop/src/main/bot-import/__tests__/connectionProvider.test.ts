@@ -7,6 +7,7 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 vi.mock('@cindy/mcps', () => ({ resolveLiziMcpSessionContext: () => ({ sessionId: 'fixture-session' }) }));
+vi.mock('../host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportResult: vi.fn(), useCindyImportSettings: vi.fn() }));
 vi.mock('../runtime.js', () => ({ readCompanionSessionEnvironment: vi.fn() }));
 import { readCompanionSessionEnvironment } from '../runtime.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
@@ -398,4 +399,34 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     // Dispose the cached healthy fixture process; failed catalogs already close theirs.
     await withImportedConnection(mcp[2]!, {}, () => {}, async () => { throw new Error('fixture cleanup'); }, { identity: scope.identity, signal: new AbortController().signal }).catch(() => {});
   }
+});
+
+it('offers paginated private import setup only in the owning companion and masks credential-bearing names', async () => {
+  const { getCompanionImportResult, continueCompanionImport } = await import('../host.js');
+  const secret = 'fixture-name-secret';
+  const checks = Array.from({ length: 23 }, (_, index) => ({ entryId: `entry-${index}`, status: 'needs-attention' as const, message: 'IMPORT_SETUP_DEFERRED' }));
+  const result = { requestId: 'fixture-request-setup', botId: 'bot', status: 'needs-attention' as const, checks, saved: true };
+  vi.mocked(getCompanionImportResult).mockResolvedValue(result);
+  vi.mocked(continueCompanionImport).mockResolvedValue(result);
+  const assertOwner = vi.fn();
+  vi.mocked(readCompanionSessionEnvironment).mockResolvedValue({ identity: 'fixture', botId: 'bot', userData: '/fixture', assertOwner,
+    environment: { version: 1, env: { API_KEY: secret }, mcp: [], credentials: [], pendingImport: {
+      selection: { previewId: 'p', requestId: result.requestId, name: 'Ada', entryIds: [], takeover: true, deferSetup: true },
+      snapshotJson: JSON.stringify({ source: {}, fingerprint: 'fixture', items: checks.map(check => ({ view: { id: check.entryId, name: `Job ${secret}`, category: 'automations', selected: true } })) }),
+    } } });
+  const config = createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    expect((await client.listTools()).tools.some(tool => tool.name === 'import_setup')).toBe(true);
+    const first = await client.callTool({ name: 'import_setup', arguments: { operation: 'status' } });
+    const text = (first.content as Array<{ text: string }>)[0]!.text;
+    expect(text).not.toContain(secret);
+    expect(JSON.parse(text)).toMatchObject({ total: 23, nextOffset: 20 });
+    expect(JSON.parse(text).items).toHaveLength(20);
+    await client.callTool({ name: 'import_setup', arguments: { operation: 'retry', offset: 20 } });
+    expect(continueCompanionImport).toHaveBeenCalledWith('bot', '/fixture', assertOwner);
+    expect(assertOwner).toHaveBeenCalled();
+  } finally { await client.close(); await config.instance.close(); }
 });
