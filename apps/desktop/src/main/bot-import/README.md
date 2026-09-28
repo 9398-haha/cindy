@@ -599,8 +599,12 @@ Readable import copies collect credentials from structured argv/stdin as well as
 command env. The same literal/JSON/URL/form traversal is shared with output masking;
 publication treats stdin and credential-named options as private literals and
 examines other arguments for structured credential fields and capability URLs.
-Authorization and Proxy-Authorization header literals also mask their credential
-payload without making the scheme or ordinary headers global masks. This covers
+Credential-named header literals (including X-API-Key and X-Auth-Token) mask
+their payload; Authorization/Proxy-Authorization additionally mask the credential
+after the scheme. MCP and commands share Cookie decomposition: every nonempty
+cookie value, including quoted and percent-decoded forms, stays private because
+cookie names are application-defined. This does not make scheme names or ordinary
+Accept/Content-Type values global masks. This covers
 separate `-H`/`--header` arguments, `--header=value`, and joined `-Hvalue` forms
 in both publication and execution-output paths; original argv remains intact.
 Form-encoded stdin, argv and command environment values collect credential-named

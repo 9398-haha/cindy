@@ -56,6 +56,13 @@ it.each([
   ['-HAuthorization: Bearer fixture-header-token'],
   ['--proxy-header', 'Proxy-Authorization: Bearer fixture-header-token'],
   ['-H', 'Authorization: Basic fixture-header-token'],
+  ['-H', 'X-API-Key: fixture-header-token'],
+  ['--header', 'x-auth-token: fixture-header-token'],
+  ['--header=X-API-Key: fixture-header-token'],
+  ['-HX-API-Key: fixture-header-token'],
+  ['--proxy-header', 'X-API-Key: fixture-header-token'],
+  ['-H', 'Cookie: session=fixture-header-token; other=fixture-second-cookie'],
+  ['--header=Cookie: session="fixture-header-token"; empty='],
 ])('masks the credential payload in command headers %j without masking public header settings', (...args) => {
   const payload = { kind: 'command', argv: ['curl', ...args, '-H', 'Accept: application/json', '--header=Content-Type: application/json'] };
   const items: ImportItem[] = [{ view: { id: 'job', category: 'automations', name: 'Job', selected: true },
@@ -67,6 +74,21 @@ it.each([
     expect(readable).toContain('curl -H --header Authorization Bearer Basic Accept: application/json Content-Type: application/json');
   }
   expect(items).toEqual(before);
+});
+
+it.each(['command', 'mcp'])('masks individual %s cookies before publication without changing original headers', source => {
+  const header = 'session=fixture-cookie%2Fone==; repeat="fixture-cookie-two"; repeat=fixture-cookie+three; empty=; emptyQuoted=""; malformed; broken=fixture%not-encoded';
+  const items: ImportItem[] = [{ view: { id: 'entry', category: source === 'mcp' ? 'connections' : 'automations', name: 'Job', selected: true },
+    ...(source === 'mcp' ? { mcp: { name: 'data', headers: { cOoKiE: header }, url: 'https://example.invalid/mcp' } }
+      : { automation: { sourceId: 'job', fingerprint: 'fixture', original: { payload: { kind: 'command', argv: ['curl', '-H', 'Cookie: ' + header] } } } }) }];
+  const original = structuredClone(items);
+  const secrets = ['fixture-cookie%2Fone==', 'fixture-cookie/one==', 'fixture-cookie-two', 'fixture-cookie+three', 'fixture%not-encoded'];
+  for (const collect of [previewImportRedactions, selectedImportRedactions]) {
+    const result = redactEnvironmentValues(`${secrets.join('\n')}\npublic report Cookie Accept Content-Type application/json ""`, collect(items));
+    for (const secret of secrets) expect(result).not.toContain(secret);
+    expect(result).toContain('public report Cookie Accept Content-Type application/json ""');
+  }
+  expect(items).toEqual(original);
 });
 
 it.each(['stdin', 'argv', 'assignment', 'env'])('masks credential fields in form-encoded command %s while retaining public values', source => {

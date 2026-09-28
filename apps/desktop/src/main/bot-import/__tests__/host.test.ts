@@ -399,7 +399,7 @@ it.each(['hermes', 'openclaw'] as const)('masks %s names from real source files 
 });
 
 it.each([false, true])('redacts all known credentials from profile/memory copies while importing only selected connections (deselected: %s)', async deselected => {
-  const secrets = ['fake-env-key', 'fake-local-key', 'fake-header-token', 'fake/url+key', 'fake-access-token', 'fake-refresh-token', '123:fake-telegram-token'];
+  const secrets = ['fake-env-key', 'fake-local-key', 'fake-header-token', 'fake/url+key', 'fake-access-token', 'fake-refresh-token', '123:fake-telegram-token', 'fixture-cookie-session', 'fixture-cookie/second'];
   const text = `简短一点，带点幽默。status en us true 3000\n${secrets.join('\n')}\nfake-unselected-key`;
   const documents: ImportSnapshot['items'] = [
     { view: { id: 'soul', name: 'SOUL.md', category: 'personality', selected: true }, role: 'identity', text },
@@ -410,7 +410,7 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   ];
   h.snapshot.items = [...documents,
     { view: { id: 'env', name: 'env', category: 'connections', selected: true }, env: { DATA_TOKEN: secrets[0]!, LANG: 'en', REGION: 'us', DEBUG: 'true', PORT: '3000' } },
-    { view: { id: 'mcp', name: 'Data', category: 'connections', selected: true }, mcp: { name: 'Data', url: 'https://example.invalid/mcp?token=fake%2Furl%2Bkey', env: { KEY: secrets[1]!, REFERENCED: '${DATA_TOKEN}' }, headers: { Authorization: `Bearer ${secrets[2]}` } } },
+    { view: { id: 'mcp', name: 'Data', category: 'connections', selected: true }, mcp: { name: 'Data', url: 'https://example.invalid/mcp?token=fake%2Furl%2Bkey', env: { KEY: secrets[1]!, REFERENCED: '${DATA_TOKEN}' }, headers: { Authorization: `Bearer ${secrets[2]}`, Cookie: 'session=fixture-cookie-session; another="fixture-cookie%2Fsecond"' } } },
     { view: { id: 'oauth', name: 'Auth', category: 'connections', selected: true }, credential: { format: 'native-auth', value: { value: { access_token: secrets[4], nested: { refreshToken: secrets[5] } } } } },
     { view: { id: 'telegram', name: 'Telegram', category: 'connections', selected: true }, credential: { format: 'telegram', value: { token: secrets[6], account: 'default' } } },
     { view: { id: 'excluded', name: 'Excluded', category: 'connections', selected: false }, env: { EXCLUDED: 'fake-unselected-key', UNUSED_ONLY: 'fake-absent-from-selected-content' } },
@@ -435,6 +435,7 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
     expect(stored.env.DATA_TOKEN).toBe(secrets[0]);
     expect(stored.mcp[0]?.env?.REFERENCED).toBe(secrets[0]);
     expect(stored.mcp[0]?.headers?.Authorization).toBe(`Bearer ${secrets[2]}`);
+    expect(stored.mcp[0]?.headers?.Cookie).toBe('session=fixture-cookie-session; another="fixture-cookie%2Fsecond"');
   }
   expect(stored.env).not.toHaveProperty('EXCLUDED');
   expect(JSON.stringify(stored)).not.toContain('fake-absent-from-selected-content');
@@ -447,7 +448,7 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
 it.each([false, true])('publishes command env/argv/stdin credentials safely (command selected: %s)', async selected => {
   const secret = 'fixture-command-json-token';
   const nested = 'fixture-command-json-nested';
-  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token', 'fixture-form argv', 'fixture-form%20argv', 'fixture-form/env', 'fixture-form%2Fenv', 'fixture-curl-password'];
+  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token', 'fixture-form argv', 'fixture-form%20argv', 'fixture-form/env', 'fixture-form%2Fenv', 'fixture-curl-password', 'fixture-custom-header-key', 'fixture-command-cookie'];
   const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
     'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment'];
   const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
@@ -455,7 +456,7 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
     unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
   const text = `Keep node --mode -e, Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')} ${literalSecrets.join(' ')}`;
   const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
-  const original = { enabled: false, payload: { kind: 'command', argv: ['curl', '-u', 'alice:fixture-curl-password', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3], '--data', 'access_token=fixture-form%20argv&city=Paris'], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, FORM: 'password=fixture-form%2Fenv&days=7', WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
+  const original = { enabled: false, payload: { kind: 'command', argv: ['curl', '-u', 'alice:fixture-curl-password', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3], '-H', 'X-API-Key: fixture-custom-header-key', '-HCookie: session=fixture-command-cookie', '--data', 'access_token=fixture-form%20argv&city=Paris'], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, FORM: 'password=fixture-form%2Fenv&days=7', WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
   h.sourceEnabled = false;
   h.snapshot.items = [
     { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,

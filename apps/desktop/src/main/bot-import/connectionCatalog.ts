@@ -15,14 +15,34 @@ const CREDENTIAL_FIELD = /^(?:keys?|.*(?:api|private|signing|encryption|decrypti
 
 export function isImportedCredentialField(name: string): boolean { return CREDENTIAL_FIELD.test(name); }
 
+/** Shared transport-header decomposition for MCP and imported commands. Cookie
+ * names are application-defined, so every nonempty cookie value stays private. */
+export function headerCredentialValues(name: string, value: string): string[] {
+  const header = name.trim(); const payload = value.trim();
+  const authorization = /^(proxy-)?authorization$/i.test(header);
+  if (!payload || !authorization && !isImportedCredentialField(header)) return [];
+  const values = [payload];
+  if (authorization) {
+    const credential = /^\S+\s+(.+)$/.exec(payload)?.[1];
+    if (credential) values.push(credential);
+  }
+  if (/^cookie$/i.test(header)) for (const part of payload.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator <= 0 || !part.slice(0, separator).trim()) continue;
+    const raw = part.slice(separator + 1).trim();
+    const unquoted = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+    if (!unquoted) continue;
+    values.push(raw, unquoted);
+    try { values.push(decodeURIComponent(unquoted)); } catch { /* Preserve malformed encodings verbatim. */ }
+  }
+  return [...new Set(values)];
+}
+
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
   const values = [...Object.values(environmentRedactions(environment)), ...Object.values(environmentRedactions(server.env ?? {})), ...Object.values(server.headers ?? {})];
   for (const [name, value] of Object.entries(server.headers ?? {})) {
-    if (/^(proxy-)?authorization$/i.test(name)) {
-      const credential = /^\S+\s+(.+)$/.exec(value)?.[1];
-      if (credential) values.push(credential);
-    }
+    values.push(...headerCredentialValues(name, value));
   }
   if (server.url) {
     values.push(...urlCredentialValues(server.url, true));

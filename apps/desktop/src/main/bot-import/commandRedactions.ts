@@ -1,4 +1,4 @@
-import { importedContentRedactions, isImportedCredentialField } from './connectionCatalog.js';
+import { headerCredentialValues, importedContentRedactions, isImportedCredentialField } from './connectionCatalog.js';
 
 /** Shared by readable import copies and execution output; originals stay intact. */
 export function commandLiteralRedactions(literals: string[], environmentValues: string[] = [], maskLiterals = true): Record<string, string> {
@@ -9,10 +9,10 @@ export function commandLiteralRedactions(literals: string[], environmentValues: 
   const structured: { id: string; format: string; value: unknown }[] = [];
   for (const value of new Set([...candidates, ...environmentValues])) {
     // curl accepts a separate -H/--header value, --header=value or -Hvalue.
-    // Strip the authorization scheme as with MCP headers: commands may echo
-    // only its credential payload. Public headers/scheme names are not masks.
-    const header = /^(?:-H)?[\t ]*(?:proxy-)?authorization[\t ]*:[\t ]*(\S+[\t ]+(.+?))[\t ]*$/i.exec(value);
-    if (header) values.push(header[1]!, header[2]!);
+    // Share credential-header and cookie parsing with MCP: commands may echo
+    // just one private value. Public header values/scheme names are not masks.
+    const header = /^(?:-H)?[\t ]*([\w-]+)[\t ]*:[\t ]*(.+?)[\t ]*$/i.exec(value);
+    if (header) values.push(...headerCredentialValues(header[1]!, header[2]!));
     // Form bodies can echo one field independently of the original scalar.
     // Keep both wire and decoded values, including repeated/encoded field names;
     // ordinary form settings are not credentials. Do not interpret URLs or JSON
