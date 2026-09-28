@@ -38,8 +38,9 @@ async function outputSecrets(environment: CompanionEnvironment, job: Record<stri
     try {
       const parsed: unknown = JSON.parse(value);
       collectUrls(parsed);
-      if (!literals.has(value)) continue; // Other env values retain their existing classification.
-      if (typeof parsed === 'string') values.push(parsed);
+      // JSON env objects use the same credential-field rules as argv/stdin;
+      // ordinary env scalar settings retain their existing classification.
+      if (typeof parsed === 'string' && literals.has(value)) values.push(parsed);
       else if (parsed && typeof parsed === 'object') structured.push({ id: `command_${structured.length}`, format: 'command-input', value: parsed });
     } catch { /* Non-JSON command literals still receive exact-value masking. */ }
   }
