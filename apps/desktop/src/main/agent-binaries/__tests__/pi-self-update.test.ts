@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installPiBinaryUpdate, parsePiRelease, piBinaryUpdateFailureStage, type PiBinaryUpdateDeps } from '../pi-self-update.js';
+import { installPiBinaryUpdate, parsePiRelease, piBinaryUpdateFailureStage, renameWithTransientRetry, type PiBinaryUpdateDeps } from '../pi-self-update.js';
 
 const electronFetch = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: electronFetch } }));
@@ -87,6 +87,40 @@ describe('Pi standalone core update', () => {
     expect(await fs.readFile(path.join(path.dirname(result.binaryPath), '.verified'), 'utf8')).toBe('a'.repeat(64));
     expect(deps.probe).toHaveBeenCalledTimes(3);
     await expect(fs.stat(path.dirname(extractionRoot))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('retries a publish rename briefly blocked by Windows security software (#5204)', async () => {
+    const { root, current, deps } = await fixture('win32');
+    const rename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, 'rename').mockRejectedValueOnce(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }))
+      .mockImplementation(rename);
+    const result = await installPiBinaryUpdate(root, current, false, deps, 'win32', 'arm64');
+    expect(result.version).toBe('0.85.1');
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(path.join(path.dirname(result.binaryPath), '.verified'), 'utf8')).toBe('a'.repeat(64));
+    expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
+  });
+  it('fails a permanently denied publish at the publish stage without retrying off Windows', async () => {
+    const { root, current, deps } = await fixture();
+    const spy = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const error = await installPiBinaryUpdate(root, current, false, deps, 'darwin', 'arm64').catch(error => error);
+    expect(error).toMatchObject({ code: 'EPERM' });
+    expect(piBinaryUpdateFailureStage(error)).toBe('publish');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(root)).toEqual(['0.84.4']);
+    expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
+  });
+  it('bounds Windows rename retries to transient codes and the install signal', async () => {
+    const signal = new AbortController().signal;
+    const eperm = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    await expect(renameWithTransientRetry('a', 'b', { platform: 'win32', signal, delaysMs: [1, 1, 1] })).rejects.toMatchObject({ code: 'EPERM' });
+    expect(eperm).toHaveBeenCalledTimes(4);
+    eperm.mockReset().mockRejectedValue(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+    await expect(renameWithTransientRetry('a', 'b', { platform: 'win32', signal, delaysMs: [1, 1, 1] })).rejects.toMatchObject({ code: 'ENOSPC' });
+    expect(eperm).toHaveBeenCalledTimes(1);
+    eperm.mockReset().mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    const aborted = new AbortController(); aborted.abort();
+    await expect(renameWithTransientRetry('a', 'b', { platform: 'win32', signal: aborted.signal, delaysMs: [60_000] })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(eperm).toHaveBeenCalledTimes(1);
   });
   it('leaves the old installation usable when version verification fails', async () => {
     const { root, current, deps } = await fixture();
