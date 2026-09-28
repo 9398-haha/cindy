@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { expect, it } from 'vitest';
 import { projectImportedSkill, withImportedSkillResources } from '../skillResources.js';
 import type { CompanionEnvironment } from '../environment.js';
@@ -48,15 +49,19 @@ it('executes the preserved resource with credentials while keeping ordinary code
   expect(result).toEqual({ stdout: 'store_true\n', exitCode: 0 });
 });
 
-it.skipIf(process.platform === 'win32')('retains and materializes native interpreter aliases without copying them into broken standalone executables', async () => {
+it('retains and materializes native interpreter aliases without copying them into broken standalone executables', async ctx => {
+  const target = path.join(os.tmpdir(), 'fixture-native-python3');
+  const interpreterName = `.venv/${process.platform === 'win32' ? 'Scripts' : 'bin'}/python`;
   const files = [
     { name: 'SKILL.md', bytes: Buffer.from('# Native'), executable: false },
-    { name: '.venv/bin/python', bytes: Buffer.from('native fixture'), executable: true, interpreterLink: '/fixture/native/python3' },
+    { name: interpreterName, bytes: Buffer.from('native fixture'), executable: true, interpreterLink: target },
   ];
   const projected = projectImportedSkill(files, 'native', {});
   expect(projected.files).toEqual(files);
-  expect(projected.originals?.[1]?.interpreterLink).toBe('/fixture/native/python3');
-  await withImportedSkillResources({ version: 1, env: {}, mcp: [], credentials: [], skillFiles: { native: projected.originals! } }, () => {}, async env => {
-    expect(await fs.readlink(path.join(env.CINDY_IMPORTED_SKILLS!, 'native/.venv/bin/python'))).toBe('/fixture/native/python3');
-  });
+  expect(projected.originals?.[1]?.interpreterLink).toBe(target);
+  try {
+    await withImportedSkillResources({ version: 1, env: {}, mcp: [], credentials: [], skillFiles: { native: projected.originals! } }, () => {}, async env => {
+      expect(await fs.readlink(path.join(env.CINDY_IMPORTED_SKILLS!, 'native', interpreterName))).toBe(target);
+    });
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
 });

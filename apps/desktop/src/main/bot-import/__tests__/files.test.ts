@@ -124,20 +124,21 @@ it('copies native venv interpreter aliases while keeping unrelated external link
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-venv-'));
   try {
     const skill = path.join(root, 'skill'), runtime = path.join(root, 'runtime');
-    const bin = path.join(skill, '.venv', 'bin');
+    const binName = `.venv/${process.platform === 'win32' ? 'Scripts' : 'bin'}`;
+    const bin = path.join(skill, binName);
     await fs.mkdir(bin, { recursive: true }); await fs.mkdir(runtime);
     await fs.writeFile(path.join(skill, 'SKILL.md'), '# Fixture');
     await fs.writeFile(path.join(skill, '.venv/pyvenv.cfg'), `home = ${runtime}\n`);
     const executable = Buffer.from('7f454c460102030405060708', 'hex');
     await fs.writeFile(path.join(runtime, 'python3.12'), executable, { mode: 0o700 });
-    try { await fs.symlink(path.join(runtime, 'python3.12'), path.join(bin, 'python')); }
+    try { await fs.symlink(path.join(runtime, 'python3.12'), path.join(bin, 'python'), 'file'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
-    await fs.symlink('python', path.join(bin, 'python3'));
+    await fs.symlink('python', path.join(bin, 'python3'), 'file');
     const files = await readImportSkillTree(skill, undefined, createImportBudget());
-    for (const name of ['.venv/bin/python', '.venv/bin/python3']) expect(files.find(file => file.name === name)).toMatchObject({ bytes: executable, interpreterLink: await fs.realpath(path.join(runtime, 'python3.12')) });
+    for (const name of [`${binName}/python`, `${binName}/python3`]) expect(files.find(file => file.name === name)).toMatchObject({ bytes: executable, interpreterLink: await fs.realpath(path.join(runtime, 'python3.12')) });
     expect(files.find(file => file.name === '.venv/pyvenv.cfg')?.bytes.toString()).toContain(runtime);
     await fs.writeFile(path.join(runtime, 'private.txt'), 'fixture-private-token');
-    await fs.symlink(path.join(runtime, 'private.txt'), path.join(skill, 'credentials.txt'));
+    await fs.symlink(path.join(runtime, 'private.txt'), path.join(skill, 'credentials.txt'), 'file');
     await expect(readImportSkillTree(skill)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
     await fs.unlink(path.join(skill, 'credentials.txt'));
     await fs.writeFile(path.join(runtime, 'python3.12'), 'fixture-private-token');

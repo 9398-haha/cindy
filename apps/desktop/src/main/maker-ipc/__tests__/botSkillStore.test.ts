@@ -335,18 +335,23 @@ it('deletes only the read/edit target if older data contains duplicate enabled a
   expect(await readBotSkill(userDataDir, 'bot-1', 'report')).toMatchObject({ enabled: false, body: '# Retain disabled copy' });
 });
 
-it.skipIf(process.platform === 'win32')('preserves native interpreter links across save/retry and rejects a changed alias', async () => {
+it('preserves native interpreter links across save/retry and rejects a changed alias', async ctx => {
   const runtime = path.join(userDataDir, 'runtime-python');
   await fs.writeFile(runtime, 'fixture-runtime');
+  const probe = path.join(userDataDir, 'link-probe');
+  try { await fs.symlink(runtime, probe, 'file'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+  await fs.unlink(probe);
+  const interpreterName = `.venv/${process.platform === 'win32' ? 'Scripts' : 'bin'}/python`;
   const files = [
     { name: 'SKILL.md', bytes: Buffer.from('# Imported'), executable: false },
-    { name: '.venv/bin/python', bytes: Buffer.from('fixture-runtime'), executable: true, interpreterLink: runtime },
+    { name: interpreterName, bytes: Buffer.from('fixture-runtime'), executable: true, interpreterLink: runtime },
   ];
   await importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {});
-  const alias = path.join(botSkillsDir(userDataDir, 'bot'), 'native/.venv/bin/python');
+  const alias = path.join(botSkillsDir(userDataDir, 'bot'), 'native', interpreterName);
   expect(await fs.readlink(alias)).toBe(runtime);
   await importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {});
-  await fs.unlink(alias); await fs.symlink(path.join(userDataDir, 'other-python'), alias);
+  await fs.unlink(alias); await fs.symlink(path.join(userDataDir, 'other-python'), alias, 'file');
   await expect(importBotSkillFiles(userDataDir, 'bot', 'native', files, () => {})).rejects.toThrow('Imported interpreter was edited');
   expect(await fs.readFile(runtime, 'utf8')).toBe('fixture-runtime');
   await expect(importBotSkillFiles(userDataDir, 'bot', 'unsafe', [{ ...files[0]!, interpreterLink: runtime }], () => {})).rejects.toThrow('Invalid imported interpreter');
