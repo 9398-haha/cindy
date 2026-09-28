@@ -250,14 +250,16 @@ it.each(['stdin', 'argv', 'assignment', 'env', 'inherited-env'] as const)('masks
   const arraySecret = 'fixture-array-secret';
   const containerSecret = 'fixture-container-secret';
   const privateKey = 'fixture-private-"quoted"\n-key';
+  const encodedKey = 'fixture-encoded-"quoted"\n-key';
   const passphrase = 'fixture-passphrase';
   const keyField = source === 'stdin' ? 'private_key' : source === 'argv' ? 'privateKey' : 'signing_key';
+  const encodedKeyField = source === 'stdin' ? 'privateKeyPem' : source === 'argv' ? 'private_key_pem' : 'privateKeyBase64';
   const input = JSON.stringify({ credentials: [{ token: secret, api_key: [arraySecret] }, containerSecret],
-    [keyField]: privateKey, passphrase, passphrases: [passphrase], city: 'Paris report', cities: ['Paris report', 'London'], count: 7 });
+    [keyField]: privateKey, [encodedKeyField]: { copies: [encodedKey] }, passphrase, passphrases: [passphrase], city: 'Paris report', cities: ['Paris report', 'London'], count: 7 });
   const read = source === 'stdin' ? 'require("node:fs").readFileSync(0,"utf8")'
     : source === 'env' || source === 'inherited-env' ? 'process.env.CONFIG'
       : source === 'assignment' ? 'process.argv[1].slice("--config=".length)' : 'process.argv[1]';
-  const code = `const input=JSON.parse(${read}); process.stdout.write(JSON.stringify({token:input.credentials[0].token,arrayToken:input.credentials[0].api_key[0],containerToken:input.credentials[1],privateKey:input.${keyField},passphrase:input.passphrase,city:input.city,cities:input.cities,count:input.count}));`;
+  const code = `const input=JSON.parse(${read}); process.stdout.write(JSON.stringify({token:input.credentials[0].token,arrayToken:input.credentials[0].api_key[0],containerToken:input.credentials[1],privateKey:input.${keyField},encodedKey:input.${encodedKeyField}.copies[0],passphrase:input.passphrase,city:input.city,cities:input.cities,count:input.count}));`;
   const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code,
     ...(['argv', 'assignment'].includes(source) ? ['--', source === 'assignment' ? `--config=${input}` : input] : [])],
     ...(source === 'stdin' ? { input } : {}), ...(source === 'env' ? { env: { CONFIG: input } } : {}), cwd: root } };
@@ -268,14 +270,14 @@ it.each(['stdin', 'argv', 'assignment', 'env', 'inherited-env'] as const)('masks
   } }, () => {});
   const signal = new AbortController().signal;
   const prepared = await prepareImportedAutomation(root, routine, 'structured-run', signal, () => {});
-  expect(JSON.parse(prepared!.direct!)).toEqual({ token: expect.stringMatching(/^\[command_literal_/), arrayToken: expect.stringMatching(/^\[command_literal_/), containerToken: expect.stringMatching(/^\[command_literal_/), privateKey: expect.stringMatching(/^\[command_literal_/), passphrase: expect.stringMatching(/^\[command_literal_/), city: 'Paris report', cities: ['Paris report', 'London'], count: 7 });
+  expect(JSON.parse(prepared!.direct!)).toEqual({ token: expect.stringMatching(/^\[command_literal_/), arrayToken: expect.stringMatching(/^\[command_literal_/), containerToken: expect.stringMatching(/^\[command_literal_/), privateKey: expect.stringMatching(/^\[command_literal_/), encodedKey: expect.stringMatching(/^\[command_literal_/), passphrase: expect.stringMatching(/^\[command_literal_/), city: 'Paris report', cities: ['Paris report', 'London'], count: 7 });
   const savedEnvironment = (await shared.store.read(root, 'bot', () => {}))!;
   expect(savedEnvironment.env).toEqual(environment);
   const saved = savedEnvironment.automations!.routine!;
   expect(saved.original).toEqual(original);
   expect(saved.prepared?.direct).toBe(prepared!.direct);
   // Old private output must be masked even when no process is executed again.
-  const legacy = JSON.stringify({ token: secret, arrayToken: arraySecret, containerToken: containerSecret, privateKey, passphrase, city: 'Paris report', cities: ['Paris report', 'London'], count: 7 });
+  const legacy = JSON.stringify({ token: secret, arrayToken: arraySecret, containerToken: containerSecret, privateKey, encodedKey, passphrase, city: 'Paris report', cities: ['Paris report', 'London'], count: 7 });
   await shared.store.update(root, 'bot', () => {}, env => {
     env.automations!.routine!.prepared = { runId: 'structured-run', prompt: '', direct: legacy };
   });

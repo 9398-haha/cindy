@@ -152,6 +152,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   never for subprocess env or connection authentication. Only selected credential
   entries are activated; selected original documents/automation definitions stay
   private and unmodified.
+  Structured private-key fields also recognize PEM/Base64 format suffixes and
+  redact their string descendants in published content and command output;
+  ordinary public-key, format-name and key-path fields retain their values.
   Profiles supplying different values for one variable are alternatives in the
   existing checkboxes; none is guessed by file order. Picking one clears its
   conflicting choices, and group selection keeps an existing account choice.

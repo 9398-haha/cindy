@@ -85,16 +85,20 @@ it('preserves OAuth token-type metadata in source files while masking credential
 it.each(['credential', 'credentials', 'clientCredentials', 'tokens', 'access_tokens', 'refreshTokens',
   'secrets', 'passwords', 'passwds', 'keys', 'api_keys', 'API-KEYS', 'auth', 'authorization', 'cookies',
   'private_key', 'privateKey', 'privateKeys', 'SSH_PRIVATE_KEY', 'signing_key', 'signing-key', 'signingKey',
+  'privateKeyPem', 'private_key_pem', 'private-key-pem', 'SSH_PRIVATE_KEY_PEM',
+  'privateKeyBase64', 'private_keys_base64', 'signingKeyPem', 'signing_key_base64',
   'encryption_key', 'decryptionKey', 'awsSecretAccessKey', 'serviceApiKey', 'passphrase', 'passphrases', 'keyPassphrase', 'pass_phrase', 'pass-phrases'])(
   'masks scalar and nested string descendants of the %s credential field', field => {
     const original = { [field]: ['fixture-container-secret', { nested: ['fixture-nested-secret'] }],
       scalar: { [field]: 'fixture-scalar-secret' }, cities: ['Paris', 'London'], monkeys: ['capuchin'],
-      public_key: 'fixture-public-key', sort_key: 'name', keyboard: 'qwerty' };
+      public_key: 'fixture-public-key', sort_key: 'name', keyboard: 'qwerty',
+      publicKeyPem: 'fixture-public-pem', public_key_base64: 'fixture-public-base64',
+      privateKeyFormat: 'pem', privateKeyPath: 'keys/local.pem' };
     const before = JSON.stringify(original);
     const masks = importedContentRedactions({ env: {}, mcp: [], credentials: [{ id: 'fixture', format: 'json', value: original }] });
-    const output = redactEnvironmentValues('fixture-container-secret fixture-nested-secret fixture-scalar-secret Paris London capuchin fixture-public-key name qwerty', masks);
+    const output = redactEnvironmentValues('fixture-container-secret fixture-nested-secret fixture-scalar-secret Paris London capuchin fixture-public-key name qwerty fixture-public-pem fixture-public-base64 pem keys/local.pem', masks);
     for (const secret of ['fixture-container-secret', 'fixture-nested-secret', 'fixture-scalar-secret']) expect(output).not.toContain(secret);
-    expect(output).toContain('Paris London capuchin fixture-public-key name qwerty');
+    expect(output).toContain('Paris London capuchin fixture-public-key name qwerty fixture-public-pem fixture-public-base64 pem keys/local.pem');
     expect(JSON.stringify(original)).toBe(before);
   },
 );
