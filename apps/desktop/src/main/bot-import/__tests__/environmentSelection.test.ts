@@ -1,8 +1,19 @@
 import { expect, it } from 'vitest';
-import { previewImportRedactions, resolveImportReferences, selectedImportRedactions } from '../environmentSelection.js';
+import { previewImportRedactions, resolveImportReferences, retainedImportRedactions, selectedImportRedactions } from '../environmentSelection.js';
 import { redactEnvironmentValues } from '../process.js';
 import type { ImportItem } from '../types.js';
 import { commandArgumentRedactions } from '../commandRedactions.js';
+
+it('retains matched credentials across selected strings and buffers with one matcher', () => {
+  let reads = 0;
+  const secrets = { get SECRET() { reads++; return 'fixture-selected-secret'; }, UNUSED: 'fixture-unselected-secret' };
+  const items: ImportItem[] = [{ view: { id: 'memory', category: 'memory', name: 'fixture-selected-secret', selected: true },
+    text: 'Ordinary text', files: [{ name: 'fixture.txt', bytes: Buffer.from('fixture-selected-secret'), executable: false }] }];
+  expect(retainedImportRedactions(items, secrets)).toEqual({ SECRET: 'fixture-selected-secret' });
+  // One matcher snapshot and one final mask selection, independent of string count.
+  expect(reads).toBe(2);
+  expect(items[0]!.files![0]!.bytes.toString()).toBe('fixture-selected-secret');
+});
 
 it('resolves mixed-case Windows references throughout selected MCP and delivery settings', () => {
   const env = { api_key: 'fixture-key', Empty: '' };

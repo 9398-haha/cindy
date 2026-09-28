@@ -2,7 +2,7 @@ import { fingerprint } from './files.js';
 import { commandArgumentRedactions, commandLiteralRedactions } from './commandRedactions.js';
 import { CompanionImportError, object, type ImportItem } from './types.js';
 import { importedContentRedactions } from './connectionCatalog.js';
-import { environmentRedactions, redactEnvironmentValues } from './process.js';
+import { createEnvironmentRedactor, environmentRedactions } from './process.js';
 
 const variableName = (name: string, platform = process.platform) => platform === 'win32' ? name.toUpperCase() : name;
 
@@ -57,7 +57,7 @@ export function previewImportRedactions(items: ImportItem[]): Record<string, str
 /** Retain masks only for values already present in selected content, never discarded accounts. */
 export function retainedImportRedactions(items: ImportItem[], secrets: Record<string, string>): Record<string, string> {
   const matched = new Set<string>();
-  const text = (value: string) => { redactEnvironmentValues(value, secrets, value => { matched.add(value); }); };
+  const text = createEnvironmentRedactor(secrets, value => { matched.add(value); });
   const visit = (value: unknown): void => {
     if (typeof value === 'string') text(value);
     else if (Buffer.isBuffer(value)) {

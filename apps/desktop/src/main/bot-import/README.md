@@ -200,7 +200,13 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   secretly copy its expanded value into another selected connection.
   Public profile/memory/Skill text and routine names/prompts redact all known
   source credentials, including unchecked accounts; memory titles use the same
-  mask. URL paths use an explicit transport-route allowlist; unknown segments are
+  mask. Preview, entry-caption and selected-content traversals compile a local
+  matcher once and reuse it for their strings; nested structured-data redaction
+  likewise compiles once per traversal. No global credential matcher is retained.
+  Repaired manifests adding new credentials refresh the import's matcher before
+  publishing recovered content.
+  Matching still prefers longer values, bounds short tokens, and never rescans
+  replacement labels. URL paths use an explicit transport-route allowlist; unknown segments are
   private regardless of length or case, including encoded forms and subsequent
   route-looking values. Named local endpoints are exempt only as single loopback
   paths; explicit credential fields always take precedence. Routine publication happens before createOnce persists the definition,

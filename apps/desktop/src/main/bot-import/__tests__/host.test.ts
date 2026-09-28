@@ -109,6 +109,43 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.restoreAllMocks(); await fs.rm(h.root, { recursive: true, force: true }); });
 
+it('compiles credential matching once for a large preview and preserves all entries', async () => {
+  const secret = (index: number) => `fixture-compiled-secret-${index.toString().padStart(5, '0')}`;
+  h.snapshot.items = [
+    ...Array.from({ length: 2_000 }, (_, index) => ({
+      view: { id: `env-${index}`, category: 'connections' as const, selected: true, name: `Account ${index}` },
+      env: { [`TOKEN_${index}`]: secret(index) },
+    })),
+    ...Array.from({ length: 10_000 }, (_, index) => ({
+      view: { id: `skill-${index}`, category: 'skills' as const, selected: true,
+        name: `Skill ${index} ${secret(index % 2_000)}`, description: `Ordinary description ${secret(1_999)}` },
+    })),
+  ];
+  const [source] = await listCompanionImportSources('fixture');
+  let compilations = 0;
+  const NativeRegExp = RegExp;
+  vi.stubGlobal('RegExp', new Proxy(NativeRegExp, {
+    construct(target, args) {
+      if (String(args[0]).includes('fixture-compiled-secret-')) {
+        compilations += 1;
+        // Fail before the regression can allocate thousands of large matchers.
+        if (compilations > 1) throw new Error('Repeated preview credential matcher compilation');
+      }
+      return Reflect.construct(target, args);
+    },
+  }));
+  try {
+    const preview = await previewCompanionImport(source!.id, 'fixture');
+    expect(compilations).toBe(1);
+    expect(preview.entries).toHaveLength(12_000);
+    for (const entry of preview.entries.slice(2_000)) {
+      expect(entry.name).toMatch(/^Skill \d+ \[preview_credential_\d+\]$/);
+      expect(entry.description).toMatch(/^Ordinary description \[preview_credential_\d+\]$/);
+    }
+    expect(h.snapshot.items[2_000]!.view.name).toBe(`Skill 0 ${secret(0)}`);
+  } finally { vi.unstubAllGlobals(); }
+}, 10_000);
+
 it('bounds actual receipt writes with long entry names while retaining retryable failures', async () => {
   const count = 1_000;
   h.snapshot.items = Array.from({ length: count }, (_, index) => ({
@@ -1123,7 +1160,9 @@ it.each([false, true])('keeps the original deferred setup choice across retries 
 
 it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata and private settings after an unreadable manifest is repaired', async kind => {
   const actual = await vi.importActual<typeof import('../sources.js')>('../sources.js');
-  vi.mocked(createImportSourceReader).mockImplementation(actual.createImportSourceReader);
+  // The repaired manifest supplies a new mask during validateItems, after the
+  // initial redactor was created; the source-wide scan need not know that mask.
+  vi.mocked(createImportSourceReader).mockImplementation((...args) => ({ ...actual.createImportSourceReader(...args), readRedactions: async () => ({}) }));
   h.snapshot.source.kind = kind;
   const secret = 'fixture-repaired-skill-secret';
   const config = { skills: { disabled: ['report'], entries: { 'report-auth': { enabled: false, apiKey: secret, env: { REPORT_REGION: 'fixture' } } } } };
@@ -1138,17 +1177,22 @@ it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata an
   h.snapshot.items = await discoverImportSkills(h.snapshot.source, config, h.root, {}, createImportBudget());
   expect(h.snapshot.items[0]?.captureIssue).toBe('SOURCE_FILE_TOO_LARGE');
   const entryId = h.snapshot.items[0]!.view.id;
+  h.snapshot.items.push({ view: { id: 'role', name: 'USER.md', category: 'memory', selected: true }, text: `Private value ${secret}`, role: 'user' });
+  h.importDocument.mockRejectedValue(new Error('fixture write failure'));
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
-  const selection = { requestId: 'fixture-repair-manifest', previewId: preview.id, name: 'Ada', entryIds: [entryId], takeover: false, deferSetup: true };
+  const selection = { requestId: 'fixture-repair-manifest', previewId: preview.id, name: 'Ada', entryIds: [entryId, 'role'], takeover: false, deferSetup: true };
   await startCompanionImport(selection, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
   const first = (await getCompanionImportResult(selection.requestId))!;
-  await fs.writeFile(manifest, `---\nname: report\ndescription: Recovered report\nmetadata:\n  openclaw:\n    skillKey: report-auth\n    primaryEnv: REPORT_TOKEN\n---\n# Report\nPrivate value ${secret}`);
+  await fs.writeFile(manifest, `---\nname: report\ndescription: Recovered report ${secret}\nmetadata:\n  openclaw:\n    skillKey: report-auth\n    primaryEnv: REPORT_TOKEN\n---\n# Report\nPrivate value ${secret}`);
+  h.importDocument.mockResolvedValue(undefined);
   await startCompanionImport(selection, 'reconnected');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
   const result = (await getCompanionImportResult(selection.requestId))!;
-  expect(result).toMatchObject({ botId: first.botId, savedEntryIds: [entryId] });
+  expect(result).toMatchObject({ botId: first.botId, savedEntryIds: [entryId, 'role'] });
+  expect(h.importDocument.mock.lastCall?.[3]).toMatch(/^Private value \[[^\]]+\]$/);
+  expect(h.profile.userContextSource).toMatch(/^Private value \[[^\]]+\]$/);
   const environment = (await h.store.read(h.root, first.botId, () => {}))!;
   expect(environment.env).toMatchObject({ REPORT_TOKEN: secret, REPORT_REGION: 'fixture' });
   const readable = await fs.readFile(path.join(h.root, 'bots', first.botId, 'disabled-skills', 'report', 'SKILL.md'), 'utf8');
@@ -1156,6 +1200,8 @@ it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata an
   expect(readable).not.toContain(secret);
   await expect(fs.stat(path.join(h.root, 'bots', first.botId, 'skills', 'report'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(JSON.stringify(result)).not.toContain(secret);
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${selection.requestId}.json`), 'utf8'));
+  expect(JSON.stringify(receipt.entryNames)).not.toContain(secret);
 });
 
 it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])('resumes saved recovered documents with stable storage IDs across lost acknowledgements: %s', async originalId => {

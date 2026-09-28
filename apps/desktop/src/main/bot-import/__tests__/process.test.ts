@@ -1,7 +1,32 @@
 import { expect, it } from 'vitest';
-import { importedProcessEnvironment, redactEnvironmentData, redactEnvironmentValues } from '../process.js';
+import { createEnvironmentRedactor, importedProcessEnvironment, redactEnvironmentData, redactEnvironmentValues } from '../process.js';
 import { previewImportRedactions } from '../environmentSelection.js';
 import { connectionRedactions, importedContentRedactions, redactImportedResult } from '../connectionCatalog.js';
+
+it('reuses a local matcher without changing longest matches, boundaries, callbacks or replacement text', () => {
+  const env = { FIRST: 'overlap-secret', LAST: 'overlap-secret', LONG: 'overlap-secret-extended',
+    SPECIAL: 'a.*[private]+?', SHORT: 'us', UNICODE: '密钥', COLLISION: 'LAST', LANG: 'en' };
+  const matched: string[] = [];
+  const redact = createEnvironmentRedactor(env, value => { matched.push(value); });
+  const text = 'overlap-secret-extended overlap-secret a.*[private]+? status us 密钥库 密钥 LAST en';
+  const expected = '[LONG] [LAST] [SPECIAL] status [SHORT] 密钥库 [UNICODE] [COLLISION] en';
+  expect(redact(text)).toBe(expected);
+  expect(redact('ordinary words')).toBe('ordinary words');
+  expect(redact(text)).toBe(expected);
+  expect(matched).toEqual(Array(2).fill(['overlap-secret-extended', 'overlap-secret', 'a.*[private]+?', 'us', '密钥', 'LAST']).flat());
+  expect(createEnvironmentRedactor({ OTHER: 'overlap-secret' })('overlap-secret')).toBe('[OTHER]');
+  expect(createEnvironmentRedactor({ LANG: 'en', EMPTY: '' })('en ordinary words')).toBe('en ordinary words');
+  expect(env.LAST).toBe('overlap-secret');
+});
+
+it('reads credentials once while traversing nested keys and values', () => {
+  let reads = 0;
+  const env = { get API_KEY() { reads++; return 'fixture-private-value'; } };
+  const value = { 'fixture-private-value': ['fixture-private-value', { text: 'fixture-private-value', count: 7, enabled: false }] };
+  expect(redactEnvironmentData(value, env)).toEqual({ '[API_KEY]': ['[API_KEY]', { text: '[API_KEY]', count: 7, enabled: false }] });
+  expect(reads).toBe(1);
+  expect(value['fixture-private-value'][0]).toBe('fixture-private-value');
+});
 
 it.each(['json', 'command-env'])('limits structured URL decomposition to command env, preserving provider paths (%s)', format => {
   const masks = importedContentRedactions({ env: {}, mcp: [], credentials: [{ id: 'fixture', format,

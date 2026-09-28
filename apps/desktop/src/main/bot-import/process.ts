@@ -92,24 +92,34 @@ export function environmentRedactions(env: Record<string, string>): Record<strin
   return Object.fromEntries(Object.entries(env).filter(([name, value]) => !isPublicImportSetting(name, value) && value.length > 0));
 }
 
-export function redactEnvironmentValues(text: string, env: Record<string, string>, onMatch?: (value: string) => void): string {
+/** Compile once per projection/traversal; keep credential state local to its caller. */
+export function createEnvironmentRedactor(env: Record<string, string>, onMatch?: (value: string) => void): (text: string) => string {
   // Unknown variable names remain private. Short values match whole tokens so
   // "us" cannot corrupt "status"; exact short credentials are still masked.
   // Match in one pass so replacements cannot redact each other.
   const values = new Map(Object.entries(environmentRedactions(env)).map(([name, value]) => [value, `[${name}]`]));
-  if (!values.size) return text;
+  if (!values.size) return text => text;
   const pattern = [...values.keys()].sort((a, b) => b.length - a.length)
     .map(value => {
       const literal = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return value.length < 8 ? `(?<![\\p{L}\\p{N}])${literal}(?![\\p{L}\\p{N}])` : literal;
     }).join('|');
-  return text.replace(new RegExp(pattern, 'gu'), value => { onMatch?.(value); return values.get(value)!; });
+  const matcher = new RegExp(pattern, 'gu');
+  return text => text.replace(matcher, value => { onMatch?.(value); return values.get(value)!; });
+}
+
+export function redactEnvironmentValues(text: string, env: Record<string, string>, onMatch?: (value: string) => void): string {
+  return createEnvironmentRedactor(env, onMatch)(text);
 }
 
 /** Redact untrusted keys and string values without corrupting JSON numbers or booleans. */
 export function redactEnvironmentData<T>(value: T, env: Record<string, string>): T {
-  if (typeof value === 'string') return redactEnvironmentValues(value, env) as T;
-  if (Array.isArray(value)) return value.map(child => redactEnvironmentData(child, env)) as T;
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [redactEnvironmentValues(key, env), redactEnvironmentData(child, env)])) as T;
-  return value;
+  const redact = createEnvironmentRedactor(env);
+  const visit = (child: unknown): unknown => {
+    if (typeof child === 'string') return redact(child);
+    if (Array.isArray(child)) return child.map(visit);
+    if (child && typeof child === 'object') return Object.fromEntries(Object.entries(child).map(([key, nested]) => [redact(key), visit(nested)]));
+    return child;
+  };
+  return visit(value) as T;
 }

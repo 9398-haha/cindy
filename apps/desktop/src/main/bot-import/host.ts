@@ -22,7 +22,7 @@ import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } fro
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
 import { previewImportRedactions, retainedImportRedactions, resolveImportReferences, selectedImportEnvironment, selectedImportRedactions } from './environmentSelection.js';
-import { redactEnvironmentValues } from './process.js';
+import { createEnvironmentRedactor } from './process.js';
 import { importedContentRedactions } from './connectionCatalog.js';
 import { createImportSourceReader, discoverImportSources, inspectImportSource, type SourceReaderDeps } from './sources.js';
 import { readOpenClawCronDatabase } from './openclawCron.js';
@@ -124,7 +124,7 @@ export async function previewCompanionImport(sourceId: string, controller: strin
   const id = randomUUID();
   await retainPreview(id, { owner: scope.scope, controller, value: snapshot, createdAt: Date.now() }, scope.assert);
   const secrets = previewImportRedactions(snapshot.items);
-  const redact = (text: string) => redactEnvironmentValues(text, secrets);
+  const redact = createEnvironmentRedactor(secrets);
   return { id, selectionRanges: true, selectionChunks: true, source: { id: sourceId, kind: source.kind, name: redact(source.name) }, name: redact(source.name),
     ...(snapshot.avatarImageBase64 ? { avatarImageBase64: snapshot.avatarImageBase64 } : {}),
     entries: snapshot.items.map(({ view }) => ({ ...view, name: redact(view.name),
@@ -436,7 +436,7 @@ export async function getCompanionImportSetupStatus(botId: string, root: string,
           ...Object.values(importedContentRedactions(environment)), ...Object.values(previewImportRedactions(snapshot.items)),
           ...Object.values(snapshot.publicationRedactions ?? {}),
         ])].map((value, index) => [`setup_credential_${index}`, value]));
-        receipt.entryNames = setupEntryNames(snapshot.items, text => redactEnvironmentValues(text, secrets));
+        receipt.entryNames = setupEntryNames(snapshot.items, createEnvironmentRedactor(secrets));
         await saveReceipt(root, receipt); assertOwner();
       }
     } else requestId = null;
@@ -530,7 +530,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     contentSecrets[`content_retry_${nextMask++}`] = value;
     knownValues.add(value);
   }
-  const redactText = (text: string) => redactEnvironmentValues(text, contentSecrets);
+  let redactText = createEnvironmentRedactor(contentSecrets);
   const publicRoutine = (input: RoutineInput): RoutineInput => ({ ...input, name: redactText(input.name), prompt: redactText(input.prompt) });
   // Resource capture finishes before saveCheckpoint; retain only selected embedded values.
   const publicationRedactions = (items: ImportSnapshot['items']) => retainedImportRedactions(items, contentSecrets);
@@ -597,11 +597,13 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     assertOwner: scope.assert,
     async validateItems(items) {
       // Repaired manifests can reveal credentials that were unavailable at preview time.
+      const previousMaskCount = knownValues.size;
       for (const value of Object.values(selectedImportRedactions(items))) {
         if (knownValues.has(value)) continue;
         while (`content_retry_${nextMask}` in contentSecrets) nextMask++;
         contentSecrets[`content_retry_${nextMask++}`] = value; knownValues.add(value);
       }
+      if (knownValues.size !== previousMaskCount) redactText = createEnvironmentRedactor(contentSecrets);
       // Capturing lazily selected resources may grow even a rejected selection.
       const cached = previews.get(selection.previewId);
       if (cached?.value === snapshot) await retainPreview(selection.previewId, cached, scope.assert, true);
