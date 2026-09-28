@@ -116,7 +116,10 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   secretly copy its expanded value into another selected connection.
   Public profile/memory/Skill text and routine names/prompts redact all known
   source credentials, including unchecked accounts; memory titles use the same
-  mask. Routine publication happens before createOnce persists the definition,
+  mask. URL paths use an explicit transport-route allowlist; unknown segments are
+  private regardless of length or case, including encoded forms and subsequent
+  route-looking values. Named local endpoints are exempt only as single loopback
+  paths; explicit credential fields always take precedence. Routine publication happens before createOnce persists the definition,
   and activation compares that same projection so masking does not block takeover.
   The encrypted checkpoint retains only masks actually matching selected source
   content, with stable labels for restart. These values were already embedded in

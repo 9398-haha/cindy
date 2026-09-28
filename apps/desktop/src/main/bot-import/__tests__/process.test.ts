@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { importedProcessEnvironment, redactEnvironmentData, redactEnvironmentValues } from '../process.js';
 import { previewImportRedactions } from '../environmentSelection.js';
-import { connectionRedactions, importedContentRedactions } from '../connectionCatalog.js';
+import { connectionRedactions, importedContentRedactions, redactImportedResult } from '../connectionCatalog.js';
 
 it('masks encoded and decoded URL credentials without mutating the private connection', () => {
   const url = 'https://fake%2Fuser:fake%2Bpassword@example.invalid/fake%2Fpath?token=fake%2Bquery';
@@ -53,4 +53,29 @@ it('does not turn ordinary scalar settings or MCP endpoint names into content cr
   const text = 'sys.exit(1) action="store_true" <path d="M1 0.5"/> native-mcp touchdesigner-mcp';
   expect(redactEnvironmentValues(text, secrets)).toBe(text);
   expect(redactEnvironmentValues('secret=1', { API_KEY: '1' })).toBe('secret=[API_KEY]');
+});
+
+it.each(['abcdefghijklmnop', 'abc', 'mcp', 'native-mcp', 'fake%2Ftoken'])('masks capability path %s in results, errors and readable imports', credential => {
+  const server = { name: 'fixture', url: `https://example.invalid/hooks/${credential}` };
+  const decoded = decodeURIComponent(credential);
+  const result = { isError: true, content: [{ type: 'text', text: `Credential: ${credential}; decoded: ${decoded}` }] };
+  for (const masks of [connectionRedactions(server, {}), importedContentRedactions({ env: {}, mcp: [server], credentials: [] })]) {
+    const output = JSON.stringify(redactImportedResult(result, masks));
+    expect(output).not.toContain(credential);
+    expect(output).not.toContain(decoded);
+    expect(redactEnvironmentValues(decoded, masks)).not.toBe(decoded);
+  }
+  expect(server.url).toBe(`https://example.invalid/hooks/${credential}`);
+});
+
+it('only exempts explicit routing paths, not arbitrary local or remote path shapes', () => {
+  for (const origin of ['http://localhost:9000', 'https://example.invalid']) {
+    const masks = connectionRedactions({ name: 'fixture', url: `${origin}/api/v1/mcp/abcdefghijklmnop` }, {});
+    expect(redactEnvironmentValues('api v1 mcp', masks)).toBe('api v1 mcp');
+    expect(redactEnvironmentValues('abcdefghijklmnop', masks)).not.toBe('abcdefghijklmnop');
+  }
+  const encodedRoute = connectionRedactions({ name: 'fixture', url: 'https://example.invalid/%68ooks/mcp' }, {});
+  expect(redactEnvironmentValues('mcp', encodedRoute)).not.toBe('mcp');
+  const explicit = connectionRedactions({ name: 'fixture', url: 'http://localhost:9000/native-mcp', headers: { Authorization: 'Bearer native-mcp' } }, {});
+  expect(redactEnvironmentValues('native-mcp', explicit)).not.toBe('native-mcp');
 });

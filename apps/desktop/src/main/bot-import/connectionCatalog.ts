@@ -4,6 +4,11 @@ import type { CompanionEnvironment } from './environment.js';
 import { fingerprint } from './files.js';
 import { environmentRedactions, isPublicImportSetting, redactEnvironmentData, redactEnvironmentValues } from './process.js';
 
+// Explicit transport routes only; arbitrary short/lowercase paths can be bearer credentials.
+const PUBLIC_MCP_ROUTES = new Set(['api', 'v1', 'v2', 'mcp', 'sse', 'messages', 'hooks', 'webhooks']);
+const LOCAL_MCP_ENDPOINTS = new Set(['native-mcp', 'touchdesigner-mcp']);
+const CAPABILITY_PATH_PREFIXES = new Set(['hooks', 'webhooks', 'token', 'secret', 'credential', 'key']);
+
 /** Include resolved connection-local values without overwriting same-named imports. */
 export function connectionRedactions(server: ImportedMcpServer, environment: Record<string, string>): Record<string, string> {
   const values = [...Object.values(environmentRedactions(environment)), ...Object.values(environmentRedactions(server.env ?? {})), ...Object.values(server.headers ?? {})];
@@ -34,10 +39,16 @@ function urlCredentialValues(raw: string, includePath = false): string[] {
       if (name && value && !isPublicImportSetting(name, value)) values.push(pair.slice(pair.indexOf('=') + 1));
     }
     if (includePath) {
-      // Ordinary endpoint names are routing, not credentials. Keep the full URL
-      // private; mask only opaque path components that can carry access tokens.
-      const parts = url.pathname.split('/').filter(part => /(?:token|secret|credential|key)/i.test(part) || part.length >= 32 || part.length >= 20 && /[A-Z0-9_]/.test(part) || /%[0-9a-f]{2}/i.test(part));
-      values.push(...parts);
+      const parts = url.pathname.split('/').filter(Boolean);
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      let capability = false;
+      for (const part of parts) {
+        const publicRoute = PUBLIC_MCP_ROUTES.has(part)
+          || local && parts.length === 1 && LOCAL_MCP_ENDPOINTS.has(part);
+        if (capability || !publicRoute) values.push(part);
+        // A route-looking value after a credential introducer is still private.
+        if (!publicRoute || CAPABILITY_PATH_PREFIXES.has(part.toLowerCase())) capability = true;
+      }
     }
   } catch { /* Invalid URLs fail at execution; never publish the literal in errors. */ }
   return [...new Set(values.filter(value => value && value !== '/').flatMap(value => {
