@@ -422,3 +422,17 @@ it.skipIf(process.platform === 'win32')('checks a local script without executing
     expect((await verifyImportedAutomation(root, 'bot', item, () => {}, [...selected, { view: { id: 'api', name: 'API_URL', category: 'connections', selected: true }, env: { API_URL: 'https://example.invalid' } }], root)).verified).toBe(false);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
+
+
+it('does not verify a native command as a local reminder or expose its inline environment secret to planning', async () => {
+  const secret = 'fixture-command-token';
+  vi.mocked(companionEnvironmentStore.read).mockResolvedValue({ version: 1, env: {}, mcp: [], credentials: [], contentRedactions: { command_token: secret } });
+  const oneShot = vi.fn().mockResolvedValue(JSON.stringify({ localReminder: true, reads: [] }));
+  vi.mocked(getMakerIfReady).mockReturnValue({ oneShot, getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'pi', model: 'fixture-model' }) } as never);
+  vi.mocked(getBotRemoteResourceSource).mockResolvedValue({ canonicalSessionId: 'fixture-session' } as never);
+  const source: ImportSource = { kind: 'openclaw', agentId: 'main', name: 'Fixture', root: '/fixture', workspace: '/fixture/workspace', configFile: '/fixture/openclaw.json' };
+  const item = normalizeAutomation(source, { id: 'command', name: 'Report', payload: { kind: 'command', argv: ['report', '--token', secret], env: { API_TOKEN: secret } }, schedule: { kind: 'every', everyMs: 60000 } }, [], 'UTC');
+  expect(await verifyImportedAutomation('/fixture', 'bot', item, () => {})).toMatchObject({ verified: false, reason: 'AUTOMATION_READ_NOT_VERIFIED' });
+  expect(oneShot.mock.calls[0]![1]).toContain('report');
+  expect(oneShot.mock.calls[0]![1]).not.toContain(secret);
+});

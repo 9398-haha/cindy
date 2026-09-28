@@ -11,6 +11,7 @@ import { importedProcessEnvironment, redactEnvironmentValues, runImportedProcess
 import { sendImportedDelivery } from './delivery.js';
 import { importedScriptName, importedScriptInterpreter } from './scripts.js';
 import { importedContentRedactions } from './connectionCatalog.js';
+import { importedCommand } from './commandAutomation.js';
 
 function repeatExhausted(binding: { original: Record<string, unknown>; completed?: number }): boolean {
   const repeat = object(binding.original.repeat);
@@ -38,10 +39,13 @@ export async function prepareImportedAutomation(root: string, routine: Routine, 
   // Keep that queued run deferred, including after restart, without executing it.
   if (binding.handover !== 'ready') return { runId, prompt: '', deferred: true as const };
   const job = binding.original;
+  const command = binding.kind === 'openclaw' ? importedCommand(job) : undefined;
   // Also repair a crash between committing the last delivery and disabling the
   // routine. A stale prepared result must not bypass an exhausted counter.
   if (repeatExhausted(binding)) return { runId, prompt: '', skipped: true, exhausted: true };
-  const secrets = importedContentRedactions(environment, job.monitor_url ? [string(job.monitor_url)] : []);
+  const secrets = importedContentRedactions({ ...environment,
+    mcp: [...environment.mcp, ...(command ? [{ name: 'command', env: command.env }] : [])],
+  }, job.monitor_url ? [string(job.monitor_url)] : []);
   const redact = (text: string) => redactEnvironmentValues(text, secrets);
   // A retry or the next occurrence finishes the captured result first, without
   // rerunning the script/model and changing the remaining message chunks.
@@ -67,6 +71,13 @@ export async function prepareImportedAutomation(root: string, routine: Routine, 
     await writeImportFiles(directory, Object.entries(environment.files ?? {}).map(([name, bytes]) => ({ name, bytes: Buffer.from(bytes, 'base64'), executable: false })));
     let prompt = redact(routine.prompt); let direct: string | undefined; let skipped = false;
     let monitorOutput: string | undefined;
+    if (command) {
+      const result = await runImportedProcess({ ...command,
+        cwd: command.cwd ?? binding.sourceWorkspace ?? path.join(binding.sourceRoot, 'workspace'),
+        env: importedProcessEnvironment({ ...environment.env, ...command.env }), signal, assertOwner });
+      if (result.exitCode !== 0) throw new CompanionImportError('AUTOMATION_COMMAND_FAILED');
+      direct = redact(result.stdout.trim());
+    }
     if (job.monitor_script) monitorOutput = await runScript(string(job.monitor_script));
     if (job.monitor_url) {
       const response = await fetch(string(job.monitor_url), { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), redirect: 'error' });
@@ -106,7 +117,10 @@ export async function finishImportedAutomation(root: string, routine: Routine, s
   if (binding.lastRun === runId) return repeatExhausted(binding);
   let progress = binding.deliveryProgress;
   text = progress?.text ?? text;
-  text = redactEnvironmentValues(text, importedContentRedactions(env, binding.original.monitor_url ? [string(binding.original.monitor_url)] : []));
+  const command = binding.kind === 'openclaw' ? importedCommand(binding.original) : undefined;
+  text = redactEnvironmentValues(text, importedContentRedactions({ ...env,
+    mcp: [...env.mcp, ...(command ? [{ name: 'command', env: command.env }] : [])],
+  }, binding.original.monitor_url ? [string(binding.original.monitor_url)] : []));
   if (!progress) {
     progress = { runId, text, direct, deliveries: binding.deliveries ?? [], next: 0 };
     const captured = progress;

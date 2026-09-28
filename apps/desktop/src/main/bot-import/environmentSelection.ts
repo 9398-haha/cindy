@@ -1,5 +1,5 @@
 import { fingerprint } from './files.js';
-import { CompanionImportError, type ImportItem } from './types.js';
+import { CompanionImportError, object, type ImportItem } from './types.js';
 import { importedContentRedactions } from './connectionCatalog.js';
 import { environmentRedactions, redactEnvironmentValues } from './process.js';
 
@@ -76,6 +76,9 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
   // still require every selected dependency and use strict reference resolution.
   const resolve = (value: unknown) => resolveImportReferences(value, env, true);
   return importedContentRedactions({ env,
+    contentRedactions: Object.fromEntries(items.flatMap(item => Object.entries(environmentRedactions(
+      Object.fromEntries(Object.entries(object(object(item.automation?.original.payload).env)).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+    ))).map(([name, value], index) => [`command_${index}_${name}`, value])),
     mcp: items.flatMap(item => item.mcp ? [resolve(item.mcp) as NonNullable<typeof item.mcp>] : []),
     credentials: items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []),
   });

@@ -5,6 +5,30 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+it('reads an explicit native memory file link without granting traversal of external directories', async ctx => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-file-link-'));
+  try {
+    const memory = path.join(root, 'memory'), shared = path.join(root, 'shared');
+    await fs.mkdir(memory); await fs.mkdir(shared);
+    const target = path.join(shared, 'state.json'), link = path.join(memory, 'state.json');
+    await fs.writeFile(target, '{"cursor":7}');
+    try { await fs.symlink(target, link, 'file'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+    await expect(readImportFile(memory, link)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    expect(await readImportTree(memory, undefined, createImportBudget(), undefined, memory, true)).toMatchObject([
+      { name: 'state.json', bytes: Buffer.from('{"cursor":7}') },
+    ]);
+    await expect(readImportFile(memory, link, createImportBudget(1), true)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+    const directory = path.join(memory, 'external');
+    await fs.symlink(shared, directory, process.platform === 'win32' ? 'junction' : 'dir');
+    const errors = vi.fn();
+    expect(await readImportTree(memory, undefined, createImportBudget(), errors, memory, true)).toHaveLength(1);
+    expect(errors).toHaveBeenCalledWith('external', expect.objectContaining({ code: 'SOURCE_LINK_OUTSIDE_FOLDER' }), 'directory');
+    await expect(readImportFile(memory, path.join(directory, 'state.json'), undefined, true)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+    await expect(readImportFile(memory, target, undefined, true)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 it('rejects the next file before allocating its buffer when the cumulative budget is exhausted', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-budget-test-'));
   try {

@@ -9,6 +9,7 @@ import { parse as parseEnv } from 'dotenv';
 import { createImportBudget, fingerprint, optionalText, readImportFile, readImportTree, snapshotFingerprint, type ImportReadBudget } from './files.js';
 import { discoverImportSkills } from './skills.js';
 import { normalizeAutomation } from './sourceAutomations.js';
+import { memoryFileContent } from './memoryFiles.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 
 export interface SourceReaderDeps {
@@ -125,18 +126,19 @@ async function memoryDocuments(items: ImportItem[], root: string, prefix: string
   if (!(await directories(root)).includes(prefix)) return;
   const directory = path.join(root, prefix);
   const failed = (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => items.push({ view: { id: entryId('memory', `${prefix}/${name}`), category: 'memory', name: name || prefix, selected: true },
-    sourceFile: { root: directory, file: path.join(directory, name), kind }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
+    sourceFile: { root: directory, file: path.join(directory, name), kind, nativeFileLinks: true }, captureIssue: error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED' });
   let files;
-  try { files = await readImportTree(directory, undefined, budget, failed); }
+  try { files = await readImportTree(directory, undefined, budget, failed, directory, true); }
   catch (error) { failed('', error, 'directory'); return; }
   for (const file of files) {
-    if (!/\.(md|txt)$/i.test(file.name)) {
+    const content = memoryFileContent(file);
+    if (content.kind === 'empty') continue;
+    if (content.kind === 'attachment') {
       items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: `${prefix}/${file.name}`, selected: true }, asset: { name: `${prefix}/${file.name}`, bytes: file.bytes } });
       continue;
     }
-    if (!file.bytes.toString('utf8').trim()) continue;
     items.push({ view: { id: entryId('memory', `${prefix}/${file.name}`), category: 'memory', name: file.name, description: prefix, selected: true },
-      text: file.bytes.toString('utf8'), role: /(^|\/)USER\.md$/i.test(file.name) ? 'user' : undefined });
+      text: content.text, role: /(^|\/)USER\.md$/i.test(file.name) ? 'user' : undefined });
   }
 }
 
@@ -323,7 +325,10 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   sourceConfiguration(items, source, values);
   // Native heartbeat is not a portable scheduled job. Ordinary jobs named heartbeat remain below.
-  for (const job of jobs) items.push(normalizeAutomation(source, job, items, string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone));
+  for (const job of jobs) {
+    if (source.kind === 'openclaw' && object(job.payload).kind === 'heartbeat') continue;
+    items.push(normalizeAutomation(source, job, items, string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone));
+  }
   const identity = items.find(item => item.view.name === 'IDENTITY.md')?.text ?? '';
   const avatar = string(object(row.identity).avatar) || string(row.avatar) || /^\s*[-*]?\s*\*{0,2}Avatar\*{0,2}:\s*(.+)$/im.exec(identity)?.[1]?.trim() || '';
   let avatarImageBase64: string | undefined;

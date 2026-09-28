@@ -188,3 +188,24 @@ it.each([2, 4])('resumes confirmed Telegram target/chunk progress after failure 
   await finishImportedAutomation(root, routine, 'chat', retryId, text, true, signal, () => {});
   expect(fetcher).toHaveBeenCalledTimes(calls);
 });
+
+
+it('runs a native command with literal argv, cwd, stdin and private env only after handover, and reuses its durable output', async () => {
+  const routine = { id: 'routine', botId: 'bot', prompt: 'Command report' } as Routine;
+  const marker = path.join(root, 'runs');
+  const arg = 'spaces; $(must-not-run)';
+  const code = 'const fs=require("node:fs"); fs.appendFileSync(process.argv[1], "x"); process.stdout.write(JSON.stringify([process.argv[2], process.cwd(), fs.readFileSync(0,"utf8"), process.env.FIXTURE_TOKEN]));';
+  const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code, marker, arg], cwd: root,
+    input: 'test stdin', env: { FIXTURE_TOKEN: 'fixture-command-secret' }, timeoutSeconds: 10, noOutputTimeoutSeconds: 5, outputMaxBytes: 4096 } };
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], automations: {
+    routine: { kind: 'openclaw', handover: 'pending', original, sourceRoot: root },
+  } }, () => {});
+  const signal = new AbortController().signal;
+  expect(await prepareImportedAutomation(root, routine, 'cmd-run', signal, () => {})).toMatchObject({ deferred: true });
+  await expect(fs.access(marker)).rejects.toThrow();
+  await shared.store.update(root, 'bot', () => {}, env => { env.automations!.routine!.handover = 'ready'; });
+  const result = await prepareImportedAutomation(root, routine, 'cmd-run', signal, () => {});
+  expect(JSON.parse(result!.direct!)).toEqual([arg, await fs.realpath(root), 'test stdin', '[imported_credential_0]']);
+  expect(await prepareImportedAutomation(root, routine, 'cmd-run', signal, () => {})).toEqual(result);
+  expect(await fs.readFile(marker, 'utf8')).toBe('x');
+});

@@ -3,6 +3,18 @@ import { importedProcessEnvironment, redactEnvironmentData, redactEnvironmentVal
 import { previewImportRedactions } from '../environmentSelection.js';
 import { connectionRedactions, importedContentRedactions, redactImportedResult } from '../connectionCatalog.js';
 
+it('preserves native boolean switches, local bind addresses and transport/policy enums without exempting credentials', () => {
+  const env = { AWS_BEDROCK_FORCE_HTTP1: '1', BROWSERBASE_PROXIES: 'true', BROWSERBASE_ADVANCED_STEALTH: 'false',
+    TELEGRAM_REQUIRE_MENTION: 'true', TELEGRAM_OBSERVE_UNMENTIONED_GROUP_MESSAGES: 'true', FEISHU_ALLOW_ALL_USERS: 'false',
+    WEB_TOOLS_DEBUG: 'false', API_SERVER_HOST: '127.0.0.1', API_SERVER_PORT: '8080', FEISHU_CONNECTION_MODE: 'websocket', FEISHU_GROUP_POLICY: 'allowlist', FEISHU_BOT_NAME: 'Fixture', FEISHU_DOMAIN: 'feishu' };
+  const text = 'sys.exit(1) action="store_true" <path d="M1 1"/> false 127.0.0.1 8080 websocket allowlist Fixture feishu';
+  expect(redactEnvironmentValues(text, env)).toBe(text);
+  expect(redactEnvironmentValues('1 true websocket', { ...env, API_KEY: '1', AUTH_ALLOW_DEBUG: 'true', SECRET_MODE: 'websocket' })).toBe('[API_KEY] [AUTH_ALLOW_DEBUG] [SECRET_MODE]');
+  const secrets = importedContentRedactions({ env, mcp: [{ name: 'fixture', headers: { Authorization: 'Bearer true' } }], credentials: [] });
+  expect(redactEnvironmentValues('true', secrets)).not.toBe('true');
+  expect(redactEnvironmentValues('private-endpoint', { API_SERVER_HOST: 'private-endpoint' })).toBe('[API_SERVER_HOST]');
+});
+
 it('masks encoded and decoded URL credentials without mutating the private connection', () => {
   const url = 'https://fake%2Fuser:fake%2Bpassword@example.invalid/fake%2Fpath?token=fake%2Bquery';
   const values = [url, 'fake%2Fuser', 'fake/user', 'fake%2Bpassword', 'fake+password', 'fake%2Fpath', 'fake/path', 'fake%2Bquery', 'fake+query'];

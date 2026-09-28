@@ -540,7 +540,7 @@ it.each(['hermes', 'openclaw'] as const)('discovers %s custom archives, hidden T
   const workspace = `.${kind}/${kind === 'hermes' ? '' : 'workspace/'}`;
   await write(`${workspace}memory/semantic/knowledge/note.md`, 'Custom archive');
   await write(`${workspace}memory/.dreams/session-corpus/session.txt`, 'Full transcript');
-  await write(`${workspace}memory/picture.png`, 'fixture image bytes');
+  await write(`${workspace}memory/picture.png`, '\0fixture image bytes');
   if (kind === 'hermes') await write('.hermes/memories/note.md', 'Built-in memory');
   else await write(`${workspace}DREAMS.md`, 'Dreams document');
   const reader = deps(); const [source] = await discoverImportSources(reader);
@@ -548,7 +548,37 @@ it.each(['hermes', 'openclaw'] as const)('discovers %s custom archives, hidden T
   const memory = snapshot.items.filter(item => item.view.category === 'memory');
   expect(memory.map(item => item.text)).toContain('Custom archive');
   expect(memory.map(item => item.text)).toContain('Full transcript');
-  expect(memory.find(item => item.asset)?.asset?.bytes.toString()).toBe('fixture image bytes');
+  expect(memory.find(item => item.asset)?.asset?.bytes.toString()).toBe('\0fixture image bytes');
   expect(memory.map(item => item.text)).toContain(kind === 'hermes' ? 'Built-in memory' : 'Dreams document');
   expect(new Set(memory.map(item => item.view.id)).size).toBe(memory.length);
+});
+
+
+it.each(['hermes', 'openclaw'] as const)('imports %s textual state and backups without treating empty markers as attachments', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  const folder = `.${kind}/${kind === 'hermes' ? 'memories' : 'workspace/memory'}`;
+  const documents = { 'state.json': '{"lastRun":"fixture"}\n', 'MEMORY.md.bak-20260101': '# Old note\n', 'extensionless': 'A note\n' };
+  for (const [name, text] of Object.entries(documents)) await write(`${folder}/${name}`, text);
+  for (const name of ['.morning-report.sent', 'MEMORY.md.lock', 'empty.md']) await write(`${folder}/${name}`, '');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const memory = (await inspectImportSource(source!, reader)).items.filter(item => item.view.category === 'memory');
+  expect(memory.map(item => [item.view.name, item.text]).sort()).toEqual(Object.entries(documents).sort());
+  expect(memory.every(item => !item.asset && !item.captureIssue)).toBe(true);
+});
+
+it('saves native command jobs as disabled routines and excludes only native heartbeats', async () => {
+  await write('.openclaw/openclaw.json', JSON.stringify({ agents: { defaults: { model: 'source-model' } }, tools: { profile: 'restricted' } }));
+  const command = { kind: 'command', argv: ['node', 'report.js', 'argument with spaces'], cwd: home, timeoutSeconds: 90, noOutputTimeoutSeconds: 10, outputMaxBytes: 4096 };
+  await write('.openclaw/cron/jobs.json', JSON.stringify({ jobs: [
+    { id: 'command', name: 'Command report', payload: command, schedule: { kind: 'every', everyMs: 60000 } },
+    { id: 'native-heartbeat', payload: { kind: 'heartbeat' }, schedule: { kind: 'every', everyMs: 60000 } },
+    { id: 'ordinary-heartbeat', name: 'heartbeat-main', payload: { kind: 'agentTurn', message: 'A normal reminder' }, schedule: { kind: 'every', everyMs: 60000 } },
+  ] }));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const tasks = (await inspectImportSource(source!, reader)).items.filter(item => item.automation);
+  expect(tasks).toHaveLength(2);
+  expect(tasks[0]?.automation?.input).toMatchObject({ name: 'Command report', enabled: false });
+  expect(tasks[0]?.automation?.original.payload).toEqual(command);
+  expect(tasks[0]?.view.issues).toBeUndefined();
+  expect(tasks[1]?.view.name).toBe('heartbeat-main');
 });

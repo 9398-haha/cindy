@@ -3,6 +3,7 @@ import { fingerprint } from './files.js';
 import { object, string, type ImportItem, type ImportSource } from './types.js';
 import path from 'node:path';
 import { importedScriptName, isImportedScriptDependency } from './scripts.js';
+import { importedCommand } from './commandAutomation.js';
 
 /** Runtime counters are not configuration; changes to them must not invalidate a handover. */
 export function automationFingerprint(job: Record<string, unknown>): string {
@@ -18,6 +19,9 @@ export function normalizeAutomation(source: ImportSource, job: Record<string, un
   const enabled = job.enabled !== false && job.state !== 'paused';
   const prompt = source.kind === 'hermes' ? string(job.prompt) : string(payload.message) || string(payload.text);
   const issues: string[] = [];
+  let command;
+  try { command = source.kind === 'openclaw' ? importedCommand(job) : undefined; }
+  catch { issues.push('SOURCE_AUTOMATION_INVALID'); }
   let trigger: RoutineTrigger | undefined;
   if (schedule.kind === 'cron') {
     trigger = { id: 'time', kind: 'cron', expression: string(schedule.expr), timezone: string(schedule.tz) || string(schedule.timezone) || timezone };
@@ -36,7 +40,7 @@ export function normalizeAutomation(source: ImportSource, job: Record<string, un
   const scriptItems = items.filter(item => item.asset && isImportedScriptDependency(item.asset.name, scriptNames));
   const skillItems = items.filter(item => item.view.category === 'skills'
     && (selectedSkills.has(item.view.name) || !!item.sourceAlias && selectedSkills.has(item.sourceAlias) || !!item.sourceDirectory && selectedSkills.has(path.basename(item.sourceDirectory))));
-  const searchText = [prompt, ...scriptItems.map(item => item.asset!.bytes.toString('utf8')), ...skillItems.flatMap(item => (item.files ?? []).filter(file => /\.(md|py|js|mjs|sh|ts|json|yaml|yml|toml)$/i.test(file.name)).map(file => file.bytes.toString('utf8')))].join('\n');
+  const searchText = [prompt, ...(command ? [command.command, ...command.args, command.input ?? ''] : []), ...scriptItems.map(item => item.asset!.bytes.toString('utf8')), ...skillItems.flatMap(item => (item.files ?? []).filter(file => /\.(md|py|js|mjs|sh|ts|json|yaml|yml|toml)$/i.test(file.name)).map(file => file.bytes.toString('utf8')))].join('\n');
   const dependsOn = items.filter(item =>
     skillItems.includes(item) ||
     item.mcp && searchText.includes(item.mcp.name) || scriptItems.includes(item)).map(item => item.view.id);
@@ -45,17 +49,17 @@ export function normalizeAutomation(source: ImportSource, job: Record<string, un
   if (job.no_agent === true && !job.script) issues.push('AUTOMATION_SCRIPT_MISSING');
   // These source-specific semantics are retained verbatim and require an explicit adapter.
   // Never start a simpler task while claiming it inherited a stricter tool policy/model/context.
-  if (job.enabled_toolsets || Object.keys(object(job.tools)).length || items.some(item => item.credential?.format === 'source-tools')) issues.push('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
+  if (!command && (job.enabled_toolsets || Object.keys(object(job.tools)).length || items.some(item => item.credential?.format === 'source-tools'))) issues.push('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
   if (job.context_from) issues.push('AUTOMATION_CONTEXT_NEEDS_MAPPING');
-  if (job.model || job.provider || job.base_url || payload.model || job.reasoning_effort || payload.thinking
-    || items.some(item => item.credential?.format === 'source-model')) issues.push('AUTOMATION_MODEL_NEEDS_MAPPING');
+  if (!command && (job.model || job.provider || job.base_url || payload.model || job.reasoning_effort || payload.thinking
+    || items.some(item => item.credential?.format === 'source-model'))) issues.push('AUTOMATION_MODEL_NEEDS_MAPPING');
   if (job.workdir && path.resolve(string(job.workdir)) !== path.resolve(source.workspace)) issues.push('AUTOMATION_WORKDIR_NEEDS_MAPPING');
   if (!sourceId || !name) issues.push('SOURCE_AUTOMATION_INVALID');
   // These are explicit source features, not guessed equivalent prompt instructions.
   if (Number(schedule.staggerMs) > 0) issues.push('AUTOMATION_STAGGER_NEEDS_ADAPTER');
   let input;
   if (trigger) {
-    try { input = parseRoutineInput({ name, prompt: prompt || string(job.script) || [...selectedSkills].filter(Boolean).join('\n'), enabled: false, triggers: [trigger], silentWhenIdle: false }); }
+    try { input = parseRoutineInput({ name, prompt: command ? name : prompt || string(job.script) || [...selectedSkills].filter(Boolean).join('\n'), enabled: false, triggers: [trigger], silentWhenIdle: false }); }
     catch { issues.push('SOURCE_AUTOMATION_INVALID'); }
   }
   return {

@@ -24,7 +24,7 @@ export interface CompanionEnvironment {
   /** Selected content only; encrypted restart checkpoint, removed after successful completion. */
   pendingImport?: { selection: import('@cindy/maker-shared/companion-import').CompanionImportSelection; snapshotJson: string };
   /** Only selected automation definitions; may contain source URLs/tokens, so remain encrypted. */
-  automations?: Record<string, { kind: 'hermes' | 'openclaw'; original: Record<string, unknown>; sourceRoot: string; sourceId?: string;
+  automations?: Record<string, { kind: 'hermes' | 'openclaw'; original: Record<string, unknown>; sourceRoot: string; sourceWorkspace?: string; sourceId?: string;
     /** Missing or pending means source ownership has not been safely handed over. */
     handover?: 'pending' | 'ready';
     issues?: string[]; deliveries?: import('./types.js').ImportedDelivery[]; completed?: number; lastRun?: string;

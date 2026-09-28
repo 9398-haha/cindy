@@ -4,6 +4,7 @@ import type { RoutineInput } from '@cindy/maker-scheduler';
 import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
 import { CompanionImportError, importFailureCode, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { normalizeImportSkill } from './skills.js';
+import { memoryFileContent } from './memoryFiles.js';
 import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from './environmentSelection.js';
 
 export interface ImportReceipt {
@@ -138,20 +139,26 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
       if (item.captureIssue && item.sourceFile) {
         try {
           const source = item.sourceFile;
+          const nativeFileLinks = source.nativeFileLinks ?? item.view.category === 'memory';
           // Missing kind is a legacy checkpoint. Re-evaluate repaired paths, but
           // keep containment anchored to the original memory root in either case.
           const directory = source.kind === 'directory' || source.kind !== 'file' && (await fs.stat(source.file)).isDirectory();
           if (directory) {
-            const files = await readImportTree(source.root, undefined, budget, undefined, source.file);
-            item.files = files.filter(file => !/\.(md|txt)$/i.test(file.name));
-            item.documents = files.filter(file => /\.(md|txt)$/i.test(file.name) && file.bytes.toString('utf8').trim()).map(file => ({
-              id: recoveredDocumentId(`${item.view.id}-${fingerprint(file.name).slice(0, 20)}`), name: file.name, text: file.bytes.toString('utf8'),
-              ...(/(^|\/)USER\.md$/i.test(file.name) ? { role: 'user' as const } : {}),
-            }));
+            const files = await readImportTree(source.root, undefined, budget, undefined, source.file, nativeFileLinks);
+            item.files = []; item.documents = [];
+            for (const file of files) {
+              const content = memoryFileContent(file);
+              if (content.kind === 'attachment') item.files.push(file);
+              else if (content.kind === 'text') item.documents.push({
+                id: recoveredDocumentId(`${item.view.id}-${fingerprint(file.name).slice(0, 20)}`), name: file.name, text: content.text,
+                ...(/(^|\/)USER\.md$/i.test(file.name) ? { role: 'user' as const } : {}),
+              });
+            }
           } else {
-            const file = await readImportFile(source.root, source.file, budget);
-            if (/\.(md|txt)$/i.test(file.name)) item.text = file.bytes.toString('utf8');
-            else item.asset = { name: file.name, bytes: file.bytes };
+            const file = await readImportFile(source.root, source.file, budget, nativeFileLinks);
+            const content = memoryFileContent(file);
+            if (content.kind === 'text') item.text = content.text;
+            else if (content.kind === 'attachment') item.asset = { name: file.name, bytes: file.bytes };
           }
           delete item.captureIssue;
         } catch (error) { item.captureIssue = importFailureCode(error); }

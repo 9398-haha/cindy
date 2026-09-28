@@ -17,6 +17,7 @@ import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, 
 import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBotRemoteResourceSource, reconcileBotProfileFolder } from '../localDb/ipc/bots.js';
 import { readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
 import { splitImportedMemoryText } from '../maker-ipc/botMemoryService.js';
+import { memoryFileContent } from './memoryFiles.js';
 import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
@@ -464,6 +465,14 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         const documents = [...(item.text ? [{ id: item.view.id, name: item.view.name, text: item.text, role: item.role }] : []), ...item.documents ?? []];
         const attachments = [...(item.asset ? [item.asset] : []), ...(item.files ?? [])];
         for (const file of attachments) {
+          // Older checkpoints classified every non-md/txt file as media. Use
+          // the same byte classification on retry without changing entry IDs.
+          const content = memoryFileContent({ ...file, executable: false });
+          if (content.kind === 'empty') continue;
+          if (content.kind === 'text') {
+            documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name, text: content.text, role: undefined });
+            continue;
+          }
           const sessionId = await transferDeps.createConversation(botId);
           const url = await importMemoryMedia(botId, sessionId, file.bytes, scope.assert);
           documents.push({ id: `memory-${fingerprint([item.view.id, file.name]).slice(0, 32)}`, name: file.name,
@@ -578,7 +587,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         environment.automations ??= {};
         environment.automations[creationId] ??= { kind: snapshot.source.kind,
           handover: item.view.enabled ? 'pending' : 'ready',
-          original: item.automation!.original, sourceId: item.automation!.sourceId, sourceRoot: snapshot.source.root, deliveries: item.automation!.deliveries,
+          original: item.automation!.original, sourceId: item.automation!.sourceId, sourceRoot: snapshot.source.root, sourceWorkspace: snapshot.source.workspace, deliveries: item.automation!.deliveries,
           issues: [...(item.view.issues ?? []), ...(item.view.dependsOn?.some(id => !selected.some(item => item.view.id === id)) ? ['AUTOMATION_DEPENDENCY_NOT_SELECTED'] : [])] };
       });
       const routine = await routineTools.createOnce(botId, publicRoutine(input), creationId); scope.assert();

@@ -1174,3 +1174,21 @@ it('keeps oversized profile text as original Unicode while preserving the entire
   expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, 'instructions', 'AGENTS.md', text, 'reference');
   expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents?.instructions).toBe(text);
 });
+
+
+it('retries legacy text and empty memory assets without passing them to the media importer', async () => {
+  h.snapshot.items = [
+    { view: { id: 'old-json', name: 'state.json', category: 'memory', selected: true }, asset: { name: 'memory/state.json', bytes: Buffer.from('{"cursor":7}\n') } },
+    { view: { id: 'old-marker', name: '.report.sent', category: 'memory', selected: true }, asset: { name: 'memory/.report.sent', bytes: Buffer.alloc(0) } },
+  ];
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const selection = { previewId: preview.id, requestId: 'legacy-memory-assets', name: 'Ada', entryIds: ['old-json', 'old-marker'], takeover: false, deferSetup: true };
+  const first = await startCompanionImport(selection, 'phone');
+  const result = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result).toMatchObject({ status: 'complete', savedEntryIds: ['old-json', 'old-marker'] });
+  expect(h.importDocument).toHaveBeenCalledOnce();
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'memory/state.json', '{"cursor":7}\n', 'reference');
+  await startCompanionImport(selection, 'phone');
+  expect(h.importDocument).toHaveBeenCalledOnce();
+});

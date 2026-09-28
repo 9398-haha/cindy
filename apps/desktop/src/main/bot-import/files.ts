@@ -102,10 +102,16 @@ export function inside(root: string, candidate: string): boolean {
 }
 
 /** Refuse symlink escapes and special files before reading any bytes. */
-export async function readImportFile(root: string, file: string, budget?: ImportReadBudget): Promise<ImportFile> {
+export async function readImportFile(root: string, file: string, budget?: ImportReadBudget, nativeFileLinks = false): Promise<ImportFile> {
   const realRoot = await fs.realpath(root);
   const realFile = await fs.realpath(file);
-  if (!inside(realRoot, realFile)) throw new CompanionImportError('SOURCE_LINK_OUTSIDE_FOLDER');
+  if (!inside(realRoot, realFile)) {
+    // Native memory entries may explicitly link a shared document. Trust only
+    // that file entry, never an external directory or a path supplied by IPC.
+    if (!nativeFileLinks || !inside(path.resolve(root), path.resolve(file))
+      || !inside(realRoot, await fs.realpath(path.dirname(file)))
+      || !(await fs.lstat(file)).isSymbolicLink()) throw new CompanionImportError('SOURCE_LINK_OUTSIDE_FOLDER');
+  }
   const handle = await fs.open(realFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await handle.stat();
@@ -135,7 +141,7 @@ export async function optionalText(root: string, file: string, budget?: ImportRe
 }
 
 /** Only traverses the selected skill/document subtree; never copies a whole Agent home. */
-export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => void, directory = root): Promise<ImportFile[]> {
+export async function readImportTree(root: string, include: (name: string) => boolean = () => true, budget?: ImportReadBudget, onError?: (name: string, error: unknown, kind: 'file' | 'directory' | 'unknown') => void, directory = root, nativeFileLinks = false): Promise<ImportFile[]> {
   const result: ImportFile[] = [];
   const visited = new Set<string>();
   let size = 0;
@@ -160,7 +166,7 @@ export async function readImportTree(root: string, include: (name: string) => bo
           kind = target.isDirectory() ? 'directory' : 'file';
           if (target.isDirectory()) await visit(file);
           else if (include(name)) {
-            const item = await readImportFile(root, file, budget);
+            const item = await readImportFile(root, file, budget, nativeFileLinks);
             size += item.bytes.length;
             if (size > MAX_ITEM_BYTES) throw new CompanionImportError('SOURCE_ITEM_TOO_LARGE');
             result.push(item);

@@ -48,13 +48,13 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   legacy JSON store; a database failure never substitutes a stale backup. The worker
   uses the native SQLite binding selected by Main, including isolated Electron dev
   bindings. Driver, size and database failures retain distinct safe reason codes.
-- Memory discovery includes Markdown, TXT and attachments under the memory trees,
+- Memory discovery includes UTF-8 text (including JSON, backups and extensionless notes) and attachments under the memory trees,
   including hidden subdirectories. Hermes `memories/` and a user-maintained `memory/`
   archive stay separate; OpenClaw also includes workspace `DREAMS.md`. Supported media
   originals enter the shared media ledger with a companion-owned import reference
   and a memory document linking the managed URL. Retry reuses that reference;
   companion deletion releases only its own refs through recoverable cleanup.
-  Unsupported attachments remain visible failures, not silently omitted files.
+  Empty files such as delivery/lock markers do not become attachment failures. Explicit native memory file links retain their logical names and bounded file reads; external directory links remain rejected. Retry applies the same classification to legacy checkpoints. Unsupported binary attachments remain visible failures, not silently omitted files.
 - Selected identity/user/instruction documents and memories retain their original
   text in the encrypted environment. Profile prompt fields and the native memory
   store receive copies with known selected env/MCP/auth credentials masked, while
@@ -462,3 +462,11 @@ Large real-source latency and peak memory are not claimed as benchmarked.
 Downgrading to a build predating chunked companion storage cannot read the new
 private format; hand automations back before downgrade and retain the current
 build/data for recovery.
+
+Native OpenClaw `payload.kind=command` jobs retain argv, cwd, stdin, environment,
+wall-clock/idle timeouts and output limits in the encrypted definition. They are
+saved disabled and execute as literal subprocess argv only after the existing
+verification and handover gates. They never start a model turn or inherit model/tool
+policy requirements. Read-only verification must verify their actual dependencies;
+it cannot accept a command as a simple local reminder. Native `heartbeat` payloads
+are excluded, while ordinary jobs named heartbeat remain importable.
