@@ -17,14 +17,15 @@ const logger: Logger = {
 
 describe.skipIf(!binaryPath || process.platform !== 'win32')('Windows Codex Review with real app-server', () => {
   it.each([
-    { binary: binaryPath!, configuredMemory: false, compatible: true },
-    { binary: binaryPath!, configuredMemory: true, compatible: true },
-    ...(legacyBinaryPath ? [{ binary: legacyBinaryPath, configuredMemory: false, compatible: false }] : []),
-  ])('enforces scoped reads (configured memory: $configuredMemory, compatible runtime: $compatible)', async ({ binary, configuredMemory, compatible }) => {
+    { binary: binaryPath!, configuredMemory: false, compatible: true, providerId: 'cprov-fixture', model: 'fixture-model' },
+    { binary: binaryPath!, configuredMemory: true, compatible: true, providerId: 'cprov-fixture', model: 'gpt-5.4' },
+    { binary: binaryPath!, configuredMemory: false, compatible: true, providerId: 'xai', model: 'grok-4' },
+    { binary: binaryPath!, configuredMemory: false, compatible: true, providerId: undefined, model: 'xai/grok-4' },
+    ...(legacyBinaryPath ? [{ binary: legacyBinaryPath, configuredMemory: false, compatible: false, providerId: 'cprov-fixture', model: 'fixture-model' }] : []),
+  ])('enforces scoped reads (model: $model, memory: $configuredMemory, compatible: $compatible)', async ({ binary, configuredMemory, compatible, providerId, model }) => {
     const root = await mkdtemp(path.join(tmpdir(), 'cindy-review-start-'));
     const home = path.join(root, 'codex');
     const workingDir = path.join(root, 'work');
-    const model = configuredMemory ? 'gpt-5.4' : 'fixture-model';
     await mkdir(home);
     await mkdir(workingDir);
     await writeFile(path.join(workingDir, 'evidence.md'), 'REVIEW_EVIDENCE');
@@ -34,7 +35,8 @@ describe.skipIf(!binaryPath || process.platform !== 'win32')('Windows Codex Revi
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64');
     await writeFile(path.join(workingDir, 'evidence.png'), png);
     await writeFile(path.join(root, 'private.png'), png);
-    const requests: { tools: { name: string }[]; input: { type: string; call_id?: string; output?: unknown }[] }[] = [];
+    const requests: { tools: { name: string; type: string }[]; input: { type: string; call_id?: string; output?: unknown }[] }[] = [];
+    const functionOnly = providerId === 'xai' || model.startsWith('xai/');
     // The scripted local provider exercises tool round trips without a real
     // model, cloud credentials, administrator setup, or the user's Codex home.
     const calls = [
@@ -53,6 +55,13 @@ describe.skipIf(!binaryPath || process.platform !== 'win32')('Windows Codex Revi
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+      // xAI Responses accepts flat function tools, not Codex namespace tools.
+      // Validate the real app-server wire output, not just thread/start input.
+      if (functionOnly && requests.at(-1)!.tools.some(tool => tool.type !== 'function')) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Only flat function tools are supported' } }));
+        return;
+      }
       const step = requests.length - 1;
       const call = calls[step];
       res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
@@ -108,7 +117,7 @@ describe.skipIf(!binaryPath || process.platform !== 'win32')('Windows Codex Revi
     });
     try {
       const started = agent.startSession({
-        sessionId: `review-${configuredMemory}`, providerId: 'cprov-fixture',
+        sessionId: `review-${configuredMemory}`, providerId,
         model, workingDir, reviewMode: true,
         makerMemoryEnabled: false,
       });
@@ -130,6 +139,7 @@ describe.skipIf(!binaryPath || process.platform !== 'win32')('Windows Codex Revi
       await handle.send({ type: 'user', content: 'Review the fixture' }, { throwOnStartFailure: true });
       await events;
       expect(requests).toHaveLength(calls.length + 1);
+      if (functionOnly) expect(requests.every(request => request.tools.every(tool => tool.type === 'function'))).toBe(true);
       expect(requests[0].tools.map((tool) => tool.name).sort()).toEqual([
         ...(configuredMemory ? ['apply_patch'] : []),
         'request_user_input', 'review_list_directory', 'review_read_file', 'review_view_image',

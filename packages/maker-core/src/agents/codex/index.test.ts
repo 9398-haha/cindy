@@ -1922,17 +1922,24 @@ describe('CodexAgent permissions', () => {
     { providerId: 'xai', model: 'grok-4' },
     { providerId: ' xai ', model: 'grok-4' },
     { providerId: undefined, model: 'xai/grok-4' },
-  ])('rejects unsupported Windows Review dynamic-tool routes before startup ($providerId, $model)', async ({ providerId, model }) => {
+  ])('starts Windows Review with flat read tools on xAI routes ($providerId, $model)', async ({ providerId, model }) => {
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-xai-'));
+    tempRoots.push(workingDir);
     const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.156.0' });
-    const realpath = vi.spyOn(fs, 'realpath');
-    await expect(agent.startSession({
-      sessionId: 'review-unsupported-provider', providerId, model,
-      workingDir: 'C:\\review', reviewMode: true,
-    })).rejects.toThrow('requires a provider that supports dynamic tools');
-    expect(realpath).not.toHaveBeenCalled();
-    expect(host.request).not.toHaveBeenCalled();
-    realpath.mockRestore();
+    const host = installFakeHost(agent, method => method === Method.ExperimentalFeatureEnablementSet ? {} : undefined,
+      { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'review-xai', providerId, model, workingDir, reviewMode: true,
+    });
+    const start = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)![1] as Record<string, unknown>;
+    expect(start.dynamicTools).toEqual([
+      expect.objectContaining({ type: 'function', name: 'review_read_file' }),
+      expect.objectContaining({ type: 'function', name: 'review_list_directory' }),
+      expect.objectContaining({ type: 'function', name: 'review_view_image' }),
+    ]);
+    expect(start.config).toMatchObject({ 'features.shell_tool': false, 'features.view_image': false });
+    expect(start).toHaveProperty('permissions');
+    await handle.close();
   });
 
   it.skipIf(process.platform !== 'win32').each([

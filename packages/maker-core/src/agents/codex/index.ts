@@ -4831,9 +4831,6 @@ assertRouteCurrent();
     if (reviewMode) {
       try {
         if (process.platform === 'win32') {
-          if (!supportsCodexDynamicTools(opts)) {
-            throw new Error('Windows Cindy Review requires a provider that supports dynamic tools. Select a supported provider before retrying Review.');
-          }
           if ([opts.workingDir, ...(opts.reviewReadPaths ?? [])].some((candidate) => !isWindowsReviewLocalPath(candidate, opts.workingDir))) {
             throw new Error('Windows Cindy Review requires local drive paths; UNC shares, device paths and alternate data streams are not supported. Use a local copy before retrying Review.');
           }
@@ -4914,6 +4911,8 @@ assertRouteCurrent();
     }
     const registeredHostDynamicToolKeys = new Set(hostDynamicTools.map(dynamicToolKey));
     const sessionDynamicTools = [
+      // Windows Review requires 0.156+ and exposes flat function tools. The legacy
+      // provider gate above concerns namespace tools, not these scoped reads.
       ...(reviewMode && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
       ...(!reviewMode && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
       ...(!reviewMode ? hostDynamicTools : []),
