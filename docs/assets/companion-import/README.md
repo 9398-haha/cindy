@@ -8,7 +8,8 @@ test stand-ins. They are not screenshots of a packaged app or a live migration.
 - `light-selection.png`, `dark-selection.png`: flat category summary in both themes.
 - `narrow-skills.png`: the Desktop component at 390 px, with 20-row pagination and
   one scrolling body; this is not a native Mobile screenshot.
-- `light-saved.png`: saved content opens the companion while setup is deferred.
+Completed saves now navigate directly to the teammate chat; the old completion-page
+fixture was removed. Partial failures retain their detail and retry controls.
 
 The fixture renderer and its embedded data are not included in shipped code.
 Native iOS/Android visual checks, mixed-version device sessions and live provider

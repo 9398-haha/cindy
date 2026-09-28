@@ -98,10 +98,17 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
   const savedIds = new Set(result?.savedEntryIds);
   const incomplete = result?.savedEntryIds ? selected.some(id => !savedIds.has(id)) : outstanding.some(check => check.message === 'IMPORT_ITEM_FAILED');
   const finished = result && result.status !== 'running';
+  const openedRequest = useRef<string | undefined>(undefined);
+  const enterChat = !!finished && saved && !incomplete && !!result?.canonicalSessionId;
+  useEffect(() => {
+    if (!enterChat || !result || openedRequest.current === result.requestId) return;
+    openedRequest.current = result.requestId;
+    onCreated({ collectionId: 'teammates', kind: 'bot', id: result.botId }); onClose();
+  }, [enterChat, result, onCreated, onClose]);
   const entries = preview?.entries.filter(entry => entry.category === expanded) ?? [];
   const filtered = entries.filter(entry => `${entry.name} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  return <CompanionSheet visible={visible} title={tr('title')} onClose={() => { if (!busy || result) onClose(); }} onClosed={onClosed} preventDismiss={busy && !result}>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
+  return <CompanionSheet visible={visible && !enterChat} title={tr('title')} onClose={() => { if (!busy || result) onClose(); }} onClosed={onClosed} preventDismiss={busy && !result}>
+    {!enterChat ? <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
       {!online || error ? <Text accessibilityRole="alert" style={styles.note}>{!online ? t('devices.companionProfile.offline', { deviceName }) : tr(companionImportReasonKey(error))}</Text> : null}
       {finished && saved ? <>
         <Text style={styles.label}>{tr(incomplete ? 'partial' : 'complete')}</Text>
@@ -145,7 +152,7 @@ export function CompanionImportSheet({ visible, onClose, onClosed, deviceId, dev
       </>}
       {finished && (!saved || incomplete) ? <MainWindowActionButton action={{ label: tr('retry'), busy, disabled: busy || !online, onPress: () => void submit() }} /> : null}
       {finished ? <MainWindowActionButton action={{ label: tr('open'), disabled: !result.canonicalSessionId, onPress: () => { onCreated({ collectionId: 'teammates', kind: 'bot', id: result.botId }); onClose(); } }} /> : preview && !expanded ? <MainWindowActionButton action={{ label: tr('submit'), busy, disabled: busy || !online || !name.trim() || !avatar, onPress: () => void submit() }} /> : null}
-    </ScrollView>
+    </ScrollView> : null}
   </CompanionSheet>;
 }
 

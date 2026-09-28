@@ -41,7 +41,8 @@ it('uses the existing portrait picker and sends only the remaining selections th
   await act(async () => (container.querySelector('[aria-label="devices.companionImport.memory"]') as HTMLInputElement).click());
   await click('devices.companionImport.submit');
   expect(h.submit.mock.calls[0]?.[2].input).toMatchObject({ entryIds: ['personality'], avatarImageBase64: 'chosen-existing-portrait' });
-  await click('devices.companionImport.open'); expect(h.created).toHaveBeenCalledWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
+  expect(h.created).toHaveBeenCalledExactlyOnceWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
+  expect(container.textContent).not.toContain('devices.companionImport.open');
 });
 
 

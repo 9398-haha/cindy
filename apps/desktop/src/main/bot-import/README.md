@@ -330,7 +330,9 @@ GUI imports send the additive `deferSetup` flag (the command defaults it to true
 Saving personality/memory/skills, private connections and disabled routine definitions
 finishes before any data probe, source pause or target activation. `savedEntryIds`
 counts saved definitions independently of activation status. `saved: true` means
-that the save pass finished, not that every selected item succeeded. Both clients
+that the save pass finished, not that every selected item succeeded. After all
+selected content is saved, both clients open the teammate chat once,
+including when sign-in or mapping remains. Partial-save results
 show saved/selected counts and distinguish partial imports from setup-only checks.
 An expandable, paginated detail list shows filenames, safe reasons and partial
 progress. Chat remains available alongside retry. Idempotent chat notices distinguish
@@ -470,3 +472,8 @@ verification and handover gates. They never start a model turn or inherit model/
 policy requirements. Read-only verification must verify their actual dependencies;
 it cannot accept a command as a simple local reminder. Native `heartbeat` payloads
 are excluded, while ordinary jobs named heartbeat remain importable.
+
+Ordinary content/routine progress uses indexed checks and at most about 100 full
+receipt snapshots per pass, sized from the selected input. An interrupted batch
+replays idempotent writes and `createOnce` under the same IDs. Handover intent,
+source pause, target enable and rollback milestones still persist immediately.

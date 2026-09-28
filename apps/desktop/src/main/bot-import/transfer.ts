@@ -121,19 +121,34 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   receipt.selectionHash = selectionHash;
   receipt.deferSetup = selection.deferSetup === true;
   const botId = receipt.result.botId;
-  const save = async () => { deps.assertOwner(); await deps.saveReceipt(receipt); deps.assertOwner(); };
-  const check = (entryId: string, status: CompanionImportResult['checks'][number]['status'], message?: string, progress?: { saved: number; total: number }) => {
-    receipt.result.checks = [...receipt.result.checks.filter(item => item.entryId !== entryId), { entryId, status, ...(message ? { message } : {}), ...(progress ? { progress } : {}) }];
-  };
   receipt.result.status = 'running';
   receipt.result.checks = receipt.result.checks.filter(item => item.entryId !== 'import');
+  const copied = new Set(receipt.copied);
+  const checkIndexes = new Map(receipt.result.checks.map((item, index) => [item.entryId, index]));
+  const selected = new Set(selectedIds);
+  // Cap full progress snapshots per pass, not imported items. A lost batch is
+  // replayed through idempotent content writes/createOnce; source handover
+  // milestones still call save immediately before/after each external mutation.
+  const progressBatchSize = Math.max(1, Math.ceil(items.length / 100));
+  let pendingProgress = 0;
+  const save = async () => { deps.assertOwner(); await deps.saveReceipt(receipt); deps.assertOwner(); pendingProgress = 0; };
+  const saveProgress = async () => { if (++pendingProgress >= progressBatchSize) await save(); };
+  const check = (entryId: string, status: CompanionImportResult['checks'][number]['status'], message?: string, progress?: { saved: number; total: number }) => {
+    const index = checkIndexes.get(entryId) ?? receipt.result.checks.length;
+    checkIndexes.set(entryId, index);
+    receipt.result.checks[index] = { entryId, status, ...(message ? { message } : {}), ...(progress ? { progress } : {}) };
+  };
+  const needsAttention = (id: string) => {
+    const index = checkIndexes.get(id);
+    return index !== undefined && receipt.result.checks[index]?.status === 'needs-attention';
+  };
   // Capture only selected resources, then publish a non-secret request index
   // before storing credentials. Acceptance still waits for the full checkpoint.
   if (!receipt.checkpointSaved || items.some(item => item.captureIssue)) {
     const budget = createImportBudget();
     reserveSnapshotItems(snapshot.items, budget);
     for (const item of items) {
-      if (item.captureIssue && item.sourceDirectory && item.filesComplete && !receipt.copied.includes(item.view.id)) {
+      if (item.captureIssue && item.sourceDirectory && item.filesComplete && !copied.has(item.view.id)) {
         item.files = undefined; item.filesComplete = false;
       }
       if (item.captureIssue && item.sourceFile) {
@@ -204,22 +219,23 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   deps.assertOwner();
   receipt.companionCreated = true;
   await save();
-  // Each selected item is a separate checkpoint. Retrying never copies unselected source files.
+  // Retry only selected resources; saved batches skip completed idempotent copies.
   for (const item of items.filter(item => item.view.category !== 'automations' && item.view.category !== 'connections')) {
-    if (receipt.copied.includes(item.view.id)) continue;
+    if (copied.has(item.view.id)) continue;
     deps.assertOwner();
     try {
       if (item.captureIssue) throw new CompanionImportError(item.captureIssue);
       await deps.importItem(botId, item, snapshot);
       deps.assertOwner();
-      receipt.copied.push(item.view.id);
+      receipt.copied.push(item.view.id); copied.add(item.view.id);
       check(item.view.id, item.view.issues?.length ? 'needs-attention' : 'copied', item.view.issues?.[0]);
     } catch (error) {
       deps.assertOwner();
       check(item.view.id, 'needs-attention', importFailureCode(error), (error as { importProgress?: { saved: number; total: number } })?.importProgress);
     }
-    await save();
+    await saveProgress();
   }
+  await save();
   if (!receipt.environmentSaved) {
     await deps.saveEnvironment(botId, items);
     deps.assertOwner();
@@ -227,30 +243,29 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
     await save();
   }
   for (const item of items.filter(item => item.view.category === 'connections')) {
-    const issue = item.view.dependsOn?.some(id => !selectedIds.includes(id)) ? 'AUTOMATION_DEPENDENCY_NOT_SELECTED' : item.view.issues?.[0];
+    const issue = item.view.dependsOn?.some(id => !selected.has(id)) ? 'AUTOMATION_DEPENDENCY_NOT_SELECTED' : item.view.issues?.[0];
     check(item.view.id, issue ? 'needs-attention' : 'copied', issue);
   }
   receipt.result.canonicalSessionId = await deps.createConversation(botId);
   await save();
-  const selected = new Set(selectedIds);
   const byId = new Map(items.map(item => [item.view.id, item]));
   const missingDependency = (id: string, visited = new Set<string>()): boolean => {
     if (!selected.has(id)) return true;
     if (visited.has(id)) return false;
     visited.add(id);
     const item = byId.get(id);
-    return !!item?.captureIssue || item?.view.enabled === false && (item.view.category === 'skills' || !!item.mcp) || receipt.result.checks.some(check => check.entryId === id && check.status === 'needs-attention') || !!item?.view.issues?.length || !!item?.view.dependsOn?.some(child => missingDependency(child, visited));
+    return !!item?.captureIssue || item?.view.enabled === false && (item.view.category === 'skills' || !!item.mcp) || needsAttention(id) || !!item?.view.issues?.length || !!item?.view.dependsOn?.some(child => missingDependency(child, visited));
   };
   for (const item of items.filter(item => item.automation)) {
     // Background reconciliation repairs only interrupted work. A definitive
     // failed verification needs an explicit retry, never another model/Ask call.
     const prior = receipt.routines[item.view.id];
-    if (reconcileOnly && receipt.result.checks.some(check => check.entryId === item.view.id && check.status === 'needs-attention')
+    if (reconcileOnly && needsAttention(item.view.id)
       && prior?.phase !== 'pausing-source' && prior?.phase !== 'source-paused') continue;
     const automation = item.automation!;
     if (!automation.input) {
       check(item.view.id, 'needs-attention', item.view.issues?.find(issue => !['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING'].includes(issue)) ?? 'SOURCE_AUTOMATION_INVALID');
-      await save(); continue;
+      await saveProgress(); continue;
     }
     let record = receipt.routines[item.view.id];
     if (!record) {
@@ -258,25 +273,25 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         const id = await deps.createRoutine(botId, { ...automation.input, enabled: false }, fingerprint([selection.requestId, item.view.id]), item);
         deps.assertOwner();
         record = receipt.routines[item.view.id] = { id, phase: 'created' };
-        await save();
+        // createOnce is idempotent if this progress batch is interrupted.
       } catch (error) {
         deps.assertOwner();
         check(item.view.id, 'needs-attention', importFailureCode(error));
-        await save(); continue;
+        await saveProgress(); continue;
       }
     }
     if (record.phase === 'complete') { check(item.view.id, item.view.enabled && selection.takeover ? 'taken-over' : 'paused'); continue; }
     if (!item.view.enabled || !selection.takeover) {
-      record.phase = 'complete'; check(item.view.id, 'paused'); await save(); continue;
+      record.phase = 'complete'; check(item.view.id, 'paused'); await saveProgress(); continue;
     }
     if (item.view.issues?.length) {
-      check(item.view.id, 'needs-attention', item.view.issues[0]); await save(); continue;
+      check(item.view.id, 'needs-attention', item.view.issues[0]); await saveProgress(); continue;
     }
     if (selection.deferSetup && !resumeSetup && record.phase === 'created') {
-      check(item.view.id, 'needs-attention', 'IMPORT_SETUP_DEFERRED'); await save(); continue;
+      check(item.view.id, 'needs-attention', 'IMPORT_SETUP_DEFERRED'); await saveProgress(); continue;
     }
     if (item.view.dependsOn?.some(id => missingDependency(id))) {
-      check(item.view.id, 'needs-attention', 'AUTOMATION_DEPENDENCY_NOT_SELECTED'); await save(); continue;
+      check(item.view.id, 'needs-attention', 'AUTOMATION_DEPENDENCY_NOT_SELECTED'); await saveProgress(); continue;
     }
     if (record.phase === 'created') {
       try {

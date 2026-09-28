@@ -124,8 +124,8 @@ it('uses the original portrait control and sends only the items still selected',
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await waitFor(() => expect(api.start).toHaveBeenCalledTimes(1));
   expect(vi.mocked(api.start).mock.calls[0]![0]).toMatchObject({ name: 'Ada', entryIds: ['skill'], avatarImageBase64: 'chosen' });
-  fireEvent.click(await screen.findByRole('button', { name: 'bots.import.open' }));
-  expect(open).toHaveBeenCalledWith('imported');
+  await waitFor(() => expect(open).toHaveBeenCalledExactlyOnceWith('imported'));
+  expect(screen.queryByRole('button', { name: 'bots.import.open' })).toBeNull();
 });
 
 
@@ -166,8 +166,8 @@ it('shows 142 selected skills in a flat searchable paginated list and opens chat
   expect((screen.getByLabelText('Skill 141') as HTMLInputElement).checked).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
-  fireEvent.click(await screen.findByRole('button', { name: 'bots.import.open' }));
-  expect(open).toHaveBeenCalledWith('bot');
+  await waitFor(() => expect(open).toHaveBeenCalledExactlyOnceWith('bot'));
+  expect(screen.queryByRole('button', { name: 'bots.import.open' })).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
   expect(screen.queryByRole('button', { name: 'bots.import.retry' })).toBeNull();
 });

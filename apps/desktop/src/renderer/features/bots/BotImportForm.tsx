@@ -84,12 +84,20 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
   const savedIds = new Set(result?.savedEntryIds);
   const incomplete = result?.savedEntryIds ? selected.some(id => !savedIds.has(id)) : outstanding.some(check => check.message === 'IMPORT_ITEM_FAILED');
   const finished = result && result.status !== 'running';
+  const openedRequest = useRef<string | undefined>(undefined);
+  const enterChat = !!finished && saved && !incomplete && !!result?.canonicalSessionId;
+  useEffect(() => {
+    if (!enterChat || !result || openedRequest.current === result.requestId) return;
+    openedRequest.current = result.requestId;
+    onCreated(result.botId);
+  }, [enterChat, result, onCreated]);
   const categoryEntries = preview?.entries.filter(entry => entry.category === category) ?? [];
   const filtered = categoryEntries.filter(entry => `${entry.name} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const openCategory = (next: CompanionImportCategory) => { setCategory(next); setQuery(''); setPage(0); };
   const checkbox = (ids: string[], checked: boolean, label: string, partial = false) => <input type="checkbox" aria-label={label}
     disabled={locked} checked={checked} ref={node => { if (node) node.indeterminate = partial; }} onChange={event => toggle(ids, event.target.checked)}
     className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" />;
+  if (enterChat) return null;
   return <div className="flex min-h-0 flex-col gap-5">
     <div className="min-h-0 space-y-5 overflow-y-auto">
     {finished && saved ? <div role="status" className="space-y-5">
