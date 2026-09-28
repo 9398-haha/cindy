@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
+import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, parseRemoteResourceTargets, type HostedRemoteCollectionItem, type RemoteHomeCollection } from './remoteResources';
 
 const PREFIX = 'cindy.remoteResources.v1.';
 const MAX_CHARS = 256 * 1024;
@@ -21,10 +21,11 @@ function normalize(raw: unknown): Snapshot {
   const value = raw as Partial<Snapshot>;
   if (Array.isArray(value.home)) for (const row of value.home.slice(0, 32)) {
     if (!row || typeof row.id !== 'string' || row.id.length > 160 || typeof row.title !== 'string' || typeof row.resourceKind !== 'string') continue;
+    if (!isMobileRemoteCollectionSupported(row.id)) continue;
     out.home.push({ id: row.id, title: row.title.slice(0, 512), resourceKind: row.resourceKind.slice(0,160), placement: 'home-scope', targets: parseRemoteResourceTargets(JSON.stringify(row.targets)) });
   }
   if (value.items && typeof value.items === 'object') for (const [id, rows] of Object.entries(value.items).slice(0, 32)) {
-    if (id.length > 160 || !Array.isArray(rows)) continue;
+    if (id.length > 160 || !Array.isArray(rows) || !isMobileRemoteCollectionSupported(id)) continue;
     out.items[id] = rows.slice(0, 200).flatMap((row) => {
       if (!row) return [];
       const [host] = parseRemoteResourceTargets(JSON.stringify([row.host]));
@@ -75,7 +76,7 @@ export const cacheRemoteResourceItems = (userId: string, collectionId: string, i
   s.items[collectionId] = items;
   for (const row of items) {
     const key = remoteResourceReadKey(row.host.deviceId, row.item.ref.id);
-    if (row.item.ref.kind === 'bot' && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
+    if ((row.item.ref.kind === 'bot' || row.item.ref.kind === 'bot-group') && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
   }
 });
 export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number) => update(userId, (s) => {

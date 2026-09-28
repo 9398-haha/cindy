@@ -1,3 +1,5 @@
+import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
+import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
 import {
   FAVORITE_HOST_READY,
@@ -797,6 +799,7 @@ const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
 );
 const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
 const fanOutBotDirectMessageChanged = createIpcFanOut('maker:bot-direct-message:changed');
+const fanOutBotGroupChanged = createIpcFanOut('maker:bot-group:changed');
 const fanOutBotProfileChanged = createIpcFanOut('maker:bot-profile:changed');
 const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
@@ -1060,6 +1063,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       };
     },
   } satisfies ModelFavoritesHostApi,
+  companionImport: {
+    sources: () => ipcRenderer.invoke('companion-import', 'sources'),
+    preview: (sourceId: string) => ipcRenderer.invoke('companion-import', 'preview', sourceId),
+    start: (selection: CompanionImportSelection) => ipcRenderer.invoke('companion-import', 'start', selection),
+    status: (requestId: string) => ipcRenderer.invoke('companion-import', 'status', requestId),
+  } satisfies CompanionImportApi,
   routines: {
     list: (botId: string) => ipcRenderer.invoke('routines:list', botId),
     save: (botId: string, input: RoutineInput, id?: string) =>
@@ -4468,6 +4477,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('shared-task:account', command),
   },
   deviceLink: {
+    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
+      ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
     getState: (): Promise<{
       remoteControlEnabled: boolean;
       keepAwake: boolean;
@@ -5862,6 +5873,56 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<import('../shared/botDirectMessage').BotDirectMessageThreadResult> =>
       ipcRenderer.invoke('maker:bot-direct-message-thread:get', threadId, viewerBotId),
     onBotDirectMessageChanged: fanOutBotDirectMessageChanged,
+    listBotGroups: (): Promise<import('../shared/botGroupChat').BotGroupListResult> =>
+      ipcRenderer.invoke('maker:bot-group:list'),
+    getBotGroup: (
+      groupId: string,
+      options?: import('../shared/botGroupChat').BotGroupGetOptions,
+    ): Promise<import('../shared/botGroupChat').BotGroupGetResult> =>
+      ipcRenderer.invoke('maker:bot-group:get', groupId, options),
+    createBotGroup: (
+      input: import('../shared/botGroupChat').BotGroupCreateInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupCreateResult> =>
+      ipcRenderer.invoke('maker:bot-group:create', input),
+    updateBotGroup: (
+      input: import('../shared/botGroupChat').BotGroupUpdateInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:update', input),
+    setBotGroupMembers: (
+      input: import('../shared/botGroupChat').BotGroupSetMembersInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:set-members', input),
+    deleteBotGroup: (groupId: string): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:delete', groupId),
+    sendBotGroupMessage: (
+      input: import('../shared/botGroupChat').BotGroupSendInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupSendResult> =>
+      ipcRenderer.invoke('maker:bot-group:send', input),
+    continueBotGroupRound: (groupId: string): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:continue', groupId),
+    stopBotGroupRound: (groupId: string): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:stop', groupId),
+    startBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:plan-start', input),
+    dismissBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:plan-dismiss', input),
+    continueBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:plan-continue', input),
+    retryBotGroupPlan: (
+      input: import('../shared/botGroupChat').BotGroupPlanActionInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:plan-retry', input),
+    editBotGroupPlanStep: (
+      input: import('../shared/botGroupChat').BotGroupPlanEditInput,
+    ): Promise<import('../shared/botGroupChat').BotGroupMutationResult> =>
+      ipcRenderer.invoke('maker:bot-group:plan-edit', input),
+    onBotGroupChanged: fanOutBotGroupChanged,
     onBotProfileChanged: fanOutBotProfileChanged,
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,

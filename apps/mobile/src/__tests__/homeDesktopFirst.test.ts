@@ -351,8 +351,8 @@ describe('mobile home desktop-first surface', () => {
     expect(primitivesSource).toContain('pulsing && {');
     expect(primitivesSource).toContain('scale: pulse.interpolate');
     expect(primitivesSource).not.toContain('statusDotReady: {\n    backgroundColor: colors.textPrimary');
-    expect(homeSource).toContain("return item.available && (item.state === 'ready' || item.state === 'busy') ? 'online' : 'offline';");
-    expect(homeSource).toContain("tone={status === 'online' ? 'ready' : 'off'}");
+    // 范围菜单已跟随 iOS 系统下拉,不再画设备在线点(见 DeviceMenuItem 断言)。
+    expect(homeSource).not.toContain("tone={status === 'online' ? 'ready' : 'off'}");
   });
 
   it('mirrors the desktop sidebar Agent identity slot and running treatment', () => {
@@ -512,13 +512,18 @@ describe('mobile home desktop-first surface', () => {
       'const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility(',
     );
     expect(source).toContain('homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)');
-    expect(source).toContain("connectionStates={deviceConnectionStates}");
     expect(source).toContain('function DeviceMenuItem');
-    expect(source).toContain("tone={status === 'online' ? 'ready' : 'off'}");
     expect(source).not.toContain('function DeviceConnectionSpinner');
-    expect(source).not.toContain("connectionState === 'syncing' ? <DeviceConnectionSpinner /> : null");
     expect(source).not.toContain('deviceConnectionSpinner');
-    expect(source).toContain("connectionState === 'failed' ? <View style={styles.deviceConnectionFailedRing} /> : null");
+    // 范围菜单跟随 iOS 系统下拉:自绘回退也不画在线点 / 同步脉冲 / 失败圈。
+    const deviceMenuItem = source.slice(
+      source.indexOf('function DeviceMenuItem'),
+      source.indexOf('function RevokedAccessTip'),
+    );
+    expect(deviceMenuItem).not.toContain('<StatusDot');
+    expect(deviceMenuItem).not.toContain('connectionState');
+    expect(source).not.toContain('connectionStates={deviceConnectionStates}');
+    expect(source).not.toContain('deviceConnectionFailedRing');
   });
 
   it('keeps project and session rows at desktop sidebar information density', () => {

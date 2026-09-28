@@ -7,6 +7,55 @@ vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: gua
 import { PluginDownloadSlot } from '../downloadSlot';
 import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
+it('keeps display progress monotonic across restart retries and resets for a new request', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-progress-')));
+  const events: any[] = [];
+  const slot = new PluginDownloadSlot({
+    root: (id) => path.join(root, id),
+    scope: () => 'owner',
+    send: (_, event) => events.push(event),
+    getGhost: () =>
+      ({
+        enabled: true,
+        approval: {},
+        manifest: { node: {}, network: { hosts: ['github.com'] } },
+      }) as unknown as InstalledGhost,
+    download: async (o) => {
+      expect(o.timeout?.totalMs).toBe(2 * 60 * 60 * 1000);
+      for (const loaded of [0, 6, 0, 2, 8, 10]) {
+        o.onProgress?.({ loaded, total: 10, percent: loaded * 10, speedBps: 2 });
+      }
+      await fs.writeFile(o.targetPath, '0123456789');
+      return {
+        path: o.targetPath,
+        size: 10,
+        sha256: o.sha256,
+        fromCache: false,
+        durationMs: 1,
+        resumedFromBytes: 0,
+      };
+    },
+  });
+  try {
+    for (const id of ['first', 'second']) {
+      expect(
+        await slot.handle('p', {
+          kind: 'start',
+          id,
+          url: 'https://github.com/file',
+          sha256: 'a'.repeat(64),
+          bytes: 10,
+        }),
+      ).toMatchObject({ ok: true });
+      const progress = events.filter((e) => e.data.id === id && e.data.phase === 'downloading');
+      expect(progress.map((e) => e.data.loaded)).toEqual([0, 6, 6, 6, 8, 10]);
+      expect(progress.map((e) => e.data.percent)).toEqual([0, 60, 60, 60, 80, 100]);
+      expect(progress.every((e) => e.data.speedBps === 2)).toBe(true);
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 it('a destroyed caller cannot enter Node after a delayed lease, even if the plugin remains enabled', async () => {
   let finish!: () => void;
   const barrier = new Promise<void>((resolve) => {

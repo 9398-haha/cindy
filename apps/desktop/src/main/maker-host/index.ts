@@ -1,3 +1,6 @@
+import { createCompanionImportProvider } from '../bot-import/importProvider.js';
+import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
+import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { cindyMakeManager } from '../cindy-make/manager.js';
@@ -192,7 +195,11 @@ import {
   refreshDiscoveredCodexModels,
   setNativeProviderClaimListener,
 } from './createDesktopProviderService.js';
-import { clearAnthropicDiscoveredModels } from './model-discovery/anthropic.js';
+import {
+  clearAnthropicDiscoveredModels,
+  requestAnthropicModelProbe,
+  setAnthropicModelProbe,
+} from './model-discovery/anthropic.js';
 import {
   buildDesktopClaudeRuntimeConfig,
   desktopCodexRuntimeConfig,
@@ -397,7 +404,7 @@ const requestAutoReviewText = createAutoReviewModelRouter({
   logger: desktopMakerLogger,
 });
 
-const reviewAutoPermissionAction = createAutoPermissionReviewer({
+export const reviewAutoPermissionAction = createAutoPermissionReviewer({
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
@@ -1146,6 +1153,8 @@ export function getMaker(): Maker {
     // 因此这里必须用具名 const 保住引用(不能内联 spread 出临时数组)。
     const claudeMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      createCompanionConnectionsProvider(),
+      createCompanionImportProvider(),
       orcaWorkerBridgeProvider,
       cindyMakeProvider,
     ];
@@ -1157,6 +1166,7 @@ export function getMaker(): Maker {
       log: desktopMakerLogger.child('command-gate'),
     });
     const claudeAgent = new ClaudeCodeAgent({
+      resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
@@ -1457,6 +1467,8 @@ export function getMaker(): Maker {
     });
     const codexMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      createCompanionConnectionsProvider(),
+      createCompanionImportProvider(),
       orcaWorkerBridgeProvider,
       cindyMakeProvider,
     ];
@@ -1482,6 +1494,7 @@ export function getMaker(): Maker {
         ?? 'default';
     };
     const codexAgent = new CodexAgent({
+      resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
@@ -2219,6 +2232,8 @@ export function getMaker(): Maker {
     // 原地 splice 同步进 capabilities(PiAgent 每次 startSession 现读)。
     const piMcpProviders = [
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      createCompanionConnectionsProvider(),
+      createCompanionImportProvider(),
       orcaWorkerBridgeProvider,
       cindyMakeProvider,
     ];
@@ -2293,7 +2308,7 @@ export function getMaker(): Maker {
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
-      resolvePiVisionBridgeEnv: (model) =>
+      resolvePiVisionBridgeEnv: (model, sessionId) =>
         buildPiVisionBridgeEnv(
           {
             getProviderById: (providerId) =>
@@ -2305,6 +2320,7 @@ export function getMaker(): Maker {
             fetch: outboundFetch,
           },
           model,
+          sessionId,
         ),
       // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
@@ -2835,6 +2851,12 @@ export function getMaker(): Maker {
       log: desktopMakerLogger,
     });
     void _codexModelBackfill.request();
+    // Anthropic 清单只来自 Claude Code SDK:maker 就绪后主动读一次,不等用户先跑任务
+    // (旧缓存也可能缺少 SDK 只以简称返回的当前型号)。登录 / 认领后由对应收口再次请求。
+    setAnthropicModelProbe((onSupportedModels) =>
+      makerRef.refreshAgentLocalModels('claude-code', { onSupportedModels }),
+    );
+    requestAnthropicModelProbe();
   }
   return _maker;
 }
@@ -2961,6 +2983,8 @@ export function resetMaker(): void {
   // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
   // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
   _codexModelBackfill = null;
+  // Anthropic 清单探测同样捕获了旧 maker:注销后,旧实例的在途结果也不再生效。
+  setAnthropicModelProbe(null);
   _initialCustomMcpRefresh = undefined;
   setVisionBridgeController(null);
   _visionBridgeInstance?.dispose();

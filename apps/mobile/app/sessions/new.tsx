@@ -57,6 +57,7 @@ import {
   Plus,
   Settings,
   Target,
+  UsersRound,
   X,
   Zap,
 } from 'lucide-react-native';
@@ -125,10 +126,27 @@ import {
 } from '@/session/agentCapabilitiesCache';
 import {
   ContextSheet,
-
+  ContextSheetFooterButton,
   ContextSheetGroup,
   ContextSheetRow,
 } from '@/session/ContextSheet';
+import { OrcaWorkerFormView } from '@/session/ContextSheetCollabView';
+import { useOrcaWorkerForm } from '@/session/useSessionOrcaCollab';
+import {
+  buildOrcaEnableOptions,
+  describeOrcaError,
+  enableOrcaTeam,
+  isOrcaCollabEligible,
+  orcaAgentLabel,
+  orcaCollabEntryHint,
+  narrowOrcaWorkerProvider,
+  orcaCollabDraftTargetKey,
+  readOrcaCollabEntryStatus,
+  rememberOrcaStartFailure,
+  type OrcaCollabEntryStatus,
+  type OrcaWorkerFormValue,
+} from '@/session/orcaTeam';
+import { buildDraftWorkerInitialTask } from '@cindy/maker-shared/orca-team';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
 import { ContextSheetGoalCreateForm } from '@/session/ContextSheetGoalView';
 import type { MobileGoalLimitsInput } from '@cindy/maker-shared/device-link-contract';
@@ -242,6 +260,7 @@ import {
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
+import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
 import { useComposerResize } from '@/session/useComposerResize';
@@ -319,7 +338,6 @@ import type { MobileModelConfiguration } from '@/session/unifiedMobileModels';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
-import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -544,8 +562,52 @@ export default function NewRemoteSessionScreen() {
   const [showHiddenDirectories, setShowHiddenDirectories] = useState(false);
   // Context 面板(+ 号弹出的可拖动 sheet):open + 子视图(主视图 / 截图列表 / 目标草稿)。
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
-  const [contextSheetView, setContextSheetView] = useState<'main' | 'goal'>('main');
+  const [contextSheetView, setContextSheetView] = useState<'main' | 'goal' | 'collab'>('main');
   const contextSheetMediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
+  // 新建即协同(对齐桌面 NewMakerDraftRoute 的协同草稿):确认后只武装草稿,发送首条消息 /
+  // 建目标时在 createSession 之后开启(首轮 Lead 才有协同工具)。一次性:创建后复位。
+  const [collabDraft, setCollabDraft] = useState<OrcaWorkerFormValue | null>(null);
+  const [collabEntryStatus, setCollabEntryStatus] = useState<OrcaCollabEntryStatus>('loading');
+  const collabForm = useOrcaWorkerForm({
+    maker,
+    // 按区域限定的账号键:Global 与中国大陆版同号不同人,记忆(含完全访问)不能串。
+    prefsScope: outboxOwner.accountKey || null,
+    active: contextSheetOpen && contextSheetView === 'collab',
+    setSheetOpen: setContextSheetOpen,
+    connectionEpoch,
+  });
+  const collabTarget = useMemo(() => ({
+    orcaRole: null,
+    workspaceKind: draft.workspaceKind,
+    workingDir: draft.workingDir || null,
+    remoteHostId: null,
+  }), [draft.workingDir, draft.workspaceKind]);
+  const collabEligible = isOrcaCollabEligible(collabTarget);
+  // 换设备 / 换工作区后,草稿里的协同设置属于旧目标:丢弃,避免在新目标上静默开启。
+  // 按草稿武装时的目标比对(而不是「目标一变就清」):返回编辑恢复草稿时目标与草稿一起回填,
+  // 不会被这里误清。
+  const collabTargetKey = orcaCollabDraftTargetKey(selectedDeviceId, draft.workspaceKind, draft.workingDir);
+  const collabDraftTargetRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (collabDraftTargetRef.current !== collabTargetKey) setCollabDraft(null);
+  }, [collabTargetKey]);
+  // 读入口状态;重连后重读:断线时读失败会落成「不可用」,不能让表单一直卡住。
+  useEffect(() => {
+    if (!contextSheetOpen || !collabEligible || !selectedDeviceId) return undefined;
+    let cancelled = false;
+    setCollabEntryStatus('loading');
+    void readOrcaCollabEntryStatus(maker, collabTarget, draft.agentKind)
+      .then((status) => { if (!cancelled) setCollabEntryStatus(status); });
+    return () => { cancelled = true; };
+  }, [collabEligible, collabTarget, connectionEpoch, contextSheetOpen, draft.agentKind, maker, selectedDeviceId]);
+  const openCollabDraftForm = useCallback(() => {
+    if (collabDraft) {
+      collabForm.restore(collabDraft);
+    } else {
+      collabForm.reset();
+    }
+    setContextSheetView('collab');
+  }, [collabDraft, collabForm]);
   // 目标模式(对齐桌面 NewMakerDraftRoute.handleCreateGoal):填完表单直接建会话 + setGoal,
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
@@ -572,9 +634,8 @@ export default function NewRemoteSessionScreen() {
   }, [workspacePickerOpen, measureWorkspacePicker]);
   // 模型浮窗(ContextSheet 同款 Modal;新建页权限已提为独立选择器,浮窗只留模型)。
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
-  // 权限模式独立浮窗(composer 工具条权限药丸点开;列表复用 MobilePermissionPickerList)。
+  // 权限模式独立浮窗(composer 工具条权限药丸点开;面板自持档位,见 NativePermissionSheet)。
   const [permissionSheetOpen, setPermissionSheetOpen] = useState(false);
-  const [permissionSheetSnap, setPermissionSheetSnap] = useState<ContextSheetSnap>('half');
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   // 被控端 runtime 已注册的 agent 集合(null = 未拉到 → fail-open 不过滤入口)。据此过滤新建
   // agent 选项:被控端 Pi 二进制缺失时其 agent map 无 pi,但模型目录仍投影 Pi,不过滤会让用户
@@ -712,6 +773,14 @@ export default function NewRemoteSessionScreen() {
     if (!stashed) return;
     restoreCreationDraft(stashed.draft, [...stashed.attachments]);
     if (stashed.notice) setAttachmentError(stashed.notice);
+    if (stashed.collabDraft && stashed.deviceId) {
+      collabDraftTargetRef.current = orcaCollabDraftTargetKey(
+        stashed.deviceId,
+        stashed.draft.workspaceKind,
+        stashed.draft.workingDir,
+      );
+      setCollabDraft(stashed.collabDraft);
+    }
     if (stashed.deviceId) {
       userTouchedDeviceRef.current = true;
       setSelectedDeviceId(stashed.deviceId);
@@ -777,8 +846,13 @@ export default function NewRemoteSessionScreen() {
   const isShareTargetFocused = useIsFocused();
   useEffect(() => {
     if (!isShareTargetFocused || !auth.isAuthenticated || !incomingShareBatch
-      || getMobileAuthOwner().accountId !== auth.user?.id
-      || !consumeIncomingShareBatch(incomingShareBatch.id)) return;
+      || getMobileAuthOwner().accountId !== auth.user?.id) return;
+    try {
+      if (!consumeIncomingShareBatch(incomingShareBatch.id)) return;
+    } catch {
+      setAttachmentError(i18n.t('composer.upload.shareReceiveFailed'));
+      return;
+    }
     const selection = selectIncomingShareUploadCandidates(incomingShareBatch.payloads);
     const remainingSlots = Math.max(
       0,
@@ -899,7 +973,10 @@ export default function NewRemoteSessionScreen() {
     [capabilities, draft.model],
   );
   // 被控端供应商目录 → provider-aware 模型分段(对齐桌面)。0 供应商 / 旧被控端 → 回退扁平列表。
-  const deviceProviders = useDeviceProviders(selectedDeviceId || undefined, modelSheetOpen);
+  const deviceProviders = useDeviceProviders(
+    selectedDeviceId || undefined,
+    modelSheetOpen || collabForm.modelPicker.open,
+  );
   // 模型列表元信息(单价 / 折扣版 key presence)+ 草稿 per-(agent,来源,模型) 记忆(对齐桌面)。
   const deviceModelPricing = useDeviceModelPricing(selectedDeviceId || undefined);
   const deviceApiKeyStatus = useDeviceApiKeyStatus(selectedDeviceId || undefined);
@@ -1599,10 +1676,12 @@ export default function NewRemoteSessionScreen() {
     && !voiceIsProcessing
     && !worktreeCreateBlocked;
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
+  // 停止后 150ms 内保持录音胶囊(仍禁止操作),超过才换处理转圈:快速收尾不闪转圈。
+  const voiceProcessingIndicator = useMobileVoiceProcessingIndicator(voiceState);
   // 录音计时(红点+m:ss 胶囊,与会话页/桌面同形态);pillWidth 同步驱动工具排占位。
   // counting 只认真实采集,启动链路(权限弹窗等)不计入时长,pending 期显示 0:00。
   const voiceRecordingTimer = useMobileVoiceRecordingTimer({
-    expanded: voiceIsListening || voiceStartPending,
+    expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,
     counting: voiceIsListening,
   });
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
@@ -2455,7 +2534,6 @@ export default function NewRemoteSessionScreen() {
     setAgentPickerOpen(false);
     setModelSheetOpen(false);
     setWorktreeBranchSheetOpen(false);
-    setPermissionSheetSnap('half');
     setPermissionSheetOpen(true);
   }, []);
 
@@ -3323,12 +3401,13 @@ export default function NewRemoteSessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。
       void refreshMobileVoiceDictionary(selectedDeviceId, () => maker.getVoiceDictionary());
-      const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null);
-      const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        prewarmedVoicePromise,
-        prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(selectedDeviceId, voice?.credential.settings?.voiceInputHistory)),
-        hydrateMobileVoiceDictionary(selectedDeviceId),
-      ]);
+      const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null));
+      // 语音历史与词典快照只丰富润色提示,润色请求在开麦之后才构建:本地存储读取
+      // 放后台,不再挡在开麦之前;读失败同样不影响录音。
+      let localVoiceInputHistory: readonly string[] | undefined;
+      void getMobileVoiceInputHistoryForHost(selectedDeviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)
+        .then((history) => { localVoiceInputHistory = history; }, () => undefined);
+      void hydrateMobileVoiceDictionary(selectedDeviceId).catch(() => undefined);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential
         ?? createMobileCindyVoiceCredential(selectedDeviceId);
@@ -3368,7 +3447,7 @@ export default function NewRemoteSessionScreen() {
           selectedText: currentDraft.slice(initialSelection.start, initialSelection.end).slice(0, 1200) || undefined,
           selectionAfter: selectionAfter || undefined,
         },
-        localVoiceInputHistory,
+        localVoiceInputHistory: () => localVoiceInputHistory,
         readCurrentDraft: () => firstMessageRef.current,
         onDraftChanged: (text, selection, replacement) => {
           // Follow ASR until a native edit claims the caret; then preserve its
@@ -3695,6 +3774,20 @@ export default function NewRemoteSessionScreen() {
             testID="newSession.planModeChip"
           />
         ) : null}
+        {collabDraft ? (
+          <PlanModeChip
+            disabled={creating}
+            exitAccessibilityLabel={t('session.collab.draftRemove')}
+            icon={<UsersRound color={colors.textPrimary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
+            label={t('session.collab.draftChip')}
+            onExit={() => setCollabDraft(null)}
+            onPress={() => {
+              openCollabDraftForm();
+              setContextSheetOpen(true);
+            }}
+            testID="newSession.collabChip"
+          />
+        ) : null}
         <Pressable
           accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
           accessibilityRole="button"
@@ -3795,12 +3888,12 @@ export default function NewRemoteSessionScreen() {
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
         voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
         voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
-        (creating || voiceIsProcessing) && styles.disabled,
+        (creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,
         pressed && styles.pressed,
       ]}
       testID="newSession.voiceButton"
     >
-      {voiceIsProcessing ? (
+      {voiceProcessingIndicator.showProcessing ? (
         <ActivityIndicator color={colors.textSecondary} size="small" />
       ) : voiceRecordingTimer.label !== null ? (
         // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
@@ -3972,6 +4065,7 @@ export default function NewRemoteSessionScreen() {
     // 生效,读 state 会拿到「入队前」旧值绕过上限(review P1)。
     getRemainingAttachmentSlots: () =>
       MOBILE_MAX_ATTACHMENTS - attachmentsRef.current.length - getPendingUploadCount(),
+    getAttachment: (attachmentId) => attachmentsRef.current.find((item) => item.id === attachmentId),
   });
   composerAnnotationsRef.current = composerAnnotations;
 
@@ -4637,6 +4731,15 @@ export default function NewRemoteSessionScreen() {
         attachments: sendAttachments,
         planModeArm: planModeCapability && planModeDraftOn,
         legacyPlanRestore,
+        // 首个 Worker 先于 Lead 首条消息创建:把待发送的 Lead 输入作为上下文附在 Worker
+        // 任务后(与桌面控制端老被控端兼容路径同口径,见 buildDraftWorkerInitialTask)。
+        ...(collabDraft ? {
+          orcaEnable: buildOrcaEnableOptions(
+            narrowOrcaWorkerProvider(collabDraft, deviceProviders.ready ? deviceProviders.providers : null),
+            buildDraftWorkerInitialTask(collabDraft.initialTask, effectiveDraft.firstMessage),
+          ),
+          collabDraft,
+        } : {}),
         precreatedWorktree,
         precreatedWorktreeAccountId: worktreeAccountId,
         // stale-ready 防护(review P1):缓存判 ready/unknown 也可能已过期。管线内
@@ -4708,6 +4811,7 @@ export default function NewRemoteSessionScreen() {
         // 一次性语义:chip 状态只影响这一次创建,创建后复位草稿态。
         setPlanModeDraftOn(false);
       }
+      setCollabDraft(null);
       voiceDictionaryLearningTrackerRef.current?.flush();
       // 本页即将 unmount 跳转会话页,标注私有缓存(源图 / 烧录图副本)清一遍
       // (review P2——此前只有目标流有这行,首条消息发送成功路径漏了,标注
@@ -4736,6 +4840,9 @@ export default function NewRemoteSessionScreen() {
   }, [
     agentAuthVerdict,
     auth.user?.id,
+    collabDraft,
+    deviceProviders.ready,
+    deviceProviders.providers,
     confirmAgentUnauthenticated,
     deviceLinkStatus,
     selectedDeviceId,
@@ -5332,6 +5439,20 @@ export default function NewRemoteSessionScreen() {
       // 调用进「编辑已有目标」分支会重落目标消息、停/重启轮次并重置计数)——仅
       // 当首次请求确认未执行才可重试,故失败直接进入接回:继续 settle 落账并跳转,
       // 目标未设置经 goalError 路由参数在会话页呈现,用户可在会话内重试设置目标。
+      // 协同草稿:goal.set 之前开启,首轮目标 Lead 才有协同工具。失败不阻断目标,
+      // 任务照单任务继续,原因带到会话页提示。
+      let collabEnabled = false;
+      if (collabDraft) {
+        try {
+          await enableOrcaTeam(maker, result.sessionId, buildOrcaEnableOptions(
+            narrowOrcaWorkerProvider(collabDraft, deviceProviders.ready ? deviceProviders.providers : null),
+            buildDraftWorkerInitialTask(collabDraft.initialTask, input.objective),
+          ));
+          collabEnabled = true;
+        } catch (collabErr) {
+          rememberOrcaStartFailure(result.sessionId, describeOrcaError(collabErr, null));
+        }
+      }
       let goalSetError: string | null = null;
       try {
         await maker.goal.set({ sessionId: result.sessionId, objective: input.objective, ...(input.limits ? { limits: input.limits } : {}) });
@@ -5366,6 +5487,9 @@ export default function NewRemoteSessionScreen() {
         });
         session = { ...session, title: titled.title };
       }
+      // 协同已开启:本地兜底(getSession 失败时由创建结果合成)不带 orcaRole,写入前补上 Lead
+      // 身份,不让兜底行盖掉已收到的 Lead 标记(与普通新建管线同口径)。
+      if (collabEnabled && session.orcaRole !== 'lead') session = { ...session, orcaRole: 'lead' };
       if (!isCurrentOwner() || !ensureDeviceAlive()) return;
       remoteSessionStore.upsertDeviceSession(selectedDeviceId, selectedDeviceName, session);
       if (session.title && !isDefaultDraftSessionTitle(session.title)) {
@@ -5485,6 +5609,9 @@ export default function NewRemoteSessionScreen() {
   }, [
     agentAuthVerdict,
     auth,
+    collabDraft,
+    deviceProviders.ready,
+    deviceProviders.providers,
     confirmAgentUnauthenticated,
     draft,
     goalBusy,
@@ -6058,7 +6185,7 @@ export default function NewRemoteSessionScreen() {
                     }
                   }}
                   placeholder={voiceIsListening ? '' : composerPlaceholder}
-                  placeholderTextColor={colors.textTertiary}
+                  placeholderTextColor={colors.textPlaceholder}
                   resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
                   scrollEnabled={composerInputScrollEnabled}
                   selection={firstMessageSelection}
@@ -6162,8 +6289,27 @@ export default function NewRemoteSessionScreen() {
         keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         onBack={contextSheetView !== 'main' ? () => setContextSheetView('main') : undefined}
         onClose={() => setContextSheetOpen(false)}
+        footer={contextSheetView === 'collab' ? (
+          <ContextSheetFooterButton
+            disabled={!collabForm.valid || collabEntryStatus !== 'ready' || creating}
+            label={t('session.collab.draftSubmit')}
+            onPress={() => {
+              // 与桌面新建任务一样:确认协同草稿即记住这次的 Worker 选择。
+              collabForm.remember(collabForm.form);
+              collabDraftTargetRef.current = collabTargetKey;
+              setCollabDraft(collabForm.form);
+              setContextSheetView('main');
+              setContextSheetOpen(false);
+            }}
+            testID="newSession.collabDraftSubmit"
+          />
+        ) : undefined}
         testID="newSession.contextSheet"
-        title={contextSheetView === 'goal' ? t('session.common.goalMode') : t('session.common.context')}
+        title={contextSheetView === 'goal'
+          ? t('session.common.goalMode')
+          : contextSheetView === 'collab'
+            ? t('session.collab.enableTitle')
+            : t('session.common.context')}
         visible={contextSheetOpen}
       >
         {contextSheetView === 'main' ? (
@@ -6219,7 +6365,54 @@ export default function NewRemoteSessionScreen() {
                 testID="newSession.contextSheetGoalRow"
                 trailing="chevron"
               />
+              {collabEligible ? (
+                <ContextSheetRow
+                  accessibilityHint={orcaCollabEntryHint(collabEntryStatus) ?? undefined}
+                  disabled={creating}
+                  icon={<UsersRound color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.collab.modeLabel')}
+                  onPress={openCollabDraftForm}
+                  testID="newSession.contextSheetCollabRow"
+                  trailing={collabDraft ? (
+                    <>
+                      <Text style={{ color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
+                        {t('session.collab.enabled')}
+                      </Text>
+                      <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                    </>
+                  ) : 'chevron'}
+                />
+              ) : null}
             </ContextSheetGroup>
+          </>
+        ) : contextSheetView === 'collab' ? (
+          <>
+            <OrcaWorkerFormView
+              agents={collabForm.agents}
+              busy={creating}
+              customRoleMode={collabForm.customRoleMode}
+              form={collabForm.form}
+              notice={orcaCollabEntryHint(collabEntryStatus)}
+              onAgentChange={collabForm.changeAgent}
+              onChange={collabForm.patch}
+              onCustomRoleModeChange={collabForm.setCustomRoleMode}
+              onPermissionChange={(mode) => void collabForm.changePermission(mode)}
+              onPickModel={collabForm.modelPicker.openPicker}
+            />
+            {collabDraft ? (
+              <ContextSheetGroup label="">
+                <ContextSheetRow
+                  destructive
+                  icon={<X color={colors.destructive} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.collab.draftRemove')}
+                  onPress={() => {
+                    setCollabDraft(null);
+                    setContextSheetView('main');
+                  }}
+                  testID="newSession.collabDraftRemove"
+                />
+              </ContextSheetGroup>
+            ) : null}
           </>
         ) : (
           <ContextSheetGoalCreateForm
@@ -6352,37 +6545,67 @@ export default function NewRemoteSessionScreen() {
         testID="newSession.modelSheet"
         visible={modelSheetOpen}
       />
-      {/* 权限模式独立浮窗:composer 权限药丸点开;列表复用 MobilePermissionPickerList,
-          选择走 selectPermissionMode(含 Full access 确认弹层 + per-agent 记忆)后关浮窗。 */}
-      {Platform.OS === 'ios' ? (<NativePermissionSheet visible={permissionSheetOpen} onClose={() => setPermissionSheetOpen(false)}
- activeMode={displayPermissionMode} disabled={creating} onSelect={selectPermissionMode}
- options={runtimeOptions.permissionOptions} testID="newSession.permissionSheet" />) : (<SheetModal
-        backdropTestID="newSession.permissionSheet.backdrop"
-        onBackdropPress={() => setPermissionSheetOpen(false)}
-        onRequestClose={() => setPermissionSheetOpen(false)}
+      {collabEligible ? (
+        // 协同首个 Worker 的模型选择:只回写协同表单,不改新任务自己的模型。
+        <ModelPickerSheet
+          unified={{
+            currentSelection: collabForm.form.model ? {
+              agentKind: collabForm.form.agent,
+              activeModelId: collabForm.form.model.id,
+              selectedProviderId: collabForm.form.model.providerId,
+              selectedEffort: collabForm.form.model.effort ?? '',
+              selectedFastMode: collabForm.form.model.fast,
+            } : undefined,
+            scope: JSON.stringify([auth.user?.id, selectedDeviceId, 'orca-worker']),
+            agents: collabForm.pickerAgents,
+            loadCapabilities: async agent => {
+              const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+              if (!result) throw new Error('Capabilities unavailable');
+              return result;
+            },
+            onSelect: collabForm.modelPicker.select,
+          }}
+          activeModelId={collabForm.form.model?.id ?? ''}
+          activePermissionMode=""
+          agentKind={collabForm.form.agent}
+          apiKeyStatus={deviceApiKeyStatus}
+          capabilities={null}
+          emptyHint={deviceProviders.error && !deviceProviders.unsupported
+            ? humanizeRemoteError(deviceProviders.error)
+            : undefined}
+          flatOptions={collabForm.modelPicker.flatModelOptions}
+          hidePermissionTrigger
+          keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          loading={deviceProviders.loading}
+          modelVisibilityOverrides={deviceProviders.modelVisibilityOverrides}
+          onClose={collabForm.modelPicker.close}
+          onClosed={collabForm.modelPicker.closed}
+          onSelectFlatModel={collabForm.modelPicker.selectFlatModel}
+          onSelectPermissionMode={() => undefined}
+          onSelectProviderRow={() => undefined}
+          permissionOptions={[]}
+          pricing={deviceModelPricing}
+          providers={deviceProviders.providers}
+          providersReady={deviceProviders.ready}
+          providersUnsupported={deviceProviders.unsupported}
+          selectedEffort={collabForm.form.model?.effort ?? ''}
+          selectedFastMode={!!collabForm.form.model?.fast}
+          selectedProviderId={collabForm.form.model?.providerId ?? null}
+          testID="newSession.collabModelSheet"
+          visible={collabForm.modelPicker.open}
+        />
+      ) : null}
+      {/* 权限模式独立浮窗:composer 权限药丸点开。两端同一语义:点选先关浮窗,关闭完成后再走
+          selectPermissionMode(含 Full access 确认弹层 + per-agent 记忆)。 */}
+      <NativePermissionSheet
         visible={permissionSheetOpen}
-      >
-        <SheetSurface
-          bottomInset={safeAreaInsets.bottom}
-          heights={permissionSheetHeights}
-          onClose={() => setPermissionSheetOpen(false)}
-          onSnapChange={setPermissionSheetSnap}
-          snap={permissionSheetSnap}
-          testID="newSession.permissionSheet"
-          title={t('models.picker.permissionTitle')}
-        >
-          <MobilePermissionPickerList
-            activeMode={displayPermissionMode}
-            disabled={creating}
-            onSelect={(mode) => {
-              selectPermissionMode(mode);
-              setPermissionSheetOpen(false);
-            }}
-            options={runtimeOptions.permissionOptions}
-            testID="newSession.permissionSheet.option"
-          />
-        </SheetSurface>
-      </SheetModal>)}
+        onClose={() => setPermissionSheetOpen(false)}
+        activeMode={displayPermissionMode}
+        disabled={creating}
+        onSelect={selectPermissionMode}
+        options={runtimeOptions.permissionOptions}
+        testID="newSession.permissionSheet"
+      />
       {composerPreviewUrl && composerGalleryImages.length > 0 ? (
         // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
         // annotation:托盘图可圈点标注 / 再编辑,保存后烧录替换附件重新上传。
@@ -6551,6 +6774,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flex: 1,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     marginHorizontal: spacing.md,
     textAlign: 'right',
     fontVariant: ['tabular-nums'],
@@ -6575,10 +6799,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 42,
   },
   selectorText: {
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     flexShrink: 1,
     fontSize: typeScale.body,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.body,
     minWidth: 0,
   },
@@ -6687,6 +6911,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -6706,16 +6931,19 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   workspaceProjectTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   workspaceProjectPath: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     marginTop: 1,
   },
   workspaceEmptyText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
@@ -6768,10 +6996,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingRight: spacing.xs,
   },
   worktreeBranchLabel: {
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     flexShrink: 1,
     fontSize: typeScale.footnote,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     minWidth: 0,
   },
@@ -6803,10 +7031,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.cta,
   },
   worktreeToggleLabel: {
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     flexShrink: 1,
     fontSize: typeScale.footnote,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     minWidth: 0,
   },
@@ -6828,13 +7056,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.body,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.body,
+    fontWeight: fontWeight.regular,
   },
-  hint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   errorText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.md,
   },
@@ -6855,7 +7084,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
     minWidth: 0,
   },
@@ -6873,6 +7102,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   workspaceQuickPickText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   browseActions: {
@@ -6891,6 +7121,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   browseActionText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   browseDriveRow: {
@@ -6901,7 +7132,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   browseDriveLabel: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   browseDriveOptions: {
     alignItems: 'center',
@@ -6946,7 +7178,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   browseHiddenLabel: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   browseList: { maxHeight: 200 },
   browseListContent: { gap: spacing.sm },
@@ -6960,8 +7193,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  browseEntryName: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  browseEntryPath: { color: colors.textTertiary, fontSize: typeScale.micro, marginTop: 2 },
+  browseEntryName: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  browseEntryPath: { color: colors.textTertiary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, marginTop: 2 },
   browseSelectButton: {
     alignItems: 'center',
     borderColor: colors.border,
@@ -6996,12 +7229,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
   paletteSecondary: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     maxWidth: 160,
   },
   paletteStatusRow: {
@@ -7056,7 +7291,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceStatusText: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   voiceStatusButton: {
@@ -7096,9 +7331,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
   },
   // 语音态占位文案渲染的就是普通态 TextInput 的 placeholder,颜色必须同源
-  // (placeholderTextColor 也是 textTertiary),否则一进语音态这行字会变色。
+  // (placeholderTextColor 也是 textPlaceholder),否则一进语音态这行字会变色。
   voiceDraftListeningText: {
-    color: colors.textTertiary,
+    color: colors.textPlaceholder,
     ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   composerToolbarWrap: {
@@ -7125,7 +7360,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 1,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.semibold,
+    fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
     minWidth: 0,
   },

@@ -6,11 +6,10 @@ import { resolveRemoteText, type RemoteResource, type RemoteResourceRef } from '
 import { useAuth } from '@/auth/AuthContext';
 import { Text } from '@/components/AppText';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { fontWeight, iconSize, iconStroke, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
 import { TeammatePicker } from './TeammatePicker';
 import { CompanionCreateSheet, CompanionProfileSheet } from './CompanionProfileSheet';
-import { CompanionAutomationSheet } from './CompanionAutomationSheet';
 import { useTeammateNavigation } from './useTeammateNavigation';
 
 const AVATAR_SIZE = 32;
@@ -28,7 +27,6 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
   const navigation = useTeammateNavigation();
   const [picker, setPicker] = useState(false);
   const [profile, setProfile] = useState(false);
-  const [automation, setAutomation] = useState(false);
   const [creating, setCreating] = useState(false);
   const created = useRef<RemoteResourceRef | null>(null);
   const pending = useRef<(() => void) | null>(null);
@@ -57,13 +55,11 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
     <CompanionProfileSheet visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
       resource={resource} collectionId={resource.ref.collectionId} deviceId={deviceId} deviceName={deviceName} online={online}
       onDeleted={() => void navigation.chooseMode('teammates')}
-      onOpenSearch={() => afterProfile(onSearch)} onOpenAutomation={() => afterProfile(() => setAutomation(true))} />
-    <CompanionAutomationSheet visible={automation} onClose={() => setAutomation(false)} collectionId="routines"
-      botId={resource.ref.id} deviceId={deviceId} deviceName={deviceName} online={online} />
+      onOpenSearch={() => afterProfile(onSearch)} />
   </>;
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', minHeight: 52, gap: spacing.md, paddingHorizontal: spacing.lg },
   identity: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 44, gap: spacing.sm },
-  name: { flexShrink: 1, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, color: colors.textPrimary },
+  name: { flexShrink: 1, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.medium, color: colors.textPrimary },
 });

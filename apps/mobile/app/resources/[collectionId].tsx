@@ -1,6 +1,6 @@
 import { useRemoteResourceList } from '@/session/useRemoteResourceList';
 import { isRemoteResourceUnread } from '@/device-link/remoteResourceCache';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
@@ -26,12 +26,13 @@ import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome'
 import { useAuth } from '@/auth/AuthContext';
 import {
   type HostedRemoteCollectionItem,
+  isMobileRemoteCollectionSupported,
   parseRemoteResourceTargets,
 } from '@/device-link/remoteResources';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 type HostedResourceItem = HostedRemoteCollectionItem;
 
@@ -46,6 +47,13 @@ function timestampLabel(value: number | undefined, locale: string): string | nul
 }
 
 export default function RemoteCollectionScreen() {
+  const params = useLocalSearchParams<{ collectionId?: string | string[] }>();
+  const collectionId = Array.isArray(params.collectionId) ? params.collectionId[0] ?? '' : params.collectionId ?? '';
+  if (!isMobileRemoteCollectionSupported(collectionId)) return <Redirect href="/devices" />;
+  return <RemoteCollectionScreenContent />;
+}
+
+function RemoteCollectionScreenContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
@@ -170,7 +178,7 @@ export default function RemoteCollectionScreen() {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { backgroundColor: colors.surface, flex: 1 },
   center: { alignItems: 'center', flex: 1, gap: spacing.sm, justifyContent: 'center' },
-  muted: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  muted: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   listContent: { gap: spacing.sm, padding: spacing.md },
   emptyContent: { flexGrow: 1, justifyContent: 'center', padding: spacing.xl },
   row: {
@@ -198,8 +206,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   body: { flex: 1, gap: spacing.xs, minWidth: 0 },
   titleRow: { alignItems: 'baseline', flexDirection: 'row', gap: spacing.sm },
-  title: { color: colors.textPrimary, flex: 1, fontSize: typeScale.listTitle, fontWeight: fontWeight.semibold },
-  time: { color: colors.textTertiary, fontSize: typeScale.footnote },
-  subtitle: { color: colors.textSecondary, fontSize: typeScale.body },
-  meta: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  title: { color: colors.textPrimary, flex: 1, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
+  time: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  subtitle: { color: colors.textSecondary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  meta: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

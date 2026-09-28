@@ -55,7 +55,7 @@ export default function CompanionDirectMessages() {
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   return <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.screen}>
     <SimpleStackHeader title={viewer && peer ? `${viewer.name} ⇄ ${peer.name}` : t('devices.companions.messages')}
-      subtitle={t('devices.companions.readOnly')} onBack={() => goBackGuarded(router)} />
+      onBack={() => goBackGuarded(router)} />
     <ScrollView contentContainerStyle={styles.content} testID="companion.directThread">
       {!online ? <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text> : null}
       {messages.map((message) => {
@@ -98,9 +98,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // Own side reads like the user's bubble; the peer sits on the chip surface (Desktop msg-user / surface-chip).
   bubbleOwn: { backgroundColor: colors.surfaceElevated, borderColor: colors.borderStrong },
   bubblePeer: { backgroundColor: colors.surfaceChip, borderColor: colors.border },
-  note: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   empty: { color: colors.textTertiary, textAlign: 'center', paddingVertical: spacing.xl },
   limit: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   limitLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-  limitText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center' },
+  limitText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
 });

@@ -187,6 +187,9 @@ export class PluginDownloadSlot {
       }
       if (this.active.size >= 8) throw Error('Too many active downloads');
       const controller = new AbortController();
+      // Transport bytes may reset when a server ignores Range on retry. Keep
+      // display progress stable without changing the bytes used for validation.
+      let displayedLoaded = 0;
       const emit = (data: Record<string, unknown>) => {
         if (current())
           this.deps.send(id, {
@@ -244,11 +247,21 @@ export class PluginDownloadSlot {
               sha256: p.sha256 as string,
               expectedSize: p.bytes as number,
               maxBytes: p.bytes as number,
+              timeout: { totalMs: 2 * 60 * 60 * 1000 },
               isUrlAllowed,
               request,
               signal: controller.signal,
               logger: { debug() {}, info() {}, warn() {}, error() {} },
-              onProgress: (e) => emit({ phase: 'downloading', ...e }),
+              onProgress: (e) => {
+                displayedLoaded = Math.max(displayedLoaded, Math.min(e.loaded, p.bytes as number));
+                emit({
+                  phase: 'downloading',
+                  ...e,
+                  loaded: displayedLoaded,
+                  total: p.bytes,
+                  percent: (displayedLoaded / (p.bytes as number)) * 100,
+                });
+              },
               onVerifying: () =>
                 emit({ phase: 'verifying', loaded: p.bytes, total: p.bytes, speedBps: 0 }),
               onRetry: (e) => emit({ phase: 'retrying', attempt: e.attempt, delayMs: e.delayMs }),

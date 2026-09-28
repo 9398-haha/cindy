@@ -138,6 +138,7 @@ import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRunti
 import { sharedTaskApi } from './sharedTaskApi.js';
 import {
   MobileNotifyDeduper,
+  buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
   type MobileSessionEventKind,
 } from './mobileNotify';
@@ -726,12 +727,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       }
       return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'));
     },
-    onUnresponsiveChanged: (deviceId, unresponsive) => {
-      broadcast(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, { deviceId, unresponsive });
+    onUnresponsiveChanged: (deviceId, unresponsive, recovered) => {
+      broadcast(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, { deviceId, unresponsive, recovered });
       // 恢复时主动重放该设备的订阅:熔断 open 期间 subscribe 都被快速失败挡掉了,
       // 不重放的话 push 驱动的列表 / 会话镜像会一直缺流,直到用户手动重试。
       // linkTornDown 闸:teardown 的 resetAll 也会触发本回调,那时不能再发订阅。
-      if (!unresponsive && !linkTornDown && client?.getStatus() === 'online') {
+      if (recovered && !linkTornDown && client?.getStatus() === 'online') {
         replayActiveSubscriptions(`responsiveness-recovered:${deviceId.slice(0, 8)}`, deviceId);
       }
     },
@@ -1956,6 +1957,32 @@ export function sendMobileSessionNotify(payload: {
     mobileNotifyDeduper.recordSent(payload.sessionId, payload.kind, now, payload.eventId);
     log.debug(`mobile notify sent: session=${payload.sessionId.slice(0, 8)} kind=${payload.kind}`);
   }
+  return sent;
+}
+
+/** Phone push for a 分工 step that stopped for the user (bot-group-chat.md §8.3). */
+export function sendMobileBotGroupNotify(payload: {
+  groupId: string;
+  title: string;
+  body: string;
+  /** Unique per settled step, so a redo of the same step notifies again. */
+  eventId: string;
+  generation?: number;
+}): boolean {
+  if (!client) return false;
+  if (payload.generation !== undefined && payload.generation !== mobileNotifyGeneration) return false;
+  const selfDeviceId = client.getSelfDeviceId();
+  if (!selfDeviceId) return false;
+  const key = `bot-group:${payload.groupId}`;
+  const now = Date.now();
+  if (!mobileNotifyDeduper.shouldSend(key, 'needs-reply', now, payload.eventId)) return false;
+  const sent = client.sendNotify(buildBotGroupNotifyPayload({
+    groupId: payload.groupId,
+    title: payload.title,
+    body: payload.body,
+    selfDeviceId,
+  }));
+  if (sent) mobileNotifyDeduper.recordSent(key, 'needs-reply', now, payload.eventId);
   return sent;
 }
 

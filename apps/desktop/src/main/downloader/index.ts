@@ -8,7 +8,8 @@
  *
  * Contract invariants (re-stated; full version in tech spec):
  *   1. download() resolves DownloadResult or rejects DownloadError, no other types.
- *   2. Progress describes the current attempt (a fresh retry may restart at zero).
+ *   2. onProgress reports raw transport bytes; callers normalize display progress
+ *      across retries (a server may reject resume and restart from zero).
  *   3. resolve implies SHA256 already verified — no need to re-check.
  */
 

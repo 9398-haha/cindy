@@ -2507,6 +2507,16 @@ const r = await cindy.send({
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;详情页会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
 
+## 4.0.3a 只读 Agent 模型目录
+
+设置页、panel、mainView 和电子脑均可 GET 同源 \`/agent-models\`（不接受参数）。
+返回 \`{ok:true,models:[{id,name,agent,providerId,providerName,efforts,defaultEffort,visible}]}\`。
+visible 跟随当前账号模型选择器；建议默认显示可见项，隐藏项由用户展开。旧 Host 缺此字段时兼容原列表。
+每项为独立的模型×框架×来源；空 efforts 与 null defaultEffort 表示未声明，不得猜测。
+只包含本机已连接且可用于新任务的模型，不代表远程 SSH 目录。读取不调用模型、
+不触发凭证认领或上游发现，不返回凭证、账号 identity 或 endpoint；不需要新增 manifest 权限。
+旧 Host 可能返回 404，插件应明确提示升级；503 时提供重试。运行前再次核验选定来源。
+
 ## 4.0.4 媒体模型配置与调用边界
 
 媒体上层能力由插件定义，Cindy Core 只提供两项低级能力：
@@ -3958,7 +3968,7 @@ Node 请求及其子进程一并结束，晚到的授权或子进程启动会被
 
 声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
 只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
-SHA-256 和精确字节数必填，单文件最多 2 GiB。返回 {ok:true,token,bytes,sha256,fromCache}，
+SHA-256 和精确字节数必填，单文件最多 2 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
 没有宿主路径。取消用 cindy.downloads.cancel({id})。
 订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
 phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。

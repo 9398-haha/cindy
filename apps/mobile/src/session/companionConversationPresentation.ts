@@ -7,12 +7,17 @@ const isDelivery = (item: MobileMessageRenderItem) => item.type === 'tool_media'
     || !!item.message.attachments?.length || !!item.message.media?.length
     || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
 
+const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
+  items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
+
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
 export function companionConversationItems(items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] {
+  // The main timeline folds earlier background-wake seals into work groups; teammate chats
+  // still show every sealed reply, so find sealed runs with tools/thinking as boundaries.
   const sealed = new Set<string>();
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
-  for (const item of [...items].reverse()) {
+  for (const item of expandWorkGroups(items).reverse()) {
     if (item.type !== 'message' || item.message.kind !== 'assistant' || !item.message.body.trim() || item.message.systemCardType) {
       sealedRun = false;
       nextAssistantAt = null;
