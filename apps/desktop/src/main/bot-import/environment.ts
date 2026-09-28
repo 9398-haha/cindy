@@ -73,12 +73,23 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
         assertOwner();
         // Names are untrusted too: a connection or variable identifier can contain
         // a credential. This existence binding has no consumer for original names.
-        const manifest = JSON.stringify({ version: 1, variables: Object.keys(value.env).map(name => fingerprint(name)), connections: value.mcp.map(server => fingerprint(server.name)), revision });
+        const manifest = JSON.stringify({ version: 1, variables: Object.keys(value.env).map(name => fingerprint(name)), connections: value.mcp.map(server => fingerprint(server.name)), revision,
+          importRequestId: value.pendingImport?.selection.requestId ?? null });
         atomicWriteFileSync(file, manifest);
       })();
       const pending = writes.get(key) ?? new Set<Promise<void>>();
       pending.add(task); writes.set(key, pending);
       try { await task; } finally { pending.delete(task); if (!pending.size) writes.delete(key); }
+    },
+    /** Opaque request binding only. Undefined means a legacy manifest needs one-time migration. */
+    readImportRequestId(userData: string, botId: string, assertOwner: () => void): string | null | undefined {
+      assertOwner();
+      const text = readAtomicFileSync(bindingPath(userData, botId));
+      if (text === null) return null;
+      const id: unknown = JSON.parse(text).importRequestId;
+      if (id !== undefined && id !== null && (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(id)))
+        throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');
+      return id as string | null | undefined;
     },
     async read(userData: string, botId: string, assertOwner: () => void): Promise<CompanionEnvironment | undefined> {
       assertOwner();

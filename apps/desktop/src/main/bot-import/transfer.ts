@@ -13,6 +13,8 @@ export interface ImportReceipt {
   /** Present on receipts whose identity includes the original setup choice. */
   deferSetup?: boolean;
   result: CompanionImportResult;
+  /** Already-redacted display metadata; status pages must not open the encrypted checkpoint. */
+  entryNames?: Record<string, string>;
   copied: string[];
   environmentSaved?: boolean;
   checkpointSaved?: boolean;

@@ -4,10 +4,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpProvider } from '@cindy/maker-core';
 import { resolveLiziMcpSessionContext } from '@cindy/mcps';
-import { readCompanionSessionEnvironment } from './runtime.js';
+import { readCompanionSessionEnvironment, readCompanionSessionScope } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
-import { deserializeImportSnapshotAsync, fingerprint } from './files.js';
-import { continueCompanionImport, getCompanionImportResult, useCindyImportSettings } from './host.js';
+import { fingerprint } from './files.js';
+import { continueCompanionImport, getCompanionImportSetupStatus, useCindyImportSettings } from './host.js';
 import { connectionRedactions, importedContentRedactions, publicConnectionName, redactImportedResult, redactImportedTool, restoreImportedArguments } from './connectionCatalog.js';
 import { withImportedSkillResources } from './skillResources.js';
 
@@ -54,28 +54,21 @@ export function createCompanionConnectionsProvider(): McpProvider {
         return { tools };
       });
       server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-        const scope = await resolve();
-        if (!scope) throw new Error('Companion connection unavailable');
         if (request.params.name === 'import_setup') {
           const operation = request.params.arguments?.operation;
           const offset = request.params.arguments?.offset ?? 0;
           if (!['status', 'retry', 'use_cindy_settings'].includes(String(operation)) || !Number.isSafeInteger(offset) || Number(offset) < 0) throw new Error('Invalid import setup request');
-          const pending = scope.environment.pendingImport;
-          if (!pending) return { content: [{ type: 'text', text: JSON.stringify({ complete: true }) }] };
+          const session = resolveLiziMcpSessionContext(context);
+          const scope = session.sessionId ? await readCompanionSessionScope(session.sessionId) : undefined;
+          if (!scope) throw new Error('Companion connection unavailable');
           if (operation === 'use_cindy_settings') await useCindyImportSettings(scope.botId, scope.userData, request.params.arguments?.entryIds, scope.assertOwner);
-          const result = operation === 'retry'
-            ? await continueCompanionImport(scope.botId, scope.userData, scope.assertOwner)
-            : await getCompanionImportResult(pending.selection.requestId);
+          if (operation === 'retry') await continueCompanionImport(scope.botId, scope.userData, scope.assertOwner);
+          const response = await getCompanionImportSetupStatus(scope.botId, scope.userData, scope.assertOwner, Number(offset));
           scope.assertOwner();
-          if (result && result.botId !== scope.botId) throw new Error('Companion import unavailable');
-          const remaining = result?.checks.filter(check => check.status === 'needs-attention') ?? [];
-          // Publish only names and host reason codes; the encrypted snapshot never leaves Main.
-          const snapshot = await deserializeImportSnapshotAsync(pending.snapshotJson, scope.assertOwner);
-          const names = new Map(snapshot.items.map(item => [item.view.id, item.view.name]));
-          const response = { status: result?.status, total: remaining.length, nextOffset: Number(offset) + 20 < remaining.length ? Number(offset) + 20 : undefined,
-            items: remaining.slice(Number(offset), Number(offset) + 20).map(check => ({ ...check, name: names.get(check.entryId) })) };
-          return { content: [{ type: 'text', text: redactEnvironmentValues(JSON.stringify(response), importedContentRedactions(scope.environment)) }] };
+          return { content: [{ type: 'text', text: JSON.stringify(response) }] };
         }
+        const scope = await resolve();
+        if (!scope) throw new Error('Companion connection unavailable');
         if (request.params.name === 'run_command') {
           const command = request.params.arguments?.command;
           if (typeof command !== 'string' || !command.trim() || command.length > 32000) throw new Error('Invalid command');

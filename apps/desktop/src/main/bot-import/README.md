@@ -547,3 +547,21 @@ library resolution when the skill is saved or temporarily materialized.
 This grants no access to neighboring credentials or external directories. The
 original virtualenv configuration and resource files stay intact; cross-machine
 runtime availability is not implied by saving their definitions.
+
+### Setup status metadata and raw command URLs (2026-09-29)
+
+Setup status resolves the active Main-owned session/owner and reads the opaque
+import request ID from the existing environment manifest. The receipt retains
+already-redacted entry captions (at most 200 characters for status display).
+Paging never opens the vault or reconstructs Skill/attachment buffers. Existing
+manifests/receipts upgrade once under the import lock; normal recovery and explicit
+retry still load the checkpoint when required. Caption clipping does not alter
+source names, files, automation definitions, or encrypted originals. Repaired
+capture metadata replaces the captions on the next checkpoint save.
+
+Raw command environment capability URLs use the same URL component masks as JSON
+command environments, before Remote Resource previews and public Skill/memory/
+routine/receipt publication. Encoded and decoded path, query and fragment values
+are covered even when the command is deselected but its token occurs in selected
+content. This remains scoped to command environment values; ordinary provider
+base URLs do not create global path-word masks. Encrypted originals are retained.

@@ -23,6 +23,7 @@ import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
 import { previewImportRedactions, retainedImportRedactions, resolveImportReferences, selectedImportEnvironment, selectedImportRedactions } from './environmentSelection.js';
 import { redactEnvironmentValues } from './process.js';
+import { importedContentRedactions } from './connectionCatalog.js';
 import { createImportSourceReader, discoverImportSources, inspectImportSource, type SourceReaderDeps } from './sources.js';
 import { readOpenClawCronDatabase } from './openclawCron.js';
 import { companionEnvironmentStore, recoverCompanionEnvironmentRemovals } from './runtime.js';
@@ -388,6 +389,66 @@ export async function getCompanionImportResult(requestId: string): Promise<Compa
   return receipt?.result;
 }
 
+function setupEntryNames(items: ImportItem[], redact: (text: string) => string): Record<string, string> {
+  // A display-only caption, never the original Skill/persona/file name. Redact
+  // before clipping so a partial credential cannot escape into the receipt.
+  return Object.fromEntries(items.map(item => [item.view.id, redact(item.view.name).slice(0, 200)]));
+}
+
+/** Status uses public receipt metadata, not the encrypted source tree or attachment buffers. */
+export async function getCompanionImportSetupStatus(botId: string, root: string, assertOwner: () => void, offset: number) {
+  assertOwner();
+  const scope = owner();
+  if (scope.root !== root) throw new CompanionImportError('OWNER_CHANGED');
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new CompanionImportError('INVALID_SELECTION');
+  let requestId = companionEnvironmentStore.readImportRequestId(root, botId, assertOwner);
+  let receipt = requestId ? await readReceipt(root, requestId) : undefined;
+  assertOwner();
+  if (receipt && receipt.result.botId !== botId) throw new CompanionImportError('INVALID_COMPANION');
+  if (requestId === undefined || receipt && !receipt.entryNames) await withBotProfileLocks([botId], async () => {
+    // Legacy checkpoints pay this cost once. Recheck under the same lock used by
+    // import/retry so a status migration cannot overwrite a newer receipt.
+    requestId = companionEnvironmentStore.readImportRequestId(root, botId, assertOwner);
+    receipt = requestId ? await readReceipt(root, requestId) : undefined;
+    assertOwner();
+    if (receipt && receipt.result.botId !== botId) throw new CompanionImportError('INVALID_COMPANION');
+    if (requestId !== undefined && (!receipt || receipt.entryNames)) return;
+    const environment = await companionEnvironmentStore.read(root, botId, assertOwner);
+    const pending = environment?.pendingImport;
+    if (pending) {
+      requestId = pending.selection.requestId;
+      receipt = await readReceipt(root, requestId); assertOwner();
+      if (receipt && receipt.result.botId !== botId) throw new CompanionImportError('INVALID_COMPANION');
+      if (receipt && !receipt.entryNames) {
+        const snapshot = await deserializeImportSnapshotAsync(pending.snapshotJson, assertOwner);
+        const secrets = Object.fromEntries([...new Set([
+          ...Object.values(importedContentRedactions(environment)), ...Object.values(previewImportRedactions(snapshot.items)),
+          ...Object.values(snapshot.publicationRedactions ?? {}),
+        ])].map((value, index) => [`setup_credential_${index}`, value]));
+        receipt.entryNames = setupEntryNames(snapshot.items, text => redactEnvironmentValues(text, secrets));
+        await saveReceipt(root, receipt); assertOwner();
+      }
+    } else requestId = null;
+    // Rewriting through the serialized store upgrades only metadata; the latest
+    // encrypted environment is preserved, including concurrent routine changes.
+    if (environment) await companionEnvironmentStore.update(root, botId, assertOwner, () => {});
+  });
+  assertOwner();
+  if (!requestId) return { complete: true };
+  const result = await getCompanionImportResult(requestId); assertOwner();
+  if (result && result.botId !== botId) throw new CompanionImportError('INVALID_COMPANION');
+  // Recovery may have refreshed names/checks. Read its durable public metadata.
+  receipt = await readReceipt(root, requestId); assertOwner();
+  if (receipt && receipt.result.botId !== botId) throw new CompanionImportError('INVALID_COMPANION');
+  let total = 0;
+  const items: Array<CompanionImportResult['checks'][number] & { name?: string }> = [];
+  for (const check of result?.checks ?? []) if (check.status === 'needs-attention') {
+    if (total >= offset && items.length < 20) items.push({ ...check, name: receipt?.entryNames?.[check.entryId] });
+    total++;
+  }
+  return { status: result?.status, total, nextOffset: offset + items.length < total ? offset + items.length : undefined, items };
+}
+
 /** Explicit enable/run reuses the saved import retry, without a second settings UI. */
 export async function ensureImportedAutomationReady(root: string, botId: string, routineId: string, assertOwner: () => void,
   request?: { input?: RoutineInput; expectedRevision?: number }): Promise<number | void> {
@@ -462,6 +523,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   const publicRoutine = (input: RoutineInput): RoutineInput => ({ ...input, name: redactText(input.name), prompt: redactText(input.prompt) });
   // Resource capture finishes before saveCheckpoint; retain only selected embedded values.
   const publicationRedactions = (items: ImportSnapshot['items']) => retainedImportRedactions(items, contentSecrets);
+  let entryNames = setupEntryNames(selected, redactText);
   const skillSlug = (item: ImportSnapshot['items'][number]) => {
     const original = item.view.name;
     if (redactText(original) !== original) return `import-${fingerprint(item.view.id).slice(0, 16)}`;
@@ -540,7 +602,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       if (skillConfigReader?.budget !== budget) skillConfigReader = { budget, reader: createImportSourceReader(readers(), budget) };
       return skillConfigReader.reader.readConfig(path.dirname(source.configFile), source.configFile);
     },
-    saveReceipt: receipt => saveReceipt(scope.root, receipt),
+    saveReceipt: receipt => { receipt.entryNames = entryNames; return saveReceipt(scope.root, receipt); },
     async createCompanion(botId, input) {
       try {
         const profile = await getBotRemoteResourceSource(botId); scope.assert();
@@ -638,6 +700,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     },
     async saveCheckpoint(botId, items) {
       const previous = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
+      entryNames = setupEntryNames(items, redactText);
       const pendingImport = { selection, snapshotJson: await serializeImportSnapshotAsync({ ...snapshot, avatarImageBase64: selection.avatarImageBase64, items, publicationRedactions: publicationRedactions(items) }, scope.assert) };
       if (previous) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => { environment.pendingImport = pendingImport; });
       else await companionEnvironmentStore.write(scope.root, botId, { version: 1, env: {}, mcp: [], credentials: [], pendingImport }, scope.assert);

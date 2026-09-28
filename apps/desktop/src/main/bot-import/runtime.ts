@@ -46,7 +46,7 @@ export async function recoverCompanionEnvironmentRemovals(): Promise<void> {
 }
 
 /** Resolve from the main-owned session link, never from a renderer-supplied Bot ID or path. */
-export async function readCompanionSessionEnvironment(sessionId: string) {
+export async function readCompanionSessionScope(sessionId: string) {
   const owner = activeOwnerScopeKey();
   const userData = ownerScopedUserDataPath();
   let botId: string | undefined;
@@ -62,9 +62,16 @@ export async function readCompanionSessionEnvironment(sessionId: string) {
   botId = link?.botId;
   assertOwner();
   if (!link) return undefined;
-  const environment = await companionEnvironmentStore.read(userData, link.botId, assertOwner);
+  return { owner, assertOwner, botId: link.botId, userData };
+}
+
+export async function readCompanionSessionEnvironment(sessionId: string) {
+  const scope = await readCompanionSessionScope(sessionId);
+  if (!scope) return undefined;
+  const { owner, userData, botId, assertOwner } = scope;
+  const environment = await companionEnvironmentStore.read(userData, botId, assertOwner);
   if (!environment) return undefined;
-  return { identity: fingerprint([owner, link.botId, environment.env, environment.mcp, environment.credentials]), environment, assertOwner, botId: link.botId, userData };
+  return { identity: fingerprint([owner, botId, environment.env, environment.mcp, environment.credentials]), environment, assertOwner, botId, userData };
 }
 
 export async function resolveCompanionRuntimeEnvironment(sessionId: string) {

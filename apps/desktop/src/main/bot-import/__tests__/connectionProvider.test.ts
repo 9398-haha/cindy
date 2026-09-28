@@ -7,9 +7,9 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 vi.mock('@cindy/mcps', () => ({ resolveLiziMcpSessionContext: () => ({ sessionId: 'fixture-session' }) }));
-vi.mock('../host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportResult: vi.fn(), useCindyImportSettings: vi.fn() }));
-vi.mock('../runtime.js', () => ({ readCompanionSessionEnvironment: vi.fn() }));
-import { readCompanionSessionEnvironment } from '../runtime.js';
+vi.mock('../host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportSetupStatus: vi.fn(), useCindyImportSettings: vi.fn() }));
+vi.mock('../runtime.js', () => ({ readCompanionSessionEnvironment: vi.fn(), readCompanionSessionScope: vi.fn() }));
+import { readCompanionSessionEnvironment, readCompanionSessionScope } from '../runtime.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
 import { redactEnvironmentData } from '../process.js';
 import { withImportedConnection } from '../connections.js';
@@ -402,13 +402,14 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 });
 
 it('offers paginated private import setup only in the owning companion and masks credential-bearing names', async () => {
-  const { getCompanionImportResult, continueCompanionImport } = await import('../host.js');
+  const { getCompanionImportSetupStatus, continueCompanionImport } = await import('../host.js');
   const secret = 'fixture-name-secret';
   const checks = Array.from({ length: 23 }, (_, index) => ({ entryId: `entry-${index}`, status: 'needs-attention' as const, message: 'IMPORT_SETUP_DEFERRED' }));
   const result = { requestId: 'fixture-request-setup', botId: 'bot', status: 'needs-attention' as const, checks, saved: true };
-  vi.mocked(getCompanionImportResult).mockResolvedValue(result);
+  vi.mocked(getCompanionImportSetupStatus).mockImplementation(async (_bot, _root, _assert, offset) => ({ status: result.status, total: 23, nextOffset: offset === 0 ? 20 : undefined, items: checks.slice(offset, offset + 20).map(check => ({ ...check, name: 'Job [API_KEY]' })) }));
   vi.mocked(continueCompanionImport).mockResolvedValue(result);
   const assertOwner = vi.fn();
+  vi.mocked(readCompanionSessionScope).mockResolvedValue({ owner: 'fixture', botId: 'bot', userData: '/fixture', assertOwner });
   vi.mocked(readCompanionSessionEnvironment).mockResolvedValue({ identity: 'fixture', botId: 'bot', userData: '/fixture', assertOwner,
     environment: { version: 1, env: { API_KEY: secret }, mcp: [], credentials: [], pendingImport: {
       selection: { previewId: 'p', requestId: result.requestId, name: 'Ada', entryIds: [], takeover: true, deferSetup: true },
@@ -420,6 +421,7 @@ it('offers paginated private import setup only in the owning companion and masks
   await config.instance.connect(serverTransport); await client.connect(clientTransport);
   try {
     expect((await client.listTools()).tools.some(tool => tool.name === 'import_setup')).toBe(true);
+    vi.mocked(readCompanionSessionEnvironment).mockClear().mockRejectedValue(new Error('must not load full environment'));
     const first = await client.callTool({ name: 'import_setup', arguments: { operation: 'status' } });
     const text = (first.content as Array<{ text: string }>)[0]!.text;
     expect(text).not.toContain(secret);
@@ -427,6 +429,8 @@ it('offers paginated private import setup only in the owning companion and masks
     expect(JSON.parse(text).items).toHaveLength(20);
     await client.callTool({ name: 'import_setup', arguments: { operation: 'retry', offset: 20 } });
     expect(continueCompanionImport).toHaveBeenCalledWith('bot', '/fixture', assertOwner);
+    expect(getCompanionImportSetupStatus).toHaveBeenLastCalledWith('bot', '/fixture', assertOwner, 20);
+    expect(readCompanionSessionEnvironment).not.toHaveBeenCalled();
     expect(assertOwner).toHaveBeenCalled();
   } finally { await client.close(); await config.instance.close(); }
 });

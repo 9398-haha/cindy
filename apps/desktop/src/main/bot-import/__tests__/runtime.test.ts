@@ -9,7 +9,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => {
   const query = { from: () => query, innerJoin: () => query, where: () => query, limit: h.lookup };
   return { drizzle: { select: () => query } };
 } }));
-import { companionEnvironmentStore, finishCompanionEnvironmentRemoval, readCompanionSessionEnvironment, resolveCompanionRuntimeEnvironment } from '../runtime.js';
+import { companionEnvironmentStore, finishCompanionEnvironmentRemoval, readCompanionSessionEnvironment, readCompanionSessionScope, resolveCompanionRuntimeEnvironment } from '../runtime.js';
 import { withImportedConnection } from '../connections.js';
 afterEach(() => vi.restoreAllMocks());
 
@@ -78,4 +78,14 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await Promise.allSettled(pending);
     await fs.rm(h.root, { recursive: true, force: true }); h.root = '/fixture';
   }
+});
+
+it('resolves the active session owner and deletion fence without reading encrypted content', async () => {
+  const read = vi.spyOn(companionEnvironmentStore, 'read').mockRejectedValue(new Error('vault unavailable'));
+  const scope = await readCompanionSessionScope('fixture-session');
+  expect(scope).toMatchObject({ owner: 'fixture-owner', userData: '/fixture', botId: 'fixture-bot' });
+  scope!.assertOwner();
+  h.lookup.mockResolvedValueOnce([]);
+  expect(await readCompanionSessionScope('unlinked-session')).toBeUndefined();
+  expect(read).not.toHaveBeenCalled();
 });

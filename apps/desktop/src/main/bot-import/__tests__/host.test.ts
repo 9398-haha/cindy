@@ -43,9 +43,11 @@ vi.mock('../openclawCron.js', () => ({ readOpenClawCronDatabase: vi.fn() }));
 vi.mock('../verification.js', () => ({ verifyImportedAutomation: vi.fn(async () => ({ verified: h.verified, reason: 'AUTOMATION_DATA_READ_FAILED' })) }));
 vi.mock('../takeover.js', () => ({ changeSourceAutomationState: async (_source: unknown, _item: unknown, enabled: boolean, _readers: unknown, _owner: unknown, _resume: boolean, env: Record<string, string>) => { h.pause(enabled); h.sourceEnabled = enabled; h.sourceEnvironment = env; } }));
 vi.mock('../runtime.js', () => ({ recoverCompanionEnvironmentRemovals: vi.fn(async () => {}),
+  readCompanionSessionScope: async () => ({ owner: h.root, botId: h.botId, userData: h.root, assertOwner() { if (h.boundary) throw new Error('OWNER_CHANGED'); } }),
   readCompanionSessionEnvironment: async () => ({ identity: h.root, botId: h.botId, userData: h.root, assertOwner() {}, environment: await h.store.read(h.root, h.botId, () => {}) }),
   companionEnvironmentStore: {
   read: (...args: Parameters<typeof h.store.read>) => h.store.read(...args),
+  readImportRequestId: (...args: Parameters<typeof h.store.readImportRequestId>) => h.store.readImportRequestId(...args),
   write: (...args: Parameters<typeof h.store.write>) => h.store.write(...args),
   update: (...args: Parameters<typeof h.store.update>) => h.store.update(...args),
   stageRemoval: (...args: Parameters<typeof h.store.stageRemoval>) => h.store.stageRemoval(...args),
@@ -69,7 +71,7 @@ vi.mock('../../routines/service.js', () => ({
     h.routines = h.routines.map(row => row.id === id ? { ...row, ...input, revision: row.revision + 1 } : row);
   } }),
 }));
-import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
+import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, getCompanionImportSetupStatus, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock.js';
 import { assertImportedAutomationReady, prepareImportedAutomation } from '../automationRuntime.js';
 import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
@@ -414,13 +416,14 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
 it.each([false, true])('publishes structured command env credentials safely (command selected: %s)', async selected => {
   const secret = 'fixture-command-json-token';
   const nested = 'fixture-command-json-nested';
-  const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token'];
+  const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
+    'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment'];
   const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
     services: [{ endpoint: 'https://host/hooks/fixture-hook-token#access_token=fixture-fragment%20token' }],
     unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
   const text = `Keep Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')}`;
   const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
-  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', ''], env: { CONFIG: config } } };
+  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', ''], env: { CONFIG: config, WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
   h.sourceEnabled = false;
   h.snapshot.items = [
     { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
@@ -438,7 +441,8 @@ it.each([false, true])('publishes structured command env credentials safely (com
     entryIds: ['memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.saved).toBe(true));
   const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
-  const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines]);
+  const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${requestId}.json`), 'utf8');
+  const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines, receiptText]);
   for (const value of [secret, nested, ...urlSecrets]) expect(output).not.toContain(value);
   expect(published).toContain('Keep Paris and 7.');
   const stored = (await h.store.read(h.root, result.botId, () => {}))!;
@@ -1382,4 +1386,61 @@ it.each(['identity', 'user', 'instructions'] as const)('reapplies a repaired %s 
   const saved = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
   expect(saved?.savedEntryIds).toContain('role-source');
   expect(h.profile[field]).toBe('Repaired original');
+});
+
+it.each([false, true])('pages setup without vault reads after one-time legacy metadata upgrade: %s', async legacy => {
+  const secret = 'fixture-private-setup-name';
+  const task = h.snapshot.items[0]!;
+  h.snapshot.items = Array.from({ length: 23 }, (_, index) => ({ ...structuredClone(task),
+    view: { ...task.view, id: `job-${index}`, name: `Report ${index} ${secret}` },
+    automation: { ...structuredClone(task.automation!), sourceId: `job-${index}` },
+  }));
+  h.snapshot.items[22]!.view.name = `Report 22 ${'x'.repeat(178)}${secret}`;
+  h.snapshot.items.push({ view: { id: 'env', name: 'API_KEY', category: 'connections', selected: true }, env: { API_KEY: secret } });
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const requestId = 'fixture-setup-paging-12345';
+  const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
+    entryIds: h.snapshot.items.map(item => item.view.id), takeover: true, deferSetup: true }, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  const receiptFile = path.join(h.root, 'companion-imports', `${requestId}.json`);
+  const bindingFile = path.join(h.root, 'bots', result.botId, 'environment.json');
+  const originalCheckpoint = (await h.store.read(h.root, result.botId, () => {}))!.pendingImport!.snapshotJson;
+  if (legacy) {
+    const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8')); delete receipt.entryNames;
+    await fs.writeFile(receiptFile, JSON.stringify(receipt));
+    const binding = JSON.parse(await fs.readFile(bindingFile, 'utf8')); delete binding.importRequestId;
+    await fs.writeFile(bindingFile, JSON.stringify(binding));
+    const migrated = await getCompanionImportSetupStatus(result.botId, h.root, () => {}, 0);
+    expect(migrated).toMatchObject({ total: 23, nextOffset: 20 });
+    expect((await h.store.read(h.root, result.botId, () => {}))!.pendingImport!.snapshotJson).toBe(originalCheckpoint);
+  }
+  const publicReceipt = await fs.readFile(receiptFile, 'utf8');
+  expect(publicReceipt).not.toContain(secret);
+  expect(publicReceipt).not.toContain(secret.slice(0, 10));
+  expect(JSON.parse(publicReceipt).entryNames['job-22'].length).toBeLessThanOrEqual(200);
+  // Even a locked/unavailable vault must not be opened merely to paginate names.
+  const vaultRead = vi.spyOn(h.store, 'read').mockRejectedValue(new Error('status must not open vault'));
+  const config = createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    for (const offset of [0, 20, 0]) {
+      const response = await client.callTool({ name: 'import_setup', arguments: { operation: 'status', offset } });
+      expect(response.isError).not.toBe(true);
+      const text = (response.content as Array<{ text: string }>)[0]!.text;
+      expect(text).not.toContain(secret);
+      const page = JSON.parse(text);
+      expect(page.total).toBe(23);
+      expect(page.items).toHaveLength(offset === 0 ? 20 : 3);
+      expect(page.items[0].name).toContain(`Report ${offset} `);
+    }
+    expect(vaultRead).not.toHaveBeenCalled();
+    h.boundary = true;
+    await expect(client.callTool({ name: 'import_setup', arguments: { operation: 'status' } })).rejects.toThrow('OWNER_CHANGED');
+  } finally { h.boundary = false; vaultRead.mockRestore(); await client.close(); await config.instance.close(); }
+  const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8')); receipt.result.botId = 'another-bot';
+  await fs.writeFile(receiptFile, JSON.stringify(receipt));
+  await expect(getCompanionImportSetupStatus(result.botId, h.root, () => {}, 0)).rejects.toThrow('INVALID_COMPANION');
 });
