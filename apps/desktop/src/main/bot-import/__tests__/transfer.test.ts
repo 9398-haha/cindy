@@ -284,6 +284,47 @@ it('finishes saving before any login or read probe, then resumes takeover from c
   expect(deps.pauseSource).toHaveBeenCalledOnce();
 });
 
+it.each([false, true])('rejects changing the original deferSetup=%s without writes or takeover', async deferSetup => {
+  const { deps, receipt } = harness();
+  vi.mocked(deps.verifyAutomation).mockResolvedValue({ verified: false });
+  await transferCompanion(snapshot, { ...selection, deferSetup }, deps);
+  const saved = structuredClone(receipt());
+  vi.clearAllMocks();
+  await expect(transferCompanion(snapshot, { ...selection, deferSetup: !deferSetup }, deps)).rejects.toThrow('REQUEST_ALREADY_USED');
+  expect(receipt()).toEqual(saved);
+  expect(deps.createCompanion).not.toHaveBeenCalled();
+  expect(deps.verifyAutomation).not.toHaveBeenCalled();
+  expect(deps.pauseSource).not.toHaveBeenCalled();
+});
+
+it('treats absent deferSetup as false and persists the choice before saving the checkpoint', async () => {
+  const { deps, receipt } = harness();
+  vi.mocked(deps.saveCheckpoint).mockImplementationOnce(async () => {
+    expect(receipt()?.deferSetup).toBe(false);
+    throw new Error('interrupted checkpoint');
+  });
+  await expect(transferCompanion(snapshot, selection, deps)).rejects.toThrow('interrupted checkpoint');
+  await expect(transferCompanion(snapshot, { ...selection, deferSetup: true }, deps)).rejects.toThrow('REQUEST_ALREADY_USED');
+  expect((await transferCompanion(snapshot, { ...selection, deferSetup: false }, deps)).status).toBe('complete');
+});
+
+it('upgrades a legacy deferred receipt from its saved choice, including a checkpoint interrupted before checks', async () => {
+  const { deps, receipt } = harness();
+  await transferCompanion(snapshot, { ...selection, deferSetup: true }, deps);
+  const legacy = structuredClone(receipt()!);
+  delete legacy.deferSetup;
+  legacy.selectionHash = fingerprint([selection.name, undefined, selection.entryIds.toSorted(), selection.takeover, snapshot.source.kind, snapshot.source.agentId, snapshot.source.root]);
+  legacy.result.checks = [];
+  await deps.saveReceipt(legacy);
+  deps.readLegacyDeferSetup = async () => true;
+  await expect(transferCompanion(snapshot, selection, deps)).rejects.toThrow('REQUEST_ALREADY_USED');
+  expect(receipt()).toEqual(legacy);
+  expect((await transferCompanion(snapshot, { ...selection, deferSetup: true }, deps, false, true)).status).toBe('complete');
+  expect(receipt()?.deferSetup).toBe(true);
+  expect(receipt()?.selectionHash).not.toBe(legacy.selectionHash);
+  expect(deps.pauseSource).toHaveBeenCalledOnce();
+});
+
 it('restores compact selections from a selected-only checkpoint without changing their meaning', async () => {
   const { deps } = harness();
   const indexed = { ...snapshot, items: snapshot.items.map((item, sourceIndex) => ({ ...item, sourceIndex })) };
@@ -309,5 +350,19 @@ it('saves healthy content and a conversation when a single routine cannot be cre
   const result = await transferCompanion(snapshot, { ...selection, deferSetup: true }, deps);
   expect(result).toMatchObject({ saved: true, canonicalSessionId: 'chat', savedEntryIds: ['memory', 'env'] });
   expect(result.checks).toContainEqual({ entryId: 'task', status: 'needs-attention', message: 'IMPORT_ITEM_FAILED' });
+  expect(deps.pauseSource).not.toHaveBeenCalled();
+});
+
+it('returns a completed legacy deferred receipt even after its checkpoint was removed', async () => {
+  const { deps, receipt } = harness();
+  const input = { ...selection, deferSetup: true };
+  await transferCompanion(snapshot, input, deps, false, true);
+  const legacy = structuredClone(receipt()!);
+  delete legacy.deferSetup;
+  legacy.selectionHash = fingerprint([selection.name, undefined, selection.entryIds.toSorted(), selection.takeover, snapshot.source.kind, snapshot.source.agentId, snapshot.source.root]);
+  await deps.saveReceipt(legacy);
+  vi.clearAllMocks();
+  await expect(transferCompanion(snapshot, input, deps)).resolves.toEqual(legacy.result);
+  expect(deps.createCompanion).not.toHaveBeenCalled();
   expect(deps.pauseSource).not.toHaveBeenCalled();
 });

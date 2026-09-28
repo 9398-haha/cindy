@@ -979,3 +979,69 @@ it.each([false, true])('publishes completion after deferred setup without duplic
   expect(rows.size).toBe(2);
   expect(h.pause).toHaveBeenCalledTimes(1);
 });
+
+it.each([false, true])('keeps the original deferred setup choice across retries and checkpoints (legacy receipt: %s)', async legacy => {
+  const { continueCompanionImport } = await import('../host.js');
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-identity-setup', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  const receiptFile = path.join(h.root, 'companion-imports', `${selection.requestId}.json`);
+  if (legacy) {
+    const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8'));
+    delete receipt.deferSetup;
+    receipt.selectionHash = fingerprint([selection.name, undefined, selection.entryIds, selection.takeover, h.snapshot.source.kind, h.snapshot.source.agentId, h.snapshot.source.root]);
+    receipt.result.checks = [];
+    await fs.writeFile(receiptFile, JSON.stringify(receipt));
+  }
+  const saved = await fs.readFile(receiptFile, 'utf8');
+  h.verified = true;
+  await expect(startCompanionImport({ ...selection, deferSetup: false }, 'fixture')).rejects.toThrow('REQUEST_ALREADY_USED');
+  expect(await fs.readFile(receiptFile, 'utf8')).toBe(saved);
+  expect(h.pause).not.toHaveBeenCalled();
+  // A reconnected controller uses the checkpoint even after losing preview access.
+  await expect(startCompanionImport({ ...selection, deferSetup: false }, 'reconnected')).rejects.toThrow('REQUEST_ALREADY_USED');
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  expect(h.pause).toHaveBeenCalledOnce();
+  expect(JSON.parse(await fs.readFile(receiptFile, 'utf8')).deferSetup).toBe(true);
+});
+
+it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata and private settings after an unreadable manifest is repaired', async kind => {
+  const actual = await vi.importActual<typeof import('../sources.js')>('../sources.js');
+  vi.mocked(createImportSourceReader).mockImplementation(actual.createImportSourceReader);
+  h.snapshot.source.kind = kind;
+  const secret = 'fixture-repaired-skill-secret';
+  const config = { skills: { disabled: ['report'], entries: { 'report-auth': { enabled: false, apiKey: secret, env: { REPORT_REGION: 'fixture' } } } } };
+  await fs.writeFile(h.snapshot.source.configFile, JSON.stringify(config));
+  const directory = path.join(h.root, 'skills', 'folder-name');
+  await fs.mkdir(directory, { recursive: true });
+  const manifest = path.join(directory, 'SKILL.md');
+  await fs.writeFile(manifest, '');
+  await fs.truncate(manifest, 16 * 1024 * 1024 + 1);
+  const { discoverImportSkills } = await import('../skills.js');
+  const { createImportBudget } = await import('../files.js');
+  h.snapshot.items = await discoverImportSkills(h.snapshot.source, config, h.root, {}, createImportBudget());
+  expect(h.snapshot.items[0]?.captureIssue).toBe('SOURCE_FILE_TOO_LARGE');
+  const entryId = h.snapshot.items[0]!.view.id;
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-repair-manifest', previewId: preview.id, name: 'Ada', entryIds: [entryId], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const first = (await getCompanionImportResult(selection.requestId))!;
+  await fs.writeFile(manifest, `---\nname: report\ndescription: Recovered report\nmetadata:\n  openclaw:\n    skillKey: report-auth\n    primaryEnv: REPORT_TOKEN\n---\n# Report\nPrivate value ${secret}`);
+  await startCompanionImport(selection, 'reconnected');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(result).toMatchObject({ botId: first.botId, savedEntryIds: [entryId] });
+  const environment = (await h.store.read(h.root, first.botId, () => {}))!;
+  expect(environment.env).toMatchObject({ REPORT_TOKEN: secret, REPORT_REGION: 'fixture' });
+  const readable = await fs.readFile(path.join(h.root, 'bots', first.botId, 'disabled-skills', 'report', 'SKILL.md'), 'utf8');
+  expect(readable).toContain('name: report');
+  expect(readable).not.toContain(secret);
+  await expect(fs.stat(path.join(h.root, 'bots', first.botId, 'skills', 'report'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(JSON.stringify(result)).not.toContain(secret);
+});

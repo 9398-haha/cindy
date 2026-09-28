@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, type Dirent } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { fingerprint, inside, readImportFile, readImportTree, type ImportReadBudget } from './files.js';
@@ -8,6 +8,17 @@ import { CompanionImportError, object, string, type ImportItem, type ImportSourc
 interface SkillRoot { directory: string; links: 'any' | string[]; bundled?: boolean }
 const ignored = new Set(['.git', '.github', '.hub', '.archive', '_archive', '.venv', 'venv', 'node_modules', 'site-packages', '__pycache__', '.tox', '.nox', '.pytest_cache', '.mypy_cache', '.ruff_cache']);
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && !!v.trim()) : [];
+const disabledSkills = (config: Record<string, unknown>) => new Set([...strings(config.disabled), ...strings(object(config.platform_disabled).cli)]);
+
+/** Charge entries before retaining them; sorting preserves native name precedence. */
+async function directoryEntries(directory: string, budget: ImportReadBudget): Promise<Dirent[]> {
+  const entries: Dirent[] = [];
+  for await (const entry of await fs.opendir(directory)) {
+    budget.reserve(128 + Buffer.byteLength(path.join(directory, entry.name)));
+    if (entry.isDirectory() || entry.isSymbolicLink()) entries.push(entry);
+  }
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 /** Resolve only path configuration; never expand credentials into public names. */
 function sourcePath(value: string, base: string, home: string, env: NodeJS.ProcessEnv) {
@@ -61,7 +72,7 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
     const locations = [...strings(object(plugins.load).paths).map(resolve),
       ...Object.values(object(plugins.installs)).flatMap(value => string(object(value).installPath) ? [resolve(string(object(value).installPath))] : [])];
     for (const parent of [path.join(source.root, 'extensions'), ...(install ? [path.join(install, 'extensions')] : [])]) {
-      try { for (const entry of await fs.readdir(parent, { withFileTypes: true })) if (entry.isDirectory()) locations.push(path.join(parent, entry.name)); }
+      try { for (const entry of await directoryEntries(parent, budget)) if (entry.isDirectory()) locations.push(path.join(parent, entry.name)); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
     for (const location of new Set(locations)) {
@@ -78,15 +89,35 @@ async function rootsFor(source: ImportSource, values: Record<string, unknown>, h
   return roots;
 }
 
+/** Discovery and repaired manifests must apply exactly the same native settings. */
+export function normalizeImportSkill(kind: ImportSource['kind'], alias: string, text: string, config: Record<string, unknown>, disabled = disabledSkills(config)): Pick<ImportItem, 'view' | 'sourceAlias' | 'env' | 'credential'> {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  let info: Record<string, unknown> = {};
+  try { if (front) info = object(yaml.load(front[1]!)); } catch { /* Keep the original file for native loader diagnostics. */ }
+  const name = string(info.name) || alias;
+  const metadata = object(object(info.metadata).openclaw ?? object(info.metadata).clawdbot ?? object(info.metadata).hermes);
+  const settings = object(object(config.entries)[string(metadata.skillKey) || name]);
+  const enabled = kind === 'hermes' ? !disabled.has(name) : settings.enabled !== false;
+  const item: Pick<ImportItem, 'view' | 'sourceAlias' | 'env' | 'credential'> = { view: { id: `skill-${fingerprint(name).slice(0, 20)}`, category: 'skills', name,
+    description: string(info.description).slice(0, 280), selected: true, enabled },
+    sourceAlias: alias };
+  item.env = Object.fromEntries(Object.entries(object(settings.env)).filter(([key, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof value === 'string')) as Record<string, string>;
+  const primary = string(metadata.primaryEnv);
+  if (typeof settings.apiKey === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(primary)) item.env[primary] = settings.apiKey;
+  else if (settings.apiKey) {
+    item.view.issues = ['MISSING_ENVIRONMENT_REFERENCE'];
+    item.credential = { format: 'source-skill-auth', value: { apiKey: settings.apiKey } };
+  }
+  return item;
+}
+
 /** Follow native precedence by declared name; grouped layouts stop at a skill entrypoint. */
 export async function discoverImportSkills(source: ImportSource, values: Record<string, unknown>, home: string, env: NodeJS.ProcessEnv, budget: ImportReadBudget, used = new Set<string>()): Promise<ImportItem[]> {
   const items: ImportItem[] = [];
   const names = new Set<string>();
   const visited = new Set<string>();
   const config = object(values.skills);
-  const disabled = new Set(strings(config.disabled));
-  const platformDisabled = object(config.platform_disabled);
-  for (const name of strings(platformDisabled.cli)) disabled.add(name);
+  const disabled = disabledSkills(config);
   for (const root of await rootsFor(source, values, home, env, budget)) {
     let realRoot: string;
     try { realRoot = await fs.realpath(root.directory); }
@@ -95,6 +126,7 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
       const real = await fs.realpath(directory);
       if (visited.has(real)) return;
       if (root.links !== 'any' && !inside(realRoot, real) && !root.links.some(allowed => inside(allowed, real))) return;
+      budget.reserve(128 + Buffer.byteLength(real));
       visited.add(real);
       let manifest;
       try { manifest = await readImportFile(real, path.join(real, 'SKILL.md'), budget); }
@@ -107,28 +139,12 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
         }
       }
       if (manifest?.bytes.toString('utf8').trim()) {
-        const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(manifest.bytes.toString('utf8'));
-        let info: Record<string, unknown> = {};
-        try { if (front) info = object(yaml.load(front[1]!)); } catch { /* Keep the original file for native loader diagnostics. */ }
-        const name = string(info.name) || path.basename(directory);
+        const metadata = normalizeImportSkill(source.kind, path.basename(directory), manifest.bytes.toString('utf8'), config, disabled);
+        const name = metadata.view.name;
         if (names.has(name)) return;
         if (root.bundled && Array.isArray(config.allowBundled) && !strings(config.allowBundled).includes(name)) return;
         names.add(name);
-        const metadata = object(object(info.metadata).openclaw ?? object(info.metadata).clawdbot ?? object(info.metadata).hermes);
-        const settings = object(object(config.entries)[string(metadata.skillKey) || name]);
-        const enabled = source.kind === 'hermes' ? !disabled.has(name) : settings.enabled !== false;
-        const item: ImportItem = { view: { id: `skill-${fingerprint(name).slice(0, 20)}`, category: 'skills', name,
-          description: string(info.description).slice(0, 280), selected: true, enabled },
-          sourceDirectory: real, sourceAlias: path.basename(directory), files: [manifest], filesComplete: false };
-        {
-          item.env = Object.fromEntries(Object.entries(object(settings.env)).filter(([key, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof value === 'string')) as Record<string, string>;
-          const primary = string(metadata.primaryEnv);
-          if (typeof settings.apiKey === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(primary)) item.env[primary] = settings.apiKey;
-          else if (settings.apiKey) {
-            item.view.issues = ['MISSING_ENVIRONMENT_REFERENCE'];
-            item.credential = { format: 'source-skill-auth', value: { apiKey: settings.apiKey } };
-          }
-        }
+        const item: ImportItem = { ...metadata, sourceDirectory: real, files: [manifest], filesComplete: false };
         if (used.has(name) || used.has(path.basename(directory))) {
           try {
             item.files = [manifest, ...await readImportTree(real, name => name !== 'SKILL.md', budget)];
@@ -138,7 +154,7 @@ export async function discoverImportSkills(source: ImportSource, values: Record<
         items.push(item); return;
       }
       if (source.kind === 'openclaw' && depth >= 6) return;
-      for (const entry of (await fs.readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      for (const entry of await directoryEntries(directory, budget)) {
         if (ignored.has(entry.name) || entry.name.startsWith('.')) continue;
         const child = path.join(directory, entry.name);
         if (entry.isDirectory()) await visit(child, depth + 1);

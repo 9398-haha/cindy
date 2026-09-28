@@ -139,5 +139,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   label: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary },
   note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular, color: colors.textSecondary },
   count: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular, color: colors.textTertiary },
-  input: { minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: radius.container, paddingHorizontal: spacing.md, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.regular, color: colors.textPrimary, backgroundColor: colors.surfaceElevated },
+  input: { minHeight: 44, borderWidth: 1, borderColor: colors.border, borderRadius: radius.container, paddingHorizontal: spacing.md, fontSize: typeScale.body, fontWeight: fontWeight.regular, color: colors.textPrimary, backgroundColor: colors.surfaceElevated },
 });

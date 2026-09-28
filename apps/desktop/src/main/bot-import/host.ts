@@ -24,7 +24,7 @@ import { createImportSourceReader, discoverImportSources, inspectImportSource, t
 import { readOpenClawCronDatabase } from './openclawCron.js';
 import { companionEnvironmentStore, recoverCompanionEnvironmentRemovals } from './runtime.js';
 import { deserializeImportSnapshotAsync, fingerprint, serializeImportSnapshotAsync, reserveSnapshotItems, MAX_SNAPSHOT_BYTES } from './files.js';
-import { transferCompanion, validateImportSelection, type ImportReceipt, type TransferDeps } from './transfer.js';
+import { transferCompanion, validateImportSelection, validateImportRequestIdentity, type ImportReceipt, type TransferDeps } from './transfer.js';
 import { CompanionImportError, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
 import { changeSourceAutomationState } from './takeover.js';
 import { verifyImportedAutomation } from './verification.js';
@@ -357,8 +357,10 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     if (!(error instanceof CompanionImportError) || error.code !== 'PREVIEW_EXPIRED') throw error;
     const receipt = await readReceipt(scope.root, selection.requestId); scope.assert();
     const pending = receipt ? (await companionEnvironmentStore.read(scope.root, receipt.result.botId, scope.assert))?.pendingImport : undefined;
-    const intentKey = (value: CompanionImportSelection) => fingerprint({ ...value, entryIds: [...value.entryIds].sort() });
-    if (!pending || !Array.isArray(selection.entryIds) || intentKey(pending.selection) !== intentKey(selection)) throw error;
+    const intentKey = (value: CompanionImportSelection) => fingerprint([value.requestId, value.previewId, value.name, value.avatarImageBase64,
+      [...value.entryIds].sort(), value.entryRanges, value.takeover, value.deferSetup === true]);
+    if (!pending || !Array.isArray(selection.entryIds)) throw error;
+    if (intentKey(pending.selection) !== intentKey(selection)) throw new CompanionImportError('REQUEST_ALREADY_USED');
     snapshot = await deserializeImportSnapshotAsync(pending.snapshotJson, scope.assert);
   }
   const selected = validateImportSelection(selection, snapshot);
@@ -392,6 +394,11 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   };
   const prior = await readReceipt(scope.root, selection.requestId); scope.assert();
   if (prior?.cancelled) return prior.result;
+  const readLegacyDeferSetup = async (botId: string) => {
+    const pending = (await companionEnvironmentStore.read(scope.root, botId, scope.assert))?.pendingImport;
+    return pending ? pending.selection.deferSetup === true : undefined;
+  };
+  await validateImportRequestIdentity(snapshot, selection, prior, readLegacyDeferSetup); scope.assert();
   if (!prior) {
     const profiles = await listBotRemoteResourceSources(); scope.assert();
     if (profiles.some(profile => profile.status !== 'archived' && normalizeBotName(profile.name) === normalizeBotName(selection.name))) throw new CompanionImportError('IMPORT_NAME_EXISTS');
@@ -399,9 +406,16 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   const jobKey = `${scope.scope}:${selection.requestId}`;
   const running = jobs.get(jobKey);
   if (running) return accepted(running, scope.root, selection.requestId);
+  let skillConfigReader: { budget: Parameters<NonNullable<TransferDeps['readSkillConfig']>>[1]; reader: ReturnType<typeof createImportSourceReader> } | undefined;
   const transferDeps: TransferDeps = {
     assertOwner: scope.assert,
     validateItems(items) {
+      // Repaired manifests can reveal credentials that were unavailable at preview time.
+      for (const value of Object.values(selectedImportRedactions(items))) {
+        if (knownValues.has(value)) continue;
+        while (`content_retry_${nextMask}` in contentSecrets) nextMask++;
+        contentSecrets[`content_retry_${nextMask++}`] = value; knownValues.add(value);
+      }
       // Capturing lazily selected resources may grow even a rejected selection.
       const cached = previews.get(selection.previewId);
       if (cached?.value === snapshot) retainPreview(selection.previewId, cached);
@@ -413,6 +427,11 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       }
     },
     readReceipt: requestId => readReceipt(scope.root, requestId),
+    readLegacyDeferSetup,
+    readSkillConfig(source, budget) {
+      if (skillConfigReader?.budget !== budget) skillConfigReader = { budget, reader: createImportSourceReader(readers(), budget) };
+      return skillConfigReader.reader.readConfig(path.dirname(source.configFile), source.configFile);
+    },
     saveReceipt: receipt => saveReceipt(scope.root, receipt),
     async createCompanion(botId, input) {
       try {
@@ -446,6 +465,9 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         }
       }
       if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
+        // A formerly unreadable manifest may only now supply its own settings.
+        if (item.env) environment.env = { ...environment.env, ...item.env };
+        if (item.credential) environment.credentials = [...environment.credentials.filter(value => value.id !== item.view.id), { id: item.view.id, ...item.credential }];
         for (const [id, text] of documentEntries(item)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
           const slug = skillSlug(item);
@@ -597,6 +619,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     }
   })().catch(async error => {
     scope.assert();
+    if (error instanceof CompanionImportError && error.code === 'REQUEST_ALREADY_USED') throw error;
     return withBotProfileLocks([`import_${fingerprint(selection.requestId).slice(0, 24)}`], async () => {
       const receipt = await readReceipt(scope.root, selection.requestId);
       scope.assert();

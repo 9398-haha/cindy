@@ -55,11 +55,11 @@ it('retains an over-budget skill for retry without dropping healthy siblings', a
   const jobs = (skills: string[]) => JSON.stringify([{ id: 'read', skills, prompt: 'Read resources', schedule: { kind: 'interval', minutes: 5 } }]);
   await write('.hermes/cron/jobs.json', jobs(['first']));
   const reader = deps(); const [source] = await discoverImportSources(reader);
-  const snapshot = await inspectImportSource(source!, reader, createImportBudget(4500));
+  const snapshot = await inspectImportSource(source!, reader, createImportBudget(6000));
   expect(snapshot.items.find(item => item.view.name === 'first')?.files?.find(file => file.name === 'data.txt')?.bytes.length).toBe(2048);
   expect(snapshot.items.find(item => item.view.name === 'second')?.files).toHaveLength(1);
   await write('.hermes/cron/jobs.json', jobs(['first', 'second']));
-  const partial = await inspectImportSource(source!, reader, createImportBudget(4500));
+  const partial = await inspectImportSource(source!, reader, createImportBudget(6000));
   expect(partial.items.find(item => item.view.name === 'second')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
   expect(partial.items.find(item => item.view.name === 'first')?.files).toHaveLength(2);
 });
@@ -504,4 +504,33 @@ it('preserves native manifest file symlinks while charging their contents', asyn
   const config = { plugins: { load: { paths: [path.join(home, 'plugin')] } } };
   expect((await discoverImportSkills(source, config, home, {}, createImportBudget())).map(item => item.view.name)).toEqual(['report']);
   await expect(discoverImportSkills(source, config, home, {}, createImportBudget(10))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+});
+
+it.each(['workspace', 'extraDirs', 'plugin', 'hermes'])('bounds empty %s directories during enumeration and closes the stream on budget failure', async location => {
+  const root = path.join(home, location === 'hermes' ? '.hermes' : '.openclaw');
+  const workspace = path.join(root, 'workspace');
+  const directory = location === 'workspace' ? path.join(workspace, 'skills') : location === 'plugin' ? path.join(root, 'extensions') : location === 'extraDirs' ? path.join(home, 'extras') : path.join(root, 'skills');
+  for (let index = 0; index < 40; index++) await fs.mkdir(path.join(directory, `empty-${index}`), { recursive: true });
+  const source = { kind: location === 'hermes' ? 'hermes' as const : 'openclaw' as const, agentId: 'main', name: 'Ada', root, workspace, configFile: path.join(root, 'config.json') };
+  const budget = createImportBudget(1500);
+  const reserve = vi.spyOn(budget, 'reserve');
+  const open = vi.spyOn(fs, 'opendir');
+  const readdir = vi.spyOn(fs, 'readdir');
+  await expect(discoverImportSkills(source, location === 'extraDirs' ? { skills: { load: { extraDirs: [directory] } } } : {}, home, {}, budget)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(readdir).not.toHaveBeenCalled();
+  expect(reserve.mock.calls.length).toBeLessThan(40);
+  const opened = open.mock.results.filter((_, index) => String(open.mock.calls[index]![0]) === directory);
+  expect(opened).toHaveLength(1);
+  const handle = await opened[0]!.value;
+  await expect(handle.read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+});
+
+it('preserves sorted skill-name precedence after streaming directory entries', async () => {
+  await write('.hermes/skills/z-last/SKILL.md', '---\nname: report\n---\nLast');
+  await write('.hermes/skills/a-first/SKILL.md', '---\nname: report\n---\nFirst');
+  const root = path.join(home, '.hermes');
+  const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root, configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
+  expect(items).toHaveLength(1);
+  expect(items[0]!.sourceAlias).toBe('a-first');
+  expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
 });

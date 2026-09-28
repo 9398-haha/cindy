@@ -1,12 +1,15 @@
 import { promises as fs } from 'node:fs';
 import type { CompanionImportResult, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import type { RoutineInput } from '@cindy/maker-scheduler';
-import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems } from './files.js';
-import { CompanionImportError, type ImportItem, type ImportSnapshot } from './types.js';
+import { createImportBudget, fingerprint, readImportFile, readImportTree, reserveSnapshotItems, type ImportReadBudget } from './files.js';
+import { CompanionImportError, object, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
+import { normalizeImportSkill } from './skills.js';
 import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from './environmentSelection.js';
 
 export interface ImportReceipt {
   selectionHash: string;
+  /** Present on receipts whose identity includes the original setup choice. */
+  deferSetup?: boolean;
   result: CompanionImportResult;
   copied: string[];
   environmentSaved?: boolean;
@@ -24,6 +27,8 @@ export interface ImportReceipt {
 export interface TransferDeps {
   assertOwner(): void;
   readReceipt(requestId: string): Promise<ImportReceipt | undefined>;
+  readLegacyDeferSetup?(botId: string): Promise<boolean | undefined>;
+  readSkillConfig?(source: ImportSource, budget: ImportReadBudget): Promise<Record<string, unknown>>;
   saveReceipt(receipt: ImportReceipt): Promise<void>;
   createCompanion(botId: string, selection: CompanionImportSelection): Promise<void>;
   validateItems?(items: ImportItem[]): void;
@@ -62,21 +67,45 @@ export function validateImportSelection(value: CompanionImportSelection, snapsho
   return resolveImportEnvironmentDependencies(items);
 }
 
+/** Old hashes predate deferSetup; the durable checkpoint retains its original value. */
+export async function validateImportRequestIdentity(snapshot: ImportSnapshot, selection: CompanionImportSelection, existing: ImportReceipt | undefined,
+  readLegacyDeferSetup?: TransferDeps['readLegacyDeferSetup']): Promise<string> {
+  const items = validateImportSelection(selection, snapshot);
+  const identity = [selection.name, selection.avatarImageBase64, items.map(item => item.view.id).toSorted(), selection.takeover, snapshot.source.kind, snapshot.source.agentId, snapshot.source.root];
+  const deferSetup = selection.deferSetup === true;
+  const selectionHash = fingerprint([...identity, deferSetup]);
+  if (!existing) return selectionHash;
+  if (existing.deferSetup !== undefined) {
+    if (existing.selectionHash !== selectionHash || existing.deferSetup !== deferSetup) throw new CompanionImportError('REQUEST_ALREADY_USED');
+  } else {
+    if (existing.selectionHash !== fingerprint(identity)) throw new CompanionImportError('REQUEST_ALREADY_USED');
+    // Terminal legacy receipts may have already discarded their checkpoint.
+    // Returning them cannot start setup or change any takeover side effects.
+    if (!existing.cancelled && existing.result.status !== 'complete') {
+      const original = await readLegacyDeferSetup?.(existing.result.botId)
+        ?? existing.result.checks.some(check => check.message === 'IMPORT_SETUP_DEFERRED');
+      if (original !== deferSetup) throw new CompanionImportError('REQUEST_ALREADY_USED');
+    }
+  }
+  return selectionHash;
+}
+
 /** One receipt is shared by GUI, remote actions and command callers. Writes are serialized by the host. */
 export async function transferCompanion(snapshot: ImportSnapshot, selection: CompanionImportSelection, deps: TransferDeps, reconcileOnly = false, resumeSetup = false): Promise<CompanionImportResult> {
   const items = validateImportSelection(selection, snapshot);
   deps.assertOwner();
   const selectedIds = items.map(item => item.view.id);
-  const selectionHash = fingerprint([selection.name, selection.avatarImageBase64, selectedIds.toSorted(), selection.takeover, snapshot.source.kind, snapshot.source.agentId, snapshot.source.root]);
   const existing = await deps.readReceipt(selection.requestId);
+  const selectionHash = await validateImportRequestIdentity(snapshot, selection, existing, deps.readLegacyDeferSetup);
   deps.assertOwner();
-  if (existing && existing.selectionHash !== selectionHash) throw new CompanionImportError('REQUEST_ALREADY_USED');
   if (existing?.creationRejected) throw new CompanionImportError(existing.creationRejected);
   if (existing?.cancelled) return existing.result;
   if (existing?.result.status === 'complete') return existing.result;
   const receipt: ImportReceipt = existing ?? { selectionHash, handoverMarkers: true, copied: [], routines: {}, result: {
     requestId: selection.requestId, botId: `import_${fingerprint(selection.requestId).slice(0, 24)}`, status: 'running', checks: [],
   } };
+  receipt.selectionHash = selectionHash;
+  receipt.deferSetup = selection.deferSetup === true;
   const botId = receipt.result.botId;
   const save = async () => { deps.assertOwner(); await deps.saveReceipt(receipt); deps.assertOwner(); };
   const check = (entryId: string, status: CompanionImportResult['checks'][number]['status'], message?: string) => {
@@ -111,10 +140,25 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         deps.assertOwner();
       }
       if (item.sourceDirectory && !item.filesComplete) {
+        // Failed discovery uses a directory-based ID. Older successful imports
+        // also lack sourceAlias, so absence alone must not reinterpret them.
+        const metadataPending = item.view.category === 'skills' && !!item.captureIssue && !item.sourceAlias
+          && item.view.id === `skill-${fingerprint(item.sourceDirectory).slice(0, 20)}`;
         const captured = item.files ?? [];
         const names = new Set(captured.map(file => file.name));
         try {
           item.files = [...captured, ...await readImportTree(item.sourceDirectory, name => !names.has(name), budget)];
+          if (metadataPending) {
+            const manifest = item.files.find(file => file.name === 'SKILL.md')?.bytes.toString('utf8');
+            if (!manifest?.trim() || !deps.readSkillConfig) throw new CompanionImportError('SOURCE_CONFIG_INVALID');
+            const config = await deps.readSkillConfig(snapshot.source, budget);
+            deps.assertOwner();
+            const metadata = normalizeImportSkill(snapshot.source.kind, item.view.name, manifest, object(config.skills));
+            const restored = { ...item, ...metadata, view: { ...item.view, ...metadata.view, id: item.view.id } };
+            // A newly readable credential must not silently choose a conflicting account.
+            selectedImportEnvironment(items.map(candidate => candidate === item ? restored : candidate));
+            Object.assign(item, restored);
+          }
           item.filesComplete = true;
           delete item.captureIssue;
         } catch (error) {
