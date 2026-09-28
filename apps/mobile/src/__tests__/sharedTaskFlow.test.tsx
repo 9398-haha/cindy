@@ -158,6 +158,42 @@ it('claims a received invitation while capability loads, then joins and enters o
     sessionId: 'task', deviceId: sharedTaskHostPeer('shared', 'desktop'), deviceName: 'Design review',
   } });
 });
+it('retains the original expiry when a link is claimed while relay capability loads', async () => {
+  h.link.sharedTaskAvailable = false;
+  receiveSharedTaskInvitationIntent(invitationIntent);
+  await act(async () => { await vi.advanceTimersByTimeAsync(14 * 60_000); });
+  await render();
+  expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  h.link.sharedTaskAvailable = true;
+  await render();
+  expect(h.api.join).not.toHaveBeenCalled();
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(element.textContent).toContain('sharedTask.invitationUnavailable');
+  expect((element.querySelector('[aria-label="sharedTask.invitation"]') as HTMLTextAreaElement).value).toBe('');
+});
+it('rejects an expired claimed link even when its timeout has not run in the background', async () => {
+  h.link.sharedTaskAvailable = false;
+  receiveSharedTaskInvitationIntent(invitationIntent);
+  await render();
+  vi.setSystemTime(Date.now() + 15 * 60_000);
+  h.link.sharedTaskAvailable = true;
+  await render();
+  expect(h.api.join).not.toHaveBeenCalled();
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(element.textContent).toContain('sharedTask.invitationUnavailable');
+});
+it('does not let the previous claimed link expiry discard a newer invitation', async () => {
+  h.link.sharedTaskAvailable = false;
+  receiveSharedTaskInvitationIntent(invitationIntent);
+  await render();
+  await act(async () => { await vi.advanceTimersByTimeAsync(14 * 60_000); });
+  await act(async () => { receiveSharedTaskInvitationIntent(invitationIntent.replace('A'.repeat(43), 'B'.repeat(43))); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  h.link.sharedTaskAvailable = true;
+  await render();
+  expect(h.api.join).toHaveBeenCalledExactlyOnceWith('B'.repeat(43), 'Account Guest');
+});
 it('does not carry a claimed invitation across an account change', async () => {
   h.link.sharedTaskAvailable = false;
   receiveSharedTaskInvitationIntent(invitationIntent);

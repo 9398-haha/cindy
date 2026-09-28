@@ -41,7 +41,7 @@ export default function SharedSessionScreen() {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [invitation, setInvitation] = useState('');
-  const [incomingLink, setIncomingLink] = useState<{ link: string; owner: ReturnType<typeof getMobileAuthOwner> } | null>(null);
+  const [incomingLink, setIncomingLink] = useState<{ link: string; owner: ReturnType<typeof getMobileAuthOwner>; expiresAt: number } | null>(null);
   const [state, setState] = useState<SharedTaskHostState | null>(null);
   const [ownedTargetUnavailable, setOwnedTargetUnavailable] = useState(false);
   const [owned, setOwned] = useState<SharedTaskListItem[]>([]);
@@ -240,12 +240,27 @@ export default function SharedSessionScreen() {
     // Claim before waiting for relay capability. Leaving this screen discards the invitation.
     epoch.current++; pending.current = false; setBusy(false);
     setJoinedId(undefined); setState(null); setEnded(false); setTab('current');
-    setIncomingLink({ link: input, owner: getMobileAuthOwner() });
+    setIncomingLink({ link: input, owner: getMobileAuthOwner(), expiresAt: incomingInvitation.expiresAt });
     clearSharedTaskInvitationIntent();
     setInvitation(input);
   }, [incomingInvitation, isAuthenticated, sessionId, deviceId, sharedTaskId]);
   useEffect(() => {
-    if (!incomingLink || !isMobileAuthOwnerCurrent(incomingLink.owner) || !isAuthenticated || link.sharedTaskAvailable !== true || guestId || pending.current) return;
+    if (!incomingLink) return;
+    // Claiming the intent transfers its original deadline; waiting for capability
+    // must not extend the invitation's in-memory lifetime.
+    const timer = setTimeout(() => {
+      setIncomingLink(null); setInvitation(''); setNotice(t('sharedTask.invitationUnavailable'));
+    }, Math.max(0, incomingLink.expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [incomingLink, t]);
+  useEffect(() => {
+    if (!incomingLink) return;
+    // Timers can be suspended in the background; check before any automatic join.
+    if (Date.now() >= incomingLink.expiresAt) {
+      setIncomingLink(null); setInvitation(''); setNotice(t('sharedTask.invitationUnavailable'));
+      return;
+    }
+    if (!isMobileAuthOwnerCurrent(incomingLink.owner) || !isAuthenticated || link.sharedTaskAvailable !== true || guestId || pending.current) return;
     setIncomingLink(null);
     joinInvitation(incomingLink.link, true);
   });

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { parseSharedTaskInvitationIntent, type SharedTaskInvitationIntent } from '@cindy/device-link';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
-let pending: (SharedTaskInvitationIntent & { id: number; source: 'link' | 'clipboard' }) | null = null;
+let pending: (SharedTaskInvitationIntent & { id: number; source: 'link' | 'clipboard'; expiresAt: number }) | null = null;
 let sequence = 0;
 let stopWatching: (() => void) | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
@@ -23,7 +23,7 @@ export function receiveSharedTaskInvitationIntent(url: string, source: 'link' | 
   clearSharedTaskInvitationIntent();
   let owner = getMobileAuthOwner();
   if (owner.switching) return true;
-  pending = { ...value, id: ++sequence, source };
+  pending = { ...value, id: ++sequence, source, expiresAt: Date.now() + 15 * 60_000 };
   stopWatching = subscribeMobileAuthOwner(() => {
     const next = getMobileAuthOwner();
     if (next.switching || (owner.accountKey && !isMobileAuthOwnerCurrent(owner))) clearSharedTaskInvitationIntent();
