@@ -93,6 +93,7 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
+import { REVIEW_READ_TOOLS, callReviewReadTool, reviewReadDenied } from './review-read-tools.js';
 import {
   annotatePermissionRequestForUnavailableReview,
   composeAutoReviewIntentWithApprovedPlan,
@@ -4902,6 +4903,7 @@ assertRouteCurrent();
     }
     const registeredHostDynamicToolKeys = new Set(hostDynamicTools.map(dynamicToolKey));
     const sessionDynamicTools = [
+      ...(reviewMode && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
       ...(!reviewMode && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
       ...(!reviewMode ? hostDynamicTools : []),
     ];
@@ -5488,6 +5490,14 @@ assertRouteCurrent();
     }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
+    // Verified with 0.156.0: features.view_image removes the native reader.
+    // 0.145.0 ignores this flag and reads images outside the permission scope.
+    if (reviewMode && process.platform === 'win32' && !codexUserAgentAtLeast(initResp.userAgent, [0, 156, 0])) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Windows Cindy Review requires Codex app-server 0.156.0 or newer to enforce scoped reads (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (reviewMode && !readonlyReferenceDirsSupported) {
       releaseHostBindingLeaseIfNeeded();
       throw new Error(
@@ -6276,6 +6286,24 @@ assertRouteCurrent();
           : {}),
         ...(reviewMode
           ? {
+              // Windows native sandboxes cannot enforce this split read scope.
+              // Keep the deny policy, and route evidence reads through the host.
+              // Native AGENTS discovery also invokes that incompatible sandbox.
+              ...(process.platform === 'win32' ? {
+                project_doc_max_bytes: 0,
+                'features.shell_tool': false,
+                'features.unified_exec': false,
+                'features.shell_snapshot': false,
+                'features.view_image': false,
+                'features.code_mode': false,
+                'features.code_mode_only': false,
+                'features.js_repl': false,
+                'features.browser_use': false,
+                'features.browser_use_external': false,
+                'features.computer_use': false,
+                'features.image_generation': false,
+                'features.multi_agent_v2': false,
+              } : {}),
               web_search: 'disabled',
               'features.apps': false,
               'features.goals': false,
@@ -6284,7 +6312,10 @@ assertRouteCurrent();
               'features.remote_plugin': false,
             }
           : {}),
-        ...(!makerMemoryEnabled && !opts.botRuntimeProfile
+        // Review disables only transport-bearing entries discovered above.
+        // Its host omits Cindy's MCP bridge, so a bare memory override would
+        // create an invalid transport even though the entry is disabled.
+        ...(!reviewMode && !makerMemoryEnabled && !opts.botRuntimeProfile
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
         // Configure the native window and its 90% compaction budget together.
@@ -9686,7 +9717,7 @@ assertRouteCurrent();
       params: DynamicToolCallParams,
       meta: { requestId: string | number },
     ): Promise<DynamicToolCallResponse> => {
-      if (reviewMode) {
+      if (reviewMode && process.platform !== 'win32') {
         return {
           contentItems: [{ type: 'inputText', text: 'Cindy Review does not allow dynamic tools.' }],
           success: false,
@@ -9709,6 +9740,16 @@ assertRouteCurrent();
           ],
           success: false,
         };
+      }
+      if (reviewMode) {
+        const readIsActive = () => !closed && isCurrentHost()
+          && params.threadId === threadId && params.turnId === currentTurnId
+          && !turnInterruptOrigins.has(params.turnId)
+          && !resolvedWhileBufferedRequestIds.has(String(meta.requestId));
+        if (!readIsActive() || params.namespace) return reviewReadDenied();
+        const response = await callReviewReadTool(params.tool, params.arguments, opts.workingDir, reviewReadGrants);
+        return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
+          ? response : reviewReadDenied();
       }
       const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {

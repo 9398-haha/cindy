@@ -692,7 +692,7 @@ describe('Codex official OAuth host isolation', () => {
   });
 
   it.each([false, true])('retires scoped snapshots and blocks new hosts during configuration persistence (review=%s)', async (reviewMode) => {
-    if (reviewMode) MockCodexTransport.userAgent = 'mock-codex/0.145.0';
+    if (reviewMode) MockCodexTransport.userAgent = 'mock-codex/0.156.0';
     if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral', mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-change-'));
     const deps = isolatedDeps();
@@ -725,7 +725,7 @@ describe('Codex official OAuth host isolation', () => {
   });
 
   it.each([false, true])('supersedes an in-flight scoped creation at the configuration boundary (review=%s)', async (reviewMode) => {
-    MockCodexTransport.userAgent = 'mock-codex/0.145.0';
+    MockCodexTransport.userAgent = 'mock-codex/0.156.0';
     if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral', mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-inflight-'));
     const deps = isolatedDeps();
@@ -1633,7 +1633,11 @@ describe('CodexAgent permissions', () => {
     });
   });
 
-  it('starts Review on an isolated memory-free host with an immutable read-only sandbox', async () => {
+  it.each([
+    { transport: 'absent', memoryConfig: undefined },
+    { transport: 'stdio', memoryConfig: { command: 'memory-server', enabled: true } },
+    { transport: 'http', memoryConfig: { url: 'http://127.0.0.1:45831/mcp', enabled: true } },
+  ])('starts Review on an isolated memory-free host with an immutable read-only sandbox (memory: $transport)', async ({ memoryConfig }) => {
     const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-artifact-'));
     tempRoots.push(artifactDir);
     const artifactPath = path.join(artifactDir, 'artifact.txt');
@@ -1683,7 +1687,10 @@ describe('CodexAgent permissions', () => {
         if (method === Method.ConfigRead) {
           return {
             config: {
-              mcp_servers: { local_docs: { command: '/usr/bin/local-docs', enabled: true } },
+              mcp_servers: {
+                local_docs: { command: '/usr/bin/local-docs', enabled: true },
+                ...(memoryConfig ? { cindy_memory: memoryConfig } : {}),
+              },
               plugins: {
                 'configured@personal': {
                   mcp_servers: {
@@ -1700,6 +1707,7 @@ describe('CodexAgent permissions', () => {
               { name: 'codex_apps', tools: {} },
               { name: 'local_docs', tools: {} },
               { name: 'configured_server', tools: {} },
+              ...(memoryConfig ? [{ name: 'cindy_memory', tools: {} }] : []),
             ],
             nextCursor: null,
           };
@@ -1709,7 +1717,7 @@ describe('CodexAgent permissions', () => {
       },
       {
         buildSessionMcpConfig: () => ({ 'mcp_servers.should_not_exist': { command: 'write' } }),
-        userAgent: 'mock-codex/0.145.0',
+        userAgent: 'mock-codex/0.156.0',
       },
     );
 
@@ -1777,7 +1785,22 @@ describe('CodexAgent permissions', () => {
       },
     });
     expect(threadStart).not.toHaveProperty('sandbox');
-    expect(threadStart).not.toHaveProperty('dynamicTools');
+    if (process.platform === 'win32') {
+      expect(threadStart.config).toMatchObject({
+        project_doc_max_bytes: 0,
+        'features.shell_tool': false,
+        'features.unified_exec': false,
+      });
+      expect(threadStart.dynamicTools).toEqual([
+        expect.objectContaining({ name: 'review_read_file' }),
+        expect.objectContaining({ name: 'review_list_directory' }),
+        expect.objectContaining({ name: 'review_view_image' }),
+      ]);
+    } else {
+      expect(threadStart.config).not.toHaveProperty('project_doc_max_bytes');
+      expect(threadStart).not.toHaveProperty('dynamicTools');
+    }
+    expect(threadStart.config).not.toHaveProperty(['windows.sandbox']);
     expect((threadStart.config as Record<string, unknown>)['skills.config']).toEqual([
       {
         path: '/home/test/.codex/plugins/cache/personal/unsafe-plugin/1.0.0/skills/review/SKILL.md',
@@ -1787,6 +1810,11 @@ describe('CodexAgent permissions', () => {
     expect(threadStart.config).not.toHaveProperty(['mcp_servers.should_not_exist']);
     expect(threadStart.config).not.toHaveProperty(['mcp_servers.codex_apps.enabled']);
     expect(threadStart.config).not.toHaveProperty(['mcp_servers.configured_server.enabled']);
+    if (memoryConfig) {
+      expect(threadStart.config).toHaveProperty(['mcp_servers.cindy_memory.enabled'], false);
+    } else {
+      expect(threadStart.config).not.toHaveProperty(['mcp_servers.cindy_memory.enabled']);
+    }
     expect(handle.getPlanMode?.()).toBe(false);
 
     await expect(
@@ -1852,7 +1880,42 @@ describe('CodexAgent permissions', () => {
     await handle.setPermissionMode('bypassPermissions');
     await handle.setPlanMode?.(true);
     expect(handle.getPlanMode?.()).toBe(false);
+    if (process.platform === 'win32') {
+      const read = (overrides = {}) => handlers.dynamicToolCall!({
+        threadId: 'start-thread-id', turnId: 'turn-review', callId: 'read-1',
+        namespace: null, tool: 'review_read_file', arguments: { path: artifactPath },
+        ...overrides,
+      }, { requestId: 'read-request' });
+      await expect(read()).resolves.toMatchObject({ success: true });
+      await expect(read({ threadId: 'child-thread' })).resolves.toMatchObject({ success: false });
+      await expect(read({ namespace: 'untrusted' })).resolves.toMatchObject({ success: false });
+      await expect(read({ tool: 'exec_command' })).resolves.toMatchObject({ success: false });
+      await expect(read({ arguments: { path: dotenvPath } })).resolves.toMatchObject({ success: false });
+      // Stop after the descriptor opens, before any bytes are returned.
+      const open = fs.open.bind(fs);
+      const opening = vi.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
+        const file = await open(...args);
+        await handle.abort();
+        return file;
+      });
+      await expect(read()).resolves.toMatchObject({ success: false });
+      opening.mockRestore();
+      await expect(read()).resolves.toMatchObject({ success: false });
+      await handle.close();
+      await expect(read()).resolves.toMatchObject({ success: false });
+    }
     await handle.close();
+  });
+
+  it.skipIf(process.platform !== 'win32')('rejects Windows Review runtimes without a disableable native image reader', async () => {
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-old-windows-'));
+    tempRoots.push(workingDir);
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
+    await expect(agent.startSession({
+      sessionId: 'review-old-windows', model: 'gpt-5.5', workingDir, reviewMode: true,
+    })).rejects.toThrow('Windows Cindy Review requires Codex app-server 0.156.0');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
   });
 
   it('keeps Bot identity and MCP config while honoring the selected task permission mode', async () => {
@@ -1976,7 +2039,7 @@ describe('CodexAgent permissions', () => {
         }
         return undefined;
       },
-      { userAgent: 'mock-codex/0.145.0' },
+      { userAgent: 'mock-codex/0.156.0' },
     );
 
     await expect(
