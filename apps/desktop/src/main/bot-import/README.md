@@ -88,6 +88,14 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   in-memory snapshot byte bounds remain; this is not an unlimited-byte importer.
   Skills disabled at the source are saved outside the active native skills folder
   and stay disabled when read or edited.
+  Runtime discovery is separately bounded: small shelves mount directly; headers
+  or catalogs exceeding the startup metadata/path byte budget use one native
+  discovery Skill for Pi, Codex and Claude Code. A streamed, complete JSONL index
+  points to original files and body line offsets; names/descriptions are previews
+  within the existing 64/280-character limits, never rewrites of source files.
+  `list_teammate_skills` searches full original metadata and pages by count and
+  response bytes. Relative resources remain rooted at the original Skill folder;
+  later saves, deletion and disabling refresh the discovery index on the next turn.
 - Skill discovery follows grouped Hermes directories, configured external roots,
   native directory links and disabled lists. OpenClaw discovery covers workspace,
   workspace `.agents`, personal/managed/workshop, installed bundled, extra and

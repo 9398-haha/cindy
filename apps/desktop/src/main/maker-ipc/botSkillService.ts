@@ -9,6 +9,7 @@
 
 import { app } from 'electron';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
+import { BOT_SKILL_RUNTIME_INDEX_BYTES, botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
 import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js';
 import { and, eq } from 'drizzle-orm';
 
@@ -217,17 +218,35 @@ export async function saveBotSkillForSession(
 
 /** 列出这个伙伴已经学会的技能,供模型避免重复学 / 决定该更新哪一条。 */
 export async function listBotSkillsForSession(
-  params: { callerSessionId: string },
+  params: { callerSessionId: string; query?: string; offset?: number; limit?: number },
   deps: BotSkillServiceDeps = {},
-): Promise<BotSkillResult<{ skills: BotSkillWireSummary[] }>> {
+): Promise<BotSkillResult<{ skills: ReturnType<typeof botSkillRuntimeSummary>[]; total: number; nextOffset?: number }>> {
   try {
     const boundary = captureOwnerBoundary(deps);
     const owner = await (deps.resolveBotId ?? defaultResolveBotId)(params.callerSessionId);
     if (!owner.ok) return owner;
     assertOwnerBoundary(deps, boundary);
-    const skills = await listBotSkills(await skillHomeOf(deps, owner.botId, boundary), owner.botId);
+    const all = await listBotSkills(await skillHomeOf(deps, owner.botId, boundary), owner.botId);
     assertOwnerBoundary(deps, boundary);
-    return { ok: true, skills: skills.map(toWire) };
+    const terms = (params.query ?? '').toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const matches = terms.length ? all.filter(item => {
+      const text = `${item.slug}\n${item.name}\n${item.description}`.toLocaleLowerCase();
+      return terms.every(term => text.includes(term));
+    }) : all;
+    const offset = Math.max(0, Math.floor(params.offset ?? 0));
+    const limit = Math.max(1, Math.min(50, Math.floor(params.limit ?? 20)));
+    const skills: ReturnType<typeof botSkillRuntimeSummary>[] = [];
+    let bytes = 0;
+    for (let index = offset; index < matches.length && skills.length < limit; index++) {
+      const summary = botSkillRuntimeSummary(matches[index]);
+      const size = Buffer.byteLength(JSON.stringify(summary));
+      if (skills.length && bytes + size > BOT_SKILL_RUNTIME_INDEX_BYTES) break;
+      skills.push(summary);
+      bytes += size;
+    }
+    const next = offset + skills.length;
+    return { ok: true, skills, total: matches.length,
+      ...(next < matches.length ? { nextOffset: next } : {}) };
   } catch (cause) {
     return storeError(cause);
   }
@@ -277,7 +296,7 @@ export async function deleteBotSkillForBot(
 }
 
 /**
- * 会话启动时要挂载的东西:每个技能的目录 + Claude Code 用的 plugin 根。
+ * 会话启动时的有界挂载:小目录直接挂载，大目录按需检索完整原文件。
  *
  * 一份磁盘事实两种消费方式 —— pi 拿 `dirPath` 走 `--skill`,Claude Code 拿
  * `pluginRoot` 走本地 plugin。没有技能时返回空,调用方据此完全不注入。
@@ -294,15 +313,7 @@ export async function collectBotOwnSkillMounts(
   const userDataDir = await skillHomeOf(deps, botId, boundary);
   const skills = await listBotSkills(userDataDir, botId, false);
   const baseline = await collectTeammateGuideMount(userDataDir);
+  const projected = await projectBotSkillMounts(botSkillRootDir(userDataDir, botId), skills);
   assertOwnerBoundary(deps, boundary);
-  return {
-    pluginRoot: botSkillRootDir(userDataDir, botId),
-    baseline,
-    skills: skills.map((item) => ({
-      name: item.name,
-      description: item.description,
-      path: item.dirPath,
-      filePath: item.filePath,
-    })),
-  };
+  return { ...projected, baseline };
 }

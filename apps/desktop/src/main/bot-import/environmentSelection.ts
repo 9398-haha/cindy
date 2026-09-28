@@ -75,12 +75,24 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
   // Missing variables do not supply a known credential. Actual connection imports
   // still require every selected dependency and use strict reference resolution.
   const resolve = (value: unknown) => resolveImportReferences(value, env, true);
+  const commandEnvironments = items.map(item => Object.fromEntries(
+    Object.entries(object(object(item.automation?.original.payload).env))
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  ));
+  // Command env JSON can also occur in readable Skill/memory/routine copies.
+  // Reuse the credential-field classifier before preview and publication, not
+  // just after command execution. Ordinary JSON scalar settings stay unchanged.
+  const structured = commandEnvironments.flatMap(environment => Object.values(environment)).flatMap((value, index) => {
+    try {
+      const parsed: unknown = JSON.parse(String(resolve(value)));
+      return parsed && typeof parsed === 'object' ? [{ id: `command_${index}`, format: 'command-env', value: parsed }] : [];
+    } catch { return []; }
+  });
   return importedContentRedactions({ env,
-    contentRedactions: Object.fromEntries(items.flatMap(item => Object.entries(environmentRedactions(
-      Object.fromEntries(Object.entries(object(object(item.automation?.original.payload).env)).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
-    ))).map(([name, value], index) => [`command_${index}_${name}`, value])),
+    contentRedactions: Object.fromEntries(commandEnvironments.flatMap(environment => Object.entries(environmentRedactions(environment)))
+      .map(([name, value], index) => [`command_${index}_${name}`, value])),
     mcp: items.flatMap(item => item.mcp ? [resolve(item.mcp) as NonNullable<typeof item.mcp>] : []),
-    credentials: items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []),
+    credentials: [...items.flatMap(item => item.credential ? [{ id: item.view.id, ...item.credential, value: resolve(item.credential.value) }] : []), ...structured],
   });
 }
 

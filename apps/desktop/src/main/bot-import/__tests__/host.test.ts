@@ -411,6 +411,47 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   });
 });
 
+it.each([false, true])('publishes structured command env credentials safely (command selected: %s)', async selected => {
+  const secret = 'fixture-command-json-token';
+  const nested = 'fixture-command-json-nested';
+  const config = JSON.stringify({ token: secret, credentials: [{ key: nested }], unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
+  const text = `Keep Paris and 7. ${secret} ${nested}`;
+  const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
+  const original = { enabled: false, payload: { kind: 'command', argv: ['node', '-e', ''], env: { CONFIG: config } } };
+  h.sourceEnabled = false;
+  h.snapshot.items = [
+    { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
+      input: { name: text, prompt: text, enabled: false, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] } } },
+    { view: { id: 'memory', name: text, category: 'memory', selected: true }, text },
+    { view: { id: 'skill', name: 'report', description: text, category: 'skills', selected: true }, filesComplete: true,
+      files: [{ name: 'SKILL.md', bytes: Buffer.from(skill), executable: false }] },
+  ];
+  const [source] = await listCompanionImportSources('fixture');
+  const remote = await readRemoteCompanionImport(`preview:${source!.id}`, 'fixture', false);
+  for (const value of [secret, nested]) expect(JSON.stringify(remote)).not.toContain(value);
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const requestId = 'fixture-json-command-publication';
+  const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
+    entryIds: ['memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.saved).toBe(true));
+  const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
+  const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines]);
+  for (const value of [secret, nested]) expect(output).not.toContain(value);
+  expect(published).toContain('Keep Paris and 7.');
+  const stored = (await h.store.read(h.root, result.botId, () => {}))!;
+  expect(stored.documents?.memory).toBe(text);
+  const savedSkill = stored.skillFiles?.report?.find(file => file.name === 'SKILL.md');
+  expect(Buffer.from(savedSkill!.bytes, 'base64').toString()).toBe(skill);
+  if (selected) {
+    expect(stored.sourceAutomations?.[0]?.original).toEqual(original);
+    expect(h.routines).toHaveLength(1);
+    expect(h.routines[0]?.enabled).toBe(false);
+  } else {
+    expect(h.routines).toHaveLength(0);
+    expect(JSON.stringify(stored)).not.toContain('fixture-unused-command-secret');
+  }
+});
+
 it('persists redacted routine fields and retains identical publication masks across a handover retry after restart', async () => {
   const selectedSecret = 'fake-active-query-token'; const excludedSecret = 'fake-excluded-note-token';
   const input = h.snapshot.items[0]!.automation!.input!;

@@ -55,7 +55,12 @@ export interface BotSkillRecord {
 }
 
 /** list 只需要元信息时用的轻量形态(不读正文,省 IO)。 */
-export type BotSkillSummary = Omit<BotSkillRecord, 'body'>;
+export type BotSkillSummary = Omit<BotSkillRecord, 'body'> & {
+  /** Charge the native loader's entire header, including YAML fields we do not interpret. */
+  frontmatterBytes: number;
+  /** One-based line at which a bounded read can skip even a very large header. */
+  bodyStartLine: number;
+};
 
 export const BOT_SKILL_MAX_NAME_CHARS = 64;
 export const BOT_SKILL_MAX_DESCRIPTION_CHARS = 280;
@@ -314,8 +319,15 @@ export async function listBotSkills(
     const filePath = await readSkillFilePath(skillDir);
     if (!filePath) continue;
     let parsed: ReturnType<typeof parseBotSkillFile>;
+    let frontmatterBytes: number;
+    let bodyStartLine: number;
     try {
-      parsed = parseBotSkillFile(await readCompatibleBotSkillSource(filePath, slug));
+      const source = await readCompatibleBotSkillSource(filePath, slug);
+      parsed = parseBotSkillFile(source);
+      const header = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(source)?.[0] ?? '';
+      // A nonstandard header is not safe to hand to a different native parser.
+      frontmatterBytes = Buffer.byteLength(header || source);
+      bodyStartLine = header ? header.split('\n').length : 1;
     } catch {
       continue;
     }
@@ -326,6 +338,8 @@ export async function listBotSkills(
       updatedAt: parsed.updatedAt,
       dirPath: skillDir,
       filePath,
+      frontmatterBytes,
+      bodyStartLine,
       ...(enabled ? {} : { enabled: false }),
     });
   }
