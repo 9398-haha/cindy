@@ -18,7 +18,7 @@ function fixture() {
  const select = vi.fn(() => ({from:(table:unknown)=>({where:()=>({limit:async()=>table===messages ? (history.input ? [{id:'manual-input'}] : []) : [{startedAt:history.startedAt,endedAt:history.endedAt}]})})}));
  const drain = vi.fn(async()=>{});
  const epoch = { client: { tx: vi.fn(async () => ({ updated: true })), drizzle: {select} } };
- const task = { taskId: 'task', revision: 1, permissionMode: 'plan' };
+ const task = { taskId: 'task', revision: 1, status: 'active', permissionMode: 'plan' };
  const service = { get: vi.fn(async () => task), listRuns: vi.fn(async () => ({ items: [] })), completeOperation: vi.fn(async <T>(operation: () => Promise<T>) => operation()) };
  const live = { isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async () => {}) };
  const queue = { ensureQueueRestored: vi.fn(async (_id: string) => {}), isQueueRestored: vi.fn((_id: string) => true), getQueueControlSnapshot: vi.fn((_id: string) => ({ pendingQueue: [] as string[] })) };
@@ -107,7 +107,7 @@ describe('plugin write confirmation interleavings', () => {
   const f = fixture(), change = () => f.change({ permissionMode: 'plan', model: 'new', workingDir: '/chosen', fastMode: true });
   if (point === 'runtime') f.live.setPermissionMode.mockImplementationOnce(async () => { change(); });
   if (point === 'database') f.epoch.client.tx.mockImplementationOnce(async () => { change(); return { updated: true }; });
-  if (point === 'lastRead') f.service.get.mockImplementationOnce(async () => ({ taskId: 'task', revision: 1, permissionMode: 'plan' })).mockImplementationOnce(async () => ({ taskId: 'task', revision: 1, permissionMode: 'plan' })).mockImplementationOnce(async () => { change(); return { taskId: 'task', revision: 1, permissionMode: 'plan' }; });
+  if (point === 'lastRead') f.service.get.mockImplementationOnce(async () => ({ taskId: 'task', revision: 1, status: 'active', permissionMode: 'plan' })).mockImplementationOnce(async () => ({ taskId: 'task', revision: 1, status: 'active', permissionMode: 'plan' })).mockImplementationOnce(async () => { change(); return { taskId: 'task', revision: 1, status: 'active', permissionMode: 'plan' }; });
   await f.run('auto'); expect(f.config()).toEqual({ permissionMode: 'auto', model: 'new', workingDir: '/chosen', fastMode: true });
  });
  it('does not overwrite a later permission change', async () => {
@@ -121,9 +121,9 @@ describe('plugin write confirmation interleavings', () => {
   const f=fixture();
   const revoke=()=>f.change({permissionMode:'acceptEdits',model:'new'});
   if(point==='database') f.epoch.client.tx.mockImplementationOnce(async()=>{revoke();return {updated:true};});
-  else f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
-   .mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
-   .mockImplementationOnce(async()=>{revoke();return {taskId:'task',revision:1,permissionMode:'auto'};});
+  else f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,status:'active',permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>({taskId:'task',revision:1,status:'active',permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>{revoke();return {taskId:'task',revision:1,status:'active',permissionMode:'auto'};});
   await expect(f.run('auto')).rejects.toMatchObject({code:'PERMISSION_DENIED'});
   expect(f.live.setPermissionMode.mock.calls).toEqual([['auto'],['plan']]);
   expect(f.epoch.client.tx).toHaveBeenLastCalledWith('bots.persistSessionPermission',{sessionId:'task',mode:'plan'});
@@ -132,8 +132,8 @@ describe('plugin write confirmation interleavings', () => {
  });
  it('rolls back a persisted grant if the final ownership read fails', async()=>{
   const f=fixture();
-  f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
-   .mockImplementationOnce(async()=>({taskId:'task',revision:1,permissionMode:'plan'}))
+  f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,status:'active',permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>({taskId:'task',revision:1,status:'active',permissionMode:'plan'}))
    .mockRejectedValueOnce(new Error('owner revoked'));
   await expect(f.run('auto')).rejects.toThrow('owner revoked');
   expect(f.live.setPermissionMode).toHaveBeenLastCalledWith('plan');
@@ -193,7 +193,7 @@ describe('first plugin write approval checks actual task history', () => {
 
 it.each(['bypassPermissions', 'auto', 'acceptEdits'])('does not report %s as granted after plugin authority is lowered', async permissionMode => {
  const f = fixture();
- f.service.get.mockImplementation(async () => ({taskId:'task',revision:1,permissionMode}));
+ f.service.get.mockImplementation(async () => ({taskId:'task',revision:1,status:'active',permissionMode}));
  f.dialog.showMessageBox.mockResolvedValue({response:1});
  await expect(f.run()).resolves.toMatchObject({granted:false});
  expect(f.dialog.showMessageBox).toHaveBeenCalledOnce();
@@ -201,6 +201,20 @@ it.each(['bypassPermissions', 'auto', 'acceptEdits'])('does not report %s as gra
 });
 it.each(['acceptEdits', 'auto'])('reuses an effective %s grant without another confirmation',async permissionMode=>{
  const f=fixture();f.change({permissionMode});
- f.service.get.mockImplementation(async()=>({taskId:'task',revision:1,permissionMode}));
+ f.service.get.mockImplementation(async()=>({taskId:'task',revision:1,status:'active',permissionMode}));
  await expect(f.run()).resolves.toMatchObject({granted:true});expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+});
+
+it.each(['plan', 'acceptEdits', 'auto'])('rejects archived %s tasks before reuse or confirmation', async permissionMode => {
+ const f=fixture();f.change({permissionMode});
+ f.service.get.mockResolvedValue({taskId:'task',revision:1,status:'archived',permissionMode});
+ await expect(f.run()).rejects.toMatchObject({code:'TASK_BUSY'});
+ expect(f.dialog.showMessageBox).not.toHaveBeenCalled();expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();
+});
+it('rejects archival while confirmation is open even if revision is unchanged',async()=>{
+ const f=fixture();f.dialog.showMessageBox.mockImplementationOnce(async()=>{
+  f.service.get.mockResolvedValue({taskId:'task',revision:1,status:'archived',permissionMode:'plan'});return {response:0};
+ });
+ await expect(f.run()).rejects.toMatchObject({code:'TASK_BUSY'});
+ expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();expect(f.write).not.toHaveBeenCalled();
 });

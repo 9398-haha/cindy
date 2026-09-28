@@ -10594,6 +10594,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'requestWriteAccess': {
         const snapshot = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
+        if (task.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
         const mode = request.mode ?? 'acceptEdits';
         const cfg = readGhostErrandConfig(pluginId);
         assertCallerCurrent();
@@ -10643,6 +10644,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             assertRequestCurrent();
             if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
+            if (fresh.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
             await assertIdle();
             assertRequestCurrent();
