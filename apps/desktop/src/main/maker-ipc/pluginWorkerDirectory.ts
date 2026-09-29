@@ -1,4 +1,4 @@
-import { realpath, stat } from 'node:fs/promises';
+import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { isPathInsideDir } from '../cindy-brain/dirDeposit.js';
 import { PluginTaskError } from './pluginTaskService.js';
@@ -12,6 +12,36 @@ function localDirectory(directory: string): string {
     throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task directory must be a local absolute path');
   }
   return path.normalize(directory);
+}
+
+// Inspect each Windows link before any API follows it. This handles existing
+// network links, not concurrent directory replacement or mapped network drives.
+async function localRealpath(directory: string): Promise<string> {
+  if (process.platform !== 'win32') return localDirectory(await realpath(directory));
+  let remaining = localDirectory(directory);
+  for (let hops = 0; hops < 40; hops += 1) {
+    const root = path.parse(remaining).root;
+    const parts = remaining.slice(root.length).split(path.sep).filter(Boolean);
+    let current = root;
+    let redirected = false;
+    for (let index = 0; index < parts.length; index += 1) {
+      current = path.join(current, parts[index]!);
+      if (!(await lstat(current)).isSymbolicLink()) continue;
+      const target = await readlink(current);
+      // Absolute link targets pass the raw namespace check before normalization.
+      // Drive-relative targets depend on process state rather than this directory.
+      if (/^[A-Za-z]:/.test(target) && !path.isAbsolute(target)) {
+        throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task link must have a local unambiguous target');
+      }
+      const checkedTarget = path.isAbsolute(target) ? localDirectory(target) : target;
+      const localTarget = localDirectory(path.resolve(path.dirname(current), checkedTarget));
+      remaining = path.join(localTarget, ...parts.slice(index + 1));
+      redirected = true;
+      break;
+    }
+    if (!redirected) return localDirectory(await realpath(remaining));
+  }
+  throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task directory contains too many links');
 }
 
 /** Plans describe work; only host directory facts authorize it. */
@@ -34,11 +64,11 @@ export async function resolvePluginWorkerDirectory(input: {
   if (!(leadRoot && isPathInsideDir(leadRoot, candidate))
       && !(configuredRoot && sameDirectory(configuredRoot, candidate))
       && !input.isPickedDirectory(candidate)) throw deny();
-  const resolved = localDirectory(await realpath(candidate));
+  const resolved = await localRealpath(candidate);
   if (!(await stat(resolved)).isDirectory()) throw deny();
   // Stored Host roots are canonical identities, not aliases to resolve into new grants.
   const unchangedRoot = async (stored: string) => {
-    const current = localDirectory(await realpath(stored));
+    const current = await localRealpath(stored);
     return sameDirectory(stored, current) ? current : null;
   };
   let allowed = false;
