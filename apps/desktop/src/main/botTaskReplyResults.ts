@@ -7,14 +7,16 @@ export async function readTaskResultsForReply(
   sessionId: string, replyClientId: string, inputClientIds: readonly string[],
   db: Pick<DbClient, 'queryOne' | 'query'> = getDbClient(),
 ): Promise<BotCollaborationMeta[]> {
-  const receiptIds = [...new Set(inputClientIds.flatMap(id => {
-    const receipt = taskResultClientIdForInput(id);
-    return receipt ? [receipt] : [];
-  }))];
-  if (!receiptIds.length) return [];
+  const inputs = [...new Set(inputClientIds)].flatMap(inputClientId => {
+    const receiptId = taskResultClientIdForInput(inputClientId);
+    return receiptId ? [{ inputClientId, receiptId }] : [];
+  });
+  if (!inputs.length) return [];
   // Only canonical teammate conversations participate; ordinary tasks/group lanes do not.
-  const reply = await db.queryOne<{ botId: string; content: string; agentMeta: string | null }>(`
-    SELECT b.bot_id AS botId, m.content, m.agent_meta AS agentMeta
+  const reply = await db.queryOne<{
+    botId: string; content: string; agentMeta: string | null; createdAt: number; rowid: number;
+  }>(`
+    SELECT b.bot_id AS botId, m.content, m.agent_meta AS agentMeta, m.created_at AS createdAt, m.rowid
     FROM messages m JOIN sessions s ON s.id = m.session_id
     JOIN bot_session_links b ON b.session_id = s.id
     WHERE m.session_id = ? AND m.client_id = ? AND m.role = 'assistant'
@@ -32,11 +34,18 @@ export async function readTaskResultsForReply(
   // A replayed seal may carry only part of the consumed inputs. Preserve its existing attachments.
   const results = meta.turnCompleted === true ? readBotTaskResults(meta.botTaskResults) : [];
   const attached = new Set(results.map(botTaskResultKey));
-  for (const receiptId of receiptIds) {
+  for (const { inputClientId, receiptId } of inputs) {
+    // The accepted input's durable row is a conservative lower boundary. Assistant timestamps
+    // retain the first text event, even when a pre-steer block is flushed after the user row.
+    // Require both orders strictly; missing/equal-time/rewound inputs keep their standalone receipt.
     const row = await db.queryOne<{ agentMeta: string }>(`
-      SELECT agent_meta AS agentMeta FROM messages
-      WHERE session_id = ? AND client_id = ? AND role = 'assistant' AND rewind_at IS NULL
-    `, [sessionId, receiptId]);
+      SELECT receipt.agent_meta AS agentMeta FROM messages receipt
+      JOIN messages input ON input.session_id = receipt.session_id AND input.client_id = ?
+        AND input.role = 'user' AND input.rewind_at IS NULL
+        AND input.created_at < ? AND input.rowid < ?
+      WHERE receipt.session_id = ? AND receipt.client_id = ?
+        AND receipt.role = 'assistant' AND receipt.rewind_at IS NULL
+    `, [inputClientId, reply.createdAt, reply.rowid, sessionId, receiptId]);
     if (!row) continue;
     let card: BotCollaborationMeta | null;
     try { card = readBotCollaborationMeta(JSON.parse(row.agentMeta).botCollaboration); } catch { continue; }
