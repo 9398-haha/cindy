@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, type WatchListener, type WatchOptions } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -6,11 +6,14 @@ import { buildBotSkillQueryIndex, queryBotSkillIndex, searchBotSkillQueryIndex }
 import { botSkillRootDir, botSkillsDir, listBotSkills, saveBotSkill, deleteBotSkill } from '../botSkillStore';
 import { listBotSkillsForSession } from '../botSkillService';
 
-const observation = vi.hoisted(() => ({ native: true }));
+const observation = vi.hoisted(() => ({ native: true, changes: new Map<string, (filename: string) => void>() }));
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, watch: (...args: Parameters<typeof actual.watch>) => observation.native
-    ? actual.watch(...args) : { close() {}, on() { return this; } } };
+  return { ...actual, watch: (file: string, options: Pick<WatchOptions, 'recursive' | 'persistent'>, listener: WatchListener<string>) => {
+    if (observation.native) return actual.watch(file, options, listener);
+    observation.changes.set(file, filename => listener('change', filename));
+    return { close() { observation.changes.delete(file); }, on() { return this; } };
+  } };
 });
 
 let home: string;
@@ -19,7 +22,7 @@ const root = () => botSkillRootDir(home, bot);
 const deps = () => ({ userDataDir: home, resolveBotId: async () => ({ ok: true as const, botId: bot }) });
 const query = (params = {}) => queryBotSkillIndex(root(), home, bot, params);
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-query-')); });
-afterEach(async () => { observation.native = true; vi.restoreAllMocks(); await fs.rm(home, { recursive: true, force: true }); });
+afterEach(async () => { observation.native = true; observation.changes.clear(); vi.restoreAllMocks(); await fs.rm(home, { recursive: true, force: true }); });
 async function write(slug: string, name: string, description = 'Searchable', disabled = false, body = 'Steps') {
   const dir = path.join(root(), disabled ? 'disabled-skills' : 'skills', slug);
   await fs.mkdir(dir, { recursive: true });
@@ -85,6 +88,10 @@ it('preserves full metadata matching, locale ordering, ties, disabled duplicates
 });
 
 it('refreshes saved/deleted/disabled/external metadata and missing catalogs without mixing owners', async () => {
+  // Exercise the actual watcher callback deterministically. Native notification
+  // timing is covered by the runtime projection's hand-edit test; it can miss
+  // changes made immediately after watch() during this multi-step query test.
+  observation.native = false;
   await write('alpha', 'Alpha', 'Original');
   await write('off', 'Off', 'Disabled', true);
   expect((await query()).total).toBe(2);
@@ -93,8 +100,11 @@ it('refreshes saved/deleted/disabled/external metadata and missing catalogs with
   await deleteBotSkill(home, bot, 'alpha');
   expect((await query()).skills.map(item => item.slug)).toEqual(['off']);
   await write('off', 'Off', 'Hand edited disabled', true);
-  // Native filesystem notifications can be coalesced (not synchronous with writeFile).
-  await vi.waitFor(async () => expect(await query({ query: 'edited' })).toMatchObject({ total: 1 }), { timeout: 5000 });
+  expect(await query({ query: 'edited' })).toMatchObject({ total: 0 });
+  const changed = observation.changes.get(path.join(root(), 'disabled-skills'));
+  expect(changed).toBeTypeOf('function');
+  changed!(path.join('off', 'SKILL.md'));
+  expect(await query({ query: 'edited' })).toMatchObject({ total: 1 });
   await fs.mkdir(botSkillsDir(home, bot), { recursive: true });
   await fs.rename(path.join(root(), 'disabled-skills/off'), path.join(root(), 'skills/off'));
   expect((await query()).skills[0].enabled).toBeUndefined();

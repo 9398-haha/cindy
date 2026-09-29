@@ -99,7 +99,7 @@ describe('complete personal Skills with bounded startup projection', () => {
     expect(await fs.readFile(path.join(disabled, 'oversized', 'SKILL.md'), 'utf8')).toBe(source);
   });
 
-  it('keeps every Skill in a large shelf discoverable, including the final page and later additions', async () => {
+  it('keeps every Skill in a large shelf discoverable, including the final page', async () => {
     const count = 2048;
     // Bounded filesystem concurrency; these are real files consumed by the store.
     for (let start = 0; start < count; start += 32) {
@@ -110,7 +110,7 @@ describe('complete personal Skills with bounded startup projection', () => {
     }
     await writeSkill('disabled', '---\nname: disabled\ndescription: Leave disabled\n---\nDo not run\n', true);
     const mounts = await assertBoundedNativeMounts();
-    let catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(catalog).toHaveLength(count);
     expect(new Set(catalog.map(item => item.slug)).size).toBe(count);
     const last = catalog.find(item => item.slug === 'skill-02047');
@@ -130,16 +130,27 @@ describe('complete personal Skills with bounded startup projection', () => {
     const lastPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow', offset: count - 1 }, deps());
     expect(lastPage).toMatchObject({ ok: true, skills: [{ slug: 'skill-02047' }] });
     expect(lastPage).not.toHaveProperty('nextOffset');
+  }, 30_000);
+
+  it('refreshes a projected catalog after additions and rebuilds it after deletion', async () => {
+    // Enter the same discovery projection by metadata size. Mutation/recovery
+    // do not need two more scans of the 2,048-file completeness fixture above.
+    const source = `---\nname: oversized\ndescription: ${'Long description '.repeat(30)}\n---\nOriginal instructions\n`;
+    const original = await writeSkill('oversized', source);
+    const mounts = await assertBoundedNativeMounts();
+    const catalogPath = path.join(mounts.pluginRoot, 'catalog.jsonl');
+    expect((await fs.readFile(catalogPath, 'utf8')).trim().split('\n')).toHaveLength(1);
     await writeSkill('z-new', '---\nname: z-new\ndescription: Newly learned\n---\nNew steps\n');
     await collectBotOwnSkillMounts(botId, deps());
-    catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-    expect(catalog).toHaveLength(count + 1);
-    expect(catalog.some(item => item.slug === 'z-new')).toBe(true);
-    await fs.unlink(path.join(mounts.pluginRoot, 'catalog.jsonl'));
+    const catalog = (await fs.readFile(catalogPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(catalog.map(item => item.slug).sort()).toEqual(['oversized', 'z-new']);
+    expect(await fs.readFile(catalog.find(item => item.slug === 'z-new').filePath, 'utf8')).toContain('New steps');
+    await fs.unlink(catalogPath);
     await collectBotOwnSkillMounts(botId, deps());
-    expect((await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(count + 1);
+    expect((await fs.readFile(catalogPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line))).toEqual(catalog);
+    expect(await fs.readFile(original, 'utf8')).toBe(source);
     expect(await fs.readdir(path.join(mounts.pluginRoot))).not.toEqual(expect.arrayContaining([expect.stringMatching(/\.tmp$/)]));
-  }, 30_000);
+  });
 
   it('writes a 100,000-entry stream before enumeration finishes, with atomic failure recovery', async () => {
     const root = botSkillRootDir(userDataDir, botId);
