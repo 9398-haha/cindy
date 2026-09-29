@@ -254,6 +254,24 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     },
   );
 
+  it.each(['', '  \n'])(
+    'does not replay commentary after an empty final message (%j)',
+    async (emptyFinal) => {
+      const h = createSessionHarness(acceptingSend());
+      const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
+      const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+      h.emit({ type: 'text', data: { text: 'Checking the PR.', isFinal: true, phase: 'commentary' } });
+      // Codex emits the empty final item, then done falls back to its last
+      // nonempty assistant item. That commentary already belongs to the transcript.
+      h.emit({ type: 'text', data: { text: emptyFinal, isFinal: true, phase: 'final_answer' } });
+      h.emit({ type: 'done', data: { result: 'Checking the PR.' } });
+      await expect(pending).resolves.toMatchObject({ resultText: 'Checking the PR.' });
+      expect(mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant')).toHaveLength(0);
+      expect(notifier.notify).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(
     [true, false].flatMap((silenced) =>
       ['result', 'finalText'].map((field) => ({ silenced, field })),

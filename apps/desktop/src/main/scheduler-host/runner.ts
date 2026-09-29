@@ -3104,6 +3104,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (ev.type === 'text') {
           const data = ev.data as { text?: string; isFinal?: boolean } | null;
           if (data && typeof data.text === 'string') {
+            // Empty final items do not replace a visible transcript message.
+            // Codex's done may fall back to its last nonempty commentary; keep
+            // that streamed text so finalizeRun does not persist it a second time.
+            if (data.isFinal && !data.text.trim()) return;
             if (data.text.trim()) finalTextMatchesStream = true;
             if (data.isFinal) assistantText = data.text;
             else assistantText += data.text;
