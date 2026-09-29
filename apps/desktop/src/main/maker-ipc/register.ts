@@ -11888,7 +11888,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCatalog: getActiveCatalog,
     });
 
-  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { permissionMode?: string }) => {
+  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { status: string; permissionMode?: string }) => {
+    if (task.status !== 'active') {
+      throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot create Workers');
+    }
     if (!isPluginTaskAuthorized(pluginId) || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
       throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
     }

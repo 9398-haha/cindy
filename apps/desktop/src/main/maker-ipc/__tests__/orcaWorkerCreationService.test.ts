@@ -2728,6 +2728,15 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
   });
 
 it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
+it('uses one canonical label at all three plan checks without mutating the caller', async () => {
+  const validateCreationPlan = vi.fn(async (_params: OrcaWorkerCreateParams) => 2);
+  const { service } = createDeps({ validateCreationPlan });
+  const params = Object.freeze({ leadSessionId: 'lead-1', teamId: 'team-1', role: 'eval', agent: 'codex' as const, label: ' SAMPLE ', workerPermissionMode: 'auto' as const });
+  await expect(service.createWorkerInTeam(params)).resolves.toMatchObject({ ok: true });
+  expect(validateCreationPlan).toHaveBeenCalledTimes(3);
+  for (const call of validateCreationPlan.mock.calls) expect(call[0]).toMatchObject({ label: 'sample' });
+  expect(params.label).toBe(' SAMPLE ');
+});
 it('rejects invalid plan before reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>{throw Error('not pending');})});await expect(service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'})).rejects.toThrow('not pending');expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();});
 it('revalidates a plan registered during creation preflight and releases the reservation on rejection', async () => {
   let reserved = false;
@@ -2782,21 +2791,22 @@ describe('production plugin Auto admission after reservation', () => {
   });
 
   it.each([
-    ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy'].map(point => ({ planned, point }))),
-    ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan'].map(point => ({ planned: true, point })),
+    ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy', 'archive-first', 'archive-admission', 'archive-reservation', 'archive-final'].map(point => ({ planned, point }))),
+    ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'normalized-label', 'settled-label'].map(point => ({ planned: true, point })),
     ...['queued-plan-excludes', 'queued-plan-route', 'queued-plan-matches'].map(point => ({ planned: false, point })),
   ])('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
     let reserved = false;
     let mode = 'auto';
     let taskMode = 'auto';
+    let taskStatus = point === 'archive-first' ? 'archived' : 'active';
     let enabled = true;
     let receiptReads = 0;
     let reservedTaskReads = 0;
     const epoch = { client: {} };
     const revoke = () => { mode = 'acceptEdits'; };
-    const task = () => ({ revision: 1, permissionMode: taskMode, workingDir: path.resolve('repo') });
+    const task = () => ({ revision: 1, status: taskStatus, permissionMode: taskMode, workingDir: path.resolve('repo') });
     const planItem = { label: 'sample', workingDir: path.resolve(point === 'canonical-directory' ? 'alias' : point === 'different-directory' ? 'other' : 'repo'), route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: point === 'normalized-fast' } };
-    const payload = () => JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [planItem] } } : {});
+    const payload = () => JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [planItem] }, settledLabels: point === 'settled-label' ? ['sample'] : [] } : {});
     const receipt = { pluginId: 'plugin', operation: 'create', payload: payload() };
     const depsForCallback = {
       readPluginTaskPlanReceipt: JSON.parse,
@@ -2806,6 +2816,7 @@ describe('production plugin Auto admission after reservation', () => {
         if (reserved) ++reservedTaskReads;
         if (reservedTaskReads === 3 && point === 'final-task') revoke();
         if (reservedTaskReads === 3 && point === 'task-mode') taskMode = 'plan';
+        if (reservedTaskReads === 3 && point === 'archive-final') taskStatus = 'archived';
         // A registration already past its reservation check commits while the
         // post-reservation service read drains the existing receipt queue.
         if (reservedTaskReads === 2 && point.startsWith('queued-plan-')) {
@@ -2824,7 +2835,10 @@ describe('production plugin Auto admission after reservation', () => {
       PluginTaskError,
     };
     const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
-    const { deps, service } = createDeps({ validateCreationPlan });
+    const { deps, service } = createDeps({ validateCreationPlan, withLeadSendLock: async (_id, operation) => {
+      if (point === 'archive-admission') taskStatus = 'archived';
+      return operation();
+    } });
     if (point === 'normalized-fast') {
       const models = deps.getAvailableModels;
       deps.getAvailableModels = agent => models(agent).map(model => ({ ...model, supportsFastMode: false }));
@@ -2834,27 +2848,28 @@ describe('production plugin Auto admission after reservation', () => {
       const result = await reserve(input); reserved = true;
       if (point === 'reservation') revoke();
       if (point === 'disabled') enabled = false;
+      if (point === 'archive-reservation') taskStatus = 'archived';
       if (point === 'changed-plan') {
         planItem.route.model = 'gpt-5.4';
         receipt.payload = payload();
       }
       return result;
     });
-    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: 'sample', workerPermissionMode: 'auto',
+    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'eval', agent: 'codex', label: ['normalized-label', 'settled-label'].includes(point) ? ' SAMPLE ' : 'sample', workerPermissionMode: 'auto',
       ...(point === 'explicit-match' ? { model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fast: false, workingDir: path.resolve('repo') } : {}),
       ...(point === 'different-model' ? { model: 'gpt-5.4' } : {}),
       ...(point === 'normalized-fast' ? { fast: true } : {}),
     });
-    if (['healthy', 'explicit-match', 'canonical-directory', 'queued-plan-matches'].includes(point)) {
+    if (['healthy', 'explicit-match', 'canonical-directory', 'queued-plan-matches', 'normalized-label'].includes(point)) {
       await expect(result).resolves.toMatchObject({ ok: true });
       expect(deps.bootstrapSession).toHaveBeenCalledOnce();
-    } else if (['different-model', 'different-directory', 'normalized-fast'].includes(point)) {
+    } else if (['different-model', 'different-directory', 'normalized-fast', 'archive-admission'].includes(point)) {
       // The child PR checks under the Lead send lock before reserving too.
-      await expect(result).resolves.toMatchObject({ ok: false, message: 'Worker configuration differs from registered plan' });
+      await expect(result).resolves.toMatchObject({ ok: false, message: point === 'archive-admission' ? 'Archived tasks cannot create Workers' : 'Worker configuration differs from registered plan' });
       expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
       expect(deps.bootstrapSession).not.toHaveBeenCalled();
     } else {
-      await expect(result).rejects.toMatchObject({ code: ['different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'queued-plan-excludes', 'queued-plan-route'].includes(point) ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
+      await expect(result).rejects.toMatchObject({ code: point.startsWith('archive-') ? 'TASK_BUSY' : ['different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'queued-plan-excludes', 'queued-plan-route', 'settled-label'].includes(point) ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
       expect(deps.bootstrapSession).not.toHaveBeenCalled();
     }
     expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(reserved ? 1 : 0);

@@ -621,6 +621,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     const label = normalizeOrcaWorkerLabel(params.label);
     if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    params = { ...params, label: label.value };
 
     const existing = await deps.listWorkersByLead(params.leadSessionId);
     if (existing.some((worker) => worker.label?.toLowerCase() === label.value)) {
