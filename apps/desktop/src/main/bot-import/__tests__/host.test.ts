@@ -489,7 +489,10 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
   const nested = 'fixture-command-json-nested';
   const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token', 'fixture-form argv', 'fixture-form%20argv', 'fixture-form/env', 'fixture-form%2Fenv', 'fixture-curl-password', 'fixture-custom-header-key', 'fixture-command-cookie', 'alice:fixture-basic:password', 'fixture-basic:password'];
   const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
-    'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment'];
+    'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment',
+    'fixture-inherited token', 'fixture-inherited%20token', 'fixture-inherited-query'];
+  const inheritedEnv = { WEBHOOK_URL: 'https://host/hooks/fixture-inherited%20token?token=fixture-inherited-query',
+    DISPLAY_MODE: 'true', RETRY_COUNT: '7' };
   const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
     services: [{ endpoint: 'https://host/hooks/fixture-hook-token#access_token=fixture-fragment%20token' }],
     unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
@@ -498,6 +501,7 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
   const original = { enabled: false, payload: { kind: 'command', argv: ['curl', '-u', 'alice:fixture-curl-password', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3], '--proxy-header', 'Proxy-Authorization: Basic ' + Buffer.from('alice:fixture-basic:password').toString('base64'), '-H', 'X-API-Key: fixture-custom-header-key', '-HCookie: session=fixture-command-cookie', '--data', 'access_token=fixture-form%20argv&city=Paris'], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, FORM: 'password=fixture-form%2Fenv&days=7', WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
   h.sourceEnabled = false;
   h.snapshot.items = [
+    { view: { id: 'source-env', name: '.env', category: 'connections', selected: true }, env: inheritedEnv },
     { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
       input: { name: text, prompt: text, enabled: false, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] } } },
     { view: { id: 'memory', name: text, category: 'memory', selected: true }, text },
@@ -510,7 +514,7 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const requestId = 'fixture-json-command-publication';
   const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
-    entryIds: ['memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture');
+    entryIds: ['source-env', 'memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.saved).toBe(true));
   const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
   const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${requestId}.json`), 'utf8');
@@ -518,6 +522,7 @@ it.each([false, true])('publishes command env/argv/stdin credentials safely (com
   for (const value of [secret, nested, ...urlSecrets, ...literalSecrets]) expect(output).not.toContain(value);
   expect(published).toContain('Keep node --mode -e, Paris and 7.');
   const stored = (await h.store.read(h.root, result.botId, () => {}))!;
+  expect(stored.env).toEqual(inheritedEnv);
   expect(stored.documents?.memory).toBe(text);
   const savedSkill = stored.skillFiles?.report?.find(file => file.name === 'SKILL.md');
   expect(Buffer.from(savedSkill!.bytes, 'base64').toString()).toBe(skill);

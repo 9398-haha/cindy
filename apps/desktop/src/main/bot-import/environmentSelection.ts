@@ -83,8 +83,14 @@ function importRedactions(items: ImportItem[], env: Record<string, string>): Rec
   // Env, stdin and argv share form/JSON/URL/header decomposition with execution
   // output. Env values retain their existing whole-value masks below; public
   // scalar settings must not gain blanket decoded-literal masks.
-  const environmentValues = Object.values(commandLiteralRedactions([], commandEnvironments
-    .flatMap(environment => Object.values(environment)).map(value => String(resolve(value))), false));
+  // Commands receive the selected source env as well as payload.env. Match the
+  // runtime collector without treating ordinary provider-only imports as commands.
+  const inheritedValues = items.some(item => object(item.automation?.original.payload).kind === 'command')
+    ? Object.values(env) : [];
+  const environmentValues = Object.values(commandLiteralRedactions([], [
+    ...inheritedValues,
+    ...commandEnvironments.flatMap(environment => Object.values(environment)).map(value => String(resolve(value))),
+  ], false));
   const commandValues = items.flatMap(item => {
     const payload = object(item.automation?.original.payload);
     if (payload.kind !== 'command') return [];

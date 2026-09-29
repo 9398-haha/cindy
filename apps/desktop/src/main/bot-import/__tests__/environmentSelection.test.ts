@@ -189,3 +189,22 @@ it('scopes curl userinfo parsing to its executable and options, retaining userna
     expect(redactEnvironmentValues('alice ordinary:fixture-public', commandArgumentRedactions(args))).toBe('alice ordinary:fixture-public');
   }
 });
+
+it.each([false, true])('decomposes inherited env only for command imports (command present: %s)', command => {
+  const url = 'https://host/hooks/fixture-inherited%20secret';
+  const items: ImportItem[] = [{ view: { id: 'env', name: '.env', category: 'connections', selected: true },
+    env: { WEBHOOK_URL: url, ENABLED: 'true', COUNT: '7', CONFIG: JSON.stringify({ city: 'Paris', count: 7 }) } }];
+  if (command) items.push({ view: { id: 'job', name: 'Job', category: 'automations', selected: true },
+    automation: { sourceId: 'job', fingerprint: 'fixture', original: { payload: { kind: 'command', argv: ['node', 'run.js'] } } } });
+  const before = structuredClone(items);
+  for (const collect of [previewImportRedactions, selectedImportRedactions]) {
+    const masks = collect(items);
+    const output = redactEnvironmentValues('fixture-inherited secret fixture-inherited%20secret Paris true 7 hooks', masks);
+    if (command) {
+      expect(output).not.toContain('fixture-inherited secret');
+      expect(output).not.toContain('fixture-inherited%20secret');
+    } else expect(output).toBe('fixture-inherited secret fixture-inherited%20secret Paris true 7 hooks');
+    expect(output).toContain('Paris true 7 hooks');
+  }
+  expect(items).toEqual(before);
+});
