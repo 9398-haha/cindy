@@ -408,6 +408,33 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     makerChatStore.purgeSession(s);
   });
 
+  it('reserves a queued send whose DB echo beats the dispatch projection', async () => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const original = host.invoke.getMockImplementation()!;
+    host.invoke.mockImplementation((...args) => args[1] === 'maker:input:enqueue'
+      ? Promise.resolve({ ...emptyProjection(s), pendingQueue: [(args[2] as unknown[])[1]] })
+      : original(...args));
+    await makerChatStore.sendMessage(s, 'queued on host', 'claude', '', 'default', '/remote/project');
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(s).pendingQueue.filter((item) => !item.isPendingEnqueue)).toHaveLength(1));
+    const queued = makerChatStore.getSnapshot(s).pendingQueue[0];
+    host.hostMessage(s, { ...dbMessage(s, 'queued-db', 'queued on host', '2026-09-17T00:00:00Z', 'user'), clientId: queued.clientId });
+    await flush();
+    const echoed = makerChatStore.getSnapshot(s);
+    expect(echoed.pendingQueue).toEqual([]);
+    expect(echoed.messages.find((row) => row.clientId === queued.clientId)?.localSendPrecedingClientIds).toBeDefined();
+    await getRemoteHistoryView(s)!.refresh();
+    const final = makerChatStore.getSnapshot(s).messages.filter((row) => row.clientId === queued.clientId);
+    expect(final).toHaveLength(1);
+    expect(final[0].localSendPrecedingClientIds).toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+
   it('does not lose repair signals received while the first historical page is in flight', async () => {
     const s = sid();
     const old = dbMessage(s, 'h1', 'old page', '2026-09-08T00:00:00Z');

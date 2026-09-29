@@ -8473,6 +8473,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const isLiveToolEcho =
       existing?.role === mapped.role &&
       (mapped.role === 'tool_use' || mapped.role === 'tool_result');
+    const userAwaitsHistoryView =
+      mapped.role === 'user' && isAwaitingHistoryView(sessionId, mapped.clientId);
     // Stop 会乐观置 Idle，但真正的 interrupt 可能还在 IPC 队列里；此时旧 turn 继续喷出的
     // live tool + DB echo 仍必须走批通知，否则按钮一按下就退化回事故中的逐行 React fan-out。
     const deferNotification =
@@ -8506,7 +8508,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             isFirstMessage: mapped.role === 'user' ? false : s.isFirstMessage,
           };
         }
-        const nextMessages = mergeMessages([mapped], s.messages, hydrateOptions);
+        const merged = mergeMessages([mapped], s.messages, hydrateOptions);
+        const nextMessages = userAwaitsHistoryView
+          ? reserveEchoedLocalUser(sessionId, s, merged, mapped.clientId)
+          : merged;
         const pendingQueue = s.pendingQueue.filter((item) => item.clientId !== mapped.clientId);
         if (nextMessages === s.messages && pendingQueue.length === s.pendingQueue.length) return s;
         return {
@@ -11161,6 +11166,58 @@ export function getRemoteHistoryView(sessionId: string) {
     return undefined;
   }
   return entry?.view;
+}
+/** 历史视图已接管渲染、但它的快照里还没有这一行。 */
+function isAwaitingHistoryView(sessionId: string, clientId: string): boolean {
+  const view = getRemoteHistoryView(sessionId);
+  if (!view) return false;
+  const snapshot = view.getSnapshot();
+  const inPage = historyViewLeaves(snapshot.items).some((item) =>
+    item.type === 'messages' && item.messages.some((row) => row.clientId === clientId));
+  if (inPage) return false;
+  for (const detail of snapshot.details.values()) {
+    if (detail.messages.some((row) => row.clientId === clientId)) return false;
+  }
+  return true;
+}
+/**
+ * 本端发出的 user 行(乐观气泡、排队项、插话)落库回声时，历史视图通常还没重读到它：
+ * 回声去掉 isPendingPersist 后它既不在快照里、也不再算本地行，气泡会消失到下一次
+ * 防抖重读才回来。沿用远程发送的位置预留，等历史视图确认(confirmRemoteUsers)再撤。
+ */
+function reserveEchoedLocalUser(
+  sessionId: string,
+  before: SessionChatState,
+  messages: ChatMessage[],
+  clientId: string,
+): ChatMessage[] {
+  const index = messages.findIndex((message) => message.clientId === clientId);
+  const row = index >= 0 ? messages[index] : undefined;
+  if (!row || row.role !== 'user' || row.localSendPrecedingClientIds) return messages;
+  // 只为「本次落库交接」预留(Codex review P2)：session.treeRehydrate 等会把活动路径
+  // 的历史行重播成 messages:created，而 localSentUserMessageIds(最多 200 条、本端
+  // 生命周期内长寿命)仍盖着这些旧 user 行；把重播当新回声会让旧气泡被长期挪到历史
+  // 尾部，后续刷新读不到这些较老的 id，confirmRemoteUsers 永远撤不掉预留。因此
+  // before 里已经是持久态的行一律视为重播，不预留；只有乐观气泡/排队插话交接给
+  // 持久态、或本端发送账本此刻仍对得上(行尚未进 before.messages)才预留。
+  const prior = before.messages.find((message) => message.clientId === clientId);
+  if (prior && prior.isPendingPersist !== true) return messages;
+  // 「本端发送」只认明确证据(Codex review P2)：仅在 pendingQueue 里不足以证明归属——
+  // IM / 手机 / 定时任务注入的 user 项同样经 pendingQueue 派发，且不登记
+  // localSentUserMessageIds；误判会把 DB 回声当本地 user 尾项提前插入或重排。
+  // 排队项要作为证据必须自证归属：isPendingEnqueue 只由本端发送/插话的乐观入队
+  // 记录打上(sendMessageCore / steerMessageCore / 本端 remote 乐观发送)，外部注入项
+  // 从 main 投影回来时没有它。
+  const sentHere =
+    prior?.isPendingPersist === true ||
+    isLocalSentUserMessage(sessionId, clientId) ||
+    before.pendingQueue.some(
+      (item) => item.clientId === clientId && item.isPendingEnqueue === true,
+    );
+  if (!sentHere) return messages;
+  const next = messages.slice();
+  next[index] = reserveRemoteUser(row, messages.slice(0, index));
+  return next;
 }
 function createRemoteHistoryView(sessionId: string) {
   const existing = getRemoteHistoryView(sessionId);

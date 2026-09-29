@@ -112,6 +112,7 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
     return new Promise<GhCliTokenReadResult>((resolve) => {
       try {
+        // All consumers target public GitHub, regardless of GH_HOST or CLI defaults.
         execFileFn(
           bin,
           ['auth', 'token', '--hostname', 'github.com'],
