@@ -14,6 +14,7 @@ import { LogOut, Monitor, Search, Settings, UsersRound } from 'lucide-react-nati
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
+  DeviceEventEmitter,
   findNodeHandle,
   Image,
   Modal,
@@ -193,10 +194,18 @@ export function HomeChromeDrawer({
     reduceMotion,
   ]);
 
-  // Android 返回键落在抽屉的 Dialog 窗口上。只有打开态才转成关闭:退场动画期间
-  // 调用方可能已记下关闭后的动作,再调 onClose 会把它清掉。
+  // Android 返回键落在抽屉的 Dialog 窗口上:
+  // - 打开态:转成关闭。
+  // - 退场动画期间(open 已 false、Dialog 还没卸载)这颗键属于底层页面:不能调
+  //   onClose——调用方记下的待执行动作会被它清掉;RN Modal 会吞掉原生 back,
+  //   这里把 hardwareBackPress 补发回 app 的返回键监听链,等价于抽屉已卸载时
+  //   的按下(无人消费时走系统默认返回)。
   const requestClose = useCallback(() => {
-    if (openRef.current) onClose();
+    if (openRef.current) {
+      onClose();
+      return;
+    }
+    DeviceEventEmitter.emit("hardwareBackPress");
   }, [onClose]);
 
   const closeFromGesture = useCallback(() => onClose(), [onClose]);

@@ -796,4 +796,11 @@ describe('home menu presentation', () => {
     expect(drawer).toContain('navigationBarTranslucent');
     expect(drawer).not.toContain('BackHandler');
   });
+
+  it('mounts the drawer search only after the Android dialog fully unmounts', () => {
+    const home = readSource('src/session/HomeSurface.tsx');
+    // 退场期间 Dialog 仍占着窗口焦点,搜索框 autoFocus 挂早了首次聚焦和软键盘
+    // 会丢;搜索动作和其它菜单动作一样延后到 onClosed 再执行。
+    expect(home).toContain('pendingMenuActionRef.current = () => setSearchOpen(true);');
+  });
 });
