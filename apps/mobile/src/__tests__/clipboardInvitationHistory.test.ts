@@ -193,3 +193,38 @@ it('clears an account that was never loaded and permits a failed removal to be r
   await rememberClipboardInvitation(account, digest);
   expect(await hasSeenClipboardInvitation(account, digest)).toBe(true);
 });
+
+it('does not reload erased digests after removal fails and all process memory is lost', async () => {
+  await rememberClipboardInvitation(account, digest);
+  storage.removeItem.mockRejectedValueOnce(new Error('remove unavailable'));
+  await expect(clearClipboardInvitationHistory(account)).rejects.toThrow('remove unavailable');
+  expect(JSON.parse(storage.values.get(key)!)).toEqual({ version: 1, entries: [] });
+  __testing.reset(); // Cold start: retain disk only, losing the retired flag and queues.
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(storage.values.has(key)).toBe(false);
+  expect(storage.removeItem).toHaveBeenCalledTimes(2);
+});
+
+it('preserves durable erasure across repeated failed removal attempts and restarts', async () => {
+  await rememberClipboardInvitation(account, digest);
+  storage.removeItem.mockRejectedValue(new Error('remove unavailable'));
+  await expect(clearClipboardInvitationHistory(account)).rejects.toThrow('remove unavailable');
+  for (let i = 0; i < 2; i++) {
+    __testing.reset();
+    expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+    expect(JSON.parse(storage.values.get(key)!)).toEqual({ version: 1, entries: [] });
+  }
+  storage.removeItem.mockImplementation(async (k: string) => { storage.values.delete(k); });
+  __testing.reset();
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(storage.values.has(key)).toBe(false);
+});
+
+it('still deletes the history when writing the empty record fails', async () => {
+  await rememberClipboardInvitation(account, digest);
+  storage.setItem.mockRejectedValueOnce(new Error('write unavailable'));
+  await clearClipboardInvitationHistory(account);
+  expect(storage.values.has(key)).toBe(false);
+  __testing.reset();
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+});

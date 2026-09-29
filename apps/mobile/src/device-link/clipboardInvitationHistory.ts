@@ -122,6 +122,11 @@ export function clearClipboardInvitationHistory(accountKey: string): Promise<voi
   history.entries = [];
   const clearing = history.writes.then(async () => {
     await history.hydrating;
+    // Erase digests durably before removing the key. If removal fails and the
+    // process exits, hydration sees an empty record and retries its removal.
+    // Still attempt removal if overwriting fails (e.g. storage is full).
+    await AsyncStorage.setItem(PREFIX + accountKey, JSON.stringify({ version: 1, entries: [] }))
+      .catch(() => undefined);
     await AsyncStorage.removeItem(PREFIX + accountKey);
     if (histories.get(accountKey) === history) histories.delete(accountKey);
   }).finally(() => { history.clearing = null; });
