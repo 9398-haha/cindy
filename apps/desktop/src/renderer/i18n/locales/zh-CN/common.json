@@ -63,6 +63,7 @@
     "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。"
   },
   "sharedTask": {
+    "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
     "manageSharing": "共享管理",
     "manageMembers": "管理成员…",
     "cancelSharing": "取消共享",
@@ -7826,6 +7827,10 @@
     },
     "model": {
       "description": "选择这个伙伴使用的模型。",
+      "primary": "主模型",
+      "task": "任务模型",
+      "inheritPrimary": "继承主模型",
+      "inheritingPrimary": "继承主模型，用于新建后台任务",
       "restoreDefault": "恢复默认模型"
     },
     "modelChain": {

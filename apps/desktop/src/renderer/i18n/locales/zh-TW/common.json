@@ -63,6 +63,7 @@
     "estimateFailed": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。"
   },
   "sharedTask": {
+    "selfJoin": "這是你發起的共享任務，無需加入。請從「我發起的」開啟",
     "manageSharing": "共享管理",
     "manageMembers": "管理成員…",
     "cancelSharing": "取消共享",
@@ -7826,6 +7827,10 @@
     },
     "model": {
       "description": "選擇這位夥伴使用的模型。",
+      "primary": "主模型",
+      "task": "任務模型",
+      "inheritPrimary": "繼承主模型",
+      "inheritingPrimary": "繼承主模型，用於新建背景任務",
       "restoreDefault": "恢復預設模型"
     },
     "modelChain": {

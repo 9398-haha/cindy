@@ -461,6 +461,7 @@ import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js
 import {
   createBotDelegationService,
   discardDelegationQueuedInputs,
+  hasExplicitSessionTaskModel,
   type BotDelegationService,
 } from './botDelegationService.js';
 import { createBotSessionTaskRouteBridge } from './botSessionTaskRouteBridge.js';
@@ -1109,7 +1110,7 @@ import {
 import { stampSharedTaskInput } from './sharedTaskInput.js';
 import { createSharedTaskContextUsageGuard } from './sharedTaskContextUsage.js';
 import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
-import { setSharedTaskQueueReader } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskInteractionResolveCurrent, setSharedTaskInteractionReader, setSharedTaskQueueReader } from '../device-link/sharedTaskDispatch.js';
 
 function captureSharedTaskSettingGuard(sessionId: string) {
   const context = getDeviceLinkInvokeContext();
@@ -12693,6 +12694,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Do not let a later infrastructure retry replace that pending intent.
       if (profiles.control.pending ||
           !canApplyAutomaticRuntimeSelection(sessionId, profiles.control.generation)) return { session: null, outcome: 'superseded' };
+      // Ordinary delegated tasks have no Bot link. Their explicit creation route
+      // still forbids automatic model replacement, while same-route retries remain valid.
+      const explicitTaskModel = await hasExplicitSessionTaskModel(sessionId);
+      if (!isCurrent()) return { session: null, outcome: 'superseded' };
+      if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
@@ -12948,7 +12954,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         baselineProfile: profiles.baseline,
         effectiveProfile: profiles.effective,
         pendingMutation: profiles.pendingMutation,
-        fallbackEnabled: botFallback.isBot
+        fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
           : readSessionRuntimeFallbackSettings().enabled,
       };
@@ -15335,6 +15341,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const item = inputCoordinator.getProjection(sessionId).pendingQueue.find((pending) => pending.clientId === clientId);
     return item ? { sessionId, authorAccountId: item.sharedTaskAuthor?.accountId ?? '', state: 'pending', attachments: item.files } : undefined;
   });
+  setSharedTaskInteractionReader((requestId) => {
+    const entry = pendingInteractionResolvers.get(requestId);
+    const request = entry?.request;
+    if (!entry || entry.migrated || !request || (request.kind !== 'permission' && request.kind !== 'ask_user_question' && request.kind !== 'plan_review')) return undefined;
+    return {
+      sessionId: entry.sessionId,
+      kind: request.kind,
+      ...(request.kind === 'permission' ? { toolName: request.toolName, suggestions: request.suggestions } : {}),
+    };
+  });
   getAgentIslandService()?.setCompletionDeferResolver((sessionId) =>
     inputCoordinator.hasPendingQueuedWork(sessionId),
   );
@@ -17017,6 +17033,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // resolvable. Host-owned setup side effects and Desktop-only confirmations
       // may only originate from the trusted local Desktop.
       assertResolveInteractionOrigin(decision, isPendingDesktopOnlyConfirmation(requestId));
+      const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+      if (sharedTask) {
+        // The initial dispatch check may be separated from this handler by an
+        // async DB admission. Recheck membership and pending-request ownership
+        // immediately before resolving so a revoked guest cannot win the race.
+        assertSharedTaskInteractionResolveCurrent(sharedTask, [requestId, decision]);
+      }
       let pluginSetupResponseTarget: GhostSetupInteractionResponseTarget | undefined;
       if (isPluginSetupInteractionDecision(decision) && !isDeviceLinkInvoke()) {
         assertTrustedAppRendererEvent(event);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Alert, Keyboard, StyleSheet, View } from 'react-native';
-import { Stack, useIsFocused } from 'expo-router';
+import { Stack, useIsFocused, useRouter } from 'expo-router';
 import { Menu } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -33,6 +33,7 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
   const routeFocused = useIsFocused();
   const focused = routeFocused && active;
   const push = useGuardedPush();
+  const router = useRouter();
   const navigation = useTeammateNavigation();
   const sharedRoster = useHomeRoster();
   const ownRoster = useTeammateRoster(focused && !sharedRoster);
@@ -49,8 +50,9 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
   const mounted = useRef(true);
   const currentAccount = useRef(auth.accountGeneration); currentAccount.current = auth.accountGeneration;
   const hasRunningTasks = useSyncExternalStore(
-    useCallback((listener) => accounts ? remoteSessionStore.subscribe(listener) : () => {}, [accounts]),
-    useCallback(() => accounts && remoteSessionStore.getSessions().some((session) => remoteSessionStore.isSessionRunning(session.id)), [accounts]),
+    // 账号切换与抽屉里的退出确认都要知道是否有运行中任务;两者都关着时不订阅。
+    useCallback((listener) => accounts || drawer ? remoteSessionStore.subscribe(listener) : () => {}, [accounts, drawer]),
+    useCallback(() => (accounts || drawer) && remoteSessionStore.getSessions().some((session) => remoteSessionStore.isSessionRunning(session.id)), [accounts, drawer]),
   );
   useEffect(() => {
     if (!navigation.restoreLastTeammate) { resumed.current = true; return; }
@@ -101,18 +103,19 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
         onInteract={() => { resumed.current = true; }}
         onOpen={(row) => { resumed.current = true; Keyboard.dismiss(); push(botGroupRoute(row.host, row.item.ref.id)); }}
         onOpenCreated={(host, groupId) => { resumed.current = true; push(botGroupRoute(host, groupId)); }} /> : null} />
-    <HomeChromeDrawer open={drawer} user={auth.user} loggingOut={loggingOut} mode="teammates"
+    <HomeChromeDrawer open={drawer} user={auth.user} loggingOut={loggingOut} hasRunningTasks={hasRunningTasks} mode="teammates"
       onModeChange={(mode) => afterDrawer(() => { void navigation.setMode(mode); })}
       onClose={() => { pending.current = null; setDrawer(false); }} onClosed={finishOverlay}
       onOpenSearch={() => afterDrawer(() => setSearchEpoch((epoch) => epoch + 1))}
       onOpenDevices={() => afterDrawer(() => push('/devices/manage'))}
       onOpenSettings={() => afterDrawer(() => push('/settings'))}
       onOpenAccounts={() => afterDrawer(() => setAccounts(true))}
+      // 抽屉内部已 confirmLogout;成功后与设置页一致直接回登录页,不依赖外层自动跳转的时序。
       onLogout={() => {
         if (loggingOut) return;
         setLoggingOut(true);
         const account = auth.accountGeneration;
-        void auth.logout().catch((cause) => {
+        void auth.logout().then(() => { router.replace('/login'); }, (cause) => {
           if (mounted.current && currentAccount.current === account) Alert.alert(t('devices.list.alert.actionFailed'), formatRemoteError(cause));
         }).finally(() => { if (mounted.current && currentAccount.current === account) setLoggingOut(false); });
       }} />
