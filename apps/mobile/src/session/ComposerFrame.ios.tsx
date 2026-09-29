@@ -6,9 +6,9 @@ import { requireNativeView, requireOptionalNativeModule } from 'expo';
 import { StyleSheet } from 'react-native';
 import { composerGeometry } from './composerGeometry';
 
-const MorphTarget = requireOptionalNativeModule('CindyTabBar') ? requireNativeView<{
+const MorphTarget = requireOptionalNativeModule('CindyComposerMorph') ? requireNativeView<{
   transitionId: string; expandToken: string; cornerRadius: number; onComplete(): void; style: object; pointerEvents: 'none';
-}>('CindyTabBar', 'CindyComposerMorphTarget') : null;
+}>('CindyComposerMorph', 'CindyComposerMorphTarget') : null;
 
 export const nativeComposerFrameAvailable = isLiquidGlassAvailable();
 

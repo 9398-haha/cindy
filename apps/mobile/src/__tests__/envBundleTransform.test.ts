@@ -39,7 +39,6 @@ describe('mobile endpoint overrides after Expo bundle transform', () => {
           EXPO_PUBLIC_CINDY_AUTH_BASE_URL: 'https://fallback.example.invalid',
         } } } };
         if (id === '@cindy/maker-shared/client-endpoints') return {};
-        if (id === './navigationDemo') return { IS_NAVIGATION_DEMO: false, NAVIGATION_DEMO_SCHEME: 'cindynavdemo' };
         if (id === './endpointManifestLoader') return {
           resolveMobileEndpointManifest() {
             throw new Error('Importing endpoint overrides must not fetch a manifest');

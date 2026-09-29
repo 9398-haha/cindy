@@ -9,8 +9,8 @@ type NativeProps = {
   onAction(event: { nativeEvent: { origin?: ComposerMorphOrigin } }): void;
   onGeometry(event: { nativeEvent: ComposerMorphOrigin }): void;
 };
-const NativeSource = requireOptionalNativeModule('CindyTabBar')
-  ? requireNativeView<NativeProps>('CindyTabBar', 'CindyComposerMorphSource') : null;
+const NativeSource = requireOptionalNativeModule('CindyComposerMorph')
+  ? requireNativeView<NativeProps>('CindyComposerMorph', 'CindyComposerMorphSource') : null;
 
 /**
  * Hosts the floating new-task button. Native takes the touch: the circle starts

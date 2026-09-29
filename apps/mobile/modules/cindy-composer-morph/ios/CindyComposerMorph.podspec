@@ -1,7 +1,7 @@
 require 'json'
 package = JSON.parse(File.read(File.join(__dir__, '..', 'package.json')))
 Pod::Spec.new do |s|
-  s.name = 'CindyTabBar'
+  s.name = 'CindyComposerMorph'
   s.version = package['version']
   s.summary = 'iOS new-task button to composer pill morph and pill-to-card expansion.'
   s.description = s.summary

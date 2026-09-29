@@ -11,7 +11,7 @@
 | 设备范围、任务显示等下拉菜单 | UIMenu | 菜单是系统的；触发按钮可由调用方提供。旧包缺原生模块时有自绘回退。[入口](../src/platform/chrome/NativePullDownMenu.tsx) |
 | 普通确认弹窗 | UIAlertController，经 React Native Alert 调用 | 自定义多步骤编辑不能一概算系统弹窗。[入口](../src/platform/chrome/showActionMenu.ts) |
 | 设置里的开关 | SwiftUI 系统开关，经 @expo/ui 使用 | 设置分组和说明布局仍是 RN，不代表整页 Settings 原生化。[实现](../src/platform/chrome/NativeSwitch.tsx) |
-| 顶栏圆形按钮、浮动新建按钮 | SwiftUI Button，原生玻璃/禁用反馈 | 保留 Cindy 业务图标，图标可以放在 RNHostView 里。首页浮动新建按钮外包一层原生形变视图：触摸由它接管（不播放按钮自身按压），按下即拉长成输入框药丸。[按钮](../src/platform/chrome/NativeChromeButton.ios.tsx)、[形变](../modules/cindy-tab-bar/ios/CindyTabBarModule.swift) |
+| 顶栏圆形按钮、浮动新建按钮 | SwiftUI Button，原生玻璃/禁用反馈 | 保留 Cindy 业务图标，图标可以放在 RNHostView 里。首页浮动新建按钮外包一层原生形变视图：触摸由它接管（不播放按钮自身按压），按下即拉长成输入框药丸。[按钮](../src/platform/chrome/NativeChromeButton.ios.tsx)、[形变](../modules/cindy-composer-morph/ios/CindyComposerMorphModule.swift) |
 | 登录页继续、Apple / SSO 等按钮 | SwiftUI Button + Cindy 的标签、品牌图案和布局 | 登录整页、手机号框、协议勾选与法律文字链接仍有自定义实现。[实现](../src/components/LoginNativeButton.ios.tsx) |
 | SSO 登录窗口 | ASWebAuthenticationSession | 登录网页由认证服务提供。[调用](../src/auth/AuthContext.tsx) |
 | 任务内搜索 | SwiftUI TextField、Button、原生 sheet | 与首页的搜索框不是同一个实现。[实现](../src/session/SessionSearchNative.ios.tsx) |
@@ -38,4 +38,4 @@
 - Android 保留现有平台实现；新建形变、药丸拉开与键盘逐帧跟随只在 iOS 生效。
 
 以上是代码事实。真实界面还受系统版本、原生模块是否已装入、回退条件和入口影响。
-模拟器目检与交互测试结果单独记录在 [导航实验记录](./navigation-demo.md)。
+导航与新建输入框的交互细节和已知未完成项见 [导航与新建输入框](./navigation-and-composer.md)。

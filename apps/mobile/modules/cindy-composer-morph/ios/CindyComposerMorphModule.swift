@@ -3,9 +3,9 @@ import UIKit
 
 /// Home new-task button → composer pill morph, and the pill → card expansion.
 /// The native part only animates; navigation stays in JS.
-public class CindyTabBarModule: Module {
+public class CindyComposerMorphModule: Module {
   public func definition() -> ModuleDefinition {
-    Name("CindyTabBar")
+    Name("CindyComposerMorph")
     View(CindyComposerMorphSource.self) {
       Events("onAction", "onGeometry")
       Prop("actionDisabled") { (view: CindyComposerMorphSource, disabled: Bool) in view.actionDisabled = disabled }
@@ -48,7 +48,7 @@ final class CindyComposerMorphSource: ExpoView {
     super.didMoveToWindow()
     lastFrame = .null
     if window == nil {
-      if pressOrigin != nil { CindyComposerMorph.current?.cancel() }
+      if pressOrigin != nil { CindyComposerMorphAnimation.current?.cancel() }
       pressOrigin = nil
     } else { setNeedsLayout() }
   }
@@ -57,26 +57,26 @@ final class CindyComposerMorphSource: ExpoView {
     let rect = convert(bounds, to: window)
     guard rect != lastFrame else { return }
     lastFrame = rect
-    onGeometry(CindyComposerMorph.geometry(rect, in: window, id: "layout"))
+    onGeometry(CindyComposerMorphAnimation.geometry(rect, in: window, id: "layout"))
   }
   private func pressBegan() {
-    guard !actionDisabled, let window, CindyComposerMorph.current == nil else { return }
-    pressOrigin = CindyComposerMorph.begin(source: self, window: window)
+    guard !actionDisabled, let window, CindyComposerMorphAnimation.current == nil else { return }
+    pressOrigin = CindyComposerMorphAnimation.begin(source: self, window: window)
     if pressOrigin == nil { pressOrigin = [:] }
   }
   private func pressEnded(inside: Bool) {
     guard let origin = pressOrigin else { return }
     pressOrigin = nil
-    guard inside, !actionDisabled, window != nil else { CindyComposerMorph.current?.cancel(); return }
+    guard inside, !actionDisabled, window != nil else { CindyComposerMorphAnimation.current?.cancel(); return }
     if origin.isEmpty { onAction([:]); return }
-    CindyComposerMorph.current?.commit()
+    CindyComposerMorphAnimation.current?.commit()
     onAction(["origin": origin])
   }
 }
 
 /// A short-lived in-memory handoff. The source screen is never saved to disk.
-@MainActor private final class CindyComposerMorph {
-  static var current: CindyComposerMorph?
+@MainActor private final class CindyComposerMorphAnimation {
+  static var current: CindyComposerMorphAnimation?
   /// Last composer contour per window size. Lets the button start growing on
   /// the tap frame instead of waiting ~300ms for the new page to mount.
   private static var landing: (window: CGSize, rect: CGRect, radius: CGFloat, style: UIUserInterfaceStyle)?
@@ -121,7 +121,7 @@ final class CindyComposerMorphSource: ExpoView {
     guard window.bounds.contains(rect), !rect.isEmpty,
       let backdrop = window.snapshotView(afterScreenUpdates: false),
       let sourceImage = source.snapshotView(afterScreenUpdates: false) else { return nil }
-    let transition = CindyComposerMorph(window: window, rect: rect, backdrop: backdrop, sourceImage: sourceImage)
+    let transition = CindyComposerMorphAnimation(window: window, rect: rect, backdrop: backdrop, sourceImage: sourceImage)
     current = transition
     if #available(iOS 26.0, *), !UIAccessibility.isReduceMotionEnabled {
       if let landing, landing.window == window.bounds.size, abs(landing.rect.maxY - rect.maxY) < 2 {
@@ -423,7 +423,7 @@ final class CindyComposerMorphTarget: ExpoView {
       expandFrom = nil
       // Only the pill→card change: taller, same bottom edge, no entry morph.
       if #available(iOS 26.0, *), CACurrentMediaTime() - expandArmedAt < 0.6, rect.height > from.height + 1,
-        abs(rect.maxY - from.maxY) < 2, CindyComposerMorph.current == nil, let content = superview {
+        abs(rect.maxY - from.maxY) < 2, CindyComposerMorphAnimation.current == nil, let content = superview {
         CindyComposerExpand.run(content: content, from: from, cornerRadius: targetCornerRadius)
       }
     } else if rect.size != lastRect?.size, let content = superview {
@@ -435,7 +435,7 @@ final class CindyComposerMorphTarget: ExpoView {
   override func layoutSubviews() {
     super.layoutSubviews()
     expandIfArmed()
-    if started == transitionId, let window, let transition = CindyComposerMorph.current,
+    if started == transitionId, let window, let transition = CindyComposerMorphAnimation.current,
       transition.id == transitionId, (transition.overlay.bounds.size != window.bounds.size
         || (transition.glass != nil && transition.morphSize != bounds.size)) {
       transition.finish()
@@ -451,13 +451,13 @@ final class CindyComposerMorphTarget: ExpoView {
         guard let self, self.window != nil else { return }
         self.onComplete([:])
       }
-      guard let transition = CindyComposerMorph.current, transition.id == id else { complete(); return }
+      guard let transition = CindyComposerMorphAnimation.current, transition.id == id else { complete(); return }
       transition.run(target: target, rect: self.convert(self.bounds, to: window), cornerRadius: self.targetCornerRadius, completion: complete)
     }
   }
   override func didMoveToWindow() {
     super.didMoveToWindow()
-    if window == nil, CindyComposerMorph.current?.id == transitionId { CindyComposerMorph.current?.finish() }
+    if window == nil, CindyComposerMorphAnimation.current?.id == transitionId { CindyComposerMorphAnimation.current?.finish() }
   }
 }
 

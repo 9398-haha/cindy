@@ -1,6 +1,5 @@
 import * as Application from 'expo-application';
 import Constants from 'expo-constants';
-import { IS_NAVIGATION_DEMO, NAVIGATION_DEMO_SCHEME } from './navigationDemo';
 
 import {
   CLIENT_ENDPOINT_KEYS,
@@ -58,10 +57,10 @@ export const AUTH_REGION: CindyAuthRegion = (() => {
 })();
 export const BUILD_AUTH_REGION: ClientEndpointRegion =
   AUTH_REGION === 'global' ? 'global' : 'cn';
-const REGIONAL_APP_SCHEME = { cn: 'cindycn', global: 'cindy', dev: 'cindydev' }[
+export const APP_SCHEME = { cn: 'cindycn', global: 'cindy', dev: 'cindydev' }[
   AUTH_REGION
 ];
-export const APP_SCHEME = IS_NAVIGATION_DEMO ? NAVIGATION_DEMO_SCHEME : REGIONAL_APP_SCHEME;
+export const MOBILE_REDIRECT_URL = `${APP_SCHEME}://auth`;
 
 // __DEV__ 端点初值来源:metro 构建期按 AUTH_REGION 把仓内
 // config/endpoint.json 或 config/endpoint.global.json require 进 dev bundle
@@ -335,16 +334,6 @@ function resolveAppPlatform(): AppPlatform {
 }
 
 export const APP_PLATFORM: AppPlatform = resolveAppPlatform();
-
-// iOS ASWebAuthenticationSession delivers its matching callback directly to the
-// initiating session; the scheme need not be registered in Info.plist (see the
-// AuthenticationServices SDK contract and expo-web-browser/ios/WebAuthSession.swift).
-// Keep the trial's OS deep links/private installation independent, but authorize
-// with the regional callback already accepted by auth-server. State/PKCE and
-// exact callback validation remain in AuthContext. Android has no such capture
-// contract: its trial callback still requires separate server registration.
-export const MOBILE_REDIRECT_URL = (IS_NAVIGATION_DEMO && APP_PLATFORM === 'ios'
-  ? REGIONAL_APP_SCHEME : APP_SCHEME) + '://auth';
 
 /**
  * 纯函数:清单 review(送审版本号)与二进制版本号严格相等、且当前安装不是
