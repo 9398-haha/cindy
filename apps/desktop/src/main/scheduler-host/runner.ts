@@ -3003,6 +3003,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const sessionId = initialSession.id;
     let assistantText = '';
     let finalTextMatchesStream = false;
+    let lastTextWasCodexCommentary = false;
     let stopped = false;
     let stopListeningTurn: (() => void) | undefined;
     const turnFinished = new Promise<void>((resolve, reject) => {
@@ -3102,12 +3103,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
           return;
         }
         if (ev.type === 'text') {
-          const data = ev.data as { text?: string; isFinal?: boolean } | null;
+          const data = ev.data as {
+            text?: string; isFinal?: boolean; isFullText?: boolean; phase?: string;
+          } | null;
           if (data && typeof data.text === 'string') {
-            // Empty final items do not replace a visible transcript message.
-            // Codex's done may fall back to its last nonempty commentary; keep
-            // that streamed text so finalizeRun does not persist it a second time.
-            if (data.isFinal && !data.text.trim()) return;
+            // Only Codex's separate empty answer after completed commentary
+            // leaves that commentary intact. Empty replacements after deltas
+            // must still retract the partial result, matching the transcript.
+            const emptyCodexAnswer = lastTextWasCodexCommentary
+              && ev.source === 'codex' && data.phase === 'final_answer'
+              && data.isFinal === true && data.isFullText === true && !data.text.trim();
+            lastTextWasCodexCommentary = ev.source === 'codex'
+              && data.phase === 'commentary' && data.isFinal === true
+              && data.isFullText === true && !!data.text.trim();
+            if (emptyCodexAnswer) return;
             if (data.text.trim()) finalTextMatchesStream = true;
             if (data.isFinal) assistantText = data.text;
             else assistantText += data.text;
