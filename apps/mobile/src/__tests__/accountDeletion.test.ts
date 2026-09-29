@@ -16,7 +16,7 @@ describe("mobile account deletion", () => {
     const body = context.slice(start, context.indexOf('const terminateSession', start));
     const capture = body.indexOf('const invitationHistoryOwner = getMobileAuthOwner();');
     const invalidate = body.indexOf('setMobileAuthOwner(null);');
-    const clear = body.indexOf('clearClipboardInvitationHistory(invitationHistoryOwner.accountKey)');
+    const clear = body.indexOf('clearClipboardInvitationHistory(invitationHistoryAccountKey)');
     expect(capture).toBeGreaterThan(-1);
     expect(invalidate).toBeGreaterThan(capture);
     expect(clear).toBeGreaterThan(invalidate);

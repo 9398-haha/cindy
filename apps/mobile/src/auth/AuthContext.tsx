@@ -2663,8 +2663,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
     // Invalidate in-flight remote creates before any async logout cleanup begins.
     const invitationHistoryOwner = getMobileAuthOwner();
+    // Switching temporarily empties the owner fence; the committed user/realm
+    // still identify the session being terminated until the new owner is applied.
+    const invitationHistoryAccountKey = invitationHistoryOwner.accountKey || (userRef.current
+      ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
+      : '');
     setMobileAuthOwner(null);
-    const clearInvitationHistory = clearClipboardInvitationHistory(invitationHistoryOwner.accountKey).catch(() => undefined);
+    const clearInvitationHistory = clearClipboardInvitationHistory(invitationHistoryAccountKey).catch(() => undefined);
     setAccountGeneration((value) => value + 1);
     // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
     // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。

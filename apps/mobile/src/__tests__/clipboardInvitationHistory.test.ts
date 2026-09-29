@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { accountVaultKey, type AuthRegion } from '@cindy/auth-client';
+import { getMobileAuthOwner, setMobileAuthOwner, invalidateMobileAuthOwnerForSwitch } from '@/auth/authOwnerGeneration';
 
 const storage = vi.hoisted(() => ({ values: new Map<string, string>(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
@@ -17,6 +21,57 @@ beforeEach(() => {
   storage.removeItem.mockReset().mockImplementation(async (k: string) => { storage.values.delete(k); });
 });
 afterEach(async () => { await __testing.flush(); vi.useRealTimers(); });
+
+// Execute the actual provider's synchronous logout prelude with committed
+// identity refs, real owner fencing and real history storage logic. Native auth
+// cleanup starts after this block and is irrelevant to choosing the owner key.
+const authSource = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+const logoutStart = authSource.indexOf('const clearLocalSession = useCallback');
+const historyStart = authSource.indexOf('const invitationHistoryOwner =', logoutStart);
+const historyEnd = authSource.indexOf('setAccountGeneration(', historyStart);
+if (logoutStart < 0 || historyStart < 0 || historyEnd < historyStart) throw new Error('Logout history prelude not found');
+const logoutHistory = new Function(
+  'getMobileAuthOwner', 'setMobileAuthOwner', 'clearClipboardInvitationHistory',
+  'accountVaultKey', 'userRef', 'activeAuthRealmRef',
+  authSource.slice(historyStart, historyEnd) + '\nreturn clearInvitationHistory;',
+);
+
+it.each([
+  { realm: 'global', phase: 'active' },
+  { realm: 'global', phase: 'switching' },
+  { realm: 'cn', phase: 'switching' },
+  { realm: 'cn', phase: 'rollback' },
+  { realm: 'cn', phase: 'switched' },
+  { realm: 'global', phase: 'no-user' },
+] as const)('terminal logout clears only the committed history ($realm / $phase)', async ({ realm, phase }) => {
+  const keys = [accountVaultKey('global', 'guest'), accountVaultKey('cn', 'guest'), accountVaultKey('global', 'other')];
+  for (const ownerKey of keys) await rememberClipboardInvitation(ownerKey, digest);
+  const userRef: { current: { id: string } | null } = { current: { id: 'guest' } };
+  const realmRef: { current: AuthRegion } = { current: realm };
+  setMobileAuthOwner('guest', realm);
+  if (phase !== 'active') invalidateMobileAuthOwnerForSwitch();
+  if (phase === 'rollback') setMobileAuthOwner('guest', realm);
+  if (phase === 'switched') {
+    userRef.current = { id: 'other' }; realmRef.current = 'global';
+    setMobileAuthOwner('other', 'global');
+  }
+  if (phase === 'no-user') userRef.current = null;
+  try {
+    // Switch invalidation, successful activation and rollback themselves retain
+    // all histories. Only terminal logout starts account-scoped removal.
+    for (const ownerKey of keys) expect(await hasSeenClipboardInvitation(ownerKey, digest)).toBe(true);
+    const expectedClearedKey = userRef.current ? accountVaultKey(realmRef.current, userRef.current.id) : '';
+    const clearing = logoutHistory(getMobileAuthOwner, setMobileAuthOwner, clearClipboardInvitationHistory, accountVaultKey, userRef, realmRef);
+    expect(getMobileAuthOwner().accountKey).toBe('');
+    expect(getMobileAuthOwner().switching).toBeUndefined();
+    await clearing;
+    __testing.reset(); // Cold start must not restore the terminated account.
+    for (const ownerKey of keys) {
+      expect(await hasSeenClipboardInvitation(ownerKey, digest)).toBe(ownerKey !== expectedClearedKey);
+      expect(storage.values.has(__testing.storageKey(ownerKey))).toBe(ownerKey !== expectedClearedKey);
+    }
+  } finally { setMobileAuthOwner(null); }
+});
 
 it('stores only SHA-256 digests and timestamps and reloads them after losing all memory', async () => {
   await rememberClipboardInvitation(account, digest);
