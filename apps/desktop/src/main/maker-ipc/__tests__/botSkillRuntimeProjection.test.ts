@@ -49,6 +49,29 @@ async function assertBoundedNativeMounts() {
 }
 
 describe('complete personal Skills with bounded startup projection', () => {
+  it.each(['.claude-plugin/plugin.json', '.claude-plugin'])('rebuilds a missing Claude artifact %s on the next hydration', async missing => {
+    const source = `---\nname: oversized\ndescription: ${'Long description '.repeat(30)}\n---\nOriginal instructions\n`;
+    const original = await writeSkill('oversized', source);
+    const mounts = await assertBoundedNativeMounts();
+    const manifestPath = path.join(mounts.pluginRoot, '.claude-plugin', 'plugin.json');
+    const manifest = await fs.readFile(manifestPath, 'utf8');
+    const catalog = await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8');
+    const discovery = await fs.readFile(mounts.skills[0].filePath, 'utf8');
+    // Only a generated Claude file/directory disappears; source metadata, the
+    // catalog and the Pi/Codex discovery Skill remain unchanged.
+    await fs.rm(path.join(mounts.pluginRoot, missing), { recursive: true });
+    expect(await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).toBe(catalog);
+    expect(await fs.readFile(mounts.skills[0].filePath, 'utf8')).toBe(discovery);
+    expect(await collectBotOwnSkillMounts(botId, deps())).toEqual(mounts);
+    expect(await fs.readFile(manifestPath, 'utf8')).toBe(manifest);
+    expect(await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).toBe(catalog);
+    expect(await fs.readFile(mounts.skills[0].filePath, 'utf8')).toBe(discovery);
+    expect(await fs.readFile(original, 'utf8')).toBe(source);
+    const opens = vi.spyOn(fs, 'open');
+    await assertBoundedNativeMounts();
+    expect(opens).not.toHaveBeenCalled();
+  });
+
   it('preserves a near-16 MiB original header and loads only bounded runtime metadata', async () => {
     const source = `---\r\nname: ${'n'.repeat(7 * 1024 * 1024)}\r\ndescription: ${'d'.repeat(8 * 1024 * 1024)} tail-query\r\n---\r\nRun scripts/report.py\r\n`;
     const original = await writeSkill('oversized', source);

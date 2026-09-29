@@ -132,6 +132,8 @@ it.each([false, true])('serializes catalog writers after eviction, including fai
 it('rejoins the active entry when evicted during a cached artifact check', async () => {
   const pluginRoot = path.join(root, '.runtime-skills');
   await fs.mkdir(pluginRoot);
+  await fs.mkdir(path.join(pluginRoot, '.claude-plugin'));
+  await fs.writeFile(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), '{"name":"fixture"}');
   const catalog = path.join(pluginRoot, 'catalog.jsonl');
   const filePath = path.join(pluginRoot, 'SKILL.md');
   await fs.writeFile(filePath, 'Fixture');

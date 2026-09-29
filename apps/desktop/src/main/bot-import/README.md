@@ -132,7 +132,8 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   Repeated runtime hydrations reuse the small per-owner/bot projection and saved
   catalog. Typed writes invalidate it synchronously; filesystem observation plus
   directory identity checks cover hand edits, moves and replacement. Watcher
-  errors fall back to rebuilding, and missing generated catalogs are recreated.
+  errors fall back to rebuilding, and missing generated catalogs, discovery
+  Skills or Claude plugin manifests are recreated on the next hydration.
   The cache retains at most 32 runtime/query entries, not a maximum number of stored Skills.
   In-flight catalog writers are serialized per root independently of cache
   eviction, so an evicted snapshot cannot overwrite its newer replacement.

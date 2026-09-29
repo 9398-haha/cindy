@@ -102,6 +102,7 @@ export async function cachedBotSkillRuntime(root: string, build: () => Promise<P
     // Generated files are disposable: deleting them must rebuild the catalog.
     const artifacts = current.value.artifacts ?? (current.value.pluginRoot === root ? [] : [
       path.join(current.value.pluginRoot, 'catalog.jsonl'), current.value.skills[0].filePath,
+      path.join(current.value.pluginRoot, '.claude-plugin', 'plugin.json'),
     ]);
     const present = await Promise.all(artifacts.map(file => fs.access(file))).then(() => true, () => false);
     // Eviction may happen while checking generated files. Rejoin the active
