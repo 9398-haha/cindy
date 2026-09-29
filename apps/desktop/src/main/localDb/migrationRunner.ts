@@ -64,7 +64,7 @@ export class MigrationRuntimeManifestError extends Error {
   ) {
     super(
       `current application is missing applied migration at seq ${seq} (${fileName}); `
-      + 'the local database was upgraded by a newer application version',
+      + 'verify that the application package contains this migration',
     );
   }
 }
