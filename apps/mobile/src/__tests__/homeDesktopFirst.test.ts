@@ -785,4 +785,15 @@ describe('home menu presentation', () => {
     expect(drawer).toContain('Gesture.Pan()');
     expect(drawer).not.toContain('ComposerSheet');
   });
+
+  it('keeps the Android drawer in its own window above the resident home list', () => {
+    const drawer = readSource('src/session/HomeChromeDrawer.tsx');
+    // Wide layouts mount the home list in a root layer after the routes; an in-route
+    // overlay cannot rise above it, so Android presents the drawer as a Dialog window.
+    expect(drawer).not.toContain('if (Platform.OS !== "ios") return overlay;');
+    expect(drawer).toMatch(/<Modal[\s\S]*?onRequestClose=\{requestClose\}[\s\S]*?transparent[\s\S]*?\{content\}\s*<\/Modal>/);
+    expect(drawer).toContain('statusBarTranslucent');
+    expect(drawer).toContain('navigationBarTranslucent');
+    expect(drawer).not.toContain('BackHandler');
+  });
 });

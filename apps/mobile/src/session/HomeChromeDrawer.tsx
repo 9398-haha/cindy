@@ -2,19 +2,21 @@
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
  * 从左边滑出,不是下拉卡:承载搜索、设备管理、设置和账号入口。
- * 不用 RN Modal,避免和首页其它 Modal 抢 present/dismiss。
- * iOS 系统导航栏在 RN 内容之上,树内 overlay 盖不住顶栏,所以走
- * react-native-screens FullWindowOverlay(独立 UIWindow)。
- * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。
- * Android 无系统顶栏,继续树内 overlay。动画遵循 reduce-motion。
+ * 抽屉必须盖住整个窗口,所以不能是树内 overlay,两端都放进独立窗口:
+ * - iOS 系统导航栏在 RN 内容之上,走 react-native-screens FullWindowOverlay
+ *   (独立 UIWindow),不用 RN Modal,避免和首页其它 Modal 抢 present/dismiss。
+ * - Android 宽屏常驻布局(折叠屏展开等)把首页列表挂在路由树之上的根层
+ *   (ResidentHomeList),连接提示也在根层,树内 zIndex 越不过这些兄弟层;
+ *   走透明 RN Modal(独立 Dialog 窗口),返回键由 onRequestClose 接管。
+ * 新窗口里要自带 GestureHandlerRootView,左滑关闭才有效。动画遵循 reduce-motion。
  */
 import { LogOut, Monitor, Search, Settings, UsersRound } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
-  BackHandler,
   findNodeHandle,
   Image,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -191,17 +193,11 @@ export function HomeChromeDrawer({
     reduceMotion,
   ]);
 
-  useEffect(() => {
-    if (!open) return;
-    const subscription = BackHandler.addEventListener(
-      "hardwareBackPress",
-      () => {
-        onClose();
-        return true;
-      },
-    );
-    return () => subscription.remove();
-  }, [onClose, open]);
+  // Android 返回键落在抽屉的 Dialog 窗口上。只有打开态才转成关闭:退场动画期间
+  // 调用方可能已记下关闭后的动作,再调 onClose 会把它清掉。
+  const requestClose = useCallback(() => {
+    if (openRef.current) onClose();
+  }, [onClose]);
 
   const closeFromGesture = useCallback(() => onClose(), [onClose]);
   const panGesture = useMemo(
@@ -398,14 +394,31 @@ export function HomeChromeDrawer({
     </View>
   );
 
-  if (Platform.OS !== "ios") return overlay;
+  const content = (
+    <GestureHandlerRootView style={styles.overlayHost}>
+      {overlay}
+    </GestureHandlerRootView>
+  );
+
+  if (Platform.OS === "ios") {
+    return (
+      <FullWindowOverlay unstable_accessibilityContainerViewIsModal>
+        {content}
+      </FullWindowOverlay>
+    );
+  }
 
   return (
-    <FullWindowOverlay unstable_accessibilityContainerViewIsModal>
-      <GestureHandlerRootView style={styles.overlayHost}>
-        {overlay}
-      </GestureHandlerRootView>
-    </FullWindowOverlay>
+    <Modal
+      animationType="none"
+      navigationBarTranslucent
+      onRequestClose={requestClose}
+      statusBarTranslucent
+      transparent
+      visible
+    >
+      {content}
+    </Modal>
   );
 }
 
