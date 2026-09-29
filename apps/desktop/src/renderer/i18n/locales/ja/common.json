@@ -1286,7 +1286,7 @@
         "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
         "dbSlimmingBackupDirectoryDialogTitle": "データベースのクリーンアップ用バックアップ先を選択",
         "dbSlimmingLabel": "データベースのクリーンアップ",
-        "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じてアクティブなタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
+        "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じて未アーカイブのタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
         "dbSlimmingScanButton": "データベースをスキャン",
         "dbSlimmingScanLoading": "データベースをスキャンしています…",
         "dbSlimmingScanResultTitle": "データベースのスキャン結果",
@@ -1296,12 +1296,12 @@
         "dbSlimmingArchiveAgeOption1": "1 か月",
         "dbSlimmingArchiveAgeOption3": "3 か月",
         "dbSlimmingArchiveAgeOption6": "6 か月",
-        "dbSlimmingIncludeActiveLabel": "アクティブなセッションをクリーンアップ",
-        "dbSlimmingIncludeActiveDescription": "選択した期間を超えたアクティブなセッションもクリーンアップし、一覧から削除します",
-        "dbSlimmingIncludeActiveConfirmTitle": "アクティブなタスクもデータベースのクリーンアップ対象にしますか？",
-        "dbSlimmingIncludeActiveConfirmDescription": "選択した期間を超えたアクティブなタスクでも、まだ実行中の可能性があります。クリーンアップはタスクの停止を待たず、スキャン後に追加されたメッセージも削除される場合があります。有効にすると、選択した期間を超えて更新されていないアクティブ、アーカイブ済み、論理削除済みのタスクがクリーンアップされます。対象のアクティブなセッションの履歴と Agent コンテキストは削除され、通常のセッションは一覧からも削除されます。仲間のメインセッションは残ります。データベースのバックアップではタスクとメッセージのデータを復元できます。バックアップを作成しない場合、それらのデータも復元できません。それらのメッセージによるファイル変更のレビューや元に戻す操作に使う記録はデータベースのバックアップに含まれず、復元できません。",
-        "dbSlimmingIncludeActiveConfirmButton": "アクティブなタスクを含める",
-        "dbSlimmingIncludeActiveCancelButton": "アクティブなタスクを残す",
+        "dbSlimmingIncludeActiveLabel": "未アーカイブのセッションをクリーンアップ",
+        "dbSlimmingIncludeActiveDescription": "選択した期間を超えた未アーカイブのセッションもクリーンアップし、一覧から削除します",
+        "dbSlimmingIncludeActiveConfirmTitle": "未アーカイブのタスクもデータベースのクリーンアップ対象にしますか？",
+        "dbSlimmingIncludeActiveConfirmDescription": "選択した期間を超えた未アーカイブのタスクでも、まだ実行中の可能性があります。クリーンアップはタスクの停止を待たず、スキャン後に追加されたメッセージも削除される場合があります。有効にすると、選択した期間を超えて更新されていない未アーカイブ、アーカイブ済み、論理削除済みのタスクがクリーンアップされます。対象の未アーカイブのセッションの履歴と Agent コンテキストは削除され、通常のセッションは一覧からも削除されます。仲間のメインセッションは残ります。データベースのバックアップではタスクとメッセージのデータを復元できます。バックアップを作成しない場合、それらのデータも復元できません。それらのメッセージによるファイル変更のレビューや元に戻す操作に使う記録はデータベースのバックアップに含まれず、復元できません。",
+        "dbSlimmingIncludeActiveConfirmButton": "未アーカイブのタスクを含める",
+        "dbSlimmingIncludeActiveCancelButton": "未アーカイブのタスクを残す",
         "dbSlimmingBackupLabel": "クリーンアップ前にデータベースをバックアップ",
         "dbSlimmingBackupDefaultLocation": "データベースのフォルダ（最新のクリーンアップ用バックアップのみ保持）",
         "dbSlimmingUseDefaultDirectoryButton": "既定のフォルダを使用",
@@ -1312,7 +1312,7 @@
         "dbSlimmingBackupMissing": "最新のクリーンアップ用バックアップが見つかりません。",
         "dbSlimmingBackupOpenFailed": "クリーンアップ用バックアップの場所を開けませんでした。もう一度お試しください。",
         "dbSlimmingReportTasks": "論理削除タスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件を削除します",
-        "dbSlimmingReportTasksWithActive": "アクティブなタスク {{active}} 件、論理削除済みタスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件をクリーンアップします",
+        "dbSlimmingReportTasksWithActive": "未アーカイブのタスク {{active}} 件、論理削除済みタスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件をクリーンアップします",
         "dbSlimmingReportMessages": "削除予定のメッセージ内容：{{count}} 件（約 {{size}}）",
         "dbSlimmingReportSpace": "データベース {{database}}、必要な一時領域は最低 {{temporary}}、空き容量 {{free}}",
         "dbSlimmingSpaceUnknown": "不明",
@@ -9656,7 +9656,7 @@
       "promptSend": "送信",
       "promptCancel": "キャンセル"
     },
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "ツールの完全な出力は解放されました（元のサイズ：{{size}}）",
     "agentActionRow": {
       "noContent": "表示できる内容はありません",
       "fileChange": {
@@ -9772,6 +9772,29 @@
       }
     },
     "systemCard": {
+      "help": {
+        "title": "利用可能なコマンド",
+        "builtInCommands": "組み込みコマンド",
+        "projectCommands": "プロジェクトのコマンド",
+        "empty": "利用可能なコマンドはありません。"
+      },
+      "cost": {
+        "title": "セッションの使用量",
+        "tokensUsed": "このターンの使用トークン数"
+      },
+      "pwd": {
+        "title": "作業ディレクトリ",
+        "notSet": "（未設定）"
+      },
+      "status": {
+        "title": "セッションの状態",
+        "agent": "Agent",
+        "model": "モデル",
+        "effort": "推論強度",
+        "permissionMode": "権限モード",
+        "running": "実行中",
+        "idle": "待機中"
+      },
       "context": {
         "title": "コンテキスト使用量",
         "loading": "読み込み中…",
