@@ -60,7 +60,7 @@ export interface ImportItem {
   envDependencies?: { names: string[]; entries: string[] };
   mcp?: ImportedMcpServer;
   credential?: { format: string; value: unknown };
-  asset?: { name: string; bytes: Buffer };
+  asset?: { name: string; bytes: Buffer; executable?: boolean };
   automation?: {
     sourceId: string;
     input?: RoutineInput;

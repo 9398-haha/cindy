@@ -711,9 +711,15 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           // A successful retry may upgrade an earlier mixed execution archive.
           // Remove only the exact copy whose original has just been preserved.
           for (const file of [...(item.asset ? [item.asset] : []), ...item.files ?? []]) {
-            if (environment.files?.[file.name] === file.bytes.toString('base64')) delete environment.files[file.name];
+            if (environment.files?.[file.name] === file.bytes.toString('base64')) {
+              delete environment.files[file.name];
+              delete environment.fileExecutables?.[file.name];
+            }
           }
-        } else if (item.asset) environment.files = { ...environment.files, [item.asset.name]: item.asset.bytes.toString('base64') };
+        } else if (item.asset) {
+          environment.files = { ...environment.files, [item.asset.name]: item.asset.bytes.toString('base64') };
+          environment.fileExecutables = { ...environment.fileExecutables, [item.asset.name]: item.asset.executable === true };
+        }
         if (item.credential) environment.credentials = [...environment.credentials.filter(value => value.id !== item.view.id), { id: item.view.id, ...item.credential }];
         for (const [id, text] of documentEntries(persistedItem)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
@@ -761,6 +767,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         }),
         credentials: items.flatMap(item => item.credential && !item.view.dependsOn?.some(id => !chosen.has(id)) && (!item.view.issues?.length || item.credential.format !== 'telegram') ? [{ id: item.view.id, ...item.credential, ...(item.credential.format === 'telegram' ? { value: resolveReferences(item.credential.value) } : {}) }] : []),
         files: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.bytes.toString('base64')]] : [])),
+        fileExecutables: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.executable === true]] : [])),
         memoryFiles: Object.fromEntries(items.flatMap(memoryFileEntries)),
         skillFiles,
         documents,

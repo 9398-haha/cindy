@@ -330,7 +330,7 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   }
   await connections(items, source, values, deps, budget);
   if (source.kind === 'hermes' && (await directories(source.root)).includes('scripts')) {
-    for (const file of await readImportTree(path.join(source.root, 'scripts'), undefined, budget)) items.push({ view: { id: entryId('script', file.name), category: 'connections', name: `scripts/${file.name}`, selected: true }, asset: { name: `scripts/${file.name}`, bytes: file.bytes } });
+    for (const file of await readImportTree(path.join(source.root, 'scripts'), undefined, budget)) items.push({ view: { id: entryId('script', file.name), category: 'connections', name: `scripts/${file.name}`, selected: true }, asset: { name: `scripts/${file.name}`, bytes: file.bytes, executable: file.executable } });
   }
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   sourceConfiguration(items, source, values);

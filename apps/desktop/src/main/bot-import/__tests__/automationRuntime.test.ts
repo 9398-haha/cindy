@@ -28,26 +28,31 @@ it.skipIf(process.platform === 'win32')('executes the default imported script an
   const files = {
     'config.yaml': 'name: Ada\n',
     'cron/jobs.json': JSON.stringify([{ id: 'report', script: 'reports/report.sh', monitor_script: 'monitor/check.sh', no_agent: true, schedule: { kind: 'interval', minutes: 5 } }]),
-    'scripts/reports/report.sh': 'test ! -e "$HERMES_HOME/memory/image.png" || exit 91\ntest -f "$HERMES_HOME/scripts/unrelated/unused.sh" || exit 92\n. ./helper.sh\nreport\n',
-    'scripts/reports/helper.sh': 'report() { cat data/report.txt; }\n',
+    'scripts/reports/report.sh': 'test ! -x data/report.txt || exit 90\ntest ! -e "$HERMES_HOME/memory/image.png" || exit 91\ntest -f "$HERMES_HOME/scripts/unrelated/unused.sh" || exit 92\n./helper.sh\n',
+    'scripts/reports/helper.sh': '#!/bin/sh\ncat data/report.txt\n',
     'scripts/reports/data/report.txt': 'copied report resource',
-    'scripts/monitor/check.sh': '. ./helper.sh\nmonitor\n',
-    'scripts/monitor/helper.sh': 'monitor() { cat data/state.txt; }\n',
+    'scripts/monitor/check.sh': './helper.sh\n',
+    'scripts/monitor/helper.sh': '#!/bin/sh\ncat data/state.txt\n',
     'scripts/monitor/data/state.txt': 'copied monitor resource',
     'scripts/unrelated/unused.sh': 'exit 99',
   };
   for (const [name, text] of Object.entries(files)) { const file = path.join(sourceRoot, name); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, text); }
+  for (const name of ['reports/helper.sh', 'monitor/helper.sh']) await fs.chmod(path.join(sourceRoot, 'scripts', name), 0o700);
   const reader = { home: root, env: {}, readCronDatabase: vi.fn(async () => []) };
   const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader);
   const selected = validateImportSelection({ requestId: 'script-subtree-fixture', previewId: 'preview', name: 'Ada', takeover: true, entryIds: snapshot.items.filter(item => item.view.selected).map(item => item.view.id) }, snapshot);
   const task = selected.find(item => item.automation)!;
   const assets = Object.fromEntries(selected.flatMap(item => item.asset ? [[item.asset.name, item.asset.bytes.toString('base64')]] : []));
+  const fileExecutables = Object.fromEntries(selected.flatMap(item => item.asset ? [[item.asset.name, item.asset.executable === true]] : []));
+  expect(fileExecutables['scripts/reports/helper.sh']).toBe(true);
+  expect(fileExecutables['scripts/monitor/helper.sh']).toBe(true);
+  expect(fileExecutables['scripts/reports/data/report.txt']).toBe(false);
   expect(Object.keys(assets)).toHaveLength(7);
   expect(assets['scripts/unrelated/unused.sh']).toBe(Buffer.from('exit 99').toString('base64'));
   expect(task.view.dependsOn).not.toContain(snapshot.items.find(item => item.asset?.name === 'scripts/unrelated/unused.sh')!.view.id);
   assets['memory/image.png'] = Buffer.from('legacy-private-image').toString('base64');
-  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], files: assets, automations: {
+  await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], files: assets, fileExecutables, automations: {
     routine: { kind: 'hermes', handover: 'ready', original: task.automation!.original, sourceRoot, deliveries: [] },
   } }, () => {});
   await fs.rm(sourceRoot, { recursive: true, force: true });
@@ -61,7 +66,7 @@ it.skipIf(process.platform === 'win32')('executes the default imported script an
 it('does not materialize legacy media or archived memory for a native command', async () => {
   const routine = { id: 'routine', botId: 'bot', prompt: 'Fixture command' } as Routine;
   const directory = path.join(root, 'bots', 'bot', 'import-executions');
-  const code = 'const fs=require("node:fs"),path=require("node:path");const dirs=fs.readdirSync(process.argv[1]);console.log(dirs.every(name=>!fs.existsSync(path.join(process.argv[1],name,"memory"))&&fs.existsSync(path.join(process.argv[1],name,"scripts/unused.py")))?"clean":"incorrect assets");';
+  const code = 'const fs=require("node:fs"),path=require("node:path");const dirs=fs.readdirSync(process.argv[1]);console.log(dirs.every(name=>!fs.existsSync(path.join(process.argv[1],name,"memory"))&&fs.existsSync(path.join(process.argv[1],name,"scripts/unused.py"))&&(process.platform==="win32"||(fs.statSync(path.join(process.argv[1],name,"scripts/unused.py")).mode&0o111)===0))?"clean":"incorrect assets");';
   const original = { payload: { kind: 'command', argv: [process.execPath, '-e', code, directory], cwd: root } };
   const legacyFiles = { 'memory/image.png': Buffer.from('legacy-media-bytes').toString('base64'), 'scripts/unused.py': Buffer.from('unused').toString('base64') };
   await shared.store.write(root, 'bot', { version: 1, env: {}, mcp: [], credentials: [], files: legacyFiles,

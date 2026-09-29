@@ -99,6 +99,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   name; referenced skill scripts contribute their environment dependencies.
   Hermes entry and monitor scripts select their entire directory subtrees,
   preserving sibling modules and resource paths in the encrypted snapshot.
+  Script assets retain their captured executable flags through the encrypted
+  archive and execution tree, so direct sibling helper calls keep working.
+  Legacy archives without those flags retain their non-executable default.
   These files remain individually deselectable; deselecting a subtree dependency
   prevents that automation's takeover, leaving its source running. Helper code
   contributes environment dependencies and bounded verification planning text.

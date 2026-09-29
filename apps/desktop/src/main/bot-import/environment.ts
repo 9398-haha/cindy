@@ -15,6 +15,8 @@ export interface CompanionEnvironment {
   credentials: Array<{ id: string; format: string; value: unknown }>;
   /** Source script assets. Legacy imports may also contain memory attachments; execution filters by the scripts/ namespace. */
   files?: Record<string, string>;
+  /** Captured script execute bits, keyed like files; absent legacy flags remain non-executable. */
+  fileExecutables?: Record<string, boolean>;
   /** Non-media memory originals (including empty markers); never execution assets. Media originals live in the media ledger. */
   memoryFiles?: Record<string, string>;
   /** Originals behind redacted skill projections; only materialized for authorized host commands. */

@@ -1550,6 +1550,40 @@ it('retains managed media by ledger reference without copying its bytes into exe
   expect(JSON.stringify(environment)).not.toContain(image.toString('base64'));
 });
 
+it.each([false, true])('preserves script executable flags in the archive and checkpoint (retry: %s)', async retry => {
+  h.snapshot.items = [
+    { view: { id: 'helper', name: 'helper', category: 'connections', selected: true },
+      asset: { name: 'scripts/helper', bytes: Buffer.from('#!/bin/sh\nprintf fixture'), executable: true } },
+    { view: { id: 'data', name: 'data.txt', category: 'connections', selected: true },
+      asset: { name: 'scripts/data.txt', bytes: Buffer.from('data'), executable: false } },
+    { view: { id: 'legacy', name: 'legacy.py', category: 'connections', selected: true },
+      asset: { name: 'scripts/legacy.py', bytes: Buffer.from('print("fixture")') } },
+    { view: { id: 'memory', name: 'note', category: 'memory', selected: true }, text: 'Original note' },
+  ];
+  if (retry) h.importDocument.mockRejectedValueOnce(Object.assign(new Error('full'), { code: 'ENOSPC' }));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `script-executable-${retry}`, previewId: preview.id, name: 'Ada',
+    entryIds: ['helper', 'data', 'legacy', 'memory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const expected = { 'scripts/helper': true, 'scripts/data.txt': false, 'scripts/legacy.py': false };
+  let stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(stored.fileExecutables).toEqual(expected);
+  const bytes = stored.files;
+  if (retry) {
+    const checkpoint = await deserializeImportSnapshotAsync(stored.pendingImport!.snapshotJson, () => {});
+    expect(checkpoint.items.find(item => item.view.id === 'helper')?.asset?.executable).toBe(true);
+    await startCompanionImport(selection, 'after-restart');
+    const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+    expect(completed?.status).toBe('complete');
+    stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+    expect(stored.fileExecutables).toEqual(expected);
+    expect(stored.files).toEqual(bytes);
+  }
+  expect(stored.pendingImport).toBeUndefined();
+});
+
 it('cleans a completed checkpoint after a crash without replaying import work', async () => {
   h.snapshot.items = [{ view: { id: 'memory', name: 'note', category: 'memory', selected: true }, text: 'Original' }];
   const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');

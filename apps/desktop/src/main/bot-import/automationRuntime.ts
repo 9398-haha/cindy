@@ -86,7 +86,7 @@ export async function prepareImportedAutomation(root: string, routine: Routine, 
     // Old environments mixed memory attachments into files. The source script
     // namespace retains all helpers/resources, including cross-directory imports.
     await writeImportFiles(directory, Object.entries(environment.files ?? {}).filter(([name]) => name.startsWith('scripts/'))
-      .map(([name, bytes]) => ({ name, bytes: Buffer.from(bytes, 'base64'), executable: false })));
+      .map(([name, bytes]) => ({ name, bytes: Buffer.from(bytes, 'base64'), executable: environment.fileExecutables?.[name] === true })));
     let prompt = redact(routine.prompt); let direct: string | undefined; let skipped = false;
     let monitorOutput: string | undefined;
     if (command) {
