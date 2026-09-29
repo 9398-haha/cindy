@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const storage = vi.hoisted(() => ({ values: new Map<string, string>(), getItem: vi.fn(), setItem: vi.fn() }));
+const storage = vi.hoisted(() => ({ values: new Map<string, string>(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
-import { __testing, hasSeenClipboardInvitation, invitationDigest, rememberClipboardInvitation } from '@/device-link/clipboardInvitationHistory';
+import { __testing, clearClipboardInvitationHistory, hasSeenClipboardInvitation, invitationDigest, rememberClipboardInvitation } from '@/device-link/clipboardInvitationHistory';
 
 const account = '["global","guest"]';
 const key = __testing.storageKey(account);
@@ -14,6 +14,7 @@ beforeEach(() => {
   __testing.reset(); storage.values.clear();
   storage.getItem.mockReset().mockImplementation(async (k: string) => storage.values.get(k) ?? null);
   storage.setItem.mockReset().mockImplementation(async (k: string, value: string) => { storage.values.set(k, value); });
+  storage.removeItem.mockReset().mockImplementation(async (k: string) => { storage.values.delete(k); });
 });
 afterEach(async () => { await __testing.flush(); vi.useRealTimers(); });
 
@@ -34,6 +35,7 @@ it('expires records at 30 days without extending TTL on reads', async () => {
   expect(await hasSeenClipboardInvitation(account, digest)).toBe(true);
   vi.setSystemTime(Date.now() + day);
   expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(storage.values.has(key)).toBe(false);
   __testing.reset();
   expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
   await rememberClipboardInvitation(account, invitationDigest('new'));
@@ -116,4 +118,78 @@ it('never stores an invitation before an account is known', async () => {
   expect(await hasSeenClipboardInvitation('', digest)).toBe(false);
   expect(storage.getItem).not.toHaveBeenCalled();
   expect(storage.setItem).not.toHaveBeenCalled();
+});
+
+it('persists pruning on a cold read and retains only unexpired records without a new invitation', async () => {
+  const fresh = invitationDigest('fresh');
+  storage.values.set(key, JSON.stringify({ version: 1, entries: [
+    { digest, seenAt: Date.now() - 31 * day }, { digest: fresh, seenAt: Date.now() - day },
+  ] }));
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(JSON.parse(storage.values.get(key)!).entries).toEqual([{ digest: fresh, seenAt: Date.now() - day }]);
+  await hasSeenClipboardInvitation(account, fresh);
+  expect(storage.setItem).toHaveBeenCalledTimes(1);
+});
+
+it('retries failed expiry cleanup without treating expired records as seen', async () => {
+  await rememberClipboardInvitation(account, digest);
+  vi.setSystemTime(Date.now() + 30 * day);
+  storage.removeItem.mockRejectedValueOnce(new Error('unavailable'));
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(storage.values.has(key)).toBe(true);
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(storage.values.has(key)).toBe(false);
+});
+
+it('does not overwrite a fresh invitation when TTL cleanup is queued behind an older write', async () => {
+  await rememberClipboardInvitation(account, digest);
+  let finish!: () => void;
+  storage.setItem.mockImplementationOnce(async (k: string, value: string) => {
+    await new Promise<void>(resolve => { finish = resolve; }); storage.values.set(k, value);
+  });
+  const oldWrite = rememberClipboardInvitation(account, invitationDigest('old'));
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  vi.setSystemTime(Date.now() + 31 * day);
+  const cleanup = hasSeenClipboardInvitation(account, digest);
+  const fresh = invitationDigest('fresh');
+  const newWrite = rememberClipboardInvitation(account, fresh);
+  finish(); await Promise.all([oldWrite, cleanup, newWrite]);
+  expect(JSON.parse(storage.values.get(key)!).entries).toEqual([{ digest: fresh, seenAt: Date.now() }]);
+});
+
+it.each(['read', 'write'] as const)('clears both memory and disk after an in-flight %s without touching another account', async operation => {
+  await rememberClipboardInvitation('other-account', digest);
+  let finish!: () => void;
+  if (operation === 'read') {
+    storage.getItem.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return JSON.stringify({ version: 1, entries: [{ digest, seenAt: Date.now() }] });
+    });
+  } else {
+    storage.setItem.mockImplementationOnce(async (k: string, value: string) => {
+      await new Promise<void>(resolve => { finish = resolve; }); storage.values.set(k, value);
+    });
+  }
+  const writing = rememberClipboardInvitation(account, digest);
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  const clearing = clearClipboardInvitationHistory(account);
+  expect(clearClipboardInvitationHistory(account)).toBe(clearing);
+  await rememberClipboardInvitation(account, invitationDigest('late'));
+  finish(); await Promise.all([writing, clearing]);
+  expect(storage.values.has(key)).toBe(false);
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(await hasSeenClipboardInvitation('other-account', digest)).toBe(true);
+  // A later login can record fresh offers again.
+  await rememberClipboardInvitation(account, digest);
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(true);
+});
+
+it('clears an account that was never loaded and permits a failed removal to be retried', async () => {
+  storage.values.set(key, JSON.stringify({ version: 1, entries: [{ digest, seenAt: Date.now() }] }));
+  storage.removeItem.mockRejectedValueOnce(new Error('unavailable'));
+  await expect(clearClipboardInvitationHistory(account)).rejects.toThrow('unavailable');
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(false);
+  expect(storage.values.has(key)).toBe(false);
+  await rememberClipboardInvitation(account, digest);
+  expect(await hasSeenClipboardInvitation(account, digest)).toBe(true);
 });
