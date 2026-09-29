@@ -63,6 +63,7 @@
     "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again."
   },
   "sharedTask": {
+    "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
     "cancelSharing": "Stop Sharing",

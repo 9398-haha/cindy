@@ -136,7 +136,10 @@ describe('complete personal Skills with bounded startup projection', () => {
       expect(opens.mock.calls.filter(([file]) => String(file).includes('catalog.jsonl'))).toHaveLength(0);
       expect((await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs).toBe(catalogTime);
       reads.mockRestore(); opens.mockRestore();
-    }, largeFixtureTimeout);
+    // This includes a cold scan/open of all 2,048 real files. Under the full
+    // Windows worker pool it can exceed the default 60s I/O allowance; this
+    // is a completeness/cache test, not a wall-clock performance assertion.
+    }, process.platform === 'win32' ? 120_000 : largeFixtureTimeout);
 
     it('keeps every Skill discoverable through the final query page', async () => {
       const firstPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow' }, deps());

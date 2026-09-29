@@ -63,6 +63,7 @@
     "estimateFailed": "集計できませんでした。コピー元の接続とバージョンを確認し、閉じて再試行してください。"
   },
   "sharedTask": {
+    "selfJoin": "これは自分が開始した共有タスクのため、参加する必要はありません。「自分が共有中」から開いてください。",
     "manageSharing": "共有管理",
     "manageMembers": "メンバーを管理…",
     "cancelSharing": "共有を停止",
