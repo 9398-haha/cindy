@@ -8,6 +8,7 @@ import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase }
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { mobileRuntimeIdentity } from '@/debug/mobileRuntimeIdentity';
 import {
   DeviceLinkClient,
   isSharedTaskPeer,
@@ -963,12 +964,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       catalogRefresh.wake(deviceId);
       return rehydrateWithClient(client, deviceId);
     };
-    mobileDebugLog('debug', 'device-link', 'runtime identity', {
-      commit: /^[a-f0-9]{7,40}$/i.test(process.env.EXPO_PUBLIC_XDT_GIT_COMMIT ?? '')
-        ? process.env.EXPO_PUBLIC_XDT_GIT_COMMIT : 'unknown',
-      version: Constants.nativeAppVersion ?? 'unknown',
-      build: Constants.nativeBuildVersion ?? 'unknown',
-    });
+    mobileDebugLog('debug', 'device-link', 'runtime identity', mobileRuntimeIdentity());
     const diagnostics = createRecoveryDiagnostics(
       (event) => mobileDeviceLinkLogger.info('recovery phase', event),
       () => connectionEpochRef.current,
