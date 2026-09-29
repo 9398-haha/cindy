@@ -18,6 +18,7 @@
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { Check, SlidersHorizontal, Zap } from 'lucide-react-native';
 
 import type { MobileAgentCapabilities, MobileModelOption } from '@/session/agentCapabilities';
@@ -277,7 +278,7 @@ export function MobileModelPickerList({
                 rowStyle,
                 selected && styles.optionRowSelected,
                 rowDisabled && styles.optionRowDisabled,
-                pressed && { opacity: 0.65 },
+                pressed && mobileInteractionStyles.pressed,
               ]}
               testID={testID}
             >
@@ -331,7 +332,7 @@ export function MobileModelPickerList({
                   disabled={disabled}
                   hitSlop={6}
                   onPress={() => onOpenOptions({ providerId: row.provider.id, modelId: row.model.id })}
-                  style={({ pressed }) => [styles.optionsButton, pressed && { opacity: 0.65 }]}
+                  style={({ pressed }) => [styles.optionsButton, pressed && mobileInteractionStyles.pressed]}
                   testID={`${testID}.optionsButton`}
                 >
                   <SlidersHorizontal color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
@@ -395,7 +396,7 @@ export function MobileModelPickerList({
                 styles.optionRow,
                 rowStyle,
                 selected && styles.optionRowSelected,
-                pressed && { opacity: 0.65 },
+                pressed && mobileInteractionStyles.pressed,
               ]}
               testID={testID}
             >
@@ -428,7 +429,7 @@ export function MobileModelPickerList({
                   disabled={disabled}
                   hitSlop={6}
                   onPress={() => onOpenOptions({ providerId: null, modelId: option.id })}
-                  style={({ pressed }) => [styles.optionsButton, pressed && { opacity: 0.65 }]}
+                  style={({ pressed }) => [styles.optionsButton, pressed && mobileInteractionStyles.pressed]}
                   testID={`${testID}.optionsButton`}
                 >
                   <SlidersHorizontal color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />

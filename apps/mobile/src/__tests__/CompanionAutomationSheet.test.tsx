@@ -34,6 +34,7 @@ vi.mock('@/device-link/remoteResources', () => ({ getRemoteResource: (...args: a
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: (error: Error) => error.message }));
 vi.mock('@/theme', () => ({ iconSize: { action: 20, lg: 24, xs: 12 }, spacing: { xs: 4, sm: 8, md: 12 }, useTheme: () => ({ mode: 'light', colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('../session/CompanionChoice', () => ({ CompanionChoice: () => null }));
+vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ value, onValueChange, disabled }: any) => <input type="checkbox" checked={value} disabled={disabled} onChange={e => onValueChange(e.currentTarget.checked)} /> }));
 vi.mock('../session/CompanionSheet', () => ({ CompanionSheet: ({ children, footer }: any) => {
   if (h.platform === 'ios') throw new Error('legacy automation sheet mounted');
   return <div>{children}{footer}</div>;
@@ -43,7 +44,7 @@ vi.mock('../session/ComposerSheet', async () => import('../session/ComposerSheet
 vi.mock('../session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ title, children }: any) => <section aria-label={title}>{children}</section> }));
 vi.mock('@expo/ui', () => ({ Host: ({ children }: any) => <div>{children}</div> }));
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
-  ...Object.fromEntries(['accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'keyboardType', 'lineLimit', 'pickerStyle', 'tag', 'textInputAutocapitalization', 'textSelection', 'padding', 'presentationDetents', 'interactiveDismissDisabled', 'presentationDragIndicator', 'scrollContentBackground'].map(name => [name, (value: any) => ({ name, value })])),
+  ...Object.fromEntries(['accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'keyboardType', 'lineLimit', 'pickerStyle', 'tag', 'textInputAutocapitalization', 'textSelection', 'tint', 'padding', 'presentationDetents', 'interactiveDismissDisabled', 'presentationDragIndicator', 'scrollContentBackground'].map(name => [name, (value: any) => ({ name, value })])),
   shapes: { rectangle: () => ({}) },
 }));
 vi.mock('@expo/ui/swift-ui', () => {

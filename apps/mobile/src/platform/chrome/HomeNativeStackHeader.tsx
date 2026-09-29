@@ -1,10 +1,9 @@
 import type { ComponentProps, ReactNode } from "react";
 import { Stack } from "expo-router";
 import { HomeHeaderGlassButton } from "@/session/HomeHeaderGlassButton";
-import { BlurBackdrop } from "@/session/BlurBackdrop";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { ChevronDown, Menu } from "lucide-react-native";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import { Text } from "@/components/AppText";
 import {
   NativePullDownMenu,
@@ -21,7 +20,8 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { lineHeight, radius, spacing } from "@/theme/tokens";
+import { lineHeight, spacing } from "@/theme/tokens";
+import { navigationTitleMaxWidth } from "@/platform/chrome/navigationTitleWidth";
 
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
@@ -64,6 +64,9 @@ export function HomeNativeStackHeader({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const nativeMenus = usesNativePullDownMenu();
+  const { width: windowWidth } = useWindowDimensions();
+  // Menu button + two trailing actions; minus the title's own hit padding.
+  const titleMaxWidth = Math.max(0, navigationTitleMaxWidth(windowWidth) - 2 * spacing.xs);
 
   if (!usesNativeStackHeader()) return null;
 
@@ -83,8 +86,8 @@ export function HomeNativeStackHeader({
         style={({ pressed }) => [styles.titleHit, pressed && styles.pressed]}
         testID="devices.title"
       >
-        <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
-        <View style={styles.titleCluster}>
+        {/* The title sits directly on the bar: no capsule material behind it. */}
+        <View style={[styles.titleCluster, { maxWidth: titleMaxWidth }]}>
           <Text numberOfLines={1} style={styles.title}>
             {title}
           </Text>
@@ -177,13 +180,10 @@ const makeStyles = (colors: ThemeColors) =>
       flexDirection: "row",
       flexShrink: 1,
       gap: spacing.xs,
-      maxWidth: 220,
       minWidth: 0,
     },
     titleHit: {
-      borderRadius: radius.pill,
-      overflow: "hidden",
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: spacing.xs,
       alignItems: "center",
       justifyContent: "center",
       minHeight: 44,

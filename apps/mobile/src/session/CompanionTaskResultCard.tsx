@@ -1,13 +1,13 @@
 import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, View, StyleSheet } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { FileText } from 'lucide-react-native';
 import type { BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type { RemotePathStatResult } from '@/device-link/mobileMakerTransport';
@@ -29,7 +29,7 @@ function ResultFileAction({
   deviceId: string;
 }) {
   const { openLink, invoke } = useDeviceLink();
-  const router = useRouter();
+  const push = useGuardedPush();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [cacheGen, setCacheGen] = useState(0);
@@ -56,7 +56,7 @@ function ResultFileAction({
     {icon}<Text selectable numberOfLines={1} style={[styles.fileLabel, styles.pending]}>{label}</Text>
   </View>;
   return <Pressable accessibilityRole="link" style={({ pressed }) => [styles.file, pressed && mobileInteractionStyles.pressed]}
-    onPress={() => router.push({ pathname: '/files/preview/[sessionId]', params: {
+    onPress={() => push({ pathname: '/files/preview/[sessionId]', params: {
       sessionId: childSessionId, deviceId, absPath,
     } })}>
     {icon}<Text numberOfLines={1} style={[styles.fileLabel, styles.link]}>{label}</Text>
@@ -67,7 +67,7 @@ function ResultFileAction({
 function useResultFileContext(deviceId: string, childSessionId: string | null | undefined, workdir: string | undefined) {
   const parent = useContext(ChatFilePathContext);
   const { openLink, invoke } = useDeviceLink();
-  const router = useRouter();
+  const push = useGuardedPush();
   return useMemo<ChatFilePathContextValue | null>(() => {
     if (!deviceId || !childSessionId || !workdir) return null;
     return {
@@ -81,10 +81,10 @@ function useResultFileContext(deviceId: string, childSessionId: string | null | 
       onOpenPath: (target) => {
         if (target.kind === 'directory') {
           if (target.relPath === null) return;
-          router.push({ pathname: '/files/[sessionId]', params: { sessionId: childSessionId, deviceId, relPath: target.relPath } });
+          push({ pathname: '/files/[sessionId]', params: { sessionId: childSessionId, deviceId, relPath: target.relPath } });
           return;
         }
-        router.push({ pathname: '/files/preview/[sessionId]', params: {
+        push({ pathname: '/files/preview/[sessionId]', params: {
           sessionId: childSessionId, deviceId,
           ...(target.relPath !== null ? { relPath: target.relPath } : { absPath: target.absPath }),
           ...(target.line !== undefined ? { line: String(target.line) } : {}),
@@ -95,7 +95,7 @@ function useResultFileContext(deviceId: string, childSessionId: string | null | 
         onLongPressPath: (target: ChatFilePathTarget) => parent.onLongPressPath?.({ ...target, scope: { sessionId: childSessionId, workdir } }),
       } : {}),
     };
-  }, [childSessionId, deviceId, invoke, openLink, parent, router, workdir]);
+  }, [childSessionId, deviceId, invoke, openLink, parent, push, workdir]);
 }
 
 /** A frozen execution receipt (Desktop BotSessionTaskResultCard); expanding never restarts or fetches the task. */
@@ -145,7 +145,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   card: { marginVertical: spacing.sm, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
     backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
   summary: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  title: { flex: 1, minWidth: 0, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
+  // §3 row/card title role: 16/22 medium.
+  title: { flex: 1, minWidth: 0, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary },
   secondary: { flexShrink: 0, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
   view: { flexShrink: 0, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textPrimary },
   body: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },

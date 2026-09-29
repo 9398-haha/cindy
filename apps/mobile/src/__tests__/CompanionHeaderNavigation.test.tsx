@@ -9,8 +9,8 @@ import { useHostManagedSession } from '@/session/hostManagedSession';
 import type { RemoteResource } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
-  focused: true, drawer: {} as any, accounts: {} as any, profile: {} as any,
-  dismiss: vi.fn(), push: vi.fn(), chooseMode: vi.fn(),
+  focused: true, drawer: {} as any, accounts: {} as any, profile: {} as any, systemBack: true,
+  dismiss: vi.fn(), push: vi.fn(), chooseMode: vi.fn(), replace: vi.fn(),
   auth: { accountGeneration: 1, user: null, logout: vi.fn(), beginAddAccount: vi.fn() },
 }));
 vi.mock('react-native', () => ({
@@ -20,7 +20,7 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (s: unknown) => s },
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
-vi.mock('expo-router', () => ({ useSegments: () => ['sessions', '[sessionId]'] }));
+vi.mock('expo-router', () => ({ useSegments: () => ['sessions', '[sessionId]'], useRouter: () => ({ replace: h.replace }) }));
 vi.mock('expo-router/react-navigation', () => ({
   useIsFocused: () => h.focused, NavigationContext: createContext(null), NavigationRouteContext: createContext(null),
 }));
@@ -38,6 +38,10 @@ vi.mock('@/theme', async () => {
 vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, PanelLeft: () => null, Settings2: () => null }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children, disabled }: any) =>
   createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children) }));
+vi.mock('@/session/CompanionBackButton', () => ({ CompanionBackButton: ({ onPress }: any) =>
+  createElement('button', { onClick: onPress, 'data-testid': 'companion.back' }) }));
+// Page-level drawer cases run as Duo (system bar owns Back, header keeps the sidebar button).
+vi.mock('@/platform/chrome/SystemNavigationBack', () => ({ useSystemNavigationBack: () => h.systemBack, SystemNavigationBack: () => null }));
 vi.mock('@/session/TeammatePicker', () => ({ TeammatePicker: () => null }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: () => null,
   CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
@@ -106,6 +110,7 @@ it('preserves search, mode switching, account switching and logout actions', asy
   await act(async () => { h.drawer.onOpenAccounts(); h.drawer.onClosed(); }); expect(h.accounts.visible).toBe(true);
   h.auth.logout.mockResolvedValue(undefined);
   await act(async () => h.drawer.onLogout()); expect(h.auth.logout).toHaveBeenCalledOnce();
+  expect(h.replace).toHaveBeenCalledWith('/login');
 });
 
 it('returns to the roster when the already-active companion mode is selected', async () => {
@@ -169,6 +174,7 @@ const compiled = ts.transpileModule(`function PageHost({ bindings }) {
   const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen } = bindings;
   const currentSession = null;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
+  const goBackToHome = bindings.goBackToHome;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
   ${relevantJsx(header)}
   return <div data-testid="page-route"><div data-testid="clipped-chrome">{headerNode}</div>${relevantJsx(overlay)}</div>;
@@ -178,11 +184,29 @@ const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'Com
 const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false,
   companionEntry: { ready: true },
   companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
-  setSearchOpen: vi.fn() });
+  setSearchOpen: vi.fn(), goBackToHome: vi.fn() });
 const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => {
   root.render(<RecentMessageHistoriesProvider><PageHost bindings={bindings} /></RecentMessageHistoriesProvider>);
 });
 const openPageDrawer = () => act(async () => host.querySelector<HTMLButtonElement>('[data-testid="companion.navigation"]')!.click());
+
+it('shows Back instead of the sidebar button on a phone, and returns to the partner list', async () => {
+  h.systemBack = false;
+  try {
+    const bindings = pageBindings();
+    await showPage(bindings);
+    expect(host.querySelector('[data-testid="companion.navigation"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="companion.back"]')!.click());
+    expect(h.dismiss).toHaveBeenCalled();
+    expect(bindings.goBackToHome).toHaveBeenCalledTimes(1);
+  } finally { h.systemBack = true; }
+});
+
+it('keeps the sidebar button where the system bar already shows Back (Duo)', async () => {
+  await showPage(pageBindings());
+  expect(host.querySelector('[data-testid="companion.back"]')).toBeNull();
+  expect(host.querySelector('[data-testid="companion.navigation"]')).not.toBeNull();
+});
 
 it('shows the companion title while profile controls wait for entry validation', async () => {
   const bindings = pageBindings(); bindings.companionEntry.ready = false;

@@ -29,9 +29,12 @@ import {
   SummaryStrip,
 } from '@/components/MobilePrimitives';
 import {
+  NativeSwitch,
   SimpleStackHeader,
-  simpleScreenSafeAreaEdges,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
 } from '@/platform/chrome';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -140,6 +143,7 @@ export default function AutomationsScreen() {
   const deviceId = String(params.deviceId ?? '');
   const deviceName = String(params.name ?? deviceId);
   const router = useRouter();
+  const guardedPush = useGuardedPush();
   const { width: screenWidth } = useWindowDimensions();
   const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink();
   // 熔断 open(电脑端未响应):relay 可能仍 online,banner 文案单独入参。
@@ -731,7 +735,7 @@ export default function AutomationsScreen() {
         next.set(run.scheduleId, markRunReadLocally(prev.get(run.scheduleId) ?? [], run.id));
         return next;
       });
-      router.push({
+      guardedPush({
         pathname: '/sessions/[sessionId]',
         params: { sessionId: run.sessionId, deviceId, deviceName },
       });
@@ -740,7 +744,7 @@ export default function AutomationsScreen() {
     } finally {
       setOpeningRunId(null);
     }
-  }, [deviceId, deviceName, maker, openingRunId, router]);
+  }, [deviceId, deviceName, guardedPush, maker, openingRunId]);
 
   const markSingleRunRead = useCallback(async (run: RemoteScheduleRun) => {
     if (busyAction) return;
@@ -826,7 +830,7 @@ export default function AutomationsScreen() {
 
   const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="automations.screen">
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="automations.screen">
       <SimpleStackHeader
         syncing={!showConnectionBanner && (loading || runsLoading || status === 'connecting')}
         action={{
@@ -890,6 +894,7 @@ export default function AutomationsScreen() {
       </SummaryStrip>
 
       <ScrollView
+        {...simpleScrollInsetProps}
         refreshControl={<RefreshControl refreshing={loading || runsLoading} onRefresh={refreshAll} />}
         contentContainerStyle={[
           styles.content,
@@ -1291,7 +1296,7 @@ function ScheduleFormCard({
             editable={!busy}
             onChangeText={(value) => onChange(updateDraftBoundSessionId(draft, value,
               sessions.find((session) => session.id === value.trim())?.agentKind))}
-            placeholder="session id"
+            placeholder={t('devices.automations.form.boundSessionIdPlaceholder')}
             placeholderTextColor={colors.textPlaceholder}
             style={styles.input}
             testID="automations.form.targetSessionInput"
@@ -1430,19 +1435,11 @@ function ScheduleFormCard({
         />
       </View>
 
-      <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.effort')}</Text>
-        <TextInput
-          autoCapitalize="none"
-          editable={!busy}
-          onChangeText={(value) => setField('effort', value)}
-          placeholder="minimal / low / medium / high / xhigh / max / ultra"
-          placeholderTextColor={colors.textPlaceholder}
-          style={styles.input}
-          testID="automations.form.effortInput"
-          value={draft.effort}
-        />
-      </View>
+      <EffortPicker
+        disabled={busy}
+        onChange={(value) => setField('effort', value)}
+        value={draft.effort}
+      />
 
       {(draft.agentKind === 'codex' || draft.agentKind === 'pi') && !hideWorkspaceFields ? (
         <ToggleRow
@@ -1477,7 +1474,7 @@ function ScheduleFormCard({
         {draft.executionMode !== 'script' ? <Text style={styles.fieldLabel}>{t('devices.companions.automation.quietHint')}</Text> : null}
         {supportsPreRunHook ? <>
           <Text style={styles.fieldLabel}>{t('devices.companions.automation.checkCommand')}</Text>
-          <TextInput accessibilityLabel={t('devices.companions.automation.checkCommand')} autoCapitalize="none" editable={!busy} multiline style={styles.input}
+          <TextInput accessibilityLabel={t('devices.companions.automation.checkCommand')} autoCapitalize="none" editable={!busy} multiline style={[styles.input, styles.inputMultiline]}
             value={draft.preRunHook?.command ?? ''} onChangeText={(command) => setField('preRunHook', command ? { ...draft.preRunHook, command } : null)} />
           <Text style={styles.fieldLabel}>{t('devices.companions.automation.checkHint')}</Text>
           {draft.preRunHook ? <>
@@ -1508,8 +1505,8 @@ function ScheduleFormCard({
         primaryActions={[
           {
             accessibilityLabel: busy ? t('devices.automations.form.savingA11y') : t('devices.automations.form.saveA11y'),
-            disabled: busy,
-            label: busy ? t('devices.common.saving') : t('devices.common.save'),
+            busy,
+            label: t('devices.common.save'),
             onPress: onSubmit,
             testID: 'automations.form.saveButton',
             tone: 'primary',
@@ -1615,8 +1612,9 @@ function ScheduleDeleteCard({
         dangerActions={[
           {
             accessibilityLabel: t('devices.automations.delete.confirmA11y'),
-            disabled: busy || state.loading,
-            label: busy ? t('devices.common.deleting') : confirmText,
+            busy,
+            disabled: state.loading,
+            label: confirmText,
             onPress: onConfirm,
             testID: 'automations.delete.confirmButton',
             tone: 'danger',
@@ -1669,8 +1667,8 @@ function SchedulePauseCard({
         primaryActions={[
           {
             accessibilityLabel: t('devices.automations.pause.confirmA11y'),
-            disabled: busy,
-            label: busy ? t('devices.automations.pause.pausing') : t('devices.automations.pause.confirm'),
+            busy,
+            label: t('devices.automations.pause.confirm'),
             onPress: onConfirm,
             testID: 'automations.pause.confirmButton',
             tone: 'primary',
@@ -1726,8 +1724,8 @@ function RunDeleteCard({
         dangerActions={[
           {
             accessibilityLabel: t('devices.automations.runDelete.confirmA11y'),
-            disabled: busy,
-            label: busy ? t('devices.common.deleting') : t('devices.automations.runDelete.confirm'),
+            busy,
+            label: t('devices.automations.runDelete.confirm'),
             onPress: onConfirm,
             testID: 'automations.runDelete.confirmButton',
             tone: 'danger',
@@ -1819,8 +1817,9 @@ function TemplatePicker({
         <MainWindowActionButton
           action={{
             accessibilityLabel: loading ? t('devices.automations.template.loadingA11y') : t('devices.automations.template.refreshA11y'),
-            disabled: busy || loading,
-            label: loading ? t('devices.automations.template.loading') : t('devices.automations.template.refresh'),
+            busy: loading,
+            disabled: busy,
+            label: t('devices.automations.template.refresh'),
             onPress: onReload,
             testID: 'automations.templateReloadButton',
           }}
@@ -1998,21 +1997,69 @@ function ToggleRow({
   testID: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   return (
-    <MainWindowRowButton
-      accessibilityLabel={label}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: active }}
-      disabled={disabled}
-      onPress={onPress}
-      style={styles.toggleRow}
-      testID={testID}
-    >
+    <View style={styles.toggleRow}>
       <Text style={styles.toggleLabel}>{label}</Text>
-      <View style={[styles.togglePill, active && styles.togglePillActive]}>
-        <View style={[styles.toggleKnob, active && styles.toggleKnobActive]} />
+      <NativeSwitch
+        accessibilityLabel={label}
+        disabled={disabled}
+        onValueChange={(next) => {
+          if (next !== active) onPress();
+        }}
+        seedColor={colors.inputCaret}
+        testID={testID}
+        value={active}
+      />
+    </View>
+  );
+}
+
+/** 推理强度:沿用模型选择器的档位列表与文案;「默认」保存为空串,与原先留空一致。 */
+const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+
+function EffortPicker({
+  disabled,
+  onChange,
+  value,
+}: {
+  disabled: boolean;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+  const current = value.trim();
+  // 已保存但不在档位表里的值(旧版手填)原样保留为一个可选项,不静默改写。
+  const options: string[] = ['', ...EFFORT_LEVELS];
+  if (current && !options.includes(current)) options.push(current);
+  return (
+    <View style={styles.fieldGroup}>
+      <Text style={styles.fieldLabel}>{t('devices.automations.form.field.effort')}</Text>
+      <View
+        accessibilityLabel={t('devices.automations.form.field.effort')}
+        accessibilityRole="radiogroup"
+        style={styles.effortOptions}
+        testID="automations.form.effortOptions"
+      >
+        {options.map((option) => (
+          <MainWindowOptionButton
+            accessibilityRole="radio"
+            accessibilityState={{ checked: option === current }}
+            density="default"
+            disabled={disabled}
+            key={option || 'default'}
+            label={option
+              ? t(`models.options.effortLevels.${option}`, { defaultValue: option })
+              : t('devices.automations.form.effortDefault')}
+            onPress={() => onChange(option)}
+            selected={option === current}
+            style={styles.effortOption}
+            testID={`automations.form.effort.${option || 'default'}`}
+          />
+        ))}
       </View>
-    </MainWindowRowButton>
+    </View>
   );
 }
 
@@ -2048,7 +2095,7 @@ function ScheduleRow({
         <Text style={styles.scheduleSubtitle} numberOfLines={1}>{summary.subtitle}</Text>
         <Text style={styles.scheduleDetail} numberOfLines={1}>{summary.detail}</Text>
       </View>
-      <ChevronRight color={colors.textTertiary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+      <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
     </MainWindowRowButton>
   );
 }
@@ -2103,10 +2150,9 @@ function ScheduleDetail({
         }]}
         primaryActions={[{
           accessibilityLabel: t('devices.automations.detail.runNowA11y'),
+          busy: busyAction === `run:${schedule.id}`,
           disabled: actionBusy,
-          label: busyAction === `run:${schedule.id}`
-            ? t('devices.automations.detail.running')
-            : t('devices.automations.runNow'),
+          label: t('devices.automations.runNow'),
           onPress: onRunNow,
           testID: 'automations.runNowButton',
           tone: 'primary',
@@ -2177,7 +2223,7 @@ function RunRow({
                 accessibilityLabel: t('devices.automations.run.openSessionA11y'),
                 busy: opening,
                 disabled: actionBusy,
-                label: opening ? t('devices.automations.run.opening') : (summary.openSessionLabel ?? t('devices.automations.run.session')),
+                label: summary.openSessionLabel ?? t('devices.automations.run.session'),
                 onPress: onOpenSession,
                 testID: 'automations.openRunSessionButton',
               }}
@@ -2191,7 +2237,7 @@ function RunRow({
                 accessibilityLabel: t('devices.automations.run.restartA11y'),
                 busy: busyAction === `run-restart:${run.id}`,
                 disabled: actionBusy,
-                label: busyAction === `run-restart:${run.id}` ? t('devices.automations.run.restarting') : (summary.restartLabel ?? t('devices.automations.run.restart')),
+                label: summary.restartLabel ?? t('devices.automations.run.restart'),
                 onPress: onRestart,
                 testID: 'automations.restartRunButton',
               }}
@@ -2205,7 +2251,7 @@ function RunRow({
                 accessibilityLabel: t('devices.automations.run.markReadA11y'),
                 busy: busyAction === `run-read:${run.id}`,
                 disabled: actionBusy,
-                label: busyAction === `run-read:${run.id}` ? t('devices.automations.run.marking') : (summary.markReadLabel ?? t('devices.automations.run.markRead')),
+                label: summary.markReadLabel ?? t('devices.automations.run.markRead'),
                 onPress: onMarkRead,
                 testID: 'automations.markRunReadButton',
               }}
@@ -2219,7 +2265,7 @@ function RunRow({
                 accessibilityLabel: t('devices.automations.run.deleteA11y'),
                 busy: busyAction === `run-delete:${run.id}`,
                 disabled: actionBusy,
-                label: busyAction === `run-delete:${run.id}` ? t('devices.common.deleting') : (summary.deleteLabel ?? t('devices.common.delete')),
+                label: summary.deleteLabel ?? t('devices.common.delete'),
                 onPress: onDelete,
                 testID: 'automations.deleteRunButton',
                 tone: 'danger',
@@ -2370,10 +2416,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   fieldGroup: { gap: spacing.xs },
   fieldLabel: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   fieldHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  // 单行输入胶囊;多行编辑区(textArea / inputMultiline)保留容器圆角。
   input: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.container,
+    borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     fontSize: typeScale.body,
@@ -2381,7 +2428,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  textArea: { minHeight: 112 },
+  textArea: { borderRadius: radius.container, minHeight: 112 },
+  inputMultiline: { borderRadius: radius.container },
+  effortOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  effortOption: { minHeight: 44 },
   templateSection: { gap: spacing.sm },
   templateHeader: {
     alignItems: 'center',
@@ -2416,16 +2466,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   segmentRow: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.container,
+    borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.xs,
     padding: spacing.xs,
   },
   segmentButton: {
-    borderRadius: radius.container,
+    borderRadius: radius.pill,
     flex: 1,
-    minHeight: 38,
+    minHeight: 44,
     paddingHorizontal: spacing.sm,
   },
   toggleRow: {
@@ -2438,24 +2488,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: spacing.md,
   },
-  toggleLabel: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
-  togglePill: {
-    alignItems: 'flex-start',
-    backgroundColor: colors.surfaceChip,
-    borderRadius: radius.pill,
-    height: 28,
-    justifyContent: 'center',
-    paddingHorizontal: 3,
-    width: 50,
-  },
-  togglePillActive: { alignItems: 'flex-end', backgroundColor: colors.cta },
-  toggleKnob: {
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: radius.pill,
-    height: 22,
-    width: 22,
-  },
-  toggleKnobActive: { backgroundColor: colors.ctaText },
+  toggleLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   boundSessionOptions: { gap: spacing.xs },
   boundSessionOption: {
     borderColor: colors.border,

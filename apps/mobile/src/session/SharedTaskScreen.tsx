@@ -2,7 +2,7 @@ import { type ReactNode, type Ref } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, type View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MainWindowActionButton, type MainWindowAction } from '@/components/MobilePrimitives';
-import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
+import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
 
@@ -11,10 +11,10 @@ export function SharedTaskScreen({ title, onClose, children }: {
   title: string; onClose(): void; children: ReactNode;
 }) {
   const styles = useThemedStyles(makeStyles);
-  return <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.root}>
-    <SimpleStackHeader title={title} onBack={onClose} />
+  return <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.root}>
+    <SimpleStackHeader scrollEdge title={title} onBack={onClose} />
     <KeyboardAvoidingView style={styles.body} enabled={Platform.OS === 'ios'} behavior="padding">
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{children}</ScrollView>
+      <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{children}</ScrollView>
     </KeyboardAvoidingView>
   </SafeAreaView>;
 }

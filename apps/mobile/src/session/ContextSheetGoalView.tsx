@@ -12,12 +12,13 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import {
-  ActivityIndicator,
   Pressable,
   StyleSheet,
   View,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
+import { MainWindowActionButton, MainWindowOptionButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatus,
@@ -207,26 +208,18 @@ export function ContextSheetGoalCreateForm({
         </>
       ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <Pressable
-        accessibilityHint={disabled ? disabledHint : undefined}
-        accessibilityLabel={t('interaction.contextSheet.startGoal')}
-        accessibilityRole="button"
-        accessibilityState={{ disabled: busy || disabled || !objective.trim() }}
-        disabled={busy || disabled || !objective.trim()}
-        onPress={submit}
-        style={({ pressed }) => [
-          styles.ctaButton,
-          (busy || disabled || !objective.trim()) && styles.ctaButtonDisabled,
-          pressed && styles.pressed,
-        ]}
-        testID="contextSheet.goalStartButton"
-      >
-        {busy ? (
-          <ActivityIndicator color={colors.ctaText} size="small" />
-        ) : (
-          <Text style={styles.ctaLabel}>{t('interaction.contextSheet.startGoal')}</Text>
-        )}
-      </Pressable>
+      <MainWindowActionButton
+        action={{
+          accessibilityHint: disabled ? disabledHint : undefined,
+          busy,
+          disabled: disabled || !objective.trim(),
+          label: t('interaction.contextSheet.startGoal'),
+          onPress: submit,
+          testID: 'contextSheet.goalStartButton',
+          tone: 'primary',
+        }}
+        style={styles.ctaButton}
+      />
     </View>
   );
 }
@@ -249,7 +242,6 @@ function GoalStatusView({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeGoalStyles);
-  const { colors } = useTheme();
   const { t } = useTranslation();
   const canPause = goal.status === 'active';
   const canResume = goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usageLimited';
@@ -282,47 +274,41 @@ function GoalStatusView({
         ) : null}
         <GoalActionButton
           busy={busy}
+          destructive
           label={t('interaction.contextSheet.clearGoal')}
           onPress={onClearGoal}
           testID="contextSheet.goalClearButton"
-          textColor={colors.statusRecording}
         />
       </View>
     </View>
   );
 }
 
+/** 状态视图的次要 / 破坏性操作:共享按钮(破坏性走 danger 档 destructive 字色)。 */
 function GoalActionButton({
   busy,
+  destructive = false,
   label,
   onPress,
   testID,
-  textColor,
 }: {
   busy: boolean;
+  destructive?: boolean;
   label: string;
   onPress: () => void;
   testID?: string;
-  textColor?: string;
 }) {
-  const styles = useThemedStyles(makeGoalStyles);
+  // busy 期间只禁用、不在每个按钮上转圈:状态视图没有「哪个按钮在忙」的归属信息。
   return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: busy }}
-      disabled={busy}
-      onPress={onPress}
-      style={({ pressed }) => [styles.actionButton, pressed && styles.pressed, busy && styles.ctaButtonDisabled]}
-      testID={testID}
-    >
-      <Text style={[styles.actionButtonText, textColor ? { color: textColor } : null]}>{label}</Text>
-    </Pressable>
+    <MainWindowActionButton
+      action={{ disabled: busy, label, onPress, testID, tone: destructive ? 'danger' : 'secondary' }}
+      grow
+    />
   );
 }
 
 /**
- * 单项上限的 pill 单选组(预设 + 「不限」)。手机端用 pill 组替代桌面的下拉——
+ * 单项上限的 pill 单选组(预设 + 「不限」),选项复用共享 MainWindowOptionButton(选中只换色)。手机端用 pill 组替代桌面的下拉——
  * bottom sheet 里嵌套下拉手感差;当前值不在预设里(历史自定义)时前置保留(对齐桌面)。
  */
 function LimitOptionsRow({
@@ -348,7 +334,7 @@ function LimitOptionsRow({
   return (
     <View style={styles.limitOptionsRow} testID={testID}>
       <Text style={styles.limitLabel}>{label}</Text>
-      <View style={styles.limitPillRow}>
+      <View accessibilityLabel={label} accessibilityRole="radiogroup" style={styles.limitPillRow}>
         {options.map((preset) => (
           <LimitPill
             disabled={disabled}
@@ -380,22 +366,16 @@ function LimitPill({
   onPress: () => void;
   disabled?: boolean;
 }) {
-  const styles = useThemedStyles(makeGoalStyles);
+  // 单选预设不切换视图,语义是 radio 而非 tab;命中区由共享组件 hitSlop 补足 44pt。
   return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      accessibilityState={{ disabled, selected }}
+    <MainWindowOptionButton
+      accessibilityRole="radio"
+      accessibilityState={{ checked: selected }}
       disabled={disabled}
+      label={label}
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.limitPill,
-        selected && styles.limitPillSelected,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Text style={[styles.limitPillText, selected && styles.limitPillTextSelected]}>{label}</Text>
-    </Pressable>
+      selected={selected}
+    />
   );
 }
 
@@ -454,26 +434,6 @@ function makeGoalStyles(colors: ThemeColors) {
       gap: spacing.sm,
       paddingTop: spacing.sm,
     },
-    limitPill: {
-      alignItems: 'center' as const,
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      height: 30,
-      justifyContent: 'center' as const,
-      paddingHorizontal: spacing.md,
-    },
-    limitPillSelected: {
-      backgroundColor: colors.cta,
-    },
-    limitPillText: {
-      color: colors.textPrimary,
-      fontSize: typeScale.footnote,
-      lineHeight: lineHeight.caption,
-      fontWeight: fontWeight.medium,
-    },
-    limitPillTextSelected: {
-      color: colors.ctaText,
-    },
     hintText: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
@@ -487,25 +447,9 @@ function makeGoalStyles(colors: ThemeColors) {
       paddingTop: spacing.md,
     },
     ctaButton: {
-      alignItems: 'center' as const,
-      backgroundColor: colors.cta,
-      borderRadius: radius.pill,
-      height: 50,
-      justifyContent: 'center' as const,
       marginTop: spacing.xl,
     },
-    ctaButtonDisabled: {
-      opacity: 0.4,
-    },
-    ctaLabel: {
-      color: colors.ctaText,
-      fontSize: typeScale.body,
-      lineHeight: lineHeight.body,
-      fontWeight: fontWeight.medium,
-    },
-    pressed: {
-      opacity: 0.7,
-    },
+    pressed: mobileInteractionStyles.pressed,
     statusHeader: {
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
@@ -545,20 +489,6 @@ function makeGoalStyles(colors: ThemeColors) {
       flexDirection: 'row' as const,
       gap: spacing.md,
       paddingTop: spacing.xl,
-    },
-    actionButton: {
-      alignItems: 'center' as const,
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      flex: 1,
-      height: 44,
-      justifyContent: 'center' as const,
-    },
-    actionButtonText: {
-      color: colors.textPrimary,
-      fontSize: typeScale.footnote,
-      lineHeight: lineHeight.caption,
-      fontWeight: fontWeight.medium,
     },
   };
 }

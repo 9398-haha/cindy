@@ -48,7 +48,7 @@ describe('mobile collaboration session fallback', () => {
     expect(sessionCollaborationNotice(worker)).toContain('发送消息');
     expect(sessionCollaborationNotice(worker)).toContain('切换 Worker 焦点');
     expect(isCollaborationSession(lead)).toBe(true);
-    expect(sessionCollaborationReadOnlyReason(worker)).toContain('只读');
+    expect(sessionCollaborationReadOnlyReason(worker)).toContain('只能查看');
   });
 
   it('lets Lead compose messages while keeping worker composer read-only', () => {
@@ -58,8 +58,8 @@ describe('mobile collaboration session fallback', () => {
 
     // composer 只读:Lead 可发消息(null),worker / 其它角色只读(非空)。
     expect(sessionCollaborationComposerReadOnlyReason(lead)).toBeNull();
-    expect(sessionCollaborationComposerReadOnlyReason(worker)).toContain('只读');
-    expect(sessionCollaborationComposerReadOnlyReason(custom)).toContain('只读');
+    expect(sessionCollaborationComposerReadOnlyReason(worker)).toContain('只能查看');
+    expect(sessionCollaborationComposerReadOnlyReason(custom)).toContain('只能查看');
     expect(sessionCollaborationComposerReadOnlyReason(session({ orcaRole: null }))).toBeNull();
 
     // 但写编排只读对 Lead 仍生效(fork/rewind/队列/设置仍留电脑端)。
@@ -70,8 +70,8 @@ describe('mobile collaboration session fallback', () => {
     const custom = session({ orcaRole: 'reviewer' });
 
     expect(sessionCollaborationLabel(custom)).toBe('协同 reviewer');
-    expect(sessionCollaborationNotice(custom)).toContain('协同编排操作请在电脑端完成');
-    expect(sessionCollaborationReadOnlyReason(custom)).toContain('任务修改请在电脑端完成');
+    expect(sessionCollaborationNotice(custom)).toContain('协同编排请在电脑端操作');
+    expect(sessionCollaborationReadOnlyReason(custom)).toContain('修改任务，请在电脑端操作');
     expect(sessionCollaborationLabel(session({ orcaRole: null }))).toBeNull();
     expect(isCollaborationSession(session({ orcaRole: null }))).toBe(false);
     expect(sessionCollaborationReadOnlyReason(session({ orcaRole: null }))).toBeNull();

@@ -1,6 +1,6 @@
 import { iconSize } from '@/theme';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { ChevronRight, Clock3, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { randomUUID } from 'expo-crypto';
@@ -10,9 +10,10 @@ import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { getRemoteResource, invokeRemoteResourceAction } from '@/device-link/remoteResources';
+import { NativeSwitch } from '@/platform/chrome/NativeSwitch';
 import { CompanionChoice } from './CompanionChoice';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, radius, spacing, typeScale, lineHeight } from '@/theme/tokens';
+import { fontWeight, iconStroke, radius, spacing, typeScale, lineHeight } from '@/theme/tokens';
 import { CompanionSheet } from './CompanionSheet';
 import { CompanionAutomationNativeView } from './CompanionAutomationNativeView';
 import { useRoutineCronFields } from './useRoutineCronFields';
@@ -213,7 +214,7 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       <Clock3 size={iconSize.lg} color={colors.textSecondary} />
       <View style={styles.flex}><Text numberOfLines={1} style={styles.label}>{item.name}</Text>
         <Text numberOfLines={1} style={styles.secondary}>{item.activity ? tr(item.activity) : !item.enabled ? tr('paused') : item.triggers.map(triggerText).join(' · ')}</Text></View>
-      <ChevronRight size={iconSize.sm} color={colors.textTertiary} />
+      <ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
     </Pressable>
   );
   const field = (label: string, value: string, onChangeText: (value: string) => void, multiline = false) => (
@@ -242,11 +243,11 @@ export function CompanionAutomationSheet({ visible, onClose, collectionId, botId
       </> : detail ? <>
         {draft && detail.editable ? <>
           {field(tr('name'), draft.name, (name) => setDraft({ ...draft, name }))}
-          <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('enabled')}</Text><Switch accessibilityLabel={tr('enabled')} disabled={busy} value={draft.enabled} onValueChange={(enabled) => setDraft({ ...draft, enabled })} trackColor={{ true: colors.textSecondary }} /></View>
+          <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('enabled')}</Text><NativeSwitch accessibilityLabel={tr('enabled')} disabled={busy} value={draft.enabled} onValueChange={(enabled) => setDraft({ ...draft, enabled })} seedColor={colors.inputCaret} /></View>
           {field(tr('instructions'), draft.prompt, (prompt) => setDraft({ ...draft, prompt }), true)}
           {detail?.supportsPreRunCheck ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: advancedOpen }} onPress={() => setAdvancedOpen(!advancedOpen)} style={styles.row}><Text style={styles.label}>{tr('advanced')}</Text></Pressable> : null}
           {detail?.supportsPreRunCheck && advancedOpen ? <View style={styles.group}>
-            <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('quiet')}</Text><Switch accessibilityLabel={tr('quiet')} disabled={busy} value={draft.silentWhenIdle ?? false} onValueChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} trackColor={{ true: colors.textSecondary }} /></View>
+            <View style={styles.row}><Text style={[styles.label, styles.flex]}>{tr('quiet')}</Text><NativeSwitch accessibilityLabel={tr('quiet')} disabled={busy} value={draft.silentWhenIdle ?? false} onValueChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} seedColor={colors.inputCaret} /></View>
             <Text style={styles.secondary}>{tr('quietHint')}</Text>
             {field(tr('checkCommand'), draft.preRunHook?.command ?? '', (command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null }), true)}
             <Text style={styles.secondary}>{tr('checkHint')}</Text>
@@ -315,5 +316,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   input: { minHeight: 44, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, borderRadius: radius.pill, fontSize: typeScale.body },
   clockInput: { width: 64, textAlign: 'center' },
   multiline: { minHeight: 112, textAlignVertical: 'top', borderRadius: radius.control }, empty: { margin: spacing.lg, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, color: colors.textSecondary },
-  error: { color: colors.statusError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }, disabled: { opacity: 0.45 },
+  error: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }, disabled: { opacity: 0.45 },
 });

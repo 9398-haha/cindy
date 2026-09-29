@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { COMPANION_MEMORY_TITLE_MAX, companionMemoryDate, companionMemoryFieldLabel, type CompanionMemoryState } from './useCompanionMemory';
 
@@ -37,14 +38,14 @@ export function CompanionMemoryPage({ memory: m, online, botName, memoryEnabled 
         : !m.listLoaded ? (online ? note(t('devices.resources.loading')) : null)
         : m.groups.length ? m.groups.map(group => <View key={group.id} style={styles.stack} accessibilityLabel={group.title}>
           <Text accessibilityRole="header" style={styles.groupTitle}>{group.title}<Text style={styles.count}>{`  ${group.count}`}</Text></Text>
-          <View style={[styles.group, !memoryEnabled && styles.dimmed]}>{group.entries.map((entry, index) =>
+          <View style={styles.group}>{group.entries.map((entry, index) =>
             <Pressable key={entry.resourceId} accessibilityRole="button" accessibilityLabel={entry.title} onPress={() => m.open(entry.resourceId)}
-              style={({ pressed }) => [styles.row, index > 0 && styles.separator, pressed && styles.pressed]} testID={`companionMemory.${entry.id}`}>
+              style={({ pressed }) => [styles.row, index > 0 && styles.separator, pressed && mobileInteractionStyles.pressed]} testID={`companionMemory.${entry.id}`}>
               <View style={styles.rowHeader}>
-                <Text numberOfLines={2} style={styles.rowTitle}>{entry.title}</Text>
+                <Text numberOfLines={2} style={[styles.rowTitle, !memoryEnabled && styles.dimmedTitle]}>{entry.title}</Text>
                 <Text style={styles.date}>{date(entry.timestamp)}</Text>
               </View>
-              {entry.preview ? <Text numberOfLines={2} style={styles.preview}>{entry.preview}</Text> : null}
+              {entry.preview ? <Text numberOfLines={2} style={[styles.preview, !memoryEnabled && styles.dimmedPreview]}>{entry.preview}</Text> : null}
             </Pressable>)}
           </View>
         </View>)
@@ -116,12 +117,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   body: { fontSize: typeScale.body, lineHeight: lineHeight.bodyRelaxed, color: colors.textPrimary },
   groupTitle: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textTertiary, fontWeight: fontWeight.semibold, paddingHorizontal: spacing.xs },
   count: { color: colors.textTertiary, fontWeight: fontWeight.regular },
-  group: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
-  dimmed: { opacity: 0.6 },
+  // Raised surface: a 1px border carries the layer on the light ivory page (mobile guide §2).
+  group: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, overflow: 'hidden' },
+  // Memory switched off: step each line down one semantic text tone instead of fading the whole card.
+  dimmedTitle: { color: colors.textSecondary },
+  dimmedPreview: { color: colors.textTertiary },
   notice: { padding: spacing.lg, gap: spacing.sm },
   row: { minHeight: 44, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.xs },
   separator: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  pressed: { opacity: 0.72 },
   rowHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
   rowTitle: { flex: 1, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, color: colors.textPrimary, fontWeight: fontWeight.medium },
   date: { fontSize: typeScale.micro, lineHeight: lineHeight.bodySmall, color: colors.textTertiary },

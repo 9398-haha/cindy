@@ -12,6 +12,10 @@
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This device is online. Take it offline before deleting it.",
     "currentlyOnline": "Currently online",
+    "availableSection": "Online",
+    "offlineSection": "Offline",
+    "showAllOffline": "Show All ({{count}})",
+    "showFewerOffline": "Show Less",
     "nameTooLong": "Device names must be {{limit}} characters or fewer.",
     "fields": {
       "name": "Name",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "Cancel",
     "save": "Save",
-    "saving": "Saving",
     "delete": "Delete",
-    "deleting": "Deleting",
     "create": "New"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "Couldn’t open the session",
     "resolving": "Opening the latest session…",
     "retry": "Try again",
-    "hostCount": "{{count}} computers"
+    "hostCount": "{{count}} computers",
+    "stale": "These items may be outdated. Unable to refresh."
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "All",
-      "allComputers": "All computers",
+      "allComputers": "All devices",
       "waitingCount": "{{count}} pending",
       "synced": "Synced",
-      "unknownComputer": "Unknown computer",
+      "unknownComputer": "Unknown device",
       "uncategorizedProject": "Uncategorized project",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -314,7 +317,7 @@
       "syncing": "Syncing",
       "sync": "Sync again",
       "pinnedConversations": "{{count}} pinned sessions",
-      "newRemoteConversation": "New remote session",
+      "newRemoteConversation": "New session",
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "dialogue": "Chat",
@@ -537,7 +540,7 @@
     },
     "runNow": "Run now",
     "error": {
-      "projectMissingConfig": "This project automation is missing projectConfigId. Delete it on the desktop.",
+      "projectMissingConfig": "This project automation is missing its project settings. Delete it on your computer.",
       "deletePartial": "Automation deleted, but {{count}} generated sessions couldn't be updated. Check them on the desktop."
     },
     "subtitle": "{{active}} running · {{total}} tasks",
@@ -606,6 +609,8 @@
       "useWorktree": "Use worktree",
       "modelPlaceholderBound": "Follow session",
       "modelPlaceholderPiDefault": "Leave blank for default model",
+      "boundSessionIdPlaceholder": "Session ID",
+      "effortDefault": "Default",
       "fastMode": "Fast Mode",
       "notifyDesktop": "Desktop Notifications",
       "notifyFeishu": "Feishu Notifications",
@@ -635,7 +640,6 @@
       "detailFallback": "Pausing stops this automation from triggering.",
       "previewFallback": "No runs in progress",
       "confirmA11y": "Confirm pausing automation",
-      "pausing": "Pausing",
       "confirm": "Confirm Pause",
       "cancelA11y": "Cancel pausing automation"
     },
@@ -705,7 +709,6 @@
       "promptEmpty": "No task prompt saved",
       "deleteA11y": "Delete automation",
       "runNowA11y": "Run automation now",
-      "running": "Running",
       "resumeA11y": "Resume automation",
       "pauseA11y": "Pause automation",
       "resume": "Resume",
@@ -715,13 +718,10 @@
     },
     "run": {
       "openSessionA11y": "Open automation session",
-      "opening": "Opening",
       "session": "Session",
       "restartA11y": "Re-run automation",
-      "restarting": "Re-running",
       "restart": "Re-run",
       "markReadA11y": "Mark run record as read",
-      "marking": "Marking",
       "markRead": "Read",
       "deleteA11y": "Delete run record"
     },
@@ -779,7 +779,7 @@
         "unknownTime": "Unknown time",
         "status": {
           "running": "Running",
-          "success": "Succeeded",
+          "success": "Completed",
           "failed": "Failed",
           "aborted": "Aborted",
           "interrupted": "Interrupted",
@@ -812,6 +812,7 @@
     }
   },
   "companions": {
+    "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a teammate.",
     "messageSent": "Message sent to background task",
     "sentTo": "Sent a message to {{name}}",
     "receivedFrom": "Message from {{name}}",
@@ -841,13 +842,13 @@
     "unread": "New reply",
     "status": {
       "queued": "Getting started",
-      "running": "Working on it",
+      "running": "Running",
       "waiting": "Waiting for input",
-      "completed": "Done",
+      "completed": "Completed",
       "failed": "Failed",
       "cancelled": "Stopped",
       "timed-out": "Timed out",
-      "unknown": "Task status unavailable"
+      "unknown": "Unknown status"
     },
     "title": "Teammates",
     "tasks": "Sessions",

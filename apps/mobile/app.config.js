@@ -422,5 +422,7 @@ module.exports = (context = {}) => {
     }
   }
 
-  return next;
+  return process.env.EXPO_PUBLIC_CINDY_NAV_DEMO === '1'
+    ? require('./scripts/navigation-demo-config.cjs').applyNavigationDemoConfig(next)
+    : next;
 };

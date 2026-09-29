@@ -36,6 +36,8 @@ export interface ThemeColors {
   surface: string;
   /** 抬一层的 Card / 弹窗 / 输入框 */
   surfaceElevated: string;
+  /** 首页导航抽屉投影，局部浮层例外（2026-09-27 用户要求）。 */
+  homeDrawerShadow: string;
   /** Surface 半透明(吸顶栏等,solid 非模糊——chrome/composer 热路径专用,守护测试禁 BlurView) */
   surfaceTranslucent: string;
   /** 侧栏/抽屉类面板毛玻璃底色(R1 audit 模式1,blur≈50 等效;BlurView tint 用) */
@@ -407,6 +409,7 @@ export const lightColors: ThemeColors = {
   taskTagWhiteCheck: '#525252',
 
   surfaceElevated: '#FFFFFC',
+  homeDrawerShadow: 'rgba(0, 0, 0, 0.16)',
   surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
   surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
   chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
@@ -494,6 +497,7 @@ export const darkColors: ThemeColors = {
   taskTagWhite: '#ffffff',
   taskTagWhiteCheck: '#525252',
   surfaceElevated: '#1E1E1E',
+  homeDrawerShadow: 'rgba(0, 0, 0, 0.40)',
   surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
   surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
   chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',

@@ -13,7 +13,9 @@ import { Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { Text, TextInput } from "@/components/AppText";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useTheme, spacing, radius, iconSize } from "@/theme";
+import { fontWeight, lineHeight, typeScale } from "@/theme/tokens";
 import { SheetModal } from "./SheetModal";
 import { SheetSurface } from "./SheetSurface";
 import {
@@ -22,6 +24,24 @@ import {
 } from "./contextSheetModel";
 import { mobileAgentLabel } from "./sessionAgentSwitch";
 import type { UnifiedMobilePickerViewProps } from "./UnifiedModelPickerSheet";
+// 文字角色按 mobile-design-guide §3 整行取值(字号 / 行高 / 字重);字色随主题在渲染处注入。
+const textRole = {
+  /** 行标题、选项、按钮:16/22 500(textPrimary)。 */
+  optionLabel: { fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  /** 行标题(模型名):16/22 500(textPrimary)。 */
+  rowTitle: { flexShrink: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  /** 次级正文(模型副标题):15/20 400(textSecondary)。 */
+  rowSubtitle: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
+  /** 短元数据(价格档、推理档、额度):12/18 400(textTertiary)。 */
+  meta: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  /** 分组小标签:13/18 600(textTertiary)。 */
+  groupLabel: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold, paddingTop: spacing.md },
+  /** 说明 / 提示 / 报错(成句的话):13/18 400(textSecondary / errorText)。 */
+  note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  /** 搜索框:bodySmall 字号;单行输入框不设行高。 */
+  searchInput: { fontSize: typeScale.bodySmall, minHeight: 44 },
+} as const;
+
 export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -40,20 +60,24 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       accessibilityRole="button"
       accessibilityLabel={label}
       disabled={p.busy || disabled}
+      accessibilityState={{ disabled: p.busy || disabled, selected }}
       onPress={onPress}
-      style={{
-        opacity: disabled ? 0.4 : 1,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: spacing.sm,
-        minHeight: 44,
-        padding: spacing.md,
-        backgroundColor: selected ? colors.surfaceChip : undefined,
-        borderRadius: radius.pill,
-      }}
+      style={({ pressed }) => [
+        {
+          opacity: disabled ? 0.4 : 1,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: spacing.sm,
+          minHeight: 44,
+          padding: spacing.md,
+          backgroundColor: selected ? colors.surfaceChip : undefined,
+          borderRadius: radius.pill,
+        },
+        pressed && mobileInteractionStyles.pressed,
+      ]}
     >
       {icon}
-      <Text style={{ color: colors.textPrimary }}>{label}</Text>
+      <Text style={[textRole.optionLabel, { color: colors.textPrimary }]}>{label}</Text>
     </Pressable>
   );
   const o = p.options;
@@ -79,12 +103,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         testID={p.testID}
       >
         {p.error ? (
-          <Text style={{ color: colors.errorText }}>{p.error}</Text>
+          <Text style={[textRole.note, { color: colors.errorText }]}>{p.error}</Text>
         ) : null}
         {o ? (
           <>
-            <Text style={{ color: colors.textSecondary }}>{o.context}</Text>
-            <Text>{t("models.unified.harness")}</Text>
+            <Text style={[textRole.note, { color: colors.textSecondary }]}>{o.context}</Text>
+            <Text style={[textRole.groupLabel, { color: colors.textTertiary }]}>{t("models.unified.harness")}</Text>
             {o.agents.map((agent) =>
               button(
                 mobileAgentLabel(agent),
@@ -105,7 +129,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 />,
               ),
             )}
-            <Text>{t("models.options.reasoningEffort")}</Text>
+            <Text style={[textRole.groupLabel, { color: colors.textTertiary }]}>{t("models.options.reasoningEffort")}</Text>
             {o.row.entry.capabilities[o.row.config.agent]?.efforts.map(
               (effort) =>
                 button(
@@ -127,7 +151,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   />,
                 )
               : null}
-            {o.price ? <Text>{o.price}</Text> : null}
+            {o.price ? <Text style={[textRole.note, { color: colors.textSecondary }]}>{o.price}</Text> : null}
             {button(
               t(
                 o.row.favorite
@@ -153,13 +177,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               value={p.query}
               onChangeText={p.onQuery}
               placeholder={t("models.picker.searchPlaceholder")}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: spacing.sm,
-                minHeight: 44,
-                color: colors.textPrimary,
-              }}
+              placeholderTextColor={colors.textPlaceholder}
+              style={[textRole.searchInput, { color: colors.textPrimary }]}
             />
             <ScrollView horizontal>
               {p.filters.map((item) =>
@@ -214,9 +233,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             </ScrollView>
             {p.groups.map((group) => (
               <View key={group.key}>
-                <Text style={{ color: colors.textSecondary }}>
-                  {group.title}
-                </Text>
+                <Text style={[textRole.groupLabel, { color: colors.textTertiary }]}>{group.title}</Text>
                 {group.rows.map((row) => (
                   <View
                     key={row.key}
@@ -224,15 +241,20 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   >
                     <Pressable
                       disabled={p.busy || row.disabled}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: p.busy || row.disabled, selected: row.selected }}
                       onPress={() => p.onSelect(row)}
-                      style={{
-                        flex: 1,
-                        minHeight: 52,
-                        padding: 12,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: spacing.sm,
-                      }}
+                      style={({ pressed }) => [
+                        {
+                          flex: 1,
+                          minHeight: 52,
+                          padding: spacing.md,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: spacing.sm,
+                        },
+                        pressed && mobileInteractionStyles.pressed,
+                      ]}
                     >
                       <MobileModelIconMark
                         icon={row.entry.icon}
@@ -246,24 +268,17 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                             gap: spacing.xs,
                           }}
                         >
-                          <Text
-                            numberOfLines={1}
-                            style={{ color: colors.textPrimary, flexShrink: 1 }}
-                          >
+                          <Text numberOfLines={1} style={[textRole.rowTitle, { color: colors.textPrimary }]}>
                             {row.entry.displayName}
                           </Text>
                           {row.costMarks ? (
-                            <Text style={{ color: colors.textSecondary }}>
-                              {row.costMarks}
-                            </Text>
+                            <Text style={[textRole.meta, { color: colors.textTertiary }]}>{row.costMarks}</Text>
                           ) : null}
                           <MobileAgentMark
                             agentKind={row.config.agent}
                             color={colors.textSecondary}
                           />
-                          <Text style={{ color: colors.textSecondary }}>
-                            {row.effortLabel}
-                          </Text>
+                          <Text style={[textRole.meta, { color: colors.textTertiary }]}>{row.effortLabel}</Text>
                           {row.config.fast ? (
                             <Zap
                               size={iconSize.sm}
@@ -272,14 +287,12 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                           ) : null}
                         </View>
                         {row.subtitle ? (
-                          <Text numberOfLines={1} style={{ color: colors.textSecondary }}>
+                          <Text numberOfLines={1} style={[textRole.rowSubtitle, { color: colors.textSecondary }]}>
                             {row.subtitle}
                           </Text>
                         ) : null}
                         {row.quotaLabel ? (
-                          <Text style={{ color: colors.textSecondary }}>
-                            {row.quotaLabel}
-                          </Text>
+                          <Text style={[textRole.meta, { color: colors.textTertiary }]}>{row.quotaLabel}</Text>
                         ) : null}
                       </View>
                       {row.favorite ? (
@@ -304,12 +317,15 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       )}
                       disabled={p.busy || row.disabled}
                       onPress={() => p.onOptions(row)}
-                      style={{
-                        width: 44,
-                        height: 44,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
+                      style={({ pressed }) => [
+                        {
+                          width: 44,
+                          height: 44,
+                          alignItems: "center",
+                          justifyContent: "center",
+                        },
+                        pressed && mobileInteractionStyles.pressed,
+                      ]}
                     >
                       <SlidersHorizontal
                         size={iconSize.action}
@@ -321,7 +337,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               </View>
             ))}
             {!p.groups.length ? (
-              <Text>
+              <Text style={[textRole.note, { color: colors.textSecondary }]}>
                 {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
               </Text>
             ) : null}

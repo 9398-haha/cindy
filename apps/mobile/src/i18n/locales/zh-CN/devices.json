@@ -12,6 +12,10 @@
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "设备当前在线，请让设备离线后再删除。",
     "currentlyOnline": "当前在线",
+    "availableSection": "在线设备",
+    "offlineSection": "离线设备",
+    "showAllOffline": "显示全部 {{count}} 台",
+    "showFewerOffline": "收起",
     "nameTooLong": "设备名称不能超过 {{limit}} 个字符。",
     "fields": {
       "name": "名称",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "取消",
     "save": "保存",
-    "saving": "保存中",
     "delete": "删除",
-    "deleting": "删除中",
     "create": "新建"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "无法打开任务",
     "resolving": "正在打开最新任务…",
     "retry": "重试",
-    "hostCount": "{{count}} 台电脑"
+    "hostCount": "{{count}} 台电脑",
+    "stale": "内容可能已过期，暂时无法更新"
   },
   "presentation": {
     "deviceList": {
@@ -155,7 +158,7 @@
         },
         "active": {
           "title": "这台电脑暂无活跃任务",
-          "copy": "先在桌面端创建或继续一个任务，手机端会把它显示在这里。"
+          "copy": "先在电脑端创建或继续一个任务，手机端会把它显示在这里。"
         }
       },
       "time": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "全部",
-      "allComputers": "全部电脑",
+      "allComputers": "全部设备",
       "waitingCount": "{{count}} 待处理",
       "synced": "已同步",
-      "unknownComputer": "未知电脑",
+      "unknownComputer": "未知设备",
       "uncategorizedProject": "未分类项目",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -202,7 +205,7 @@
         },
         "noSession": {
           "title": "还没有任务",
-          "copy": "先在桌面端创建或继续一个任务，手机端会直接显示对应项目和任务。"
+          "copy": "先在电脑端创建或继续一个任务，手机端会直接显示对应项目和任务。"
         }
       },
       "noDevice": {
@@ -294,7 +297,7 @@
     "error": {
       "sessionDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
       "taskDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
-      "noDevice": "没有可用设备。请先打开桌面端远程控制，然后重新同步。"
+      "noDevice": "没有可用设备。请先在电脑端打开远程控制，然后重新同步。"
     },
     "alert": {
       "cacheSaveFailed": "离线缓存未能保存",
@@ -314,7 +317,7 @@
       "syncing": "正在重新同步",
       "sync": "重新同步",
       "pinnedConversations": "置顶 {{count}} 条任务",
-      "newRemoteConversation": "新建远程任务",
+      "newRemoteConversation": "新建任务",
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
       "dialogue": "对话",
@@ -537,8 +540,8 @@
     },
     "runNow": "立即运行",
     "error": {
-      "projectMissingConfig": "项目自动化缺少 projectConfigId，请在桌面端删除",
-      "deletePartial": "自动化已删除，但 {{count}} 个生成任务未能更新状态。请在桌面端检查这些任务。"
+      "projectMissingConfig": "这个项目自动化缺少项目配置，请在电脑端删除",
+      "deletePartial": "自动化已删除，但 {{count}} 个生成任务未能更新状态。请在电脑端检查这些任务。"
     },
     "subtitle": "{{active}} 个运行中 · {{total}} 个自动化",
     "metric": {
@@ -551,7 +554,7 @@
       "default": "选择自动化后可以运行、暂停、编辑或打开最近任务。"
     },
     "empty": {
-      "copy": "可以直接从手机创建第一条自动化，或在桌面端创建后同步到这里。",
+      "copy": "可以直接从手机创建第一条自动化，或在电脑端创建后同步到这里。",
       "title": "这台设备暂无自动化"
     },
     "createAutomation": "新建自动化",
@@ -584,7 +587,7 @@
         "timezone": "时区"
       },
       "namePlaceholder": "例如：每日项目巡检",
-      "scriptHint": "这是一个仅运行脚本的自动化，脚本配置只能在桌面端编辑；此处可以改动名称、触发方式、通知等其它字段。",
+      "scriptHint": "这是一个仅运行脚本的自动化，脚本配置只能在电脑端编辑；此处可以改动名称、触发方式、通知等其它字段。",
       "promptPlaceholder": "写清楚每次自动执行要让 {{appName}} 做什么",
       "trigger": {
         "recurring": "周期",
@@ -606,6 +609,8 @@
       "useWorktree": "使用 worktree",
       "modelPlaceholderBound": "跟随任务",
       "modelPlaceholderPiDefault": "留空使用默认模型",
+      "boundSessionIdPlaceholder": "任务 ID",
+      "effortDefault": "默认",
       "fastMode": "Fast 模式",
       "notifyDesktop": "桌面通知",
       "notifyFeishu": "飞书通知",
@@ -619,7 +624,7 @@
       "confirmArchive": "删除自动化并归档任务",
       "confirmTaskOnly": "只删除自动化",
       "title": "删除 {{name}}",
-      "copy": "删除自动化不会中断已经开始的执行。生成过的任务按下面的选项处理，和桌面端保持一致。",
+      "copy": "删除自动化不会中断已经开始的执行。生成过的任务按下面的选项处理，和电脑端保持一致。",
       "optionsA11y": "选择生成任务处理方式",
       "keepDesc": "只删除这条自动化，历史任务继续保留在原列表里。",
       "keepLabel": "保留生成任务",
@@ -635,7 +640,6 @@
       "detailFallback": "暂停会阻止这条自动化继续触发。",
       "previewFallback": "没有正在执行的 run",
       "confirmA11y": "确认暂停自动化",
-      "pausing": "暂停中",
       "confirm": "确认暂停",
       "cancelA11y": "取消暂停自动化"
     },
@@ -701,11 +705,10 @@
     },
     "scheduleRowA11y": "自动化 {{title}}",
     "detail": {
-      "promptScriptFallback": "仅运行脚本的自动化，配置只能在桌面端编辑",
+      "promptScriptFallback": "仅运行脚本的自动化，配置只能在电脑端编辑",
       "promptEmpty": "没有保存自动化提示词",
       "deleteA11y": "删除自动化",
       "runNowA11y": "立即执行自动化",
-      "running": "运行中",
       "resumeA11y": "恢复自动化",
       "pauseA11y": "暂停自动化",
       "resume": "恢复",
@@ -715,13 +718,10 @@
     },
     "run": {
       "openSessionA11y": "打开自动化生成的任务",
-      "opening": "打开中",
       "session": "任务",
       "restartA11y": "重新执行自动化",
-      "restarting": "重跑中",
       "restart": "重跑",
       "markReadA11y": "标记执行记录已读",
-      "marking": "标记中",
       "markRead": "已读",
       "deleteA11y": "删除执行记录"
     },
@@ -779,7 +779,7 @@
         "unknownTime": "未知时间",
         "status": {
           "running": "运行中",
-          "success": "成功",
+          "success": "已完成",
           "failed": "失败",
           "aborted": "已中止",
           "interrupted": "被中断",
@@ -812,6 +812,7 @@
     }
   },
   "companions": {
+    "noCreateHosts": "当前没有可用的兼容电脑。在电脑上打开 Cindy 并登录同一账号后即可新建伙伴。",
     "messageSent": "已向后台任务发送消息",
     "sentTo": "已发消息给 {{name}}",
     "receivedFrom": "消息来自 {{name}}",
@@ -841,13 +842,13 @@
     "unread": "有新回复",
     "status": {
       "queued": "正在开始",
-      "running": "正在做",
+      "running": "运行中",
       "waiting": "等待处理",
       "completed": "已完成",
-      "failed": "失败了",
+      "failed": "失败",
       "cancelled": "已停止",
       "timed-out": "已超时",
-      "unknown": "任务状态查不到了"
+      "unknown": "状态未知"
     },
     "title": "伙伴",
     "tasks": "任务",
@@ -1014,7 +1015,7 @@
     "memorySaveFailed": "没有保存成功，你的编辑已保留。",
     "memoryMissing": "这条记忆已不存在。",
     "memoryDeleteFailed": "删除失败",
-    "create": "新伙伴",
+    "create": "新建伙伴",
     "createFailed": "暂未确认创建结果，请重试核对。",
     "title": "伙伴资料",
     "profile": "资料与性格",

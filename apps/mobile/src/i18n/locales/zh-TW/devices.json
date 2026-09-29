@@ -12,6 +12,10 @@
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "裝置目前在線，請讓裝置離線後再刪除。",
     "currentlyOnline": "目前在線",
+    "availableSection": "在線裝置",
+    "offlineSection": "離線裝置",
+    "showAllOffline": "顯示全部 {{count}} 台",
+    "showFewerOffline": "收合",
     "nameTooLong": "裝置名稱不能超過 {{limit}} 個字元。",
     "fields": {
       "name": "名稱",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "取消",
     "save": "儲存",
-    "saving": "儲存中",
     "delete": "刪除",
-    "deleting": "刪除中",
     "create": "新建"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "無法開啟任務",
     "resolving": "正在開啟最新任務…",
     "retry": "重試",
-    "hostCount": "{{count}} 台電腦"
+    "hostCount": "{{count}} 台電腦",
+    "stale": "內容可能已過期，暫時無法更新"
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "全部",
-      "allComputers": "全部電腦",
+      "allComputers": "全部裝置",
       "waitingCount": "{{count}} 待處理",
       "synced": "已同步",
-      "unknownComputer": "未知電腦",
+      "unknownComputer": "未知裝置",
       "uncategorizedProject": "未分類專案",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -294,7 +297,7 @@
     "error": {
       "sessionDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
       "taskDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
-      "noDevice": "沒有可用裝置。請先開啟桌面端遠端控制，然後重新同步。"
+      "noDevice": "沒有可用裝置。請先在電腦端開啟遠端控制，然後重新同步。"
     },
     "alert": {
       "cacheSaveFailed": "離線快取未能儲存",
@@ -314,7 +317,7 @@
       "syncing": "正在重新同步",
       "sync": "重新同步",
       "pinnedConversations": "置頂 {{count}} 條任務",
-      "newRemoteConversation": "新建遠端任務",
+      "newRemoteConversation": "新建任務",
       "renameDevice": "重新命名 {{label}}",
       "project": "專案 {{title}}",
       "dialogue": "對話",
@@ -537,8 +540,8 @@
     },
     "runNow": "立即執行",
     "error": {
-      "projectMissingConfig": "專案自動化缺少 projectConfigId，請在桌面端刪除",
-      "deletePartial": "自動化已刪除，但 {{count}} 個生成任務未能更新狀態。請在桌面端檢查這些任務。"
+      "projectMissingConfig": "這個專案自動化缺少專案設定，請在電腦端刪除",
+      "deletePartial": "自動化已刪除，但 {{count}} 個生成任務未能更新狀態。請在電腦端檢查這些任務。"
     },
     "subtitle": "{{active}} 個執行中 · {{total}} 個自動化",
     "metric": {
@@ -551,7 +554,7 @@
       "default": "選擇自動化後可以執行、暫停、編輯或開啟最近任務。"
     },
     "empty": {
-      "copy": "可以直接從手機建立第一條自動化，或在桌面端建立後同步到這裡。",
+      "copy": "可以直接從手機建立第一條自動化，或在電腦端建立後同步到這裡。",
       "title": "這臺裝置暫無自動化"
     },
     "createAutomation": "新建自動化",
@@ -584,7 +587,7 @@
         "timezone": "時區"
       },
       "namePlaceholder": "例如：每日專案巡檢",
-      "scriptHint": "這是一個僅執行指令碼的自動化，指令碼配置只能在桌面端編輯；此處可以改動名稱、觸發方式、通知等其它欄位。",
+      "scriptHint": "這是一個僅執行指令碼的自動化，指令碼配置只能在電腦端編輯；此處可以改動名稱、觸發方式、通知等其它欄位。",
       "promptPlaceholder": "寫清楚每次自動執行要讓 {{appName}} 做什麼",
       "trigger": {
         "recurring": "週期",
@@ -606,6 +609,8 @@
       "useWorktree": "使用 worktree",
       "modelPlaceholderBound": "跟隨任務",
       "modelPlaceholderPiDefault": "留空使用預設模型",
+      "boundSessionIdPlaceholder": "任務 ID",
+      "effortDefault": "預設",
       "fastMode": "Fast 模式",
       "notifyDesktop": "桌面通知",
       "notifyFeishu": "飛書通知",
@@ -619,7 +624,7 @@
       "confirmArchive": "刪除自動化並歸檔任務",
       "confirmTaskOnly": "只刪除自動化",
       "title": "刪除 {{name}}",
-      "copy": "刪除自動化不會中斷已經開始的執行。生成過的任務按下面的選項處理，和桌面端保持一致。",
+      "copy": "刪除自動化不會中斷已經開始的執行。生成過的任務按下面的選項處理，和電腦端保持一致。",
       "optionsA11y": "選擇生成任務處理方式",
       "keepDesc": "只刪除這條自動化，歷史任務繼續保留在原列表裡。",
       "keepLabel": "保留生成任務",
@@ -635,7 +640,6 @@
       "detailFallback": "暫停會阻止這條自動化繼續觸發。",
       "previewFallback": "沒有正在執行的 run",
       "confirmA11y": "確認暫停自動化",
-      "pausing": "暫停中",
       "confirm": "確認暫停",
       "cancelA11y": "取消暫停自動化"
     },
@@ -701,11 +705,10 @@
     },
     "scheduleRowA11y": "自動化 {{title}}",
     "detail": {
-      "promptScriptFallback": "僅執行指令碼的自動化，配置只能在桌面端編輯",
+      "promptScriptFallback": "僅執行指令碼的自動化，配置只能在電腦端編輯",
       "promptEmpty": "沒有儲存自動化提示詞",
       "deleteA11y": "刪除自動化",
       "runNowA11y": "立即執行自動化",
-      "running": "執行中",
       "resumeA11y": "恢復自動化",
       "pauseA11y": "暫停自動化",
       "resume": "恢復",
@@ -715,13 +718,10 @@
     },
     "run": {
       "openSessionA11y": "開啟自動化生成的任務",
-      "opening": "開啟中",
       "session": "任務",
       "restartA11y": "重新執行自動化",
-      "restarting": "重跑中",
       "restart": "重跑",
       "markReadA11y": "標記執行記錄已讀",
-      "marking": "標記中",
       "markRead": "已讀",
       "deleteA11y": "刪除執行記錄"
     },
@@ -779,7 +779,7 @@
         "unknownTime": "未知時間",
         "status": {
           "running": "執行中",
-          "success": "成功",
+          "success": "已完成",
           "failed": "失敗",
           "aborted": "已中止",
           "interrupted": "被中斷",
@@ -812,6 +812,7 @@
     }
   },
   "companions": {
+    "noCreateHosts": "目前沒有可用的相容電腦。在電腦上開啟 Cindy 並登入同一帳號後即可新建夥伴。",
     "messageSent": "已向背景任務傳送訊息",
     "sentTo": "已傳訊息給 {{name}}",
     "receivedFrom": "訊息來自 {{name}}",
@@ -841,13 +842,13 @@
     "unread": "有新回覆",
     "status": {
       "queued": "正在開始",
-      "running": "正在做",
+      "running": "執行中",
       "waiting": "等待處理",
       "completed": "已完成",
-      "failed": "失敗了",
+      "failed": "失敗",
       "cancelled": "已停止",
       "timed-out": "已逾時",
-      "unknown": "任務狀態查不到了"
+      "unknown": "狀態未知"
     },
     "title": "夥伴",
     "tasks": "任務",
@@ -1014,7 +1015,7 @@
     "memorySaveFailed": "沒有儲存成功，你的編輯已保留。",
     "memoryMissing": "這條記憶已不存在。",
     "memoryDeleteFailed": "刪除失敗",
-    "create": "新夥伴",
+    "create": "新建夥伴",
     "createFailed": "尚未確認建立結果，請重試核對。",
     "title": "夥伴資料",
     "profile": "資料與性格",

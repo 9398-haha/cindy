@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
-import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Brain, Check, ChevronRight, Clock3, FileText, MessageCircle, Search, Settings2, Sparkles, UserRound } from 'lucide-react-native';
 import { resolveRemoteText, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
-import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome';
+import { NativePullDownMenu, NativeSwitch, usesNativePullDownMenu } from '@/platform/chrome';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { invokeRemoteResourceAction } from '@/device-link/remoteResources';
 import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { CompanionSettingsRow as ContextSheetRow } from './CompanionSettingsRow';
 import { CompanionSheet } from './CompanionSheet';
-import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { CompanionModelChain, CompanionModelPicker, readCompanionModelChain } from './CompanionModelChain';
 import { CompanionCreateNativeView } from './CompanionCreateNativeView';
 import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPortraitPicker';
@@ -337,7 +337,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         <Pressable accessibilityRole="button" accessibilityLabel={t('devices.companionProfile.profile')} onPress={() => open('profile')} style={styles.identity}>
           <RemoteCompanionAvatar avatar={data?.resource.display.avatar ?? resource?.display.avatar} deviceId={deviceId} name={name} online={online} size={AVATAR_SIZE} />
           <View style={styles.identityText}><Text style={styles.name}>{name}</Text><Text numberOfLines={2} style={styles.note}>{label(data?.resource.display.subtitle ?? resource?.display.subtitle ?? '')}</Text></View>
-          <ChevronRight color={colors.textSecondary} size={iconSize.md} />
+          <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
         </Pressable>
         <View style={styles.group}>{row('memory', Brain)}{row('models', Settings2)}{row('skills', Sparkles)}{row('artifacts', FileText)}</View>
         <View style={styles.group}>
@@ -501,7 +501,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
     return <View key={field.id} style={styles.field}>
       <Text style={styles.heading}>{label}</Text>
       {field.id === 'avatarImageBase64' ? <CompanionPortraitPicker value={String(values[field.id] ?? '')} onChange={change} disabled={disabled} /> : field.id === 'portrait' && panel.portraits ? <View style={styles.choices}>{panel.portraits.map(portrait => <Pressable key={portrait.value} accessibilityRole="button" accessibilityLabel={`${label} ${Number(portrait.value) + 1}`} accessibilityState={{ selected: values[field.id] === portrait.value, disabled }} disabled={disabled} onPress={() => change(portrait.value)} style={[styles.portrait, values[field.id] === portrait.value && { borderColor: colors.textPrimary }]}><Image source={{ uri: portrait.uri }} style={styles.portraitImage} /></Pressable>)}</View>
-        : field.kind === 'toggle' ? <Switch accessibilityLabel={label} value={values[field.id] === true} onValueChange={change} disabled={fieldDisabled} trackColor={{ false: colors.border, true: colors.cta }} />
+        : field.kind === 'toggle' ? <NativeSwitch accessibilityLabel={label} value={values[field.id] === true} onValueChange={change} disabled={fieldDisabled} seedColor={colors.inputCaret} />
         : field.kind === 'select' ? <View><NativePullDownMenu actions={options.map((option, index) => ({
           id: String(index), title: resolveRemoteText(option.label, i18n.language), disabled: optionDisabled(option),
           state: values[field.id] === option.value ? 'on' : 'off',
@@ -510,7 +510,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
             accessibilityState={{ disabled: fieldDisabled, expanded: openSelect === field.id }} style={[styles.input, styles.select]}
             onPress={() => { if (!usesNativePullDownMenu()) { setOpenSelect(openSelect === field.id ? null : field.id); setSelectQuery(''); } }}>
             <Text numberOfLines={2} style={styles.selectText}>{resolveRemoteText(options.find(option => option.value === values[field.id])?.label ?? '', i18n.language)}</Text>
-            <ChevronRight size={iconSize.md} color={colors.textSecondary} />
+            <ChevronRight size={iconSize.lg} color={colors.textTertiary} strokeWidth={iconStroke.regular} />
           </Pressable>
         </NativePullDownMenu>
           {!fieldDisabled && openSelect === field.id ? <View style={styles.group}>
@@ -535,7 +535,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   note: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, color: colors.textSecondary },
   body: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },
   heading: { fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary, fontWeight: fontWeight.medium },
-  group: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container, overflow: 'hidden' },
+  // Raised surface: a 1px border carries the layer on the light ivory page (mobile guide §2).
+  group: { backgroundColor: colors.surfaceElevated, borderRadius: radius.container, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, overflow: 'hidden' },
   field: { gap: spacing.sm },
   select: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   selectText: { flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary },

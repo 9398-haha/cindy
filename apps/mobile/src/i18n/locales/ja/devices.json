@@ -12,6 +12,10 @@
     "deleteFailed": "デバイスを削除できませんでした。",
     "deleteOnline": "デバイスがオンラインです。オフラインにしてから削除してください。",
     "currentlyOnline": "現在オンライン",
+    "availableSection": "オンラインのデバイス",
+    "offlineSection": "オフラインのデバイス",
+    "showAllOffline": "すべて表示（{{count}} 台）",
+    "showFewerOffline": "表示を減らす",
     "nameTooLong": "デバイス名は {{limit}} 文字以内で入力してください。",
     "fields": {
       "name": "名前",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "キャンセル",
     "save": "保存",
-    "saving": "保存中",
     "delete": "削除",
-    "deleting": "削除中",
     "create": "新規"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "セッションを開けませんでした",
     "resolving": "最新のセッションを開いています…",
     "retry": "もう一度試す",
-    "hostCount": "{{count}} 台のコンピュータ"
+    "hostCount": "{{count}} 台のコンピュータ",
+    "stale": "内容が古い可能性があります。更新できません。"
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "すべて",
-      "allComputers": "すべてのコンピューター",
+      "allComputers": "すべてのデバイス",
       "waitingCount": "保留中 {{count}} 件",
       "synced": "同期済み",
-      "unknownComputer": "不明なコンピューター",
+      "unknownComputer": "不明なデバイス",
       "uncategorizedProject": "未分類のプロジェクト",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -314,7 +317,7 @@
       "syncing": "再同期中",
       "sync": "再同期",
       "pinnedConversations": "ピン留めしたセッション {{count}} 件",
-      "newRemoteConversation": "新しいリモートセッション",
+      "newRemoteConversation": "新しいセッション",
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
       "dialogue": "チャット",
@@ -537,7 +540,7 @@
     },
     "runNow": "今すぐ実行",
     "error": {
-      "projectMissingConfig": "プロジェクト自動化に projectConfigId がありません。デスクトップで削除してください。",
+      "projectMissingConfig": "このプロジェクト自動化にはプロジェクト設定がありません。パソコンで削除してください。",
       "deletePartial": "自動化を削除しましたが、{{count}} 件の生成されたセッションの状態を更新できませんでした。デスクトップでこれらのセッションを確認してください。"
     },
     "subtitle": "実行中 {{active}} 件 · タスク {{total}} 件",
@@ -606,6 +609,8 @@
       "useWorktree": "worktree を使用",
       "modelPlaceholderBound": "セッションに従う",
       "modelPlaceholderPiDefault": "空欄でデフォルトモデル",
+      "boundSessionIdPlaceholder": "セッション ID",
+      "effortDefault": "デフォルト",
       "fastMode": "Fast モード",
       "notifyDesktop": "デスクトップ通知",
       "notifyFeishu": "Feishu 通知",
@@ -635,7 +640,6 @@
       "detailFallback": "一時停止すると、この自動化のトリガーが止まります。",
       "previewFallback": "実行中の run はありません",
       "confirmA11y": "自動化の一時停止を確定",
-      "pausing": "一時停止中",
       "confirm": "一時停止を確定",
       "cancelA11y": "自動化の一時停止をキャンセル"
     },
@@ -705,7 +709,6 @@
       "promptEmpty": "タスクのプロンプトが保存されていません",
       "deleteA11y": "自動化を削除",
       "runNowA11y": "自動化を今すぐ実行",
-      "running": "実行中",
       "resumeA11y": "自動化を再開",
       "pauseA11y": "自動化を一時停止",
       "resume": "再開",
@@ -715,13 +718,10 @@
     },
     "run": {
       "openSessionA11y": "自動化セッションを開く",
-      "opening": "開いています",
       "session": "セッション",
       "restartA11y": "自動化を再実行",
-      "restarting": "再実行中",
       "restart": "再実行",
       "markReadA11y": "実行記録を既読にする",
-      "marking": "マーク中",
       "markRead": "既読",
       "deleteA11y": "実行記録を削除"
     },
@@ -779,7 +779,7 @@
         "unknownTime": "時刻不明",
         "status": {
           "running": "実行中",
-          "success": "成功",
+          "success": "完了",
           "failed": "失敗",
           "aborted": "中止済み",
           "interrupted": "中断",
@@ -812,6 +812,7 @@
     }
   },
   "companions": {
+    "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインするとチームメイトを新規作成できます。",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",
@@ -836,18 +837,18 @@
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",
     "directEmpty": "表示できるメッセージはまだありません。",
-    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました",
-    "directUnavailable": "この仲間同士の会話は利用できません。",
+    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインセッションに戻りました",
+    "directUnavailable": "このチームメイト同士の会話は利用できません。",
     "unread": "新しい返信",
     "status": {
       "queued": "開始しています",
-      "running": "作業中",
+      "running": "実行中",
       "waiting": "対応待ち",
       "completed": "完了",
       "failed": "失敗",
       "cancelled": "停止済み",
       "timed-out": "タイムアウト",
-      "unknown": "タスクの状況を確認できません"
+      "unknown": "状態不明"
     },
     "title": "チームメイト",
     "tasks": "セッション",
@@ -1014,7 +1015,7 @@
     "memorySaveFailed": "保存できませんでした。編集内容は保持されています。",
     "memoryMissing": "この記憶はもう存在しません。",
     "memoryDeleteFailed": "削除できませんでした",
-    "create": "新しいチームメイト",
+    "create": "チームメイトを新規作成",
     "createFailed": "作成結果を確認できていません。再試行して確認してください。",
     "title": "チームメイト",
     "profile": "プロフィールと性格",
