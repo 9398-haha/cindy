@@ -21,7 +21,7 @@ import {
   typeScale,
 } from '@/theme/tokens';
 
-export const SESSION_TRANSIENT_NOTICE_MS = 1500;
+const SESSION_TRANSIENT_NOTICE_MS = 1500;
 
 export interface SessionTransientNoticeValue {
   /** 每次提示递增,同文案连续触发也会重新计时。 */

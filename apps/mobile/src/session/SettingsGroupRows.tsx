@@ -243,7 +243,7 @@ export function SettingsSwitchRow({
   );
 }
 
-export const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
+const makeSettingsRowStyles = (colors: ThemeColors) => StyleSheet.create({
   // —— 分组 ——
   group: { gap: spacing.sm },
   groupTitleRow: {

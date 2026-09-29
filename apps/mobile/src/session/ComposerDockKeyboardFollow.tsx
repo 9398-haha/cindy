@@ -3,18 +3,25 @@ import { Platform, View } from 'react-native';
 import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 
 /**
- * iOS existing task / partner chat: the composer and
- * the message viewport follow the keyboard on the UI thread every frame,
- * instead of jumping to the end position when the keyboard event arrives
- * (RN LayoutAnimation does not run for these views in this build).
+ * iOS composer dock: the composer (and, in an existing task / partner chat, the
+ * message viewport) follows the keyboard on the UI thread every frame, instead of
+ * jumping to the end position when the keyboard event arrives (RN LayoutAnimation
+ * does not run for these views in this build).
  *
- * The composer bottom is max(restingBottom, keyboard + gap): it stays at the
- * new-task button's edge until the keyboard reaches it, then rides with a fixed
- * gap. Only iOS mounts the keyboard tracker; the choice is a platform
- * constant, so hooks never change between renders and toggling `active`
- * never remounts the composer.
+ * Only iOS mounts the keyboard tracker; the choice is a platform constant, so
+ * hooks never change between renders and toggling `active` never remounts the
+ * composer.
  */
 const TRACKS = Platform.OS === 'ios';
+
+/**
+ * Composer bottom edge: it stays at the new-task button's edge until the keyboard
+ * reaches it, then rides the keyboard with a fixed gap.
+ */
+function dockBottom(keyboardHeight: number, restingBottom: number, keyboardGap: number): number {
+  'worklet';
+  return Math.max(restingBottom, keyboardHeight + keyboardGap);
+}
 
 type ViewProps = ComponentProps<typeof View>;
 
@@ -30,7 +37,7 @@ function TrackingLift({ active, restingBottom, keyboardGap, style, children, ...
 }) {
   const keyboard = useAnimatedKeyboard();
   const lift = useAnimatedStyle(() => ({
-    transform: [{ translateY: active ? -Math.max(0, keyboard.height.value + keyboardGap - restingBottom) : 0 }],
+    transform: [{ translateY: active ? restingBottom - dockBottom(keyboard.height.value, restingBottom, keyboardGap) : 0 }],
   }), [active, keyboardGap, restingBottom]);
   return <Reanimated.View {...props} style={[style, lift]}>{children}</Reanimated.View>;
 }
@@ -42,5 +49,12 @@ export function DockKeyboardViewportSpacer({ active }: { active: boolean }) {
 function TrackingSpacer({ active }: { active: boolean }) {
   const keyboard = useAnimatedKeyboard();
   const style = useAnimatedStyle(() => ({ height: active ? keyboard.height.value : 0 }), [active]);
+  return <Reanimated.View pointerEvents="none" style={style} />;
+}
+
+/** New task: the space under the composer, sized by layout so the page content above shrinks with it. */
+export function DockKeyboardBottomSpacer({ restingBottom, keyboardGap }: { restingBottom: number; keyboardGap: number }) {
+  const keyboard = useAnimatedKeyboard();
+  const style = useAnimatedStyle(() => ({ height: dockBottom(keyboard.height.value, restingBottom, keyboardGap) }), [keyboardGap, restingBottom]);
   return <Reanimated.View pointerEvents="none" style={style} />;
 }

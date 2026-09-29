@@ -17,7 +17,7 @@ const AVATAR_DIMENSION: Record<MobileUserAvatarSize, number> = {
   regular: 44,
 };
 
-export function mobileUserAvatarInitial(name: string | null | undefined): string {
+function mobileUserAvatarInitial(name: string | null | undefined): string {
   // Whole code point, so a name starting with an emoji or astral character stays intact.
   return (Array.from(name?.trim() ?? '')[0] ?? '?').toUpperCase();
 }

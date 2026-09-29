@@ -17,7 +17,7 @@ import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailabil
 import { CompanionSettingsRow as ContextSheetRow } from './CompanionSettingsRow';
 import { CompanionChoice } from './CompanionChoice';
 import { CompanionSheet } from './CompanionSheet';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { CompanionModelChain, CompanionModelPicker, readCompanionModelChain } from './CompanionModelChain';
 import { CompanionCreateNativeView } from './CompanionCreateNativeView';
 import { CompanionPortraitPicker, randomCompanionPortrait } from './CompanionPortraitPicker';

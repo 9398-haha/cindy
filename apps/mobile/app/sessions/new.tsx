@@ -11,7 +11,8 @@ import { resolveWorkspacePickerFrame, type WorkspacePickerFrame } from '@/sessio
 import { simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
 import { readComposerEntry, useComposerDock } from '@/session/composerMorph';
 import { useComposerPillOpen } from '@/session/useComposerPillOpen';
-import { ComposerDockKeyboardSpacer } from '@/session/ComposerDockKeyboardSpacer';
+import { DockKeyboardBottomSpacer } from '@/session/ComposerDockKeyboardFollow';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { composerGeometry } from '@/session/composerGeometry';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
@@ -6227,7 +6228,7 @@ export default function NewRemoteSessionScreen() {
             </View>
           </ScrollView>
           {composerDock.enabled ? (
-            <ComposerDockKeyboardSpacer restingBottom={composerDock.restingBottom} keyboardGap={composerDock.keyboardGap} />
+            <DockKeyboardBottomSpacer restingBottom={composerDock.restingBottom} keyboardGap={composerDock.keyboardGap} />
           ) : null}
           {/* Keep the floating panel inside its native touch bounds on Android. */}
           {!nativeSelectionSheet && workspacePickerOpen && workspacePickerFrame ? (
@@ -7415,7 +7416,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
   },
   sendButtonPressed: { opacity: 0.86 },
-  // 与 mobileInteractionStyles.pressed 同值(0.72),全端按压反馈统一。
-  pressed: { opacity: 0.72 },
+  pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.44 },
 });
