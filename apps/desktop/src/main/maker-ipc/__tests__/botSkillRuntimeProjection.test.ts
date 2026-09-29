@@ -99,38 +99,49 @@ describe('complete personal Skills with bounded startup projection', () => {
     expect(await fs.readFile(path.join(disabled, 'oversized', 'SKILL.md'), 'utf8')).toBe(source);
   });
 
-  it('keeps every Skill in a large shelf discoverable, including the final page', async () => {
+  describe('2,048-file shelf', () => {
     const count = 2048;
-    // Bounded filesystem concurrency; these are real files consumed by the store.
-    for (let start = 0; start < count; start += 32) {
-      await Promise.all(Array.from({ length: 32 }, (_, offset) => {
-        const slug = `skill-${String(start + offset).padStart(5, '0')}`;
-        return writeSkill(slug, `---\nname: ${slug}\ndescription: Workflow ${slug}\n---\nInstructions for ${slug}\n`);
-      }));
-    }
-    await writeSkill('disabled', '---\nname: disabled\ndescription: Leave disabled\n---\nDo not run\n', true);
-    const mounts = await assertBoundedNativeMounts();
-    const catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-    expect(catalog).toHaveLength(count);
-    expect(new Set(catalog.map(item => item.slug)).size).toBe(count);
-    const last = catalog.find(item => item.slug === 'skill-02047');
-    expect(last).toBeDefined();
-    expect(await fs.readFile(last.filePath, 'utf8')).toContain('Instructions for skill-02047');
-    const reads = vi.spyOn(fs, 'readFile');
-    const opens = vi.spyOn(fs, 'open');
-    const catalogTime = (await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs;
-    for (let turn = 0; turn < 5; turn++) expect((await collectBotOwnSkillMounts(botId, deps())).skills).toEqual(mounts.skills);
-    const sourcePrefix = path.join(botSkillRootDir(userDataDir, botId), 'skills') + path.sep;
-    expect(reads.mock.calls.filter(([file]) => String(file).startsWith(sourcePrefix))).toHaveLength(0);
-    expect(opens.mock.calls.filter(([file]) => String(file).includes('catalog.jsonl'))).toHaveLength(0);
-    expect((await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs).toBe(catalogTime);
-    reads.mockRestore(); opens.mockRestore();
-    const firstPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow' }, deps());
-    expect(firstPage).toMatchObject({ ok: true, total: count, nextOffset: 20 });
-    const lastPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow', offset: count - 1 }, deps());
-    expect(lastPage).toMatchObject({ ok: true, skills: [{ slug: 'skill-02047' }] });
-    expect(lastPage).not.toHaveProperty('nextOffset');
-  }, 30_000);
+    // Fixture creation, native hydration and query indexing are separate I/O
+    // phases. Give each its own existing 30s budget; none asserts total latency.
+    // Each test gets a fresh real shelf, so it can also run independently.
+    beforeEach(async () => {
+      // Bounded filesystem concurrency; these are real files consumed by the store.
+      for (let start = 0; start < count; start += 32) {
+        await Promise.all(Array.from({ length: 32 }, (_, offset) => {
+          const slug = `skill-${String(start + offset).padStart(5, '0')}`;
+          return writeSkill(slug, `---\nname: ${slug}\ndescription: Workflow ${slug}\n---\nInstructions for ${slug}\n`);
+        }));
+      }
+      await writeSkill('disabled', '---\nname: disabled\ndescription: Leave disabled\n---\nDo not run\n', true);
+    }, 30_000);
+
+    it('catalogs every enabled Skill and reuses the native projection', async () => {
+      const mounts = await assertBoundedNativeMounts();
+      const catalog = (await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(catalog).toHaveLength(count);
+      expect(new Set(catalog.map(item => item.slug)).size).toBe(count);
+      const last = catalog.find(item => item.slug === 'skill-02047');
+      expect(last).toBeDefined();
+      expect(await fs.readFile(last.filePath, 'utf8')).toContain('Instructions for skill-02047');
+      const reads = vi.spyOn(fs, 'readFile');
+      const opens = vi.spyOn(fs, 'open');
+      const catalogTime = (await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs;
+      for (let turn = 0; turn < 5; turn++) expect((await collectBotOwnSkillMounts(botId, deps())).skills).toEqual(mounts.skills);
+      const sourcePrefix = path.join(botSkillRootDir(userDataDir, botId), 'skills') + path.sep;
+      expect(reads.mock.calls.filter(([file]) => String(file).startsWith(sourcePrefix))).toHaveLength(0);
+      expect(opens.mock.calls.filter(([file]) => String(file).includes('catalog.jsonl'))).toHaveLength(0);
+      expect((await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs).toBe(catalogTime);
+      reads.mockRestore(); opens.mockRestore();
+    }, 30_000);
+
+    it('keeps every Skill discoverable through the final query page', async () => {
+      const firstPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow' }, deps());
+      expect(firstPage).toMatchObject({ ok: true, total: count, nextOffset: 20 });
+      const lastPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow', offset: count - 1 }, deps());
+      expect(lastPage).toMatchObject({ ok: true, skills: [{ slug: 'skill-02047' }] });
+      expect(lastPage).not.toHaveProperty('nextOffset');
+    }, 30_000);
+  });
 
   it('refreshes a projected catalog after additions and rebuilds it after deletion', async () => {
     // Enter the same discovery projection by metadata size. Mutation/recovery
