@@ -16,6 +16,10 @@ vi.mock('node:fs', async importOriginal => {
   } };
 });
 
+// Windows inherits the existing 60s I/O budget from vitest.config.ts.
+// Other platforms retain the large-fixture 30s allowance.
+const largeFixtureTimeout = process.platform === 'win32' ? undefined : 30_000;
+
 let home: string;
 const bot = 'bot';
 const root = () => botSkillRootDir(home, bot);
@@ -161,7 +165,7 @@ it('externally sorts 100,000 entries before enumeration completes and keeps the 
   await expect(buildBotSkillQueryIndex(root(), failed())).rejects.toThrow('fixture enumeration failure');
   expect(await fs.readFile(catalog, 'utf8')).toBe(text);
   expect(await fs.readdir(directory)).toEqual(['query-catalog.jsonl']);
-}, 30_000);
+}, largeFixtureTimeout);
 
 it('keeps disabled Skill metadata discoverable without publishing read paths, then restores them on enable', async () => {
   const file = await write('off', 'Off', 'Searchable disabled', true, 'Private disabled instructions');

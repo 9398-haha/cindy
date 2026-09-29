@@ -9,6 +9,10 @@ import { buildBotSkillIndex } from '../botSystemPrompt';
 import { applyPiBotSkillPolicy } from '../../../../../../packages/maker-core/src/agents/pi/bot-skill-policy';
 import { buildCodexBotSkillConfigOverrides } from '../../../../../../packages/maker-core/src/agents/codex/capability-routing';
 
+// Windows inherits the existing 60s I/O budget from vitest.config.ts.
+// Other platforms retain the large-fixture 30s allowance.
+const largeFixtureTimeout = process.platform === 'win32' ? undefined : 30_000;
+
 let userDataDir: string;
 const botId = 'imported-bot';
 beforeEach(async () => { userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-projection-')); });
@@ -102,7 +106,7 @@ describe('complete personal Skills with bounded startup projection', () => {
   describe('2,048-file shelf', () => {
     const count = 2048;
     // Fixture creation, native hydration and query indexing are separate I/O
-    // phases. Give each its own existing 30s budget; none asserts total latency.
+    // phases. Each follows the platform budget; none asserts total latency.
     // Each test gets a fresh real shelf, so it can also run independently.
     beforeEach(async () => {
       // Bounded filesystem concurrency; these are real files consumed by the store.
@@ -113,7 +117,7 @@ describe('complete personal Skills with bounded startup projection', () => {
         }));
       }
       await writeSkill('disabled', '---\nname: disabled\ndescription: Leave disabled\n---\nDo not run\n', true);
-    }, 30_000);
+    }, largeFixtureTimeout);
 
     it('catalogs every enabled Skill and reuses the native projection', async () => {
       const mounts = await assertBoundedNativeMounts();
@@ -132,7 +136,7 @@ describe('complete personal Skills with bounded startup projection', () => {
       expect(opens.mock.calls.filter(([file]) => String(file).includes('catalog.jsonl'))).toHaveLength(0);
       expect((await fs.stat(path.join(mounts.pluginRoot, 'catalog.jsonl'))).mtimeMs).toBe(catalogTime);
       reads.mockRestore(); opens.mockRestore();
-    }, 30_000);
+    }, largeFixtureTimeout);
 
     it('keeps every Skill discoverable through the final query page', async () => {
       const firstPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow' }, deps());
@@ -140,7 +144,7 @@ describe('complete personal Skills with bounded startup projection', () => {
       const lastPage = await listBotSkillsForSession({ callerSessionId: 'session', query: 'workflow', offset: count - 1 }, deps());
       expect(lastPage).toMatchObject({ ok: true, skills: [{ slug: 'skill-02047' }] });
       expect(lastPage).not.toHaveProperty('nextOffset');
-    }, 30_000);
+    }, largeFixtureTimeout);
   });
 
   it('refreshes a projected catalog after additions and rebuilds it after deletion', async () => {
@@ -191,7 +195,7 @@ describe('complete personal Skills with bounded startup projection', () => {
     await expect(projectBotSkillMounts(root, failed())).rejects.toThrow('fixture enumeration failure');
     expect(await fs.readFile(catalogPath, 'utf8')).toBe(original);
     expect((await fs.readdir(catalogRoot)).some(file => file.endsWith('.tmp'))).toBe(false);
-  }, 30_000);
+  }, largeFixtureTimeout);
 
   it('refreshes after typed mutations, hand edits, disabling and directory replacement without mixing owners', async () => {
     const input = { name: 'report', description: 'Original', body: 'Steps' };
