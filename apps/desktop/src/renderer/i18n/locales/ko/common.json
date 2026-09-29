@@ -63,6 +63,7 @@
     "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요."
   },
   "sharedTask": {
+    "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
     "manageSharing": "공유 관리",
     "manageMembers": "멤버 관리…",
     "cancelSharing": "공유 중지",
