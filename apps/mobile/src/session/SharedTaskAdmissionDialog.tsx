@@ -10,7 +10,9 @@ export function SharedTaskAdmissionDialog({ title, onClose, children }: {
 }) {
   const styles = useThemedStyles(makeStyles);
   return <Modal transparent visible animationType="fade" onRequestClose={onClose}>
-    <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    {/* Android Modal already resizes for the IME. A second height adjustment
+        creates a layout loop while the invitation input is focused. */}
+    <KeyboardAvoidingView style={styles.backdrop} enabled={Platform.OS === 'ios'} behavior="padding">
       <View style={styles.card} accessibilityViewIsModal testID="sharedTask.admissionDialog">
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content} bounces={false}>
           <Text style={styles.title} accessibilityRole="header">{title}</Text>
