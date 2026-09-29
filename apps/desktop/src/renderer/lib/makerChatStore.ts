@@ -1,3 +1,4 @@
+import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -381,6 +382,7 @@ export interface AskUserQuestionItem {
 export interface ChatMessage {
   /** Private Bot reply provenance, projected from persisted/live agent metadata. */
   botPrivateReply?: boolean;
+  botTaskResults?: import('@cindy/maker-shared/botCollaboration').BotCollaborationMeta[];
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;
@@ -18574,6 +18576,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
+      ...(m.role === 'assistant' && m.agentMeta?.turnCompleted === true
+        ? { botTaskResults: readBotTaskResults(m.agentMeta.botTaskResults) } : {}),
       // tool_result 消息也带 toolUseId(DB 列),让 MessageStream 能按 id 配对
       ...(m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0
         ? { toolUseId: m.toolUseId }
