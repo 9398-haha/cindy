@@ -35,7 +35,14 @@ export function snapshotFingerprint(items: ImportItem[]): string {
 
 export async function snapshotFingerprintAsync(items: ImportItem[]): Promise<string> {
   const hash = createHash('sha256');
-  await visitSnapshotJson(items, bytes => createHash('sha256').update(bytes).digest('hex'), text => { hash.update(text); });
+  // Batch punctuation and short metadata into bounded hash updates. The visitor
+  // still accounts for every fragment and yields at its normal byte boundary.
+  let chunk = '';
+  await visitSnapshotJson(items, bytes => createHash('sha256').update(bytes).digest('hex'), text => {
+    chunk += text;
+    if (chunk.length >= 16 * 1024) { hash.update(chunk); chunk = ''; }
+  });
+  if (chunk) hash.update(chunk);
   return hash.digest('hex');
 }
 

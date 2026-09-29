@@ -6,6 +6,9 @@ import type { ImportItem } from './types.js';
 function* snapshotJson(items: ImportItem[], encodeBytes: (bytes: Buffer) => unknown): Generator<string> {
   const ancestors = new Set<object>();
   function* quoted(value: string): Generator<string> {
+    // Most metadata consists of short keys/values. Keep them in one bounded
+    // fragment instead of visiting separate quotes and contents for each field.
+    if (value.length <= 16 * 1024) { yield JSON.stringify(value); return; }
     yield '"';
     for (let start = 0; start < value.length;) {
       let end = Math.min(start + 16 * 1024, value.length);

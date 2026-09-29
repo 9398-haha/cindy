@@ -173,7 +173,11 @@ it('preserves exact legacy budget bytes and fingerprints across streamed string/
     { name: 'binary', bytes: Buffer.alloc(128 * 1024, 255), executable: true }];
   const items = [{ view: { id: 'fixture', name: text, category: 'memory' as const, selected: true }, files,
     asset: { name: 'asset', bytes: Buffer.from('fixture') },
-    credential: { format: 'fixture', value: { when: new Date('2026-09-29T00:00:00Z'), list: [null, false, undefined, 7, Infinity], omitted: undefined, hidden: { toJSON: () => undefined } } }, text }];
+    credential: { format: 'fixture', value: {
+      when: new Date('2026-09-29T00:00:00Z'), list: [null, false, undefined, 7, Infinity],
+      strings: ['', '😀漢\u0000\n"\\\ud800', '\u0000'.repeat(16 * 1024)],
+      omitted: undefined, hidden: { toJSON: () => undefined },
+    } }, text }];
   const mapped = items.map(item => ({ ...item, files: item.files.map(file => ({ ...file, bytes: null })), asset: { ...item.asset, bytes: null } }));
   const expected = Buffer.byteLength(JSON.stringify(mapped)) + files.reduce((total, file) => total + file.bytes.length + 256, 0) + items[0]!.asset.bytes.length + 256;
   const before = serializeImportSnapshot({ source: {} as never, fingerprint: 'fixture', items });
