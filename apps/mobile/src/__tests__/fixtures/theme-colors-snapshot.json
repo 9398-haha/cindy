@@ -3,6 +3,7 @@
   "light": {
     "surface": "#F9F9F6",
     "surfaceElevated": "#FFFFFC",
+    "homeDrawerShadow": "rgba(0, 0, 0, 0.16)",
     "surfaceTranslucent": "rgba(249, 249, 246, 0.78)",
     "surfaceTranslucentSidebar": "rgba(255, 255, 252, 0.90)",
     "chatHeaderSurface": "rgba(249, 249, 246, 0.90)",
@@ -122,6 +123,7 @@
   "dark": {
     "surface": "#121212",
     "surfaceElevated": "#1E1E1E",
+    "homeDrawerShadow": "rgba(0, 0, 0, 0.40)",
     "surfaceTranslucent": "rgba(18, 18, 18, 0.78)",
     "surfaceTranslucentSidebar": "rgba(10, 10, 10, 0.85)",
     "chatHeaderSurface": "rgba(18, 18, 18, 0.80)",

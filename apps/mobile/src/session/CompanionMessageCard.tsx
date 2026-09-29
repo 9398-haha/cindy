@@ -1,6 +1,7 @@
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { Component, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { Linking, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import {
   FileText,
@@ -121,7 +122,7 @@ function CompanionMessageCardContent({ message, renderMarkdown }: {
 /** Desktop BotDirectMessageCard: a separator pill with the peer's portrait, opening the read-only thread. */
 function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: BotDirectMessageMeta }) {
   const { t, i18n } = useTranslation();
-  const router = useRouter();
+  const push = useGuardedPush();
   const { user } = useAuth();
   const { status, getPresenceAvailability } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
@@ -139,7 +140,7 @@ function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: Bot
         accessibilityRole="button"
         style={styles.traceTouchTarget}
         onPress={() =>
-          router.push({
+          push({
             pathname: '/companions/direct/[threadId]',
             params: {
               deviceId,
@@ -176,7 +177,7 @@ function CompanionTaskCard({
   meta: BotCollaborationMeta;
 }) {
   const { t } = useTranslation();
-  const router = useRouter();
+  const push = useGuardedPush();
   const { invoke } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -402,7 +403,7 @@ function CompanionTaskCard({
             accessibilityRole="button"
             style={styles.touchTarget}
             onPress={() =>
-              router.push({
+              push({
                 pathname: '/sessions/[sessionId]',
                 params: { deviceId, sessionId: childSessionId },
               })
@@ -515,9 +516,9 @@ const makeStyles = (colors: ThemeColors) =>
     action: {
       minHeight: 32,
       minWidth: 104,
-      paddingHorizontal: 12,
-      paddingVertical: 5,
-      gap: 6,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+      gap: spacing.xs,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',

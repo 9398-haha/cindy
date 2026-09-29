@@ -2,13 +2,14 @@ import { CompanionImportSheet } from './CompanionImportSheet';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
-import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Brain, Camera, FileText, Hand, History, Info, Link2, Settings2, Sparkles } from 'lucide-react-native';
 import { resolveRemoteText, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { NativeSwitch } from '@/platform/chrome';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { invokeRemoteResourceAction } from '@/device-link/remoteResources';
@@ -551,7 +552,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
     };
     if (field.kind === 'toggle') return <View key={field.id} style={styles.inline}>
       <Text style={[styles.heading, styles.flex]}>{label}</Text>
-      <Switch accessibilityLabel={label} value={values[field.id] === true} onValueChange={change} disabled={fieldDisabled} trackColor={{ false: colors.border, true: colors.cta }} />
+      <NativeSwitch accessibilityLabel={label} value={values[field.id] === true} onValueChange={change} disabled={fieldDisabled} seedColor={colors.inputCaret} />
     </View>;
     if (field.kind === 'select') return <CompanionChoice key={field.id} label={label} value={typeof values[field.id] === 'string' ? values[field.id] as string : ''} disabled={fieldDisabled}
       options={options.map(option => ({ value: option.value, label: resolveRemoteText(option.label, i18n.language), disabled: optionDisabled(option) }))} onChange={change} />;
