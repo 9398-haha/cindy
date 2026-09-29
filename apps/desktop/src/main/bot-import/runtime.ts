@@ -4,6 +4,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, botProfiles, sessions } from '../localDb/schema.js';
 import { botEnvironmentSecretIo } from '../secrets/providerSecretStore.js';
 import { createCompanionEnvironmentStore } from './environment.js';
+import { projectEnvironmentDiscovery } from './environmentJson.js';
 import { fingerprint } from './files.js';
 import { CompanionImportError } from './types.js';
 import { removeImportedMemoryMedia } from './memoryMedia.js';
@@ -71,10 +72,19 @@ export async function readCompanionSessionEnvironment(sessionId: string) {
   const { owner, userData, botId, assertOwner } = scope;
   const environment = await companionEnvironmentStore.read(userData, botId, assertOwner);
   if (!environment) return undefined;
-  return { identity: fingerprint([owner, botId, environment.env, environment.mcp, environment.credentials]), environment, assertOwner, botId, userData };
+  return { identity: fingerprint([owner, botId, projectEnvironmentDiscovery(environment).identity]), environment, assertOwner, botId, userData };
+}
+
+export async function readCompanionSessionDiscovery(sessionId: string) {
+  const scope = await readCompanionSessionScope(sessionId);
+  if (!scope) return undefined;
+  const { owner, userData, botId, assertOwner } = scope;
+  const environment = await companionEnvironmentStore.readDiscovery(userData, botId, assertOwner);
+  if (!environment) return undefined;
+  return { identity: fingerprint([owner, botId, environment.identity]), environment, assertOwner, botId, userData };
 }
 
 export async function resolveCompanionRuntimeEnvironment(sessionId: string) {
-  const result = await readCompanionSessionEnvironment(sessionId);
+  const result = await readCompanionSessionDiscovery(sessionId);
   return result ? { identity: result.identity, assertCurrent: result.assertOwner } : undefined;
 }

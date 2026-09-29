@@ -4,7 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { McpProvider } from '@cindy/maker-core';
 import { resolveLiziMcpSessionContext } from '@cindy/mcps';
-import { readCompanionSessionEnvironment, readCompanionSessionScope } from './runtime.js';
+import { readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from './runtime.js';
 import { IMPORTED_TOOL_LIMIT, listImportedTools, withImportedConnection } from './connections.js';
 import { fingerprint } from './files.js';
 import { continueCompanionImport, getCompanionImportSetupStatus, useCindyImportSettings } from './host.js';
@@ -19,14 +19,14 @@ export function createCompanionConnectionsProvider(): McpProvider {
     name: COMPANION_CONNECTIONS_MCP_NAME,
     toClaudeSdkConfig(context) {
       const server = new McpServer({ name: COMPANION_CONNECTIONS_MCP_NAME, version: '1.0.0' }, { capabilities: { tools: {} } });
-      const resolve = async () => {
+      const resolve = async <T>(read: (sessionId: string) => Promise<T>) => {
         const session = resolveLiziMcpSessionContext(context);
         if (!session.sessionId) return undefined;
-        return readCompanionSessionEnvironment(session.sessionId);
+        return read(session.sessionId);
       };
       const toolName = (connection: string, tool: string, publicName = tool) => `c_${fingerprint(connection).slice(0, 12)}_${publicName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32)}_${fingerprint(tool).slice(0, 8)}`;
       server.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
-        const scope = await resolve();
+        const scope = await resolve(readCompanionSessionDiscovery);
         if (!scope) return { tools: [] };
         const tools: Tool[] = [{ name: 'run_command', description: 'Run a command with this companion’s imported environment and API credentials. Use this for imported skills and data queries that require their original environment. This executes arbitrary shell code with private credentials and may write files or use the network; it requires the current task’s command authorization. Output masking is not a security sandbox.', annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }, inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'], additionalProperties: false } }];
         if (scope.environment.pendingImport) tools.push({ name: 'import_setup',
@@ -67,7 +67,7 @@ export function createCompanionConnectionsProvider(): McpProvider {
           scope.assertOwner();
           return { content: [{ type: 'text', text: JSON.stringify(response) }] };
         }
-        const scope = await resolve();
+        const scope = await resolve(readCompanionSessionEnvironment);
         if (!scope) throw new Error('Companion connection unavailable');
         if (request.params.name === 'run_command') {
           const command = request.params.arguments?.command;

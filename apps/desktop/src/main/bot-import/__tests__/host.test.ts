@@ -214,7 +214,7 @@ it('rejects a simultaneous normalized-name conflict, removes only the loser chec
   expect(await h.store.read(h.root, botId, () => {})).toBeUndefined();
   const winner = selections[1 - rejectedIndex]!;
   await vi.waitFor(async () => expect((await getCompanionImportResult(winner.requestId))?.status).toBe('complete'));
-  expect(h.secretValues.size).toBe(1);
+  expect(h.secretValues.size).toBe(2);
   const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${rejected.requestId}.json`), 'utf8');
   expect(receiptText).not.toContain('fixture-private-key');
   expect(JSON.parse(receiptText).creationRejected).toBe('IMPORT_NAME_EXISTS');
@@ -223,7 +223,7 @@ it('rejects a simultaneous normalized-name conflict, removes only the loser chec
   await startCompanionImport({ ...rejected, name: 'Grace', requestId: 'name-race-renamed-request' }, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult('name-race-renamed-request'))?.status).toBe('complete'));
   expect(profiles.size).toBe(2);
-  expect(h.secretValues.size).toBe(2);
+  expect(h.secretValues.size).toBe(4);
   expect(h.pause).not.toHaveBeenCalled();
 });
 
@@ -234,7 +234,7 @@ it('recovers rejected creation cleanup after a storage failure without retrying 
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: 'name-rejection-recovery', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true };
   await expect(startCompanionImport(selection, 'fixture')).rejects.toThrow('CREDENTIAL_STORAGE_FAILED');
-  expect(h.secretValues.size).toBe(1);
+  expect(h.secretValues.size).toBe(2);
   await recoverCompanionImports();
   expect(h.secretValues.size).toBe(0);
   expect(finish).toHaveBeenCalledTimes(2);
@@ -255,7 +255,7 @@ it('retains a committed profile and credentials when a create conflict acknowled
   await startCompanionImport(selection, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
   expect(h.created).toBe(true);
-  expect(h.secretValues.size).toBe(1);
+  expect(h.secretValues.size).toBe(2);
   expect(await h.store.read(h.root, h.botId, () => {})).toBeDefined();
 });
 
@@ -952,7 +952,7 @@ it.each(['readback', 'binding'] as const)('cleans an unbound first checkpoint af
   });
   const result = await startCompanionImport(selection, 'fixture');
   expect(result.status).toBe('needs-attention');
-  expect(h.created).toBe(false); expect(values.size).toBe(1);
+  expect(h.created).toBe(false); expect(values.size).toBe(failure === 'binding' ? 2 : 1);
   await expect(fs.access(bindingFile)).rejects.toThrow();
   bindingFailure?.mockRestore();
   // A new vault instance and the startup receipt scan must find and remove it,
@@ -962,14 +962,14 @@ it.each(['readback', 'binding'] as const)('cleans an unbound first checkpoint af
   // A committed profile or an uncertain lookup must never lose its vault key.
   vi.mocked(getBotRemoteResourceSource).mockResolvedValueOnce({ canonicalSessionId: 'chat' } as never);
   await recoverCompanionImports();
-  expect(values.size).toBe(1); expect(remove).not.toHaveBeenCalled();
+  expect(values.size).toBe(failure === 'binding' ? 2 : 1); expect(remove).not.toHaveBeenCalled();
   vi.mocked(getBotRemoteResourceSource).mockRejectedValueOnce(new Error('fixture database unavailable'));
   await recoverCompanionImports();
-  expect(values.size).toBe(1); expect(remove).not.toHaveBeenCalled();
+  expect(values.size).toBe(failure === 'binding' ? 2 : 1); expect(remove).not.toHaveBeenCalled();
   await recoverCompanionImports();
-  expect(values.size).toBe(1);
+  expect(values.size).toBe(failure === 'binding' ? 2 : 1);
   await recoverCompanionImports();
-  expect(values.size).toBe(0); expect(remove).toHaveBeenCalledTimes(2);
+  expect(values.size).toBe(0); expect(remove).toHaveBeenCalledTimes(3);
   expect(h.created).toBe(false);
 });
 

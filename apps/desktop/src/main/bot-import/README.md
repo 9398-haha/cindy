@@ -194,6 +194,12 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   reordered or truncated chunks. Large JSON encode/decode/hash work runs in a
   short-lived Node worker; checkpoint conversion yields between resource files
   and reuses already captured bytes when publishing the environment.
+  Tool discovery and harness session initialization read a separate encrypted
+  projection containing only connection inputs, a credential identity hash and
+  the pending-setup flag. Source files and the retry snapshot stay in the original
+  archive. Writes invalidate/rebuild the projection under a per-companion lock;
+  legacy or missing projections rebuild once, with large archive parsing and
+  projection in a worker. Both encrypted records participate in deletion recovery.
   Legacy single-value ciphertext and numeric-array snapshots remain readable;
   normal writes automatically use the chunked format. Legacy decryption itself
   remains synchronous until that first rewrite. This changes only the private

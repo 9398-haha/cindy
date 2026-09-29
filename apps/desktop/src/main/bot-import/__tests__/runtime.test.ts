@@ -11,16 +11,19 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => {
 } }));
 import { companionEnvironmentStore, finishCompanionEnvironmentRemoval, readCompanionSessionEnvironment, readCompanionSessionScope, resolveCompanionRuntimeEnvironment } from '../runtime.js';
 import { withImportedConnection } from '../connections.js';
+import { projectEnvironmentDiscovery } from '../environmentJson.js';
 afterEach(() => vi.restoreAllMocks());
 
 it('projects only opaque identity and owner fencing into all harnesses, never imported values', async () => {
   const env = { TELEGRAM_BOT_TOKEN: 'fixture-token', GITHUB_PAT: 'fixture-pat', DATABASE_URL: 'postgres://fixture:secret@example.invalid/db',
     ANTHROPIC_CUSTOM_HEADERS: 'Authorization: fixture-header', ANTHROPIC_UNIX_SOCKET: '/fixture/socket', UNUSUAL_NAME: 'short' };
-  vi.spyOn(companionEnvironmentStore, 'read').mockResolvedValue({ version: 1, env, mcp: [], credentials: [] });
+  const archive = vi.spyOn(companionEnvironmentStore, 'read').mockRejectedValue(new Error('must not load archive'));
+  vi.spyOn(companionEnvironmentStore, 'readDiscovery').mockResolvedValue(projectEnvironmentDiscovery({ version: 1, env, mcp: [], credentials: [] }));
   const result = await resolveCompanionRuntimeEnvironment('fixture-session');
   expect(result).toEqual({ identity: expect.any(String), assertCurrent: expect.any(Function) });
   for (const value of Object.values(env)) expect(JSON.stringify(result)).not.toContain(value);
   result!.assertCurrent();
+  expect(archive).not.toHaveBeenCalled();
 });
 
 it('drains deleted companion transports before vault removal and rejects stale scopes without affecting another companion', async () => {
