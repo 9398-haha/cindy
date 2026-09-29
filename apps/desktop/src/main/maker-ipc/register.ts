@@ -10544,7 +10544,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
         const resolvedConfig: PluginTaskRoute = { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode };
         const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([resolvedConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
-        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode };
+        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled };
       },
       dispatch: async (pluginId, taskId, clientId, text) => {
         assertPlugin(pluginId);
@@ -10638,7 +10638,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const safeMeta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
     const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta}).from(messages)
       .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), inArray(messages.role, ['user', 'assistant']), sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`))
-      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
+      .orderBy(desc(messages.createdAt), desc(sql`rowid`)).limit(1);
     const flow = await createOrcaDiagnosticsDeps().getWorkerFlowStatus(sessionId);
     if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
     return {row, completedAt: pluginWorkerCompletedAt({status, working:flow.isWorking, queued:flow.queuedCount, paused:flow.queuePaused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor})};
@@ -10650,6 +10650,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const snapshot = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
         if (task.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
+        if (task.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Exit Plan Mode before requesting write access');
         const mode = request.mode ?? 'acceptEdits';
         const cfg = readGhostErrandConfig(pluginId);
         assertCallerCurrent();
@@ -10700,6 +10701,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
             if (fresh.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
+            if (fresh.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Exit Plan Mode before requesting write access');
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
             await assertIdle();
             assertRequestCurrent();
@@ -10714,6 +10716,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               if (!saved.updated) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const updatedTask = await service.get(pluginId, task.taskId);
+              if (updatedTask.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Plan Mode changed during permission confirmation');
               assertRequestCurrent();
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const currentConfig = readGhostErrandConfig(pluginId);
@@ -10737,7 +10740,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot start a team');
         };
         assertActive(task.status);
-        if (task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
+        if (task.planModeEnabled || task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
         const result = await startOrcaTeamForCaller(task.taskId, undefined, async () => {
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
           const fresh = await service.get(pluginId, task.taskId);
@@ -11856,11 +11859,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCatalog: getActiveCatalog,
     });
 
-  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { status: string; permissionMode?: string }) => {
+  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { status: string; permissionMode?: string; planModeEnabled?: boolean }) => {
     if (task.status !== 'active') {
       throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot create Workers');
     }
-    if (!isPluginTaskAuthorized(pluginId) || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
+    if (!isPluginTaskAuthorized(pluginId) || task.planModeEnabled || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
       throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
     }
   };

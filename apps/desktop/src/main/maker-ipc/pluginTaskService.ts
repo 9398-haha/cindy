@@ -61,10 +61,10 @@ export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
 }
 /** A live task cannot exercise more authority than the plugin's current setting. */
-export function isPluginTaskPermissionAllowed(taskMode: unknown, configuredMode: unknown): boolean {
+export function isPluginTaskPermissionAllowed(taskMode: unknown, configuredMode: unknown, planModeEnabled = false): boolean {
   const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'acceptEdits' ? 1 : mode === 'auto' ? 2 : -1;
   const task = rank(taskMode);
-  return task >= 0 && task <= Math.max(0, rank(configuredMode));
+  return !planModeEnabled && task >= 0 && task <= Math.max(0, rank(configuredMode));
 }
 const fail = (code: string, message: string): never => {
   throw new PluginTaskError(code, message);
@@ -141,7 +141,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     const view = await ownTask(pluginId, taskId);
     deps.assertAuthorized(pluginId);
     if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
-    if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId)))
+    if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId), view.planModeEnabled))
       return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
     return view;
   };
@@ -315,7 +315,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         );
         if (previous)
           return { run: JSON.parse(previous.payload) as PluginTaskRun, dispatch: false };
-        if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId))) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+        if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId), view.planModeEnabled)) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
         if (view.status !== 'active')
           return fail('TASK_BUSY', 'Archived tasks cannot accept input');
         if (view.revision !== request.expectedRevision)
@@ -426,7 +426,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           }
           const view = await ownTask(row.pluginId, taskId);
           if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
-          if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(row.pluginId))) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+          if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(row.pluginId), view.planModeEnabled)) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
           if (hash(view.resolvedConfig) !== hash(run.acceptedConfig))
             return fail('ROUTE_UNAVAILABLE', 'Accepted route changed before dispatch');
           await deps.resolveRoute(row.pluginId, run.acceptedConfig);

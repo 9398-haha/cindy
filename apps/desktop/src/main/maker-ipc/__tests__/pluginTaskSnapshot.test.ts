@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, rm, symlink, unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,20 @@ function handler(kind: string, next: string, deps: Record<string, unknown>) {
   const branch = source.slice(source.indexOf(`      case '${kind}':`), source.indexOf(`      case '${next}':`));
   return compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`, deps);
 }
+
+it.each(['auto', 'acceptEdits'])('exposes independent Plan Mode alongside stored %s permission', async permissionMode => {
+  const start = source.indexOf('      readSession: async taskId =>');
+  const property = source.slice(start, source.indexOf('      dispatch:', start)).trim().replace(/,$/, '');
+  const row = {id:'task',source:'plugin',agentKind:'codex',status:'active',permissionMode,planModeEnabled:true};
+  const query = {from:()=>query,where:()=>query,limit:async()=>[row]};
+  const read = compile(`return ({${property}}).readSession;`, {assertCurrent:()=>{},snapshot:{client:{drizzle:{select:()=>query}}},sessions:{},eq:()=>true,pluginTaskConfigHash:createHash});
+  const plan = await read('task');
+  expect(plan).toMatchObject({permissionMode,planModeEnabled:true});
+  row.planModeEnabled=false;
+  const normal = await read('task');
+  expect(normal).toMatchObject({permissionMode,planModeEnabled:false});
+  expect(normal.revision).not.toBe(plan.revision);
+});
 
 it('freezes the directory returned by admission without mutating the caller plan', async () => {
   const epoch = {};

@@ -2791,7 +2791,7 @@ describe('production plugin Auto admission after reservation', () => {
   });
 
   it.each([
-    ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy', 'archive-first', 'archive-reservation', 'archive-final'].map(point => ({ planned, point }))),
+    ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy', 'archive-first', 'archive-reservation', 'archive-final', 'plan-first', 'plan-reservation', 'plan-final'].map(point => ({ planned, point }))),
     ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'normalized-label', 'settled-label'].map(point => ({ planned: true, point })),
     ...['queued-plan-excludes', 'queued-plan-route', 'queued-plan-matches'].map(point => ({ planned: false, point })),
   ])('checks $point with planned=$planned before bootstrap', async ({ planned, point }) => {
@@ -2799,12 +2799,13 @@ describe('production plugin Auto admission after reservation', () => {
     let mode = 'auto';
     let taskMode = 'auto';
     let taskStatus = point === 'archive-first' ? 'archived' : 'active';
+    let planModeEnabled = point === 'plan-first';
     let enabled = true;
     let receiptReads = 0;
     let reservedTaskReads = 0;
     const epoch = { client: {} };
     const revoke = () => { mode = 'acceptEdits'; };
-    const task = () => ({ revision: 1, status: taskStatus, permissionMode: taskMode, workingDir: path.resolve('repo') });
+    const task = () => ({ revision: 1, status: taskStatus, permissionMode: taskMode, planModeEnabled, workingDir: path.resolve('repo') });
     const planItem = { label: 'sample', workingDir: path.resolve(point === 'canonical-directory' ? 'alias' : point === 'different-directory' ? 'other' : 'repo'), route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: point === 'normalized-fast' } };
     const payload = () => JSON.stringify(planned ? { teamPlan: { concurrency: 2, items: [planItem] }, settledLabels: point === 'settled-label' ? ['sample'] : [] } : {});
     const receipt = { pluginId: 'plugin', operation: 'create', payload: payload() };
@@ -2816,6 +2817,7 @@ describe('production plugin Auto admission after reservation', () => {
         if (reservedTaskReads === 3 && point === 'final-task') revoke();
         if (reservedTaskReads === 3 && point === 'task-mode') taskMode = 'plan';
         if (reservedTaskReads === 3 && point === 'archive-final') taskStatus = 'archived';
+        if (reservedTaskReads === 3 && point === 'plan-final') planModeEnabled = true;
         // A registration already past its reservation check commits while the
         // post-reservation service read drains the existing receipt queue.
         if (reservedTaskReads === 2 && point.startsWith('queued-plan-')) {
@@ -2845,6 +2847,7 @@ describe('production plugin Auto admission after reservation', () => {
       if (point === 'reservation') revoke();
       if (point === 'disabled') enabled = false;
       if (point === 'archive-reservation') taskStatus = 'archived';
+      if (point === 'plan-reservation') planModeEnabled = true;
       if (point === 'changed-plan') {
         planItem.route.model = 'gpt-5.4';
         receipt.payload = payload();
@@ -2863,6 +2866,6 @@ describe('production plugin Auto admission after reservation', () => {
       await expect(result).rejects.toMatchObject({ code: point.startsWith('archive-') ? 'TASK_BUSY' : ['different-model', 'different-directory', 'normalized-fast', 'changed-plan', 'queued-plan-excludes', 'queued-plan-route', 'settled-label'].includes(point) ? 'INVALID_REQUEST' : 'PERMISSION_DENIED' });
       expect(deps.bootstrapSession).not.toHaveBeenCalled();
     }
-    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(['archive-first', 'settled-label'].includes(point) ? 0 : 1);
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(['archive-first', 'plan-first', 'settled-label'].includes(point) ? 0 : 1);
   });
 });

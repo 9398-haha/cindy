@@ -31,6 +31,17 @@ function fixture() {
  return { run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('plugin write confirmation interleavings', () => {
+ it.each(['auto','acceptEdits'].flatMap(mode=>['before','dialog','lastRead'].map(point=>({mode,point}))))('rejects independent Plan Mode at $point for $mode without reporting a grant',async ({point,mode})=>{
+  const f=fixture();f.change({permissionMode:mode});
+  const planTask={taskId:'task',revision:1,status:'active',permissionMode:mode,planModeEnabled:true};
+  if(point==='before') f.service.get.mockResolvedValue(planTask);
+  if(point==='dialog') f.dialog.showMessageBox.mockImplementationOnce(async()=>{f.service.get.mockResolvedValue(planTask);return {response:0};});
+  if(point==='lastRead') f.epoch.client.tx.mockImplementationOnce(async()=>{f.service.get.mockResolvedValue(planTask);return {updated:true};});
+  await expect(f.run(mode)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+  expect(f.write).not.toHaveBeenCalled();
+  if(point==='before') expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+  if(point!=='lastRead') {expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();}
+ });
  it.each(['acceptEdits', 'auto'])('restores a cold durable queue before %s confirmation under the send lock', async mode => {
   const f=fixture();
   f.queue.ensureQueueRestored.mockImplementation(async()=>{
