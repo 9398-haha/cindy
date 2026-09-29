@@ -1014,6 +1014,29 @@ describe('retained tasks after explicit plugin uninstall', () => {
   const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
   const callback = source.slice(source.indexOf('    getWorkerPermissionModeOverride: async (leadSessionId) => {'), source.indexOf('    setWorkerPermissionMode: applyWorkerPermissionModePreference,'));
   const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).getWorkerPermissionModeOverride;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('requires an active plugin task for %s', async action => {
+    for (const status of ['active', 'archived']) {
+      const epoch = { client: {} };
+      const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+        createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: '{}' }) }),
+        pluginTaskServiceForCurrentOwner: () => ({ get: async () => ({ status, permissionMode: 'auto' }) }),
+        isPluginTaskAuthorized: () => true, readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
+      };
+      const override = new Function(...Object.keys(callbacks), js)(...Object.values(callbacks));
+      const { deps, service } = createDeps({ getWorkerPermissionModeOverride: override,
+        getActiveTeamByLead: vi.fn(async () => action === 'createWorker' ? activeTeam() : null),
+      });
+      const result = action === 'enableTeam' ? service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'worker', label: 'sample' })
+        : action === 'startTeam' ? service.startTeam({ leadSessionId: 'lead-1' })
+        : service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' });
+      if (status === 'active') await expect(result).resolves.toMatchObject({ ok: true });
+      else {
+        await expect(result).rejects.toMatchObject({ code: 'TASK_BUSY' });
+        expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
+        expect(deps.createActiveTeam).not.toHaveBeenCalled();
+      }
+    }
+  });
   it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('uses ordinary permissions for %s with a retained revoked receipt', async action => {
     const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked'); });
     const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
