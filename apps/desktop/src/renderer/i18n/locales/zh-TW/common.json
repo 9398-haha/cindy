@@ -2671,7 +2671,7 @@
         "pending": "憑證準備中",
         "unavailable": "暫時無法使用"
       },
-      "claudeAccountRetired": "獨立 Claude 帳號已停用。請改用「使用 Claude Code 登入」連線 Claude 訂閱，這個帳號可以刪除。"
+      "claudeAccountRetired": "Cindy 已不再支援透過這筆舊版 Claude 連線登入訂閱，不影響你的 Claude 帳號和訂閱。請改用「使用 Claude Code 登入」連線訂閱"
     },
     "experimental": {
       "title": "實驗性功能",

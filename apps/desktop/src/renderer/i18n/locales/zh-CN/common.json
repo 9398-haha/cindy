@@ -2671,7 +2671,7 @@
         "pending": "凭据准备中",
         "unavailable": "暂时不可用"
       },
-      "claudeAccountRetired": "独立 Claude 账号已停用。请改用「使用 Claude Code 登录」连接 Claude 订阅，这个账号可以删除。"
+      "claudeAccountRetired": "Cindy 已不再支持通过这条旧版 Claude 连接登录订阅，不影响你的 Claude 账号和订阅。请改用「使用 Claude Code 登录」连接订阅"
     },
     "experimental": {
       "title": "实验性功能",

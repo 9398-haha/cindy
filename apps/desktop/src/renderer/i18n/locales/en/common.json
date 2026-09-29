@@ -2672,7 +2672,7 @@
         "pending": "Preparing credentials",
         "unavailable": "Temporarily unavailable"
       },
-      "claudeAccountRetired": "Separate Claude accounts are no longer supported. Use \"Sign in with Claude Code\" to connect your Claude subscription; you can delete this account."
+      "claudeAccountRetired": "Cindy no longer supports signing in to your subscription through this legacy Claude connection. Your Claude account and subscription are unaffected. Use “Sign in with Claude Code” to connect."
     },
     "experimental": {
       "title": "Experimental",

@@ -2671,7 +2671,7 @@
         "pending": "인증 정보 준비 중",
         "unavailable": "일시적으로 사용할 수 없음"
       },
-      "claudeAccountRetired": "별도 Claude 계정은 더 이상 지원되지 않습니다. 'Claude Code로 로그인'으로 Claude 구독을 연결하세요. 이 계정은 삭제해도 됩니다."
+      "claudeAccountRetired": "Cindy에서는 이 이전 Claude 연결 방식으로 구독에 로그인할 수 없습니다. Claude 계정과 구독에는 영향이 없습니다. ‘Claude Code로 로그인’을 사용해 구독을 연결하세요."
     },
     "experimental": {
       "title": "실험적 기능",
