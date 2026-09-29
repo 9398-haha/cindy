@@ -23,6 +23,8 @@ export interface PluginTaskView {
   resolvedConfig: PluginTaskRoute;
   workingDir?: string;
   permissionMode?: string;
+  /** Independent Plan Mode; the stored permission remains available after it ends. */
+  planModeEnabled?: boolean;
 }
 export interface PluginTaskRun {
   runId: string;

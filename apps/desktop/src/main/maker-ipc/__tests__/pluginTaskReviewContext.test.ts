@@ -206,6 +206,8 @@ describe('plugin delegated Auto context', () => {
     'plugin-read-only',
     'worker-read-only',
     'lead-read-only',
+    'worker-plan',
+    'lead-plan',
     'archived',
     'ended-team',
     'settled',
@@ -217,6 +219,8 @@ describe('plugin delegated Auto context', () => {
     if (kind === 'revoked' || kind === 'plugin-read-only') s.authorized = false;
     if (kind === 'worker-read-only') s.session.permissionMode = 'ask';
     if (kind === 'lead-read-only') s.lead.permissionMode = 'ask';
+    if (kind === 'worker-plan') s.session.planModeEnabled = true;
+    if (kind === 'lead-plan') s.lead.planModeEnabled = true;
     if (kind === 'archived') s.session.status = 'archived';
     if (kind === 'ended-team') s.worker!.activeTeam = false;
     if (kind === 'settled') s.settledLabels = ['w'];

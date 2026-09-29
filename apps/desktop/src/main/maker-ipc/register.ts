@@ -10570,7 +10570,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
         const resolvedConfig: PluginTaskRoute = { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode };
         const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([resolvedConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
-        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode };
+        return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled };
       },
       dispatch: async (pluginId, taskId, clientId, text) => {
         assertPlugin(pluginId);
@@ -10664,7 +10664,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const safeMeta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
     const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta}).from(messages)
       .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), inArray(messages.role, ['user', 'assistant']), sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`))
-      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(1);
+      .orderBy(desc(messages.createdAt), desc(sql`rowid`)).limit(1);
     const flow = await createOrcaDiagnosticsDeps().getWorkerFlowStatus(sessionId);
     if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
     return {row, completedAt: pluginWorkerCompletedAt({status, working:flow.isWorking, queued:flow.queuedCount, paused:flow.queuePaused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor})};
@@ -10676,6 +10676,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const snapshot = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
         if (task.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
+        if (task.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Exit Plan Mode before requesting write access');
         const mode = request.mode ?? 'acceptEdits';
         const cfg = readGhostErrandConfig(pluginId);
         assertCallerCurrent();
@@ -10726,6 +10727,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
             if (fresh.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
+            if (fresh.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Exit Plan Mode before requesting write access');
             if (fresh.revision !== task.revision) throw new PluginTaskError('TASK_BUSY', 'Task changed while awaiting permission');
             await assertIdle();
             assertRequestCurrent();
@@ -10740,6 +10742,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               if (!saved.updated) throw new PluginTaskError('TASK_NOT_FOUND', 'Task not found');
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const updatedTask = await service.get(pluginId, task.taskId);
+              if (updatedTask.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Plan Mode changed during permission confirmation');
               assertRequestCurrent();
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               const currentConfig = readGhostErrandConfig(pluginId);
@@ -10763,7 +10766,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot start a team');
         };
         assertActive(task.status);
-        if (task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
+        if (task.planModeEnabled || task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
         const result = await startOrcaTeamForCaller(task.taskId, undefined, async () => {
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
           const fresh = await service.get(pluginId, task.taskId);
@@ -11888,11 +11891,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCatalog: getActiveCatalog,
     });
 
-  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { status: string; permissionMode?: string }) => {
+  const assertPluginWorkerAutoAuthorized = (pluginId: string, task: { status: string; permissionMode?: string; planModeEnabled?: boolean }) => {
     if (task.status !== 'active') {
       throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot create Workers');
     }
-    if (!isPluginTaskAuthorized(pluginId) || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
+    if (!isPluginTaskAuthorized(pluginId) || task.planModeEnabled || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
       throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
     }
   };
@@ -13537,19 +13540,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // requests that were already waiting for history/projection reads at uninstall.
     await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId, leadId);
     if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
+    // The projection/ownership awaits must not return an old Worker grant.
+    // One final SELECT compares every database fact used below at one read point;
+    // a changed fact denies this review, while a query failure remains unavailable.
+    const unchanged = await epoch.client.queryOne<{ unchanged: number }>(`
+      SELECT 1 AS unchanged FROM sessions s
+      JOIN sessions l ON l.id = ?
+      LEFT JOIN orca_workers w ON w.session_id = s.id
+      LEFT JOIN orca_teams t ON t.id = w.team_id
+      JOIN plugin_task_requests r ON r.id = l.id
+      WHERE s.id = ?
+        AND json_array(s.source,s.orca_role,s.working_dir,s.permission_mode,coalesce(s.plan_mode_enabled,0),s.status,
+          s.agent_kind,s.provider_id,s.model,s.effort,coalesce(s.fast_mode,0)) = ?
+        AND json_array(l.source,l.permission_mode,coalesce(l.plan_mode_enabled,0),l.status) = ?
+        AND json_array(w.label,t.lead_session_id,t.id,t.status) = ?
+        AND json_array(r.id,r.target_id,r.plugin_id,r.operation,r.payload,r.revision) = ?
+      LIMIT 1`, [leadId, sessionId,
+      JSON.stringify([session.source,session.orcaRole,session.workingDir,session.permissionMode,Number(!!session.planModeEnabled),session.status,
+        session.agentKind,session.providerId,session.model,session.effort,Number(!!session.fastMode)]),
+      JSON.stringify([lead.source,lead.permissionMode,Number(!!lead.planModeEnabled),lead.status]),
+      JSON.stringify([link?.label,link?.leadId,link?.teamId,link?.teamStatus]),
+      JSON.stringify([receipt.id,receipt.targetId,receipt.pluginId,receipt.operation,receipt.payload,receipt.revision]),
+    ]);
+    if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
     const config = readGhostErrandConfig(receipt.pluginId);
     const data = readPluginTaskPlanReceipt(receipt.payload);
     const approvalRevision = pluginTaskAuthorizationRevision(receipt.pluginId);
     return {
       pluginId: receipt.pluginId,
-      authorized: approvalRevision !== null && isPluginTaskAuthorized(receipt.pluginId) && config.permissionMode === 'auto',
+      authorized: !!unchanged && approvalRevision !== null && isPluginTaskAuthorized(receipt.pluginId) && config.permissionMode === 'auto',
       revision: [epoch.userId, epoch.clientEpoch, approvalRevision, config.permissionMode, link],
       plan: data.teamPlan, settledLabels: data.settledLabels,
       registeredRoute: data.route,
-      session: { workingDir: session.workingDir, permissionMode: session.permissionMode, status: session.status,
+      session: { workingDir: session.workingDir, permissionMode: session.permissionMode, planModeEnabled: !!session.planModeEnabled, status: session.status,
         route: { agentKind, providerId: session.providerId ?? '', model: session.model,
           effort: session.effort, fastMode: !!session.fastMode } },
-      lead: { permissionMode: lead.permissionMode, status: lead.status },
+      lead: { permissionMode: lead.permissionMode, planModeEnabled: !!lead.planModeEnabled, status: lead.status },
       ...(link ? { worker: { label: link.label ?? '', activeTeam: link.teamStatus === 'active' } } : {}),
       projection,
       history: [],

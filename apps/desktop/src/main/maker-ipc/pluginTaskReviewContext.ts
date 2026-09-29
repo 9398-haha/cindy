@@ -18,8 +18,8 @@ export interface PluginReviewSnapshot {
   registeredRoute?: PluginTaskRoute;
   plan?: PluginTeamPlan;
   settledLabels?: string[];
-  session: { workingDir: string; permissionMode: string; status: string; route: PluginTaskRoute };
-  lead: { permissionMode: string; status: string };
+  session: { workingDir: string; permissionMode: string; planModeEnabled?: boolean; status: string; route: PluginTaskRoute };
+  lead: { permissionMode: string; planModeEnabled?: boolean; status: string };
   worker?: { label: string; activeTeam: boolean };
   history: AutoReviewHistoryMessage[];
   sessionHistory: AutoReviewHistoryMessage[];
@@ -58,6 +58,7 @@ export function createPluginTaskReviewResolver(
     }
     if (
       !snapshot.authorized ||
+      snapshot.session.planModeEnabled || snapshot.lead.planModeEnabled ||
       snapshot.session.permissionMode !== 'auto' ||
       snapshot.lead.permissionMode !== 'auto' ||
       snapshot.session.status !== 'active' ||

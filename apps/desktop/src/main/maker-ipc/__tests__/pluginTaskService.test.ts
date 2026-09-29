@@ -34,7 +34,7 @@ it.each([false,true])('production Auto context checks uninstall after its projec
     const session={...f.route,source:'plugin',workingDir:'/answer',permissionMode:'auto',status:'active'};
     const results=[[session],worker?[{leadId:task.taskId,label:'w',teamId:'team',teamStatus:'active'}]:[],[session]];
     const query={from:()=>query,where:()=>query,innerJoin:()=>query,limit:async()=>results.shift()};
-    const epoch={client:{drizzle:{select:()=>query},tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
+    const epoch={client:{drizzle:{select:()=>query},queryOne:async()=>({unchanged:1}),tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
     let load!:(id:string)=>Promise<unknown>;
     const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
       getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,
@@ -658,6 +658,27 @@ it('a rejected operation does not poison subsequent drain', async () => {
 
 
 describe('current plugin dispatch authority', () => {
+  it.each(['before', 'route', 'insert'])('blocks independent Plan Mode before dispatch at %s', async point => {
+    const f=fixture(), task=await f.create();
+    const enable=()=>Object.assign(f.tasks.get(task.taskId)!,{permissionMode:'auto',planModeEnabled:true});
+    if(point==='before') enable();
+    if(point==='route') f.deps.resolveRoute=async()=>{enable();return f.route;};
+    if(point==='insert') {const insert=f.deps.store.insert;f.deps.store.insert=async row=>{await insert(row);enable();};}
+    const send=f.service.send('p',{taskId:task.taskId,expectedRevision:task.revision,requestKey:'plan',text:'input'});
+    if(point==='insert') await expect(send).resolves.toMatchObject({status:'reconciling'});
+    else await expect(send).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    expect(f.deps.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(['before', 'route', 'save'])('blocks queued acceptance after Plan Mode at %s but keeps inspection/cancel', async point => {
+    const f=fixture(), run=await f.send();
+    const enable=()=>Object.assign(f.tasks.get(run.taskId)!,{permissionMode:'acceptEdits',planModeEnabled:true});
+    if(point==='before') enable();
+    if(point==='route') f.deps.resolveRoute=async()=>{enable();return f.route;};
+    if(point==='save') {const save=f.deps.store.save;f.deps.store.save=async row=>{await save(row);enable();};}
+    await expect(f.service.accept(run.taskId,{clientId:run.inputMessageId},f.execution)).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+    await expect(f.service.get('p',run.taskId)).resolves.toMatchObject({planModeEnabled:true});
+    await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
+  });
   it.each(['plan', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
     const modes = ['plan', 'acceptEdits', 'auto'];
     for (const mode of [...modes, 'bypassPermissions', 'unknown', undefined]) {
