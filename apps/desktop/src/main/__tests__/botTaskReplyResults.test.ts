@@ -73,3 +73,15 @@ it('does not lose earlier attachments when a repeated seal sees only part of the
   row('final', 'assistant', 'Both ready', { turnCompleted: true, botTaskResults: [card('a'), card('b')] });
   expect(await bind([ids.completionRun('b', 1)])).toEqual([card('a'), card('b')]);
 });
+
+it('ignores corrupt historic metadata without losing new results or valid duplicate ownership', async () => {
+  row('corrupt', 'assistant', 'Old reply');
+  sqlite.prepare('UPDATE messages SET agent_meta=? WHERE client_id=?').run('{truncated', 'corrupt');
+  row('old-shape', 'assistant', 'Old reply', { turnCompleted: true, botTaskResults: ['legacy', null, 7] });
+  receipt(); row('final', 'assistant', 'Ready');
+  expect(await bind()).toEqual([card()]);
+  row('valid-owner', 'assistant', 'Already delivered', { turnCompleted: true, botTaskResults: [card()] });
+  expect(await bind()).toEqual([]);
+  expect(sqlite.prepare('SELECT agent_meta FROM messages WHERE client_id=?').get('corrupt'))
+    .toEqual({ agent_meta: '{truncated' });
+});

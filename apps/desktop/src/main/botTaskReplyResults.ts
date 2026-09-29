@@ -43,11 +43,18 @@ export async function readTaskResultsForReply(
     if (card?.role !== 'delegation-result' || !card.result || card.parentSessionId !== sessionId
       || card.fromBotId !== reply.botId || botTaskResultKey(card) !== receiptId) continue;
     // Retry/replayed wakes cannot attach the same execution to a second unrelated reply.
+    // Guard JSON at the function argument: WHERE evaluation order must not let an unrelated
+    // corrupt history row (or a legacy scalar attachment) abort this new reply's association.
     const existing = await db.queryOne<{ found: number }>(`
-      SELECT 1 AS found FROM messages m, json_each(m.agent_meta, '$.botTaskResults') r
-      WHERE m.session_id = ? AND m.client_id != ? AND m.role = 'assistant' AND m.rewind_at IS NULL
-        AND json_extract(m.agent_meta, '$.turnCompleted') = 1
-        AND json_extract(r.value, '$.delegationId') = ? AND json_extract(r.value, '$.result.runSequence') = ?
+      WITH historic_replies AS (
+        SELECT CASE WHEN json_valid(agent_meta) THEN agent_meta ELSE '{}' END AS meta
+        FROM messages
+        WHERE session_id = ? AND client_id != ? AND role = 'assistant' AND rewind_at IS NULL
+      )
+      SELECT 1 AS found FROM historic_replies, json_each(meta, '$.botTaskResults') r
+      WHERE json_extract(meta, '$.turnCompleted') = 1
+        AND json_extract(CASE WHEN r.type = 'object' THEN r.value ELSE '{}' END, '$.delegationId') = ?
+        AND json_extract(CASE WHEN r.type = 'object' THEN r.value ELSE '{}' END, '$.result.runSequence') = ?
       LIMIT 1
     `, [sessionId, replyClientId, card.delegationId, card.result.runSequence]);
     if (!existing && !attached.has(receiptId)) {
