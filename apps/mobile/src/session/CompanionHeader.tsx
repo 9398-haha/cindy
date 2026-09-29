@@ -12,7 +12,6 @@ import { CompanionBackButton } from './CompanionBackButton';
 import { useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { TeammatePicker } from './TeammatePicker';
 import { CompanionCreateSheet, CompanionProfileSheet } from './CompanionProfileSheet';
-import { CompanionAutomationSheet } from './CompanionAutomationSheet';
 import { useTeammateNavigation } from './useTeammateNavigation';
 
 const AVATAR_SIZE = 32;
@@ -35,7 +34,6 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
   const systemBack = useSystemNavigationBack();
   const [picker, setPicker] = useState(false);
   const [profile, setProfile] = useState(false);
-  const [automation, setAutomation] = useState(false);
   const [creating, setCreating] = useState(false);
   const created = useRef<RemoteResourceRef | null>(null);
   const pending = useRef<(() => void) | null>(null);
@@ -66,9 +64,7 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
     <CompanionProfileSheet visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
       resource={resource} collectionId={resource.ref.collectionId} deviceId={deviceId} deviceName={deviceName} online={online}
       onDeleted={() => void navigation.chooseMode('teammates')}
-      onOpenSearch={() => afterProfile(onSearch)} onOpenAutomation={() => afterProfile(() => setAutomation(true))} />
-    <CompanionAutomationSheet visible={automation} onClose={() => setAutomation(false)} collectionId="routines"
-      botId={resource.ref.id} deviceId={deviceId} deviceName={deviceName} online={online} />
+      onOpenSearch={() => afterProfile(onSearch)} />
   </>;
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

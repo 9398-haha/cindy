@@ -48,9 +48,9 @@ import {
   ORCA_WORKER_PERMISSION_MODES,
   type OrcaWorkerPermissionMode,
 } from '../../../shared/orca-worker-permission-mode';
+import { ORCA_PREDEFINED_WORKER_ROLES as PREDEFINED_ROLES } from '@cindy/maker-shared/orca-team';
 import { selectWorkerModels } from './workerModelAvailability';
 
-const PREDEFINED_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
 const AUTO_ONLY_WORKER_PERMISSION_MODES = ['auto'] as const;
 
 export interface CreateWorkerForm {

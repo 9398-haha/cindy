@@ -335,7 +335,7 @@ export function RemoteDesktopSession({
   const [network, setNetwork] = useState<DesktopNetworkStats | null>(null);
   const frameBusy = useRef<string | null>(null);
   const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
-  const inputBusy = useRef<string | null>(null);
+  const inputBusy = useRef<{ lease: string } | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
   const [windowsOpen, setWindowsOpen] = useState(false);
   useEffect(() => {
@@ -460,6 +460,9 @@ export function RemoteDesktopSession({
   const [modifiers, setModifiers] = useState<string[]>([]);
   const send = useCallback((message: object) => {
     const command = message as Record<string, unknown>;
+    // Every control handoff retires the parent batch together with the viewer
+    // queue. A late native fallback, failure or ACK cannot own the next batch.
+    if (command.type === "control" || command.type === "stop") inputBusy.current = null;
     const owner = active.current;
     const attempt = command.attemptId ?? mediaAttempt.current;
     webview.current?.postMessage(JSON.stringify(message));
@@ -1944,7 +1947,7 @@ export function RemoteDesktopSession({
         };
         if (
           !current.controlling ||
-          inputBusy.current === current.lease ||
+          inputBusy.current?.lease === current.lease ||
           !Number.isSafeInteger(message.sequence) ||
           !Array.isArray(message.events) ||
           message.events.length > 64 ||
@@ -1953,7 +1956,9 @@ export function RemoteDesktopSession({
           send(ack);
           return;
         }
-        inputBusy.current = current.lease;
+        const batch = { lease: current.lease };
+        inputBusy.current = batch;
+        const ownsBatch = () => active.current === current && inputBusy.current === batch;
         const events = message.events;
         void (async () => {
           if (
@@ -1961,7 +1966,7 @@ export function RemoteDesktopSession({
             (await nativeViewer.current?.sendInput(message).catch(() => false))
           )
             return;
-          if (active.current !== current || !current.controlling) return;
+          if (!ownsBatch() || !current.controlling) return;
           await request({
             op: "input",
             lease: current.lease,
@@ -1970,11 +1975,12 @@ export function RemoteDesktopSession({
           });
         })()
           .catch((cause) => {
-            if (active.current !== current) return;
+            if (!ownsBatch()) return;
             resolveControlFailure(cause);
           })
           .finally(() => {
-            if (inputBusy.current === current.lease) inputBusy.current = null;
+            if (!ownsBatch()) return;
+            inputBusy.current = null;
             send(ack);
           });
         break;

@@ -1,6 +1,6 @@
 import { useRemoteResourceList } from '@/session/useRemoteResourceList';
 import { isRemoteResourceUnread } from '@/device-link/remoteResourceCache';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
@@ -27,6 +27,7 @@ import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEd
 import { useAuth } from '@/auth/AuthContext';
 import {
   type HostedRemoteCollectionItem,
+  isMobileRemoteCollectionSupported,
   parseRemoteResourceTargets,
 } from '@/device-link/remoteResources';
 import { goBackGuarded } from '@/utils/backGuard';
@@ -47,6 +48,13 @@ function timestampLabel(value: number | undefined, locale: string): string | nul
 }
 
 export default function RemoteCollectionScreen() {
+  const params = useLocalSearchParams<{ collectionId?: string | string[] }>();
+  const collectionId = Array.isArray(params.collectionId) ? params.collectionId[0] ?? '' : params.collectionId ?? '';
+  if (!isMobileRemoteCollectionSupported(collectionId)) return <Redirect href="/devices" />;
+  return <RemoteCollectionScreenContent />;
+}
+
+function RemoteCollectionScreenContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();

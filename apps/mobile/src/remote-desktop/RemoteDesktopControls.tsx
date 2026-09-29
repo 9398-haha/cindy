@@ -369,6 +369,7 @@ export function RemoteDesktopControls({
                 {displays.length > 0 && (
                   <>
                     <NativePullDownMenu
+                      disabled={!nativeDisplayMenu}
                       actions={
                         nativeDisplayMenu
                           ? displays.map((display, index) => ({

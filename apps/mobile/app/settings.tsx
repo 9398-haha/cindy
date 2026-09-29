@@ -87,6 +87,7 @@ import {
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
+import { isGooglePlayInstallation } from '@/update/androidInstallSource';
 import {
   manualUpdateCheckMessage,
   runManualUpdateCheck,
@@ -263,19 +264,22 @@ export default function SettingsScreen() {
     auto: false,
     channel: updateChannel.channel,
   });
+  const playManagedUpdates = Platform.OS === 'android' && isGooglePlayInstallation();
   const bundleCheckEnabled = shouldCheckBundleUpdate({
     isSelfHosted: IS_OTA_SELFHOST,
     isReviewMode: REVIEW_MODE,
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+    isGooglePlayInstallation: playManagedUpdates,
   });
   const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;
   // 保存未翻译的结果，语言切换触发重渲染时用当前 t() 重新生成提示。
   const updateMessage = useMemo(
     () => updateOutcome && manualUpdateCheckMessage(updateOutcome, {
       isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+      isGooglePlayInstallation: playManagedUpdates,
       t,
     }),
-    [t, updateOutcome],
+    [playManagedUpdates, t, updateOutcome],
   );
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
@@ -725,7 +729,7 @@ export default function SettingsScreen() {
 
   const updateBusy = updatePhase === 'checking' || updatePhase === 'downloading';
   const updateActionLabel = t(
-    IS_TESTFLIGHT_BUILD
+    IS_TESTFLIGHT_BUILD || playManagedUpdates
       ? 'settings.version.testFlightCheckAction'
       : 'settings.version.checkAction',
   );
@@ -734,11 +738,13 @@ export default function SettingsScreen() {
     ? null
     : IS_TESTFLIGHT_BUILD
       ? (updatesEnabled ? null : t('settings.version.testFlightContentUpdateUnavailable'))
-      : updatesEnabled
-        ? t('settings.version.updateMethodInApp')
-        : bundleCheckEnabled
-          ? t('settings.version.updateMethodPackage')
-          : t('settings.version.updateMethodUnavailable');
+      : playManagedUpdates
+        ? (updatesEnabled ? null : t('settings.version.googlePlayContentUpdateUnavailable'))
+        : updatesEnabled
+          ? t('settings.version.updateMethodInApp')
+          : bundleCheckEnabled
+            ? t('settings.version.updateMethodPackage')
+            : t('settings.version.updateMethodUnavailable');
 
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
@@ -790,6 +796,11 @@ export default function SettingsScreen() {
                     {t('settings.version.testFlightUpdateManaged')}
                   </Text>
                 ) : null}
+                {playManagedUpdates ? (
+                  <Text style={styles.versionDetail} testID="settings.googlePlayUpdateHint">
+                    {t('settings.version.googlePlayUpdateManaged')}
+                  </Text>
+                ) : null}
                 {updateMessage ? (
                   <Text style={styles.versionDetail} testID="settings.updateMessage">{updateMessage}</Text>
                 ) : updateMethodHint ? (
@@ -803,7 +814,7 @@ export default function SettingsScreen() {
                   action={{
                     accessibilityLabel: updateBusy
                       ? t(
-                        IS_TESTFLIGHT_BUILD
+                        IS_TESTFLIGHT_BUILD || playManagedUpdates
                           ? 'settings.version.testFlightCheckingAccessibility'
                           : 'settings.version.checkingAccessibility',
                       )
@@ -852,6 +863,16 @@ export default function SettingsScreen() {
             onPress={openVoiceDictionary}
             testID="settings.voiceDictionary.row"
             value={t('settings.voiceDictionary.entryCount', { count: dictionaryEntries.length })}
+          />
+        </SettingsGroup>
+
+        <SettingsGroup title={t('sharedTask.title')}>
+          <ActionInfoRow
+            accessibilityLabel={t('sharedTask.manageSharing')}
+            label={t('sharedTask.manageSharing')}
+            value=""
+            onPress={() => router.push({ pathname: '/shared-session', params: { mode: 'manage' } })}
+            testID="settings.sharedTasks.row"
           />
         </SettingsGroup>
 

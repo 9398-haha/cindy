@@ -135,7 +135,7 @@
     "viewToolInput": "查看完整输入",
     "loadingToolInput": "正在读取完整输入",
     "retryToolInput": "读取失败，重试",
-    "toolResultCompacted": "已精简完整工具输出（原始大小 {{size}}）",
+    "toolResultCompacted": "完整工具输出已释放（原始大小 {{size}}）",
     "mermaidEmpty": "空 Mermaid 图表。",
     "diffEditCount": "{{n}} 处编辑"
   },
@@ -161,7 +161,13 @@
     "loadFailed": "图片加载失败",
     "retryLoadImage": "重试加载图片",
     "retry": "重试",
-    "closeImage": "关闭图片"
+    "closeImage": "关闭图片",
+    "discardAnnotationTitle": "放弃标注？",
+    "discardAnnotationBody": "未保存的笔迹将会丢失。",
+    "continueAnnotating": "继续标注",
+    "discardAnnotation": "放弃标注",
+    "annotateUnavailableTitle": "暂时无法标注",
+    "annotateImageUnavailable": "标注图片（暂不可用）"
   },
   "queue": {
     "continueSystemInstruction": "继续未完成的任务（系统指令）",
@@ -261,7 +267,7 @@
       "steering": "插话发送中",
       "orcaTitle": "协同队列 {{index}}",
       "title": "队列 {{index}}",
-      "orcaReadOnly": "协同消息由电脑端编排，手机上只能查看。",
+      "orcaEditDisabled": "协同消息不支持编辑或插话发送。",
       "busy": "队列操作同步中，完成后再继续操作。",
       "steeringDisabled": "插话正在发送到当前这一轮，等电脑端回应后再操作。",
       "editLocked": "这条队列消息正在编辑中，完成后再操作。",

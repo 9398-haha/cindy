@@ -13,6 +13,17 @@
 
 ## 电脑互联的消息文件与历史变更
 
+跨电脑任务复制使用同账号业务通道 `maker:task-copy`，受信 Renderer 使用 `task-copy:request`。
+不开放裸导入、数据库或路径写入；共享访客不准入。该通道与旧 `maker:task-migration` 交接协议
+隔离，旧端拒绝时提示升级，不退回旧交接协议或控制端执行。新端也不接收旧协议的 activate。
+源任务和文件保留可用，自动任务及消息渠道不转移。数据复用 peer 附件与 OSS；复制记录及目标回执
+仅用于幂等重试，不管理源任务执行权。写请求不进入自动重试白名单，无需服务端变更。
+`preflight` 检查目标实时资源；文件描述可为单附件或有序分段附件，每段复用已有协议和校验，
+复制不设固定总量上限。整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
+`receive.files.additionalWorkspaces` 沿用同一文件描述，manifest 记录成员到目录的映射。
+双方必须支持复制通道；收到整组能力声明才发送团队，不尝试部分导入。
+范围、恢复与源目录保护见 [同机移动与跨电脑复制任务](../product-rules/task-device-migration.md)。
+
 设备互联生成文件沿用远端文件服务的 stat 与修改时间，控制端按被控端消息时间窗校验命令产物；
 仅有文件存在、缺失时间戳或读取失败不构成命令产物证据。不增加 relay 协议字段。
 SSH 保持仅展示经过存在性复核的工具产物，不把 Desktop 消息时间与 SSH 主机文件时间比较。
@@ -152,6 +163,19 @@ link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订
 不调用新通道，行为不变。手机不参与读取，也未新增入口。本机 `maker:usage:history` 仍只对
 受信 renderer 开放。不改 relay、帧限制或服务器权限，服务端无需改动。实现见
 `apps/desktop/src/main/usage/usageDeviceRows.ts` 与 `peerUsageSync.ts`。
+
+## 图片标注区域说明
+
+`maker:input:enqueue` / `maker:input:steer` / `maker:input:update-content` 的队列附件
+（`AgentInputSerializedFile`）追加可选 `annotationRegions: { x0, y0, x1, y1 }[]`：标注图
+（`annotated: true`）烧录时由笔迹归纳的外接框，归一化坐标（0..1，原点左上，两位小数，
+每张图至多 6 处）。只经既有 device-link 隧道与 IPC 透传，不新增 channel、relay 类型或
+持久化 schema。消费端 `buildMakerUserMessage` 一律经 `sanitizeAnnotationRegions` 校验，
+有合法区域时在原标注说明后另起一行按本条消息内图片顺序描述区域；仍然每条消息至多一条说明。
+旧主机忽略该字段，只注入原固定说明；新主机收到旧控制端（不带该字段）的消息时，说明与
+旧版逐字节相同。remote 会话剥离 `annotationSourceUrl` / `annotationStrokes` 时保留区域字段。
+Mobile 以同一归纳算法在上传后的附件（含持久发件箱 `DurableUpload`，可选字段、旧记录缺省）
+上携带该字段；底图本身已是烧录图、旧红线位置不可知时不带区域。服务端无需改动。
 
 ## 事实来源
 
@@ -444,6 +468,27 @@ canonical 主任务时，宿主额外追加 `resourceCollectionId=teammates&reso
 不识别它们的旧控制端仍按普通任务打开。拼接后超过 `NOTIFY_DEEP_LINK_MAX_LENGTH` 时回退为原深链。
 委派的独立 Session 任务和普通任务不带这组参数。不修改 notify 帧结构、relay 或协议版本。
 
+## 伙伴群聊手机端（Remote Resource 与群推送深链）
+
+群聊以新的 Remote Resource collection `bot-groups`（`resourceKind: bot-group`，无 placement）接入控制端，
+列表项的 `links` 以 rel `member` 指向 `teammates` 中的成员。新增可移植原语 `bot-group-chat`：主机只对声明它的
+控制端在 `get` 中输出该块，`data` 为 `@cindy/maker-shared/botGroupChat` 的 `BotGroupRemoteChatData`
+（主机路径置空，只给文件夹名）；未声明的控制端只拿到 `markdown` 块的可读摘要。动作 id 见同文件
+`BotGroupRemoteActionId`，被拒时以群聊错误码作为 registry 错误 message。变化沿用
+`maker:remote-resources:changed`（collection + 该群 ref）。
+
+分工停下时的手机推送沿用 notify 帧与 `session-needs-reply` 类别，深链为
+`/companions/groups/<groupId>?deviceId=<hostDeviceId>`，`collapseId` 为 `(设备, 群)` 摘要。旧手机不识别该深链，
+点开只进入 App；旧主机没有该 collection，新手机不显示群聊入口。未新增 channel、allowlist、relay 类型、
+notify 类别或协议版本，服务端无需升级；Mobile 无原生 fingerprint 变更。
+
+群附件按字段追加演进：`send` 动作的 input 可选携带 `attachments`（与会话消息相同的上传引用形状，
+`cindy-peer-attach://` / `cindy-oss-attach://`，最多 20 个）；主机只接受该手机自己的上传，不接受主机路径。
+消息追加 `attachments`（图片给 `cindy-media://` 地址，`path` 一律为 null）。`BotGroupRemoteChatData` 追加
+`supportsAttachments: true`，新手机只在看到它时提供附件入口；旧主机不回这个字段，新手机不会把附件发给会丢掉
+它们的旧主机。旧手机忽略新字段，Markdown 摘要里列出附件名。图片缩略图沿用既有 `device-link:media:fetch`。
+未新增 channel、allowlist、relay 类型或协议版本。
+
 ## 伙伴记忆远程页面与资源内搜索
 
 伙伴设置主资源（声明 `form` 的控制端）追加 `memories` list 块，入口指向 `settings:<botId>/memory`；
@@ -459,3 +504,7 @@ canonical 主任务时，宿主额外追加 `resourceCollectionId=teammates&reso
 该块后带 `query` 重读同一资源。旧控制端不声明也不传 `query`，列表页原样可用；旧主机忽略 `query`，也不
 提供记忆页面，新手机显示原有升级提示。未新增 channel、relay 类型、allowlist、权限、数据库迁移或
 Mobile 原生 fingerprint 输入，服务端无需改动。
+
+任务迁移业务通道的 `move-project` action 在任务所属宿主复用项目移动校验与更新，
+仅接受任务 ID 和明确的目录（null 表示移到对话）。不开放远程 sessions 原始 patch；
+旧宿主拒绝未知 action，不回退到控制端本机执行。

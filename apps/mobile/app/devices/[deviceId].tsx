@@ -451,7 +451,6 @@ function DeviceDetailScreenContent() {
   );
   const bulkConfirmSummary = bulkConfirmAction ? bulkActionSummaries[bulkConfirmAction] : null;
   const selectionMode = selectionRequested || selectedSessionIds.length > 0;
-  const runningAutomationCount = filterCounts.runningAutomation;
   const controlsSummary = useMemo(
     () => remoteSessionControlsSummary(statusFilter, filterCounts),
     [filterCounts, statusFilter, t],
@@ -687,9 +686,7 @@ function DeviceDetailScreenContent() {
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={deviceName}
           title={automationScopeName ?? t('devices.detail.automationScope.title')}
           titleTestID="deviceDetail.title"
         />
@@ -767,9 +764,7 @@ function DeviceDetailScreenContent() {
             testID: 'deviceDetail.newSessionButton',
           }}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.projectScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={`${projectWorkingDir} · ${deviceName}`}
           title={projectName ?? deviceName}
           titleTestID="deviceDetail.title"
         />
@@ -889,11 +884,7 @@ function DeviceDetailScreenContent() {
           testID: 'deviceDetail.newSessionButton',
         }}
         backTestID="deviceDetail.backButton"
-        eyebrow="Remote Device"
         onBack={() => goBackGuarded(router)}
-        subtitle={projectWorkingDir
-          ? t('devices.detail.subtitle.deviceActive', { deviceName, count: filterCounts.active })
-          : t('devices.detail.subtitle.activeAndProjects', { count: filterCounts.active, projects: filterCounts.projectCount })}
         title={projectName ?? deviceName}
         titleTestID="deviceDetail.title"
       />
@@ -953,27 +944,6 @@ function DeviceDetailScreenContent() {
             variant="pill"
             value={filterCounts.automation}
           />
-          <View
-            style={{ minWidth: windowLayout.metricMinWidth }}
-            testID="deviceDetail.automationActions"
-          >
-            <MainWindowActionButton
-              action={{
-                accessibilityLabel: t('devices.detail.automationsButtonA11y'),
-                label: `${t('devices.detail.plan')}${runningAutomationCount > 0 ? ` · ${runningAutomationCount}` : ''}`,
-                onPress: () => guardedPush({
-                  pathname: '/automations/[deviceId]',
-                  params: { deviceId, name: deviceName },
-                }),
-                testID: 'deviceDetail.automationsButton',
-              }}
-              density="compact"
-              style={{
-                minHeight: windowLayout.metricMinHeight,
-                minWidth: windowLayout.metricMinWidth,
-              }}
-            />
-          </View>
           {loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
         </View>
       </SummaryStrip>

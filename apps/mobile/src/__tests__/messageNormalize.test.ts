@@ -542,9 +542,9 @@ describe('normalizeRemoteMessages', () => {
       }),
     ]);
 
-    expect(item.secondaryBody).toBe('已精简完整工具输出（原始大小 128 KB）');
+    expect(item.secondaryBody).toBe('完整工具输出已释放（原始大小 128 KB）');
     expect(buildMobileMessageCopyText(item)).toContain(
-      '已精简完整工具输出（原始大小 128 KB）',
+      '完整工具输出已释放（原始大小 128 KB）',
     );
     expect(buildMobileMessageCopyText(item)).not.toContain('tool_result_compacted');
   });

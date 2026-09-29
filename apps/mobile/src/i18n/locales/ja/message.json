@@ -135,7 +135,7 @@
     "viewToolInput": "完全な入力を表示",
     "loadingToolInput": "完全な入力を読み込み中",
     "retryToolInput": "入力を読み込めませんでした。再試行",
-    "toolResultCompacted": "完全なツール出力は省略されました（元のサイズ {{size}}）",
+    "toolResultCompacted": "ツールの完全な出力は解放されました（元のサイズ：{{size}}）",
     "mermaidEmpty": "空の Mermaid 図。",
     "diffEditCount": "{{n}} 件の編集"
   },
@@ -161,7 +161,13 @@
     "loadFailed": "画像の読み込みに失敗",
     "retryLoadImage": "画像の読み込みを再試行",
     "retry": "再試行",
-    "closeImage": "画像を閉じる"
+    "closeImage": "画像を閉じる",
+    "discardAnnotationTitle": "注釈を破棄しますか？",
+    "discardAnnotationBody": "保存されていない描画は失われます。",
+    "continueAnnotating": "注釈を続ける",
+    "discardAnnotation": "破棄",
+    "annotateUnavailableTitle": "現在は注釈できません",
+    "annotateImageUnavailable": "画像に注釈（現在利用不可）"
   },
   "queue": {
     "continueSystemInstruction": "未完了のタスクを続行(システム指令)",
@@ -261,7 +267,7 @@
       "steering": "割り込み送信中",
       "orcaTitle": "コラボレーションキュー {{index}}",
       "title": "キュー {{index}}",
-      "orcaReadOnly": "コラボレーションメッセージはデスクトップで編成され、モバイルでは読み取り専用です。",
+      "orcaEditDisabled": "コラボレーションメッセージは編集や割り込み送信ができません。",
       "busy": "キュー操作を同期中です。完了後にもう一度操作してください。",
       "steeringDisabled": "現在の turn に割り込みを送信中です。デスクトップから戻るまでお待ちください。",
       "editLocked": "このキューメッセージは編集中です。完了後に操作してください。",

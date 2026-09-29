@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { Monitor } from 'lucide-react-native';
+import { Monitor, Pencil, Trash2 } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
 import { StatusDot } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
@@ -108,22 +108,34 @@ function DeviceRow({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const action = (remove: boolean) => (
-    <Pressable
-      accessibilityRole="button"
-      disabled={busy}
-      onPress={() => {
-        ref.current?.close();
-        (remove ? onDelete : onRename)(row.device);
-      }}
-      style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
-      testID={`deviceManagement.${remove ? 'delete' : 'rename'}.${row.device.deviceId}`}
-    >
-      <Text style={[styles.actionLabel, remove && styles.actionLabelDestructive]}>
-        {t(remove ? 'devices.common.delete' : 'devices.list.menu.renameDevice')}
-      </Text>
-    </Pressable>
-  );
+  // 与 iOS 滑动操作一致:只放图标(重命名=铅笔、删除=红色垃圾桶),文字留给读屏。
+  const action = (remove: boolean) => {
+    const Icon = remove ? Trash2 : Pencil;
+    return (
+      <Pressable
+        accessibilityLabel={t(remove ? 'devices.common.delete' : 'devices.list.menu.renameDevice')}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: busy }}
+        disabled={busy}
+        onPress={() => {
+          ref.current?.close();
+          (remove ? onDelete : onRename)(row.device);
+        }}
+        style={({ pressed }) => [
+          styles.action,
+          pressed && mobileInteractionStyles.pressed,
+          busy && styles.actionDisabled,
+        ]}
+        testID={`deviceManagement.${remove ? 'delete' : 'rename'}.${row.device.deviceId}`}
+      >
+        <Icon
+          color={remove ? colors.destructive : colors.textPrimary}
+          size={iconSize.xl}
+          strokeWidth={iconStroke.regular}
+        />
+      </Pressable>
+    );
+  };
   return (
     <ClassicSwipeable
       ref={ref}
@@ -182,9 +194,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.surfaceChip,
     justifyContent: 'center',
     minHeight: 44,
-    minWidth: 88,
+    minWidth: 72,
     padding: spacing.lg,
   },
-  actionLabel: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body },
-  actionLabelDestructive: { color: colors.destructive },
+  actionDisabled: { opacity: 0.45 },
 });
