@@ -2761,6 +2761,26 @@ describe('production plugin Auto admission after reservation', () => {
   const callback = source.slice(source.indexOf('    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute) => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
   const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
+  it.each(['uninstalled', 'reinstalled', 'malformed'])('keeps ordinary Worker creation separate from %s plugin receipts', async state => {
+    const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned'); });
+    const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+      createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: state === 'malformed' ? '{' : JSON.stringify({ ownershipRevoked: true, teamPlan: { items: [] } }) }) }),
+      pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
+      readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
+    };
+    const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { deps, service } = createDeps({ validateCreationPlan });
+    const result = service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex' });
+    if (state === 'malformed') {
+      await expect(result).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    } else {
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(get).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    }
+  });
+
   it.each([
     ...[false, true].flatMap(planned => ['reservation', 'directory', 'receipt', 'final-task', 'task-mode', 'disabled', 'healthy'].map(point => ({ planned, point }))),
     ...['explicit-match', 'canonical-directory', 'different-model', 'different-directory', 'normalized-fast', 'changed-plan'].map(point => ({ planned: true, point })),

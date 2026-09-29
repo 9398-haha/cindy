@@ -1,3 +1,4 @@
+import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -381,6 +382,7 @@ export interface AskUserQuestionItem {
 export interface ChatMessage {
   /** Private Bot reply provenance, projected from persisted/live agent metadata. */
   botPrivateReply?: boolean;
+  botTaskResults?: import('@cindy/maker-shared/botCollaboration').BotCollaborationMeta[];
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;
@@ -489,6 +491,8 @@ export interface ChatMessage {
   // Legacy single-question fields (kept for history compat)
   askUserOptions?: Array<{ label: string; description?: string }>;
   askUserPageIndicator?: string;
+  /** Renderer-only command result; history reads must retain it at its local position. */
+  isLocalSystemCard?: boolean;
   /**
    * F-CMD: local-only system card (not persisted)。
    * 例外:'goal-complete' 不是 ephemeral —— 它由 mapServerMessages 从持久化的
@@ -4502,6 +4506,7 @@ function applyInputProjection(
     }
   }
   let settlingClientIds: string[] = [];
+  let externalQueueDeparted = false;
   let locallyDispatchedQueueItems: QueuedMessage[] = [];
   const deferredPersistFromProjection: {
     payload: {
@@ -4532,6 +4537,11 @@ function applyInputProjection(
 
     // 队首连续出队 / steer 标记才进入 settling；中段删除不制造幽灵气泡。
     const currentQueueIds = new Set(pendingQueue.map((item) => item.clientId));
+    externalQueueDeparted = remoteProjection && s.pendingQueue.some(
+      (item) => !optimisticRecords?.has(item.clientId)
+        && !currentQueueIds.has(item.clientId)
+        && !persistedMessageIds.has(item.clientId),
+    );
     let vanishedPrefixEnd = 0;
     while (
       vanishedPrefixEnd < s.pendingQueue.length &&
@@ -4544,6 +4554,10 @@ function applyInputProjection(
     const currentSteeringIds = new Set(projection.steeringQueueClientIds);
     const settlingQueueItems = s.pendingQueue.filter((item, index) => {
       if (!remoteProjection) return false;
+      // Only this controller's sends have an outbox record that can reconcile a
+      // missing DB echo. Scheduler/IM/other-device queue entries may disappear
+      // through cancellation too; let durable history introduce those messages.
+      if (!optimisticRecords?.has(item.clientId)) return false;
       if (persistedMessageIds.has(item.clientId)) return false;
       if (currentQueueIds.has(item.clientId)) return false;
       if (locallyRemoved?.has(item.clientId)) return false;
@@ -4709,6 +4723,13 @@ function applyInputProjection(
   }
   for (const clientId of settlingClientIds) {
     scheduleRemoteOptimisticSettlingRetirement(projection.sessionId, clientId);
+  }
+  if (externalQueueDeparted) {
+    // A departure may be cancellation or a dispatch whose DB push was lost.
+    // Reuse history reconciliation without inventing a local pending row.
+    void reconcileRemoteMessages(projection.sessionId).catch((error) => {
+      log.warn('remote queue departure reconciliation failed:', error);
+    });
   }
   if (optimisticRecords) {
     const current = getOrCreateState(projection.sessionId);
@@ -15884,6 +15905,7 @@ function insertSystemCard(
           isStreaming: false,
           systemCardType: cardType,
           systemCardData: data,
+          isLocalSystemCard: cardType !== 'cindy-make' && cardType !== 'cindy-make-doctor',
           createdAt: new Date().toISOString(),
         },
       ],
@@ -18557,6 +18579,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
+      ...(m.role === 'assistant' && m.agentMeta?.turnCompleted === true
+        ? { botTaskResults: readBotTaskResults(m.agentMeta.botTaskResults) } : {}),
       // tool_result 消息也带 toolUseId(DB 列),让 MessageStream 能按 id 配对
       ...(m.role === 'tool_result' && typeof m.toolUseId === 'string' && m.toolUseId.length > 0
         ? { toolUseId: m.toolUseId }

@@ -1286,7 +1286,7 @@
         "chatAttachmentsClearFailed": "메시지 첨부 파일 캐시를 정리할 수 없습니다. 다시 시도해 주세요.",
         "dbSlimmingBackupDirectoryDialogTitle": "데이터베이스 정리 백업 폴더 선택",
         "dbSlimmingLabel": "데이터베이스 정리",
-        "dbSlimmingDescription": "선택한 기간보다 오래 업데이트되지 않은 소프트 삭제 및 보관 작업의 기록을 검사하며, 활성 작업도 선택적으로 포함할 수 있습니다. 확인 후 Cindy를 다시 시작하고 데이터베이스를 열기 전에 기록을 정리하고 압축합니다. 디스크의 첨부 파일과 생성 미디어는 삭제하지 않습니다.",
+        "dbSlimmingDescription": "선택한 기간보다 오래 업데이트되지 않은 소프트 삭제 및 보관 작업의 기록을 검사하며, 보관되지 않은 작업도 선택적으로 포함할 수 있습니다. 확인 후 Cindy를 다시 시작하고 데이터베이스를 열기 전에 기록을 정리하고 압축합니다. 디스크의 첨부 파일과 생성 미디어는 삭제하지 않습니다.",
         "dbSlimmingScanButton": "데이터베이스 검사",
         "dbSlimmingScanLoading": "데이터베이스를 검사하는 중…",
         "dbSlimmingScanResultTitle": "데이터베이스 검사 결과",
@@ -1296,12 +1296,12 @@
         "dbSlimmingArchiveAgeOption1": "1개월",
         "dbSlimmingArchiveAgeOption3": "3개월",
         "dbSlimmingArchiveAgeOption6": "6개월",
-        "dbSlimmingIncludeActiveLabel": "활성 세션 정리",
-        "dbSlimmingIncludeActiveDescription": "선택한 기간보다 오래된 활성 세션도 정리하고 세션 목록에서 제거합니다",
-        "dbSlimmingIncludeActiveConfirmTitle": "활성 작업도 데이터베이스 정리 대상에 포함할까요?",
-        "dbSlimmingIncludeActiveConfirmDescription": "선택한 기간보다 오래된 활성 작업도 아직 실행 중일 수 있습니다. 정리는 작업이 중지될 때까지 기다리지 않으며 스캔 후 추가된 메시지도 삭제될 수 있습니다. 사용하면 선택한 기간보다 오래 업데이트되지 않은 활성, 보관 및 소프트 삭제 작업이 정리됩니다. 대상 활성 세션의 기록과 Agent 컨텍스트가 삭제되며 일반 세션 항목도 목록에서 제거됩니다. 동료의 기본 세션은 유지됩니다. 데이터베이스 백업으로 작업과 메시지 데이터는 복구할 수 있습니다. 백업을 만들지 않으면 해당 데이터도 복구할 수 없습니다. 해당 메시지의 파일 변경 사항을 검토하거나 실행 취소하는 데 사용되는 기록은 데이터베이스 백업에 포함되지 않으며 복구할 수 없습니다.",
-        "dbSlimmingIncludeActiveConfirmButton": "활성 작업 포함",
-        "dbSlimmingIncludeActiveCancelButton": "활성 작업 유지",
+        "dbSlimmingIncludeActiveLabel": "보관되지 않은 세션 정리",
+        "dbSlimmingIncludeActiveDescription": "선택한 기간보다 오래된 보관되지 않은 세션도 정리하고 세션 목록에서 제거합니다",
+        "dbSlimmingIncludeActiveConfirmTitle": "보관되지 않은 작업도 데이터베이스 정리 대상에 포함할까요?",
+        "dbSlimmingIncludeActiveConfirmDescription": "선택한 기간보다 오래된 보관되지 않은 작업도 아직 실행 중일 수 있습니다. 정리는 작업이 중지될 때까지 기다리지 않으며 스캔 후 추가된 메시지도 삭제될 수 있습니다. 사용하면 선택한 기간보다 오래 업데이트되지 않은 미보관, 보관 및 소프트 삭제 작업이 정리됩니다. 대상 보관되지 않은 세션의 기록과 Agent 컨텍스트가 삭제되며 일반 세션 항목도 목록에서 제거됩니다. 동료의 기본 세션은 유지됩니다. 데이터베이스 백업으로 작업과 메시지 데이터는 복구할 수 있습니다. 백업을 만들지 않으면 해당 데이터도 복구할 수 없습니다. 해당 메시지의 파일 변경 사항을 검토하거나 실행 취소하는 데 사용되는 기록은 데이터베이스 백업에 포함되지 않으며 복구할 수 없습니다.",
+        "dbSlimmingIncludeActiveConfirmButton": "보관되지 않은 작업 포함",
+        "dbSlimmingIncludeActiveCancelButton": "보관되지 않은 작업 유지",
         "dbSlimmingBackupLabel": "정리 전 데이터베이스 백업",
         "dbSlimmingBackupDefaultLocation": "데이터베이스 폴더(최근 정리 백업만 유지)",
         "dbSlimmingUseDefaultDirectoryButton": "기본 폴더 사용",
@@ -1312,7 +1312,7 @@
         "dbSlimmingBackupMissing": "최근 정리 백업을 찾을 수 없습니다.",
         "dbSlimmingBackupOpenFailed": "정리 백업 위치를 열 수 없습니다. 다시 시도해 주세요.",
         "dbSlimmingReportTasks": "소프트 삭제 작업 {{deleted}}개와 보관된 작업 {{archived}}개를 정리합니다",
-        "dbSlimmingReportTasksWithActive": "활성 작업 {{active}}개, 소프트 삭제된 작업 {{deleted}}개, 보관된 작업 {{archived}}개를 정리합니다",
+        "dbSlimmingReportTasksWithActive": "보관되지 않은 작업 {{active}}개, 소프트 삭제된 작업 {{deleted}}개, 보관된 작업 {{archived}}개를 정리합니다",
         "dbSlimmingReportMessages": "정리할 메시지 내용: {{count}}개(약 {{size}})",
         "dbSlimmingReportSpace": "데이터베이스 {{database}}, 필요한 임시 공간 최소 {{temporary}}, 사용 가능 {{free}}",
         "dbSlimmingSpaceUnknown": "알 수 없음",
@@ -2671,7 +2671,7 @@
         "pending": "인증 정보 준비 중",
         "unavailable": "일시적으로 사용할 수 없음"
       },
-      "claudeAccountRetired": "별도 Claude 계정은 더 이상 지원되지 않습니다. 'Claude Code로 로그인'으로 Claude 구독을 연결하세요. 이 계정은 삭제해도 됩니다."
+      "claudeAccountRetired": "Cindy에서는 이 이전 Claude 연결 방식으로 구독에 로그인할 수 없습니다. Claude 계정과 구독에는 영향이 없습니다. ‘Claude Code로 로그인’을 사용해 구독을 연결하세요."
     },
     "experimental": {
       "title": "실험적 기능",
@@ -8270,13 +8270,13 @@
       "automations": "자동화",
       "paused": "일시 중지 유지",
       "itemAttention": "확인 필요",
-      "takeover": "확인 후 자동화 인계",
+      "takeover": "가져온 후 자동화 확인 및 인계",
       "takeoverNote": "데이터 연결 확인 후 원본 작업을 중지합니다. 필요한 항목을 제외하면 원본 작업은 계속 실행됩니다.",
       "submit": "가져오기",
       "back": "이전",
       "open": "동료 열기",
       "running": "가져오기 및 연결 확인 중…",
-      "complete": "가져오기 완료",
+      "complete": "가져온 내용을 저장했습니다",
       "attention": "확인이 필요한 항목이 있습니다. 아래 내용을 확인하세요.",
       "error": "가져오기를 완료하지 못했습니다. 같은 선택으로 재시도하세요.",
       "keptAtSource": "인계가 완료되지 않았습니다",
@@ -8291,7 +8291,31 @@
       "credentialFailed": "인증 정보를 안전하게 저장하지 못했습니다.",
       "scriptMissing": "필요한 스크립트가 없습니다.",
       "sourceCommand": "기존 Agent 제어 명령을 찾지 못했습니다.",
-      "readFailed": "작업에 필요한 실제 데이터 조회를 확인하지 못했습니다."
+      "readFailed": "작업에 필요한 실제 데이터 조회를 확인하지 못했습니다.",
+      "search": "검색",
+      "selectAll": "모두 선택",
+      "previous": "이전 페이지",
+      "next": "다음 페이지",
+      "chatSetup": "가져올 수 있는 자료를 저장했어요. 바로 대화를 시작할 수 있어요. 로그인이나 확인이 필요한 항목은 편할 때 마무리하면 돼요. 인계가 끝날 때까지 기존 자동화 상태는 그대로 유지돼요.",
+      "chatReady": "정보를 가져왔습니다. 이제 대화를 시작할 수 있어요.",
+      "partial": "일부 내용을 완전히 가져오지 못했습니다",
+      "details": "가져오기 세부 정보",
+      "partlySaved": "일부만 저장됨",
+      "savedNeedsSetup": "저장됨 · 설정 또는 활성화 필요",
+      "notSaved": "저장되지 않음",
+      "databaseDriver": "데이터베이스 드라이버를 불러올 수 없습니다. Cindy를 업데이트하거나 복구한 뒤 다시 시도하세요.",
+      "databaseUnavailable": "원본 데이터베이스를 읽을 수 없습니다. 원본은 변경되지 않았으며 복구 후 다시 시도할 수 있습니다.",
+      "fileTooLarge": "파일 또는 전체 자료가 읽기 한도를 초과했습니다. 내용을 잘라서 가져오지 않았습니다.",
+      "memoryMetadata": "기억 요약 또는 제목이 저장 요건에 맞지 않습니다.",
+      "memoryWrite": "기억 저장 또는 무결성 확인에 실패했습니다. 다시 시도할 수 있습니다.",
+      "memoryChanged": "저장된 기억이 변경되어 덮어쓰지 않았습니다.",
+      "attachmentUnsupported": "아직 지원하지 않는 첨부 형식입니다. 원본 파일은 소스에 남아 있습니다.",
+      "diskFull": "디스크 공간이 부족합니다. 공간을 확보한 뒤 다시 시도하세요.",
+      "permissionDenied": "읽기 또는 저장 권한이 없습니다. 권한을 수정한 뒤 다시 시도하세요.",
+      "setupDeferred": "파트너 채팅에서 로그인과 확인을 계속할 수 있습니다.",
+      "automationInvalid": "자동화 정의를 변환할 수 없어 생성되지 않았습니다.",
+      "itemFailed": "아직 완료되지 않은 항목입니다. 다시 시도하거나 세부 정보를 확인하세요.",
+      "chatPartial": "파트너가 생성되었지만 일부 자료는 완전히 저장되지 않았습니다. 아래 항목은 추가 처리가 필요하며 다른 내용과 채팅은 계속 사용할 수 있습니다."
     }
   },
   "common": {
@@ -9636,7 +9660,7 @@
       "promptSend": "보내기",
       "promptCancel": "취소"
     },
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "전체 도구 출력이 해제되었습니다(원래 크기 {{size}})",
     "agentActionRow": {
       "noContent": "표시할 내용이 없음",
       "fileChange": {
@@ -9752,6 +9776,29 @@
       }
     },
     "systemCard": {
+      "help": {
+        "title": "사용 가능한 명령",
+        "builtInCommands": "기본 제공 명령",
+        "projectCommands": "프로젝트 명령",
+        "empty": "사용할 수 있는 명령이 없습니다."
+      },
+      "cost": {
+        "title": "세션 사용량",
+        "tokensUsed": "이번 턴의 사용 토큰 수"
+      },
+      "pwd": {
+        "title": "작업 디렉터리",
+        "notSet": "(설정되지 않음)"
+      },
+      "status": {
+        "title": "세션 상태",
+        "agent": "Agent",
+        "model": "모델",
+        "effort": "추론 강도",
+        "permissionMode": "권한 모드",
+        "running": "실행 중",
+        "idle": "대기 중"
+      },
       "context": {
         "title": "컨텍스트 사용량",
         "loading": "불러오는 중…",
@@ -10743,14 +10790,89 @@
         "clickToOpen": "클릭하여 브라우저에서 PR 열기",
         "guidance": {
           "login": {
-            "hint": "클릭하면 Agent가 로그인을 도와줍니다",
-            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub 로그인 맡기기",
-            "prompt": "GitHub CLI에 로그인해 주세요: `gh auth login -h github.com -w`를 실행하고 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+            "hint": "클릭하여 GitHub 연결",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: GitHub 연결"
           },
           "install": {
-            "hint": "클릭하면 Agent가 설치와 로그인을 도와줍니다",
-            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub CLI 설치와 로그인 맡기기",
-            "prompt": "GitHub CLI(gh)를 설치해 주세요(macOS는 `brew install gh`, Windows는 `winget install GitHub.cli`). 그다음 `gh auth login -h github.com -w`를 실행해 로그인하고, 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+            "hint": "클릭하여 GitHub 연결",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: GitHub 연결"
+          }
+        },
+        "setup": {
+          "install": "설치하고 계속",
+          "connect": "GitHub 로그인",
+          "cancel": "취소",
+          "retry": "다시 시도",
+          "done": "완료",
+          "openBrowser": "GitHub에서 승인",
+          "deviceCode": "일회용 기기 코드",
+          "copyCode": "코드 복사",
+          "copied": "복사됨",
+          "copyFailed": "복사하지 못했습니다. 코드를 선택하여 직접 복사해 주세요.",
+          "openFailed": "브라우저를 열지 못했습니다. github.com/login/device를 직접 열어 주세요.",
+          "stages": {
+            "install": {
+              "title": "GitHub CLI 설치",
+              "description": "GitHub CLI를 설치하여 GitHub 계정에 연결하세요."
+            },
+            "login": {
+              "title": "GitHub 연결",
+              "description": "GitHub 계정에 연결하세요. GitHub CLI가 없으면 자동으로 설치합니다."
+            },
+            "checking": {
+              "title": "연결 확인 중…",
+              "description": "GitHub 로그인 상태를 확인하고 있습니다."
+            },
+            "downloading": {
+              "title": "GitHub CLI 다운로드 중…",
+              "description": "다운로드가 끝나면 자동으로 설치합니다."
+            },
+            "installing": {
+              "title": "GitHub CLI 설치 중…",
+              "description": "다운로드가 완료되었습니다."
+            },
+            "preparing": {
+              "title": "로그인 준비 중…",
+              "description": "일회용 기기 코드를 가져오고 있습니다."
+            },
+            "authorizing": {
+              "title": "GitHub 로그인",
+              "description": "아래 코드를 복사한 뒤 GitHub 페이지에 입력하여 승인하세요."
+            },
+            "connected": {
+              "title": "GitHub에 연결되었습니다",
+              "description": "이 창을 닫고 계속 사용할 수 있습니다."
+            },
+            "cancelled": {
+              "title": "연결이 취소되었습니다",
+              "description": "준비되면 다시 연결할 수 있습니다."
+            },
+            "unavailable": {
+              "title": "진행 상황을 읽을 수 없음",
+              "description": "현재 진행 상황을 가져올 수 없습니다. 다시 시도해 주세요."
+            },
+            "error": {
+              "title": "연결이 완료되지 않음"
+            }
+          },
+          "errors": {
+            "unsupported": "아직 지원하지 않는 운영 체제 또는 프로세서입니다.",
+            "install": "설치에 실패했습니다. 네트워크와 디스크 공간을 확인하고 다시 시도하세요.",
+            "login": "로그인에 실패했거나 승인이 거부되었습니다. 다시 시도하여 새 코드를 받으세요.",
+            "timeout": "코드가 만료되었습니다. 다시 시도하여 새 코드를 받으세요."
+          },
+          "account": {
+            "checking": "GitHub 연결 확인 중…",
+            "connected": "연결됨 · @{{login}}",
+            "missing": "GitHub에 연결하여 시작하세요.",
+            "auth": "인증이 만료되었습니다. 다시 로그인하거나 아래 예비 토큰을 변경하세요.",
+            "network": "GitHub에 연결할 수 없습니다. 네트워크를 확인하고 다시 시도하세요.",
+            "forbidden": "연결을 확인할 수 없습니다. 권한이나 요청 한도를 확인하고 다시 시도하세요.",
+            "gh-cli": "이 컴퓨터의 GitHub 로그인 사용 중",
+            "token": "예비 토큰 사용 중",
+            "recheck": "연결 확인",
+            "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
+            "otherMethods": "다른 연결 방법"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건"
