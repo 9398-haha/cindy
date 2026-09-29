@@ -15,7 +15,8 @@ import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
 import {
-  publishSelfDeviceName,
+  publishSavedSelfDeviceName,
+  selfDeviceNameKey,
   SETTINGS_DEVICE_TIMEOUT_MS,
   useSettingsDeviceDirectory,
 } from '@/session/settingsDeviceDirectory';
@@ -74,6 +75,7 @@ export default function RenameSelfDeviceScreen() {
 
   const writeName = useCallback(async (kind: 'rename' | 'reset') => {
     const deviceId = auth.deviceId;
+    const accountGeneration = auth.accountGeneration;
     if (!deviceId) {
       setMessage({ kind: 'error', text: t('settings.deviceNameEditor.deviceInitializing') });
       return;
@@ -90,7 +92,7 @@ export default function RenameSelfDeviceScreen() {
           timeoutMs: SETTINGS_DEVICE_TIMEOUT_MS,
         },
       );
-      publishSelfDeviceName(deviceId, res.name);
+      publishSavedSelfDeviceName(selfDeviceNameKey(accountGeneration, deviceId), res.name);
       if (!mountedRef.current) return;
       touchedRef.current = false;
       setDraft(res.name);
@@ -122,7 +124,9 @@ export default function RenameSelfDeviceScreen() {
   }, [back, dirty, leaveAfterSave]);
 
   // 有未保存改动时拦截所有离开方式(顶栏返回、iOS 边缘右滑、Android 返回键)。
-  usePreventRemove(dirty && !leaveAfterSave, ({ data }) => {
+  // 写入进行中也不能离开:已发出的请求无法可靠撤回,此时「放弃」并不能真的放弃。
+  usePreventRemove(saving || (dirty && !leaveAfterSave), ({ data }) => {
+    if (saving) return;
     Alert.alert(
       t('settings.deviceNameEditor.discardTitle'),
       t('settings.deviceNameEditor.discardBody'),

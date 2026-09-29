@@ -214,7 +214,11 @@ describe('mobile settings overview', () => {
     // 名称正本仍是 device-link 设备清单。
     expect(directory).toContain("auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices'");
     expect(directory).toContain('const self = res.devices.find((device) => device.deviceId === selfDeviceId);');
-    expect(directory).toContain('export function publishSelfDeviceName');
+    expect(directory).toContain('export function publishSavedSelfDeviceName');
+    // 共享名称按「账号代次 + deviceId」隔离:同一台手机换账号不串名。
+    expect(directory).toContain('return `${accountGeneration}:${deviceId}`;');
+    // 读取发起后若已有新保存,旧快照不覆盖刚存的名称。
+    expect(directory).toContain('if (selfDeviceNameWrites === writesAtStart) publish(');
 
     expect(editor).toContain('testID="settings.renameSelfDevice.screen"');
     expect(editor).toContain('backTestID="settings.renameSelfDevice.backButton"');
@@ -226,10 +230,12 @@ describe('mobile settings overview', () => {
     expect(editor).toContain('`/api/device-link/devices/${encodeURIComponent(deviceId)}`');
     expect(editor).toContain("method: 'PATCH'");
     expect(editor).toContain("body: kind === 'reset' ? { name: null } : { name: trimmedDraft }");
-    expect(editor).toContain('publishSelfDeviceName(deviceId, res.name);');
+    expect(editor).toContain('publishSavedSelfDeviceName(selfDeviceNameKey(accountGeneration, deviceId), res.name);');
     // 保存按钮只在有改动且非空时可用;离开时不再静默保存,有改动先确认放弃。
     expect(editor).toContain('const canSave = dirty && trimmedDraft.length > 0 && !saving;');
-    expect(editor).toContain('usePreventRemove(dirty && !leaveAfterSave');
+    // 写入进行中不能离开(已发出的 PATCH 撤不回,「放弃」名不副实)。
+    expect(editor).toContain('usePreventRemove(saving || (dirty && !leaveAfterSave)');
+    expect(editor).toContain('if (saving) return;');
     expect(editor).toContain("t('settings.deviceNameEditor.discardTitle')");
     expect(editor).not.toContain('setTimeout(() => {');
     expect(editor).not.toContain('acceptClosedDraft');

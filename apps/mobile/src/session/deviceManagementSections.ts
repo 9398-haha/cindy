@@ -6,7 +6,7 @@ export const DEVICE_MANAGEMENT_OFFLINE_PREVIEW_COUNT = 3;
 export interface DeviceManagementSections<TDevice extends DeviceListDeviceLike> {
   /** 在线设备(可控在前;含未开远控 / 已撤销访问的在线设备),保持共享排序。 */
   online: DeviceListItem<TDevice>[];
-  /** 离线设备:按最近在线时间倒序(没有记录的排最后),同时间按名称。 */
+  /** 离线设备(含已撤销访问的离线设备):按最近在线时间倒序(没有记录的排最后),同时间按名称。 */
   offline: DeviceListItem<TDevice>[];
 }
 
@@ -26,7 +26,8 @@ export function buildDeviceManagementSections<TDevice extends DeviceListDeviceLi
   const online: DeviceListItem<TDevice>[] = [];
   const offline: DeviceListItem<TDevice>[] = [];
   for (const row of rows) {
-    if (row.state === 'offline') offline.push(row);
+    // 按设备真实在线状态分组:状态会先判「已撤销访问」,离线的已撤销设备 state 不是 offline。
+    if (!row.device.online) offline.push(row);
     else online.push(row);
   }
   offline.sort((a, b) =>

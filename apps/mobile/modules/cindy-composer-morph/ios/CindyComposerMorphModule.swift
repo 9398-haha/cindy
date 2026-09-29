@@ -115,8 +115,20 @@ final class CindyComposerMorphSource: ExpoView {
     ["id": id, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height,
       "windowWidth": window.bounds.width, "windowHeight": window.bounds.height]
   }
+  /// Same rule as expo-glass-effect's `isLiquidGlassAvailable`: without Liquid
+  /// Glass the new-task composer mounts no morph target, so no overlay may start.
+  private static let liquidGlassAvailable: Bool = {
+    #if compiler(>=6.2)
+    if #available(iOS 26.0, *) {
+      return (Bundle.main.infoDictionary?["UIDesignRequiresCompatibility"] as? Bool) != true
+    }
+    #endif
+    return false
+  }()
   static func begin(source: UIView, window: UIWindow) -> [String: Any]? {
     current?.finish()
+    // No origin → the caller navigates normally, with the regular push animation.
+    guard liquidGlassAvailable else { return nil }
     let rect = source.convert(source.bounds, to: window)
     guard window.bounds.contains(rect), !rect.isEmpty,
       let backdrop = window.snapshotView(afterScreenUpdates: false),
