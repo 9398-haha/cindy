@@ -170,6 +170,8 @@ export async function createGhostErrandSession(params: {
   ghostId: string;
   /** Host-allocated durable task identity; never taken directly from plugin payload. */
   sessionId?: string;
+  /** Synchronous boundary: after this callback, a failed INSERT is not proof of absence. */
+  onPersistenceStarted?: () => void;
   shouldContinue?: () => boolean;
   title: string | null;
   agentKind?: 'cc' | 'codex' | 'pi';
@@ -221,6 +223,7 @@ export async function createGhostErrandSession(params: {
     source: 'plugin-errand-session',
   });
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
+  params.onPersistenceStarted?.();
   await db.insert(sessions).values(insertRow);
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   if (projectDir && insertRow.workingDir) {

@@ -10499,7 +10499,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         if (workers.length || reservations.length) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before creating Workers');
       },
-      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute) => {
+      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute, onPersistenceStarted) => {
         assertPlugin(pluginId);
         const cfg = readGhostErrandConfig(pluginId);
         const configurationIsCurrent = () => {
@@ -10529,6 +10529,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!configurationIsCurrent()) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task configuration changed');
         await createGhostErrandSession({
           ghostId: pluginId, sessionId: taskId, title, ...route,
+          onPersistenceStarted,
           permissionMode: clampErrandPermissionMode(cfg.permissionMode),
           ...(workingDir ? { workingDir } : {}),
           shouldContinue: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId) && configurationIsCurrent(),

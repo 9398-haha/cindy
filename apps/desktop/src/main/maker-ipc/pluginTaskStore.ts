@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { pluginTaskRequests } from '../localDb/schema.js';
+import { pluginTaskRequests, sessions } from '../localDb/schema.js';
 import type { PluginTaskStore } from './pluginTaskService.js';
 import { PluginTaskError } from './pluginTaskService.js';
 
@@ -55,6 +55,15 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .where(and(eq(table.operation, 'send'), eq(table.targetId, taskId))),
     insert: async (row) => {
       await db.drizzle.insert(table).values(row);
+    },
+    discardUncreated: async (row) => {
+      // The caller proves INSERT never started; retain any changed/revoked
+      // receipt or raw Session row, even one hidden by the task view.
+      await db.drizzle.delete(table).where(and(
+        eq(table.id, row.id), eq(table.pluginId, row.pluginId),
+        eq(table.operation, 'create'), eq(table.revision, row.revision),
+        sql`NOT EXISTS (SELECT 1 FROM ${sessions} WHERE ${sessions.id} = ${row.id})`,
+      ));
     },
     revokePlugin: async (pluginId) => {
       // Keep the identity/request key so reinstall cannot replay or recreate old tasks.

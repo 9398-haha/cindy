@@ -4,6 +4,29 @@ import { expect, it } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { createPluginTaskStore } from '../pluginTaskStore.js';
 
+it.each(['absent', 'raw session', 'revoked', 'changed revision', 'other plugin', 'send'] as const)(
+  'rolls back only its uncreated receipt in SQLite: %s', async state => {
+    const sqlite = new Database(':memory:');
+    try {
+      sqlite.exec(`CREATE TABLE plugin_task_requests(id TEXT PRIMARY KEY, plugin_id TEXT,
+        operation TEXT, target_id TEXT, request_key TEXT, fingerprint TEXT, payload TEXT,
+        revision INTEGER, created_at INTEGER); CREATE TABLE sessions(id TEXT PRIMARY KEY)`);
+      const store = createPluginTaskStore({ drizzle: drizzle(sqlite) } as unknown as DbClient);
+      const row = { id: 'task', pluginId: 'p', operation: 'create' as const, targetId: '',
+        requestKey: 'key', fingerprint: 'hash', payload: '{}', revision: 0, createdAt: 1 };
+      await store.insert(row);
+      if (state === 'raw session') sqlite.prepare('INSERT INTO sessions VALUES (?)').run(row.id);
+      if (state === 'revoked') await store.revokePlugin('p');
+      if (state === 'changed revision') await store.save(row);
+      if (state === 'other plugin') sqlite.exec("UPDATE plugin_task_requests SET plugin_id='other'");
+      if (state === 'send') sqlite.exec("UPDATE plugin_task_requests SET operation='send'");
+      await store.discardUncreated(row);
+      expect(await store.get(row.id)).toEqual(state === 'absent' ? undefined : expect.any(Object));
+      expect(sqlite.prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: state === 'raw session' ? 1 : 0 });
+    } finally { sqlite.close(); }
+  },
+);
+
 it('durably revokes only create ownership while retaining plans, run results and request identities', async () => {
   const sqlite=new Database(':memory:');
   try {

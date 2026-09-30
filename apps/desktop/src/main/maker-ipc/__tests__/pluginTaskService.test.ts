@@ -52,6 +52,11 @@ function fixture() {
       expect(rows.has(r.id)).toBe(false);
       rows.set(r.id, copy(r));
     },
+    discardUncreated: vi.fn(async r => {
+      const current = rows.get(r.id);
+      if (current && current.pluginId === r.pluginId && current.operation === 'create'
+        && current.revision === r.revision && !tasks.has(r.id)) rows.delete(r.id);
+    }),
     save: async (r) => {
       expect(rows.get(r.id)?.revision).toBe(r.revision);
       rows.set(r.id, copy({ ...r, revision: r.revision + 1 }));
@@ -77,7 +82,8 @@ function fixture() {
     id: () => `id-${++seq}`,
     now: () => 1,
     resolveRoute: vi.fn(async (_, r) => r ?? route),
-    createSession: vi.fn(async (_, taskId, title, resolvedConfig) => {
+    createSession: vi.fn(async (_, taskId, title, resolvedConfig, _isolated, _requested, onPersistenceStarted) => {
+      onPersistenceStarted();
       tasks.set(taskId, { taskId, title, resolvedConfig, revision: 1, status: 'active', permissionMode: 'plan' });
     }),
     readSession: async (id) => copy(tasks.get(id) ?? null),
@@ -156,6 +162,75 @@ it.each(['restore','restart'] as const)('the production cancel adapter rechecks 
 });
 
 describe('plugin ordinary task receipts', () => {
+  it.each(['same service', 'restart', 'concurrent'] as const)('retries a conclusively uncreated task with the original key after %s', async mode => {
+    const f = fixture();
+    const create = vi.mocked(f.deps.createSession);
+    create.mockRejectedValueOnce(new Error('Directory unavailable'));
+    await expect(f.create()).rejects.toThrow('Directory unavailable');
+    const service = mode === 'restart' ? createPluginTaskService(f.deps) : f.service;
+    const request = { requestKey: 'create', title: 'Test' };
+    const calls = mode === 'concurrent' ? 2 : 1;
+    const tasks = await Promise.all(Array.from({ length: calls }, () => service.create('p', request)));
+    expect(new Set(tasks.map(task => task.taskId)).size).toBe(1);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(f.tasks.size).toBe(1);
+    expect(f.rows.size).toBe(1);
+    await expect(service.create('p', { ...request, title: 'Changed' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  });
+  it.each(['insert error', 'persisted', 'deleted after insert'] as const)('retains the request key after persistence started: %s', async phase => {
+    const f = fixture();
+    const create = f.deps.createSession;
+    f.deps.createSession = vi.fn(async (...args: Parameters<PluginTaskServiceDeps['createSession']>) => {
+      args[6]();
+      if (phase !== 'insert error') await create(...args);
+      if (phase === 'deleted after insert') f.tasks.delete(args[1]);
+      throw new Error('Creation response failed');
+    });
+    await expect(f.create()).rejects.toThrow('Creation response failed');
+    expect(f.rows.size).toBe(1);
+    expect(f.deps.store.discardUncreated).not.toHaveBeenCalled();
+    if (phase === 'persisted') await expect(f.create()).resolves.toMatchObject({ taskId: 'id-1' });
+    else await expect(f.create()).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    expect(f.deps.createSession).toHaveBeenCalledOnce();
+  });
+  it('retains the receipt when rollback fails and does not silently retry creation', async () => {
+    const f = fixture();
+    vi.mocked(f.deps.createSession).mockRejectedValueOnce(new Error('Directory unavailable'));
+    vi.mocked(f.deps.store.discardUncreated).mockRejectedValueOnce(new Error('Storage unavailable'));
+    await expect(f.create()).rejects.toThrow('Storage unavailable');
+    await expect(f.create()).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    expect(f.rows.size).toBe(1);
+    expect(f.deps.createSession).toHaveBeenCalledOnce();
+  });
+  it('rolls back an unstarted creation through its captured store after an account switch', async () => {
+    const f = fixture();
+    const insert = f.deps.store.insert;
+    f.deps.store.insert = async row => { await insert(row); f.switchOwner(); };
+    await expect(f.create()).rejects.toThrow('Owner changed');
+    expect(f.rows.size).toBe(0);
+    expect(f.deps.createSession).not.toHaveBeenCalled();
+  });
+  it('never releases an already revoked creation key on a preparation failure', async () => {
+    const f = fixture();
+    vi.mocked(f.deps.createSession).mockImplementationOnce(async () => {
+      await f.deps.store.revokePlugin('p');
+      throw new Error('Plugin unavailable');
+    });
+    await expect(f.create()).rejects.toThrow('Plugin unavailable');
+    expect(f.rows.size).toBe(1);
+    await expect(createPluginTaskService(f.deps).create('p', { requestKey: 'create', title: 'Test' }))
+      .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    expect(f.deps.createSession).toHaveBeenCalledOnce();
+  });
+  it('does not recreate a deleted task or an old ambiguous orphan receipt', async () => {
+    const f = fixture();
+    const task = await f.create();
+    f.tasks.delete(task.taskId);
+    await expect(createPluginTaskService(f.deps).create('p', { requestKey: 'create', title: 'Test' }))
+      .rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    expect(f.deps.store.discardUncreated).not.toHaveBeenCalled();
+    expect(f.deps.createSession).toHaveBeenCalledOnce();
+  });
   it('retains user tasks and receipts but denies every old task capability after reinstall and restart', async () => {
     const f = fixture(); const task = await f.create(); const run = await f.send();
     const before = structuredClone([...f.tasks]);
@@ -221,7 +296,7 @@ describe('plugin ordinary task receipts', () => {
     const f = fixture();
     const input = { requestKey: 'isolated', title: 'Test', isolatedWorkspace: true };
     const task = await f.service.create('p', input);
-    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined);
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined, expect.any(Function));
     await f.service.create('p', input);
     expect(f.deps.createSession).toHaveBeenCalledTimes(1);
     await expect(f.service.create('p', { ...input, isolatedWorkspace: false }))
