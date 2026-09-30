@@ -1,6 +1,3 @@
-import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { appendAutoReviewUserIntent, type AutoReviewRequest, type AutoReviewUserIntent, type AutoReviewDecision } from '@cindy/maker-core';
 import { withAutoReviewContext, resolveAutoReviewDecision } from '../../../../../../packages/maker-core/src/agents/shared/auto-review-decision.js';
@@ -46,7 +43,7 @@ function fixture(): PluginReviewSnapshot {
     },
     session: { workingDir: '/answer', permissionMode: 'auto', status: 'active', route },
     lead: { permissionMode: 'auto', status: 'active' },
-    worker: { label: 'w', activeTeam: true },
+    worker: { label: 'w', activeTeam: true, directoryMatches: true },
     history: [
       {
         clientId: 'lead-input',
@@ -357,28 +354,8 @@ it.each([false, true])('marks tied user grant/revocation as incomplete regardles
   expect(JSON.stringify(result.userIntent)).toContain('Do not write');
 });
 
-it('accepts a plan alias only while it resolves to the stored Worker directory', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'plugin-review-path-'));
-  try {
-    const target = join(root, 'target'), other = join(root, 'other'), alias = join(root, 'alias');
-    await mkdir(target); await mkdir(other);
-    await symlink(target, alias, 'junction');
-    const s = fixture();
-    s.plan!.items[0]!.workingDir = alias;
-    s.session.workingDir = await realpath(target);
-    const r = {...request, workspaceRoots: [s.session.workingDir]};
-    const resolve = createPluginTaskReviewResolver(async () => s);
-    expect((await resolve(r)).delegatedTask?.workingDir).toBe(s.session.workingDir);
-    await rm(alias);
-    await symlink(other, alias, 'junction');
-    expect((await resolve(r)).authorizationError).toBeTruthy();
-    await rm(alias);
-    expect((await resolve(r)).authorizationError).toBeTruthy();
-    s.plan!.items[0]!.workingDir = join(target, '..', 'target');
-    expect((await resolve(r)).authorizationError).toBeUndefined();
-    s.authorized = false;
-    expect((await resolve(r)).authorizationError).toBeTruthy();
-  } finally {
-    await rm(root, {recursive: true, force: true});
-  }
+it('rejects a Worker when the loader could not verify its directory', async () => {
+  const s=fixture();
+  s.worker!.directoryMatches=false;
+  expect((await createPluginTaskReviewResolver(async()=>s)(request)).authorizationError).toBeTruthy();
 });

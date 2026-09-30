@@ -13709,6 +13709,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!session || !lead || !session.workingDir) throw new Error('Delegated task unavailable');
     const agentKind = session.agentKind === 'cc' ? 'cc' : session.agentKind === 'pi' ? 'pi' : session.agentKind === 'codex' ? 'codex' : null;
     if (!agentKind) throw new Error('Delegated task route unavailable');
+    const data = readPluginTaskPlanReceipt(receipt.payload);
+    const item = link ? data.teamPlan?.items.find(item => item.label === link.label) : undefined;
+    let directoryMatches = item?.workingDir === session.workingDir;
+    if (item && !directoryMatches) {
+      try {
+        directoryMatches = await fsp.realpath(item.workingDir) === session.workingDir;
+      } catch {
+        directoryMatches = false;
+      }
+    }
+    // Resolve aliases before the live ownership/database/epoch fence. Returning
+    // the checked snapshot must not await filesystem I/O after that fence.
     await drainPersistQueue();
     const projection = await epoch.client.tx('authorization.readProjection', { sessionId, leadId });
     // Reinstall must not revive the old Lead's delegated authority, including
@@ -13742,7 +13754,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ]);
     if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
     const config = readGhostErrandConfig(receipt.pluginId);
-    const data = readPluginTaskPlanReceipt(receipt.payload);
     const approvalRevision = pluginTaskAuthorizationRevision(receipt.pluginId);
     return {
       pluginId: receipt.pluginId,
@@ -13754,7 +13765,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         route: { agentKind, providerId: session.providerId ?? '', model: session.model,
           effort: session.effort, fastMode: !!session.fastMode } },
       lead: { permissionMode: lead.permissionMode, planModeEnabled: !!lead.planModeEnabled, status: lead.status },
-      ...(link ? { worker: { label: link.label ?? '', activeTeam: link.teamStatus === 'active' } } : {}),
+      ...(link ? { worker: { label: link.label ?? '', activeTeam: link.teamStatus === 'active', directoryMatches } } : {}),
       projection,
       history: [],
       sessionHistory: [],

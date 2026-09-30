@@ -1,6 +1,5 @@
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
 import {
   normalizeAutoReviewUserIntent,
   type AutoReviewRequest,
@@ -20,7 +19,7 @@ export interface PluginReviewSnapshot {
   settledLabels?: string[];
   session: { workingDir: string; permissionMode: string; planModeEnabled?: boolean; status: string; route: PluginTaskRoute };
   lead: { permissionMode: string; planModeEnabled?: boolean; status: string };
-  worker?: { label: string; activeTeam: boolean };
+  worker?: { label: string; activeTeam: boolean; directoryMatches: boolean };
   history: AutoReviewHistoryMessage[];
   sessionHistory: AutoReviewHistoryMessage[];
   historyComplete: boolean;
@@ -72,16 +71,6 @@ export function createPluginTaskReviewResolver(
       ? plan?.items.find((x) => x.label === snapshot.worker!.label)
       : undefined;
     const task = snapshot.worker ? item?.task : plan?.task;
-    // Worker creation stores a canonical local directory. Compare aliases to
-    // that same identity, never broaden the plan to a parent or a new root.
-    let directoryMatches = item?.workingDir === snapshot.session.workingDir;
-    if (snapshot.worker && item && !directoryMatches) {
-      try {
-        directoryMatches = await realpath(item.workingDir) === snapshot.session.workingDir;
-      } catch {
-        directoryMatches = false;
-      }
-    }
     if (!snapshot.worker && task && (!snapshot.registeredRoute ||
       (['agentKind', 'providerId', 'model', 'effort', 'fastMode'] as const).some(
         k => snapshot.registeredRoute![k] !== snapshot.session.route[k],
@@ -91,7 +80,7 @@ export function createPluginTaskReviewResolver(
       (!snapshot.worker.activeTeam ||
         !item ||
         snapshot.settledLabels?.includes(snapshot.worker.label) ||
-        !directoryMatches ||
+        !snapshot.worker.directoryMatches ||
         (Object.keys(item.route) as Array<keyof PluginTaskRoute>).some(
           (k) => item.route[k] !== snapshot.session.route[k],
         ))
