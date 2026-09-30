@@ -6,7 +6,7 @@ import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
-const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void }>());
+const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void }>());
 vi.mock('react-native', async () => {
   const React = await import('react');
   const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
@@ -32,8 +32,8 @@ vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }))
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
-  return { Image: ({ source, onLoad, style }: any) => {
-    imageEvents.set(source.uri, { onLoad });
+  return { Image: ({ source, onLoad, onError, style }: any) => {
+    imageEvents.set(source.uri, { onLoad, onError });
     const frame = Object.assign({}, ...[style].flat().filter(Boolean));
     return createElement('img', { src: source.uri, 'data-width': frame.width, 'data-height': frame.height });
   } };
@@ -122,13 +122,31 @@ describe('group image attachments outside LegendList (#5278)', () => {
     await act(async () => root!.render(createElement(AttachmentStrip, {
       attachments: [{ kind: 'image', name: 'local.png', uri: imageUrl, previewable: false }],
       messageKey: 'local-message', clientId: 'local-message', align: 'right', layout,
-      usePreviewState: useState,
+      usePreviewState: useState, onResolveRemoteMedia: resolveMedia,
       getImagePreview: () => ({ attachmentId: 'local', name: 'local.png', sourceRef: imageUrl, uri }),
     })));
     expect(host.querySelector('img')?.getAttribute('src')).toBe(uri);
     act(() => imageEvents.get(uri)!.onLoad({ source: { width: 100, height: 50 } }));
     expect(host.querySelector('img')?.getAttribute('data-width')).toBe('100');
     expect(host.querySelector('img')?.getAttribute('data-height')).toBe('50');
+    await act(async () => imageEvents.get(uri)!.onError());
+    expect(host.querySelector('img')?.getAttribute('src')).toBe(thumbnailUrl);
+  });
+
+  it('retries a failed remote thumbnail once, then shows the fallback and keeps the gallery action', async () => {
+    const container = await renderAttachment('failed-thumbnail-message');
+    await act(async () => imageEvents.get(thumbnailUrl)!.onError());
+    expect(resolveMedia).toHaveBeenCalledTimes(2);
+    expect(resolveMedia).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: imageUrl, thumbnail: true }),
+      expect.objectContaining({ forceRefresh: true }),
+    );
+    await act(async () => imageEvents.get(thumbnailUrl)!.onError());
+    expect(resolveMedia).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('[data-testid="message.mediaThumbFallback"]')).not.toBeNull();
+    act(() => (container.querySelector('[data-testid="message.mediaPreviewButton"]') as HTMLElement).click());
+    expect(container.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe(imageUrl);
   });
 
   it('can reopen a group whose loaded history already contains an image', async () => {
