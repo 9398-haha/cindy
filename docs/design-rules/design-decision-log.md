@@ -821,3 +821,35 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 ## 2026-09-18 — Desktop Segmented v8
 
 用户确认将 Design Lab v8 落到 Desktop，全量复用共享 `SegmentedControl`；仅自审和 E2E，不做本地双审。轨道用浅色黑 6% / 暗色黑 25% 透明叠加，选中药丸用低对比描边和两层轻阴影。保留各场景密度、业务回调及独立分离式选项；Mobile / iOS 延后。规范见 DESIGN.md §4 Desktop segmented controls，精确颜色/阴影进入 DTCG。实施与实际验证另见本次证据，不把线上设计预览等同客户端验收。
+
+## 2026-09-30 — 共享下拉菜单：面板、悬停与侧栏菜单统一（#5272）
+
+- **决定人：用户/设计师**（经 Orca lead 转达，Design Lab `#/dropdown-menu` v3–v7 对比后确认）。关键原话：
+  「我倾向于选择A，有阴影的」「悬停时字色不变，只变字重；锁住面板宽度，长文字悬停时下拉框不再变宽」
+  「危险项悬停底色还是和普通状态的底色一样就好了」「整体都用半透明 + 毛玻璃效果，……如果windows实现不了
+  或者性能会变差，那windows下就不用实色」（按上下文应为「用实色」，笔误已确认）。
+- **最终规则**（DESIGN §4 Select & Dropdown、§14.4、§15.12）：
+  - 面板：12px、`p-1`、登记阴影 `shadow-[shadow:var(--shadow-menu)]`（阴影方案 A）；`--cmd-palette-bg` /
+    `--cmd-palette-border` / `--cmd-palette-item-text`。macOS Cindy 主题下为毛玻璃，Windows 一律实色、无模糊。
+    `PopoverContent` 仍为不透明 `bg-popover`；Select 面板不改。
+  - 文字：14px / `leading-[1.43]`（32px 行），快捷键与分组标题 12px `--cmd-palette-item-meta`，危险项
+    `variant="danger"` 用 `--error-fg`。字色悬停前后不变；高亮 / 勾选 / 展开行 400 → 500，行内 Lucide
+    图标 1.5 → 2，`--motion-instant`。
+  - 悬停：每个面板一块 `--sidebar-item-hover` 高亮，整面板最近行判定、跨分隔线连续滑动；危险行同为灰底。
+  - 宽度：行文字与 `truncate` 用零高度 `::after` 预留 500 宽度，面板排版后锁宽。
+  - 分隔线：`bg-muted` → `--cmd-palette-border`（与面板描边同色）。
+  - 侧栏菜单：`menuStyles.ts` 只保留 `h-8 gap-2`（触发行加 `cursor-pointer`），并入共享高亮；
+    `ConversationSearchBox`、`SessionProjectMoveSubmenu`、`MessageActionBar` 的副本改为共享写法，四处手写
+    红字删除行改为 `variant="danger"`。
+- **试过又撤回**：按分隔线分组淡入淡出（试用时读成「跳一下」）；平时文字 `--text-tertiary`、高亮恢复（浅色下
+  对比度偏低）；菜单毛玻璃不透明度 0.94（随平时灰字撤回而不再需要）；危险项淡红底 `--error-bg`（浅色下读作粉红）。
+- **关键实测**：无类型的 `shadow-[var(--shadow-menu)]` 被 Tailwind 当成阴影颜色、不产生阴影；暗色旧悬停色
+  `--cmd-palette-item-hover` #1D1D1D 比面板还暗（1.02–1.07:1），新高亮 #2B2B2B / #333333（1.28–1.30:1）；
+  分隔线 #1D1D1D → #313131；长文字行变粗曾把面板撑宽 459.89 → 465.69px，锁宽后逐帧不变；主字色浅色
+  最差 13.39:1、深色最差 6.57:1。
+- **明确不包含**：其余约 68 处 `shadow-[var(--shadow-menu)]`、24 处 `--confirm-shadow` 等无效阴影写法；
+  自带逐行底色（含 `focus:bg-[var(--error-bg)]` 的插件页、套餐、iOS 模拟器等）或不走共享高亮的菜单，后续清理
+  方向为统一成灰底；Popover 与 Select。
+- **危险红字**：保持 `--error-fg`，高亮时不换 `--error-fg-strong`。原话「红字先保持现在的红（B）吧。」浅色灰高亮上
+  只有 4.23:1（不透明）/ 4.15:1（毛玻璃），低于 4.5:1（换 `-strong` 为 7.27 / 7.14:1），用户知情后选择保留。
+- 以上为 Design Lab 对比与 dev 实例实测，不代表 Windows 实机已验收。
