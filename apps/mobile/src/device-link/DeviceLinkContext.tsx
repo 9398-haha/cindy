@@ -157,7 +157,7 @@ import {
 import { createOfflineMirrorWipeQueue } from '@/device-link/offlineMirrorWipeQueue';
 import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
-import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
+import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
@@ -1601,10 +1601,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 }
 
 function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
+  const [value, setValue] = useState<DeviceLinkContextValue | null>(null);
   useEffect(() => {
-    seedVisualMockStore();
+    let mounted = true;
+    void prepareVisualMockDeviceLinkContext().then((context) => {
+      if (mounted) setValue(context);
+    });
+    return () => { mounted = false; };
   }, []);
-  const value = useMemo(() => createVisualMockDeviceLinkContext(), []);
+  if (!value) return null;
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
 }
 
