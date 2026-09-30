@@ -101,7 +101,7 @@ export interface OrcaLifecycleDeps {
       source: string;
       context: string;
     };
-  }): Promise<DispatchWorkerTaskResult>;
+  }, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult>;
   markTeamEnded(teamId: string, status: 'completed' | 'cancelled' | 'failed'): Promise<void>;
   setSessionOrcaRole(sessionId: string, role: 'lead' | null): Promise<void>;
   clearKnownNonOrcaSession(sessionId: string): void;
@@ -117,7 +117,7 @@ export interface OrcaLifecycleDeps {
     agentKind: AgentKind;
     entrypoint: 'create_worker' | 'enable_collab_mode';
     context: string;
-  }): Promise<void>;
+  }, assertCurrent?: () => Promise<void>): Promise<void>;
   rollbackCreatedWorker(params: { workerId: string; workerSessionId: string }): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
@@ -204,18 +204,33 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     workerSessionId: string;
     message: string | undefined;
     context: string;
-  }): Promise<DispatchWorkerTaskResult | undefined> {
+  }, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult | undefined> {
     if (!params.message) return undefined;
+    // The dispatcher maps accepted cancellation to a send result. Remember only
+    // this call's authorization failure so cleanup runs after its locks release.
+    // A queued callback may run later: it rejects that input, not the Worker.
+    let rejected: { error: unknown } | undefined;
+    const assertAccepted = assertCurrent ? async () => {
+      try {
+        await assertCurrent();
+      } catch (error) {
+        rejected = { error };
+        throw error;
+      }
+    } : undefined;
     try {
-      return await deps.dispatchWorkerTask({
+      const result = await deps.dispatchWorkerTask({
         targetSessionId: params.workerSessionId,
         message: params.message,
         dispatchMeta: {
           source: dispatchSource,
           context: params.context,
         },
-      });
+      }, assertAccepted);
+      if (!result.queued && rejected) throw rejected.error;
+      return result;
     } catch {
+      if (rejected) throw rejected.error;
       return {
         dispatched: false,
         dispatchOutcome: {
@@ -252,28 +267,25 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       return internalFailure(err);
     }
 
-    const dispatchResult = initialTask
-      ? await dispatchInitialTask({
+    let dispatchResult: DispatchWorkerTaskResult | undefined;
+    try {
+      if (initialTask) {
+        dispatchResult = await dispatchInitialTask({
           workerSessionId: created.workerSessionId,
           message: initialTask,
           context: `create_worker/${created.workerSessionId}/initial_task`,
-        })
-      : undefined;
-    if (!initialTask) {
-      try {
+        }, assertCurrent);
+      } else {
         await deps.sendWorkerReadyPlaceholder({
           workerSessionId: created.workerSessionId,
           agentKind: created.resolved.agent,
           entrypoint: 'create_worker',
           context: `create_worker/${created.workerSessionId}/worker-ready-placeholder`,
-        });
-      } catch (err) {
-        await deps.rollbackCreatedWorker({
-          workerId: created.workerId,
-          workerSessionId: created.workerSessionId,
-        }).catch(() => undefined);
-        return internalFailure(err);
+        }, assertCurrent);
       }
+    } catch (err) {
+      await deps.rollbackCreatedWorker(created).catch(() => undefined);
+      return internalFailure(err);
     }
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
@@ -442,33 +454,33 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
 
     let dispatchResult: DispatchWorkerTaskResult | undefined;
-    if (normalized.initialTask && !params.deferDelegateTask) {
-      dispatchResult = await dispatchInitialTask({
-        workerSessionId: created.workerSessionId,
-        message: buildUiAssignmentInitialTask({
-          leadSessionId: params.leadSessionId,
-          initialTask: normalized.initialTask,
-        }),
-        context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
-      });
-    } else if (!normalized.initialTask || params.deferDelegateTask) {
-      try {
+    try {
+      if (normalized.initialTask && !params.deferDelegateTask) {
+        dispatchResult = await dispatchInitialTask({
+          workerSessionId: created.workerSessionId,
+          message: buildUiAssignmentInitialTask({
+            leadSessionId: params.leadSessionId,
+            initialTask: normalized.initialTask,
+          }),
+          context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
+        }, assertCurrent);
+      } else {
         await deps.sendWorkerReadyPlaceholder({
           workerSessionId: created.workerSessionId,
           agentKind: created.resolved.agent,
           entrypoint: 'enable_collab_mode',
           context: `enable_collab_mode/${created.workerSessionId}/worker-ready-placeholder`,
-        });
-      } catch (err) {
-        return failCreatedTeam({
-          teamId: team.id,
-          leadSessionId: params.leadSessionId,
-          workerId: created.workerId,
-          workerSessionId: created.workerSessionId,
-          clearLeadVendorOptions: true,
-          err,
-        });
+        }, assertCurrent);
       }
+    } catch (err) {
+      return failCreatedTeam({
+        teamId: team.id,
+        leadSessionId: params.leadSessionId,
+        workerId: created.workerId,
+        workerSessionId: created.workerSessionId,
+        clearLeadVendorOptions: true,
+        err,
+      });
     }
 
     deps.broadcastSessionCreated(created.workerSessionId);

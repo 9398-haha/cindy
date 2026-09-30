@@ -321,7 +321,7 @@ export interface OrcaTeamServiceDeps {
 /** Orca worker 生命周期服务。错误以结构化 result 返回，IPC adapter 再转 throwIpcError。 */
 export interface OrcaTeamService {
   /** 可信内部路径：只供 lifecycle / host 对已解析 worker 派活，不做外部 caller 校验。 */
-  dispatchWorkerTask(params: DispatchWorkerTaskParams): Promise<DispatchWorkerTaskResult>;
+  dispatchWorkerTask(params: DispatchWorkerTaskParams, assertCurrent?: () => Promise<void>): Promise<DispatchWorkerTaskResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。内部可信派活请用 dispatchWorkerTask。 */
   sendToWorker(params: {
     callerLeadSessionId: string;
@@ -730,6 +730,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   async function dispatchWorkerTask(
     params: DispatchWorkerTaskParams,
+    assertCurrent?: () => Promise<void>,
   ): Promise<DispatchWorkerTaskResult> {
     const link = await deps.getWorkerLinkBySessionId(params.targetSessionId);
     if (!link) {
@@ -767,6 +768,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       message: params.message,
       mode: 'normal',
       dispatchMeta: params.dispatchMeta,
+      assertCurrent,
     });
     return mapNormalDispatchResult(target, execution);
   }
@@ -821,6 +823,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     message: string;
     mode: 'normal' | 'interrupt';
     dispatchMeta: DispatchWorkerTaskParams['dispatchMeta'];
+    assertCurrent?: () => Promise<void>;
   }): Promise<ResolvedWorkerDispatchExecution> {
     const { worker: target, link } = params.resolved;
     await reserveWorkerDispatch(target.id);
@@ -891,6 +894,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
       const onAccepted = async (): Promise<void> => {
         try {
+          await params.assertCurrent?.();
           await withWorkerTransition(target.id, async () => {
             const currentWorkers = await deps.listWorkersByLead(link.leadSessionId);
             const currentWorker = currentWorkers.find((worker) => worker.id === target.id);
@@ -920,6 +924,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
             await markPendingReady(target.sessionId, currentPending);
           });
+          await params.assertCurrent?.();
         } catch (err) {
           try {
             await rollbackAccepted();

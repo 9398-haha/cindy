@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { PluginTaskError } from '../pluginTaskService.js';
 import type { AgentKind } from '@cindy/maker-core';
+import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 import { describe, expect, it, vi } from 'vitest';
 
 // The lifecycle unit owns no credential/runtime I/O.
@@ -123,6 +124,83 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
 }
 
 describe('OrcaLifecycleService', () => {
+  it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].map(revoked => ({ action, revoked }))))(
+    'guards $action at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked }) => {
+      let allowed = true, insideSend = false, nativeCalls = 0;
+      const { deps, service } = createDeps({
+        getActiveTeamByLead: async () => action.startsWith('create') ? activeTeam() : null,
+        getWorkerPermissionModeOverride: async () => ({ permissionMode: 'auto', assertCurrent: async () => { if (!allowed) throw new Error('Revoked'); } }),
+      });
+      deps.dispatchWorkerTask = vi.fn(async (params, assertCurrent): Promise<DispatchWorkerTaskResult> => {
+        insideSend = true; allowed = !revoked;
+        try {
+          try { await assertCurrent?.(); } catch { return { dispatched: false, dispatchOutcome: { kind: 'host-send', code: 'SEND_FAILED', accepted: false, message: 'Revoked', source: 'test', context: 'initial' } }; }
+          nativeCalls++;
+          return { dispatched: true, dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true }, agentKind: 'codex', wakeKind: 'resumed', targetTitle: 'Worker', targetLastUserSendAt: null };
+        } finally { insideSend = false; }
+      });
+      const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+      const lifecycleFrom = source.indexOf('  const orcaLifecycleService = createOrcaLifecycleService(');
+      expect(lifecycleFrom).toBeGreaterThan(-1);
+      const dispatchFrom = source.indexOf('    dispatchWorkerTask: (', lifecycleFrom);
+      const dispatchAdapter = source.slice(dispatchFrom, source.indexOf('    markTeamEnded,', dispatchFrom));
+      const dispatchJs = ts.transpileModule(`return ({${dispatchAdapter}}).dispatchWorkerTask;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+      deps.dispatchWorkerTask = new Function('orcaTeamService', dispatchJs)({ dispatchWorkerTask: deps.dispatchWorkerTask });
+      const from = source.indexOf('    sendWorkerReadyPlaceholder: async (');
+      const callback = source.slice(from, source.indexOf('    rollbackCreatedWorker:', from));
+      const bindings = { maker: { getSession: () => ({ id: 'worker-session-1', send: async (_message: unknown, opts: { onAccepted?: () => Promise<void> }) => {
+        insideSend = true; allowed = !revoked;
+        try { await runAcceptedCallback(opts.onAccepted, 'worker-session-1', 'placeholder'); nativeCalls++; return { dispatched: true }; }
+        finally { insideSend = false; }
+      } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() } };
+      const js = ts.transpileModule(`return ({${callback}}).sendWorkerReadyPlaceholder;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+      deps.sendWorkerReadyPlaceholder = new Function(...Object.keys(bindings), js)(...Object.values(bindings));
+      deps.rollbackCreatedWorker = vi.fn(async () => { expect(insideSend).toBe(false); });
+      const result = action.startsWith('create')
+        ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', ...(action.endsWith('task') ? { initialTask: 'Evaluate' } : {}) })
+        : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', ...(action === 'enable-task' || action === 'enable-deferred' ? { delegateTask: 'Evaluate' } : {}), deferDelegateTask: action === 'enable-deferred' });
+      expect(result.ok).toBe(!revoked);
+      expect(nativeCalls).toBe(revoked ? 0 : 1);
+      expect(deps.rollbackCreatedWorker).toHaveBeenCalledTimes(revoked ? 1 : 0);
+      expect(deps.markTeamEnded).toHaveBeenCalledTimes(revoked && action.startsWith('enable') ? 1 : 0);
+    },
+  );
+
+  it.each(['createWorker', 'enableTeam'] as const)(
+    'keeps the Worker when queued acceptance rejects before %s returns', async action => {
+      let allowed = true;
+      const { deps, service } = createDeps({
+        getActiveTeamByLead: async () => action === 'createWorker' ? activeTeam() : null,
+        getWorkerPermissionModeOverride: async () => ({
+          permissionMode: 'auto',
+          assertCurrent: async () => { if (!allowed) throw new Error('Revoked'); },
+        }),
+        dispatchWorkerTask: vi.fn(async (_params, assertCurrent): Promise<DispatchWorkerTaskResult> => {
+          // A coordinator drain can reject independently before the queued
+          // result reaches lifecycle; it still owns this queued input only.
+          allowed = false;
+          await expect(assertCurrent!()).rejects.toThrow('Revoked');
+          return {
+            dispatched: false,
+            queued: true,
+            dispatchOutcome: { kind: 'session-dispatch', dispatched: true, source: 'test', wakeKind: 'queued' },
+            agentKind: 'codex',
+            wakeKind: 'queued',
+            targetTitle: 'Worker',
+            targetLastUserSendAt: null,
+            queuedMessageId: 'queued-1',
+          };
+        }),
+      });
+      const result = action === 'createWorker'
+        ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', initialTask: 'Evaluate' })
+        : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', delegateTask: 'Evaluate' });
+      expect(result).toMatchObject({ ok: true, dispatched: false, dispatchOutcome: { wakeKind: 'queued' } });
+      expect(deps.rollbackCreatedWorker).not.toHaveBeenCalled();
+      expect(deps.markTeamEnded).not.toHaveBeenCalled();
+    },
+  );
+
   it('starts a team without creating a worker and refreshes lead state', async () => {
     const { calls, service } = createDeps();
 
@@ -406,7 +484,7 @@ describe('OrcaLifecycleService', () => {
       agentKind: 'codex',
       entrypoint: 'create_worker',
       context: 'create_worker/worker-session-1/worker-ready-placeholder',
-    });
+    }, undefined);
     expect(ORCA_WORKER_READY_MESSAGE).toBe(
       '[系统] Orca Worker 已就绪，当前没有待执行任务。不要调用任何工具来等待、观察或轮询 Lead。只回复一句简短确认并立即结束本轮；Lead 后续会主动发送任务。',
     );
@@ -442,7 +520,7 @@ describe('OrcaLifecycleService', () => {
       agentKind: 'codex',
       entrypoint: 'create_worker',
       context: 'create_worker/worker-session-1/worker-ready-placeholder',
-    });
+    }, undefined);
   });
 
   it('rolls back create_worker when the ready placeholder is not accepted', async () => {
@@ -527,7 +605,7 @@ describe('OrcaLifecycleService', () => {
       dispatchMeta: expect.objectContaining({
         context: 'create_worker/worker-session-1/initial_task',
       }),
-    }));
+    }), undefined);
   });
 
   it('enables a team through the same worker creation boundary and sends the ready placeholder when no delegate task exists', async () => {
@@ -644,6 +722,7 @@ describe('OrcaLifecycleService', () => {
           context: 'enable_collab_mode/worker-session-1/delegate_task',
         }),
       }),
+      undefined,
     );
     const dispatchedMessage = vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message;
     expect(dispatchedMessage).toContain('Task:\nReview PR #42 now');

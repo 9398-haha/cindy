@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -261,6 +262,40 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
 }
 
 describe('OrcaTeamService', () => {
+  it.each(['lookup', 'resume', 'send', 'accepted-list', 'status-update', 'queued', 'healthy'])(
+    'rechecks Host creation provenance at acceptance after %s', async phase => {
+      let allowed = true, nativeCalls = 0;
+      let delayed: (() => void | Promise<void>) | undefined;
+      const { deps, service, getWorker } = createDeps();
+      const mutate = (point: string) => { if (point === phase) allowed = false; };
+      const list = deps.listWorkersByLead;
+      let reads = 0;
+      deps.listWorkersByLead = vi.fn(async id => { const result = await list(id); mutate(++reads === 1 ? 'lookup' : 'accepted-list'); return result; });
+      deps.resumeWorkerSession = vi.fn(async () => { mutate('resume'); });
+      const update = deps.updateWorkerStatus;
+      deps.updateWorkerStatus = vi.fn(async (id, status) => { await update(id, status); if (status === 'running') mutate('status-update'); });
+      deps.dispatchWorkerMessage = vi.fn(async (params): Promise<DispatchWorkerMessageResult> => {
+        const accept = async () => { await runAcceptedCallback(params.onAccepted, params.targetSessionId, 'client-test', deps.log); nativeCalls++; };
+        if (phase === 'queued') delayed = accept;
+        else { mutate('send'); await accept(); }
+        return { ok: true, mode: phase === 'queued' ? 'queued' : 'dispatched', clientId: 'client-test',
+          dispatchOutcome: { kind: 'session-dispatch', source: 'test', dispatched: true, ...(phase === 'queued' ? { wakeKind: 'queued' as const } : {}) },
+          targetTitle: 'Worker', targetLastUserSendAt: null };
+      });
+      const result = await service.dispatchWorkerTask({ targetSessionId: 'worker-session-1', message: 'Evaluate', dispatchMeta: { source: 'test', context: 'initial' } }, async () => {
+        if (!allowed) throw new Error('Host authorization revoked');
+      });
+      if (phase === 'queued') {
+        expect(result).toMatchObject({ queued: true }); allowed = false;
+        await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+      } else expect(result.dispatched).toBe(phase === 'healthy');
+      expect(nativeCalls).toBe(phase === 'healthy' ? 1 : 0);
+      expect(getWorker().status).toBe(phase === 'healthy' ? 'running' : 'idle');
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+      expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+    },
+  );
+
   it('dispatches worker task through shared primitive after accepted updates running, broadcast, and pending', async () => {
     const leadMessages: string[] = [];
     const { calls, deps, service } = createDeps({
