@@ -5499,6 +5499,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:bots:create-canonical-session', body),
       history: (botId: string): Promise<unknown[]> =>
         ipcRenderer.invoke('local-db:bots:history', botId),
+      listSkills: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
+        ipcRenderer.invoke('local-db:bots:skills:list', botId),
       memory: {
         list: (botId: string, query?: string): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:memory:list', botId, query),

@@ -5721,6 +5721,8 @@ export default function SessionScreen() {
   }, () => { void loadEarlierMessages(); });
   // Task links and notifications carry no teammate resource; the cached roster row supplies name and avatar.
   const companionDisplay = useCompanionDisplayResource(deviceId, sessionId, companionResource, companionChat);
+  const [companionSettingsRequest, setCompanionSettingsRequest] = useState<{ sessionId: string; page: 'memory' | 'capabilities'; sequence: number }>();
+  const openCompanionSettings = useCallback((page: 'memory' | 'capabilities') => setCompanionSettingsRequest(previous => ({ sessionId, page, sequence: (previous?.sequence ?? 0) + 1 })), [sessionId]);
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
   const companionAvatarData = companionDisplay?.display.avatar;
@@ -8904,6 +8906,7 @@ export default function SessionScreen() {
       <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />
       <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
         resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
+        settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
         working={!!companionWorkingLabel}
         onSearch={() => setSearchOpen(true)}
         onBack={goBackToHome} />
@@ -9453,7 +9456,7 @@ export default function SessionScreen() {
 
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
                   <MessageRenderer companion={companionChat}
-                    onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
+                    onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
