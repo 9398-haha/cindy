@@ -4,6 +4,15 @@ import Reanimated, { Easing, withTiming, type LayoutAnimationsValues } from 'rea
 
 import { getCachedReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { listDisclosureMotion } from '@/theme/tokens';
+import {
+  commitRegisteredLevel,
+  createDisclosureController,
+  detachDisclosureScope,
+  openDisclosureWindow,
+  runDisclosure,
+  type DisclosureController,
+  type DisclosureLevel,
+} from './listDisclosureController';
 
 /**
  * 列表分组展开 / 收起的过渡(DESIGN.md §14.4 移动端列表节奏)。
@@ -58,64 +67,26 @@ function disclosureExit() {
   };
 }
 
-/** 0 = 关闭;1 = cell 与分组块;2 = 另加分组块内部的逐行包裹。 */
-type DisclosureLevel = 0 | 1 | 2;
-
-type DisclosureController = {
-  pending: Array<() => void>;
-  registered: DisclosureLevel;
-  requested: DisclosureLevel;
-  setLevel: ((level: DisclosureLevel) => void) | null;
-  timer: ReturnType<typeof setTimeout> | null;
-};
-
 const DisclosureLevelContext = createContext<DisclosureLevel>(0);
 const DisclosurePrepareContext = createContext<(nested?: boolean) => void>(() => {});
 
-// 窗口在最后一次变更落地后再保留一段:数据类变更(归档 / 置顶)写入 store 后还要经过
-// 列表重算才提交,留足余量,动画结束前不收回布局动画。
-const WINDOW_TAIL = DURATION + 300;
-
-function scheduleClose(controller: DisclosureController) {
-  if (controller.timer) clearTimeout(controller.timer);
-  controller.timer = setTimeout(() => {
-    controller.timer = null;
-    controller.registered = 0;
-    controller.requested = 0;
-    controller.setLevel?.(0);
-  }, WINDOW_TAIL);
-}
-
-function openWindow(controller: DisclosureController, level: DisclosureLevel): boolean {
-  if (getCachedReduceMotionEnabled() === true || !controller.setLevel) return false;
-  scheduleClose(controller);
-  if (level > controller.requested) {
-    controller.requested = level;
-    controller.setLevel(level);
-  }
-  return true;
-}
+/** 系统「减弱动态效果」的约定:只有明确为 false 才播放(偏好未查到的 null 也不播)。 */
+const motionAllowed = () => getCachedReduceMotionEnabled() === false;
 
 /**
  * 页面持有的控制器。run(apply):请求列表挂上布局动画,行登记完成后(同一次提交的
  * layout effect 里)立刻执行 apply;窗口在动画结束后自动收回。系统「减弱动态效果」
- * 开启、或列表不在屏上时直接执行。
+ * 开启、或列表不在屏上时直接执行。窗口逻辑见 listDisclosureController.ts。
  */
 export function useListDisclosureTransition() {
-  const controller = useRef<DisclosureController>({ pending: [], registered: 0, requested: 0, setLevel: null, timer: null }).current;
+  const controller = useRef<DisclosureController>(createDisclosureController()).current;
   /** nested:要切换的分组嵌在另一个分组块里(项目里的自动化组),块内的行也要让位。 */
   const run = useCallback((apply: () => void, options?: { nested?: boolean }) => {
-    const level: DisclosureLevel = options?.nested ? 2 : 1;
-    // 已有排队的变更时一律排队,保证乐观写入与回滚按调用顺序落地。
-    if (!openWindow(controller, level) || (controller.registered >= level && controller.pending.length === 0)) {
-      apply();
-      return;
-    }
-    controller.pending.push(apply);
+    runDisclosure(controller, apply, options?.nested ? 2 : 1, motionAllowed());
   }, [controller]);
   /** 分组标题的 onPressIn:手指按下即提前挂上动画,松手时直接执行。 */
   const prepare = useCallback(() => {
-    openWindow(controller, 1);
+    openDisclosureWindow(controller, 1, motionAllowed());
   }, [controller]);
   useEffect(() => () => {
     if (controller.timer) clearTimeout(controller.timer);
@@ -128,27 +99,14 @@ export function ListDisclosureScope({ children, controller }: { children: ReactN
   const [level, setLevel] = useState<DisclosureLevel>(0);
   useLayoutEffect(() => {
     controller.setLevel = setLevel;
-    return () => {
-      controller.setLevel = null;
-      controller.registered = 0;
-      controller.requested = 0;
-      const queued = controller.pending;
-      controller.pending = [];
-      queued.forEach((apply) => apply());
-    };
+    return () => detachDisclosureScope(controller);
   }, [controller]);
   // 子行的 componentDidUpdate(登记布局动画)先于这里执行,此时再改折叠状态。
-  // 窗口关闭时仍有排队的变更(极端慢渲染),直接落地,不能卡住。
   useLayoutEffect(() => {
-    controller.registered = level;
-    if (controller.pending.length === 0) return;
-    if (level > 0) scheduleClose(controller);
-    const queued = controller.pending;
-    controller.pending = [];
-    queued.forEach((apply) => apply());
+    commitRegisteredLevel(controller, level);
   }, [level, controller]);
   const prepare = useCallback((nested?: boolean) => {
-    openWindow(controller, nested ? 2 : 1);
+    openDisclosureWindow(controller, nested ? 2 : 1, motionAllowed());
   }, [controller]);
   return (
     <DisclosurePrepareContext.Provider value={prepare}>

@@ -6799,7 +6799,7 @@ export default function SessionScreen() {
     </>
   );
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <VoicePillWidthFrame width={voiceRecordingTimer.pillWidth}>
+    <VoicePillWidthFrame hitSlop={COMPOSER_CONTROL_HIT_SLOP} width={voiceRecordingTimer.pillWidth}>
       <RouteActionButton
         accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
         accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
@@ -12345,8 +12345,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 28,
   },
-  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动。
-  voicePillFill: { width: '100%' },
+  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
+  // 红点 + 计时尚未装下时不会溢出盖住左邻控件。
+  voicePillFill: { overflow: 'hidden', width: '100%' },
   composerInlineToolButton: {
     alignItems: 'center',
     backgroundColor: colors.sheetActionSurface,

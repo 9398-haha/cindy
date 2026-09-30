@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import type { Insets } from 'react-native';
 import Reanimated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { getCachedReduceMotionEnabled } from '@/hooks/useReduceMotion';
@@ -23,8 +24,12 @@ export function useVoicePillWidthStyle(width: number) {
   return useAnimatedStyle(() => ({ width: animated.value }));
 }
 
-/** 语音按钮外框:宽度随胶囊平滑变化,按钮本身撑满外框(width: '100%')。 */
-export function VoicePillWidthFrame({ children, width }: { children: ReactNode; width: number }) {
+/**
+ * 语音按钮外框:宽度随胶囊平滑变化,按钮本身撑满外框(width: '100%')。
+ * 外框成了按钮的直接父视图,而 hitSlop 不会越过直接父视图的边界,所以调用方要把
+ * 按钮的 hitSlop 同样传给外框,收起态 34pt 麦克风的命中区才不会缩小。
+ */
+export function VoicePillWidthFrame({ children, hitSlop, width }: { children: ReactNode; hitSlop?: number | Insets; width: number }) {
   const style = useVoicePillWidthStyle(width);
-  return <Reanimated.View style={style}>{children}</Reanimated.View>;
+  return <Reanimated.View hitSlop={hitSlop} style={style}>{children}</Reanimated.View>;
 }

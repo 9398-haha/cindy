@@ -3882,7 +3882,7 @@ export default function NewRemoteSessionScreen() {
   ) : null;
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <VoicePillWidthFrame width={voiceRecordingTimer.pillWidth}>
+    <VoicePillWidthFrame hitSlop={10} width={voiceRecordingTimer.pillWidth}>
       <Pressable
         accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
         accessibilityRole="button"
@@ -7287,8 +7287,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
-  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动。
-  voicePillFill: { width: '100%' },
+  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
+  // 红点 + 计时尚未装下时不会溢出盖住左邻控件。
+  voicePillFill: { overflow: 'hidden', width: '100%' },
   composerIconButton: {
     alignItems: 'center',
     backgroundColor: colors.sheetActionSurface,

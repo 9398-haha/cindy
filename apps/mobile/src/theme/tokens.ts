@@ -817,9 +817,9 @@ export const motionEasing = {
 
 /**
  * 移动端列表展开 / 收起节奏(DESIGN.md §14.4 登记的移动端例外,2026-09-30 用户要求
- * 「符合 iOS 节奏」)。桌面 base 档 200ms 适合指针;手机列表按 iOS 系统节奏用 450ms
- * 二次缓出,约 300ms 完成九成位移,先快后缓、无回弹。只用于列表分组的展开 / 收起
- * (session/listDisclosureTransition.tsx)。
+ * 「符合 iOS 节奏」,同日要求把首版 450ms 加快一倍)。手机列表用 225ms 二次缓出,约
+ * 150ms 完成九成位移,先快后缓、无回弹(桌面 base 档为 200ms)。只用于列表分组的展开 /
+ * 收起(session/listDisclosureTransition.tsx)。
  */
 export const listDisclosureMotion = {
   duration: 225,
