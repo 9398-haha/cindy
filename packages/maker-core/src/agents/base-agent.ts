@@ -1328,7 +1328,8 @@ export interface AgentDeps {
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
-  resolveCodexThreadStorage?: (threadId: string) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;
+  /** readOnly locates existing storage without invoking resume recovery or copying history. */
+  resolveCodexThreadStorage?: (threadId: string, options?: { readOnly?: boolean }) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;
   /** Freeze the owner/account scope before async host startup; never expose tokens to the renderer. */
   createCodexAuthTokenReader?: (providerId?: string) => () => Promise<import('./codex/app-server/external-auth.js').CodexChatgptTokens>;
 
