@@ -17,7 +17,6 @@ import type { TFunction } from 'i18next';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { unresponsiveDevicesStore, useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
-import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { mapContentEqual } from '@/utils/valueEquality';
 import { useStableValue } from '@/utils/useStableValue';
@@ -75,6 +74,7 @@ import {
 import { useConversationSearch } from '@/session/useConversationSearch';
 import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeSessionRow } from '@/session/HomeSurface';
+import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
@@ -123,6 +123,9 @@ export default function DeviceDetailScreen() {
     </RemoteSessionStoreSubscriptionGate>
   );
 }
+
+// 设备页列表的 cell 与首页同一套展开 / 收起过渡;组内子行由 DisclosureItem 负责收起。
+const DeviceListCell = createDisclosureListCell();
 
 function DeviceDetailScreenContent() {
   const screenFocused = useIsFocused();
@@ -254,6 +257,10 @@ function DeviceDetailScreenContent() {
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(
     () => new Map(),
   );
+  // 与首页共用同一套展开 / 收起过渡(listDisclosureTransition);行的归档、置顶移位也走它。
+  const disclosure = useListDisclosureTransition();
+  const runDisclosure = disclosure.run;
+  const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
   const {
     actionSheetSession,
     closeRenameSession,
@@ -266,7 +273,7 @@ function DeviceDetailScreenContent() {
     setActionSheetSession,
     setRenameSessionDraft,
     swipeRegistry,
-  } = useSessionListActions();
+  } = useSessionListActions({ animateListChange });
 
   useEffect(() => {
     if (!deviceId || !scheduleMirrorInvalidations.has(deviceId)) return;
@@ -505,12 +512,10 @@ function DeviceDetailScreenContent() {
   }, [deviceId, deviceName, guardedPush, swipeRegistry]);
 
   const toggleAutomationGroup = useCallback((key: string) => {
-    // 与首页组展开共用同一条折叠动画,保持视觉连续性。
-    configureCollapseAnimation();
-    setExpandedAutomationGroups((prev) =>
+    runDisclosure(() => setExpandedAutomationGroups((prev) =>
       prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
-    );
-  }, []);
+    ));
+  }, [runDisclosure]);
 
   // 自动化组「查看全部 N 次运行」:与项目「查看全部」一致,进入该任务的专属列表页
   // (本路由的自动化任务作用域模式)。
@@ -815,53 +820,56 @@ function DeviceDetailScreenContent() {
             />
           )}
         </View>
-        <SectionList
-          {...simpleScrollInsetProps}
-          sections={displaySections}
-          keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-          // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
-          // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
-          removeClippedSubviews={false}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
-          stickySectionHeadersEnabled={false}
-          renderSectionHeader={() => null}
-          contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
-          testID="deviceDetail.projectSessionList"
-          renderItem={({ item, index, section }) => (
-            <DeviceDetailSessionRow
-              asBlock
-              expandedAutomationGroups={expandedAutomationGroups}
-              // 分割线唯一化(与首页同规则):紧邻自动化块上边界的行不画自己的缩进线,
-              // 相邻两个块之间只保留一根全宽线(后块不画顶线)。
-              hideDivider={!!section.data[index + 1]?.automationGroup}
-              item={item}
-              onOpenAutomationGroup={openAutomationGroup}
-              onOpenSession={(it) => openSession(
-                it.session.id,
-                'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
-              )}
-              onToggleAutomationGroup={toggleAutomationGroup}
-              suppressBlockTopBorder={!!section.data[index - 1]?.automationGroup}
-              swipe={sessionSwipeControls}
-              testID={`deviceDetail.projectSessionRow.${item.session.id}`}
-            />
-          )}
-          ListEmptyComponent={suppressListEmptyState ? (
-            <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
-          ) : (
-            <MainWindowEmptyState
-              centered
-              copy={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).copy : t('devices.detail.projectScope.emptyCopy')}
-              style={{
-                marginTop: spacing.xxl,
-                minHeight: windowLayout.emptyMinHeight,
-                padding: windowLayout.emptyPadding,
-              }}
-              testID="deviceDetail.projectEmpty"
-              title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
-            />
-          )}
-        />
+        <ListDisclosureScope controller={disclosure.controller}>
+          <SectionList
+            CellRendererComponent={DeviceListCell}
+            {...simpleScrollInsetProps}
+            sections={displaySections}
+            keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
+            // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
+            // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
+            removeClippedSubviews={false}
+            refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
+            stickySectionHeadersEnabled={false}
+            renderSectionHeader={() => null}
+            contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
+            testID="deviceDetail.projectSessionList"
+            renderItem={({ item, index, section }) => (
+              <DeviceDetailSessionRow
+                asBlock
+                expandedAutomationGroups={expandedAutomationGroups}
+                // 分割线唯一化(与首页同规则):紧邻自动化块上边界的行不画自己的缩进线,
+                // 相邻两个块之间只保留一根全宽线(后块不画顶线)。
+                hideDivider={!!section.data[index + 1]?.automationGroup}
+                item={item}
+                onOpenAutomationGroup={openAutomationGroup}
+                onOpenSession={(it) => openSession(
+                  it.session.id,
+                  'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+                )}
+                onToggleAutomationGroup={toggleAutomationGroup}
+                suppressBlockTopBorder={!!section.data[index - 1]?.automationGroup}
+                swipe={sessionSwipeControls}
+                testID={`deviceDetail.projectSessionRow.${item.session.id}`}
+              />
+            )}
+            ListEmptyComponent={suppressListEmptyState ? (
+              <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
+            ) : (
+              <MainWindowEmptyState
+                centered
+                copy={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).copy : t('devices.detail.projectScope.emptyCopy')}
+                style={{
+                  marginTop: spacing.xxl,
+                  minHeight: windowLayout.emptyMinHeight,
+                  padding: windowLayout.emptyPadding,
+                }}
+                testID="deviceDetail.projectEmpty"
+                title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
+              />
+            )}
+          />
+        </ListDisclosureScope>
         {actionOverlays}
       </SafeAreaView>
     );
@@ -1157,61 +1165,64 @@ function DeviceDetailScreenContent() {
         </View>
       </View>
 
-      <SectionList
-        {...simpleScrollInsetProps}
-        sections={displaySections}
-        keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
-        stickySectionHeadersEnabled={false}
-        contentContainerStyle={[
-          styles.listContent,
-          {
-            paddingHorizontal: windowLayout.listPaddingHorizontal,
-            paddingVertical: windowLayout.listPaddingVertical,
-          },
-        ]}
-        testID="deviceDetail.sessionList"
-        renderSectionHeader={({ section }) => (
-          section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
-        )}
-        ListEmptyComponent={suppressListEmptyState ? (
-          <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
-        ) : (
-          <MainWindowEmptyState
-            centered
-            copy={emptyState.copy}
-            style={{
-              marginTop: spacing.xxl,
-              minHeight: windowLayout.emptyMinHeight,
-              padding: windowLayout.emptyPadding,
-            }}
-            testID="deviceDetail.empty"
-            title={emptyState.title}
-          />
-        )}
-        renderItem={({ item }) => (
-          <DeviceDetailSessionRow
-            expandedAutomationGroups={expandedAutomationGroups}
-            item={item}
-            onLongPress={conversationSearchAllowsLocalWrites(item)
-              ? () => beginSelection(sessionIdsForListItem(item))
-              : undefined}
-            onOpenAutomationGroup={item.automationGroup ? openAutomationGroup : undefined}
-            onOpenSession={(it) => openSession(
-                it.session.id,
-                'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
-              )}
-            onPressSelection={conversationSearchAllowsLocalWrites(item)
-              ? () => toggleSelection(sessionIdsForListItem(item))
-              : undefined}
-            onToggleAutomationGroup={toggleAutomationGroup}
-            selected={sessionIdsForListItem(item).every((id) => selectedSessionIdSet.has(id))}
-            selectionMode={selectionMode}
-            swipe={conversationSearchAllowsLocalWrites(item) ? sessionSwipeControls : undefined}
-            testID="deviceDetail.sessionRow"
-          />
-        )}
-      />
+      <ListDisclosureScope controller={disclosure.controller}>
+        <SectionList
+          CellRendererComponent={DeviceListCell}
+          {...simpleScrollInsetProps}
+          sections={displaySections}
+          keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
+          stickySectionHeadersEnabled={false}
+          contentContainerStyle={[
+            styles.listContent,
+            {
+              paddingHorizontal: windowLayout.listPaddingHorizontal,
+              paddingVertical: windowLayout.listPaddingVertical,
+            },
+          ]}
+          testID="deviceDetail.sessionList"
+          renderSectionHeader={({ section }) => (
+            section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
+          )}
+          ListEmptyComponent={suppressListEmptyState ? (
+            <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
+          ) : (
+            <MainWindowEmptyState
+              centered
+              copy={emptyState.copy}
+              style={{
+                marginTop: spacing.xxl,
+                minHeight: windowLayout.emptyMinHeight,
+                padding: windowLayout.emptyPadding,
+              }}
+              testID="deviceDetail.empty"
+              title={emptyState.title}
+            />
+          )}
+          renderItem={({ item }) => (
+            <DeviceDetailSessionRow
+              expandedAutomationGroups={expandedAutomationGroups}
+              item={item}
+              onLongPress={conversationSearchAllowsLocalWrites(item)
+                ? () => beginSelection(sessionIdsForListItem(item))
+                : undefined}
+              onOpenAutomationGroup={item.automationGroup ? openAutomationGroup : undefined}
+              onOpenSession={(it) => openSession(
+                  it.session.id,
+                  'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+                )}
+              onPressSelection={conversationSearchAllowsLocalWrites(item)
+                ? () => toggleSelection(sessionIdsForListItem(item))
+                : undefined}
+              onToggleAutomationGroup={toggleAutomationGroup}
+              selected={sessionIdsForListItem(item).every((id) => selectedSessionIdSet.has(id))}
+              selectionMode={selectionMode}
+              swipe={conversationSearchAllowsLocalWrites(item) ? sessionSwipeControls : undefined}
+              testID="deviceDetail.sessionRow"
+            />
+          )}
+        />
+      </ListDisclosureScope>
       {actionOverlays}
     </SafeAreaView>
   );

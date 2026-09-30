@@ -4783,6 +4783,7 @@ interface ElectronAPI {
         session: import('@/lib/ccAgent.types').Session;
       }>;
       history: (botId: string) => Promise<unknown[]>;
+      listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
       memory: {
         list: (
           botId: string,
