@@ -1,3 +1,4 @@
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -31,7 +32,7 @@ describe('Host provenance across Orca creation waits', () => {
     expect(from).toBeGreaterThan(0);
     expect(to).toBeGreaterThan(from);
     const js = ts.transpileModule(`${helper}\nreturn ({${source.slice(from, to)}});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-    return new Function(...Object.keys(bindings), js)(...Object.values(bindings));
+    return new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
   }
   type Action = 'createWorker' | 'enableTeam' | 'startNew' | 'startExisting';
   const phases: Record<Action, string[]> = {
@@ -2929,7 +2930,7 @@ describe('production plugin Auto admission after reservation', () => {
     deps.bootstrapSession = vi.fn(async opts => { const result = await bootstrap(opts); if (stage === 'bootstrap') mutate(); return result; });
     deps.renewWorkerCreationReservation = vi.fn(async () => { if (stage === 'renewal') mutate(); return true; });
     const markTeamEnded = vi.fn(async () => undefined);
-    const getWorkerPermissionModeOverride = new Function(...Object.keys(callbackDeps), overrideJs)(...Object.values(callbackDeps));
+    const getWorkerPermissionModeOverride = new Function('hasAcceptedUserTaskInput', ...Object.keys(callbackDeps), overrideJs)(hasAcceptedUserTaskInput, ...Object.values(callbackDeps));
     const lifecycle = createOrcaLifecycleService({
       getWorkerPermissionModeOverride,
       getActiveTeamByLead: async () => planned ? null : { id: 'team-1', leadSessionId: 'lead-1' },

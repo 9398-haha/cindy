@@ -1,3 +1,4 @@
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { PluginTaskError } from '../pluginTaskService.js';
@@ -158,7 +159,7 @@ describe('OrcaLifecycleService', () => {
         finally { insideSend = false; }
       } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() } };
       const js = ts.transpileModule(`return ({${callback}}).sendWorkerReadyPlaceholder;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-      deps.sendWorkerReadyPlaceholder = new Function(...Object.keys(bindings), js)(...Object.values(bindings));
+      deps.sendWorkerReadyPlaceholder = new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
       deps.rollbackCreatedWorker = vi.fn(async () => { expect(insideSend).toBe(false); });
       const result = action.startsWith('create')
         ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', ...(action.endsWith('task') ? { initialTask: 'Evaluate' } : {}) })
@@ -1131,9 +1132,9 @@ describe('retained tasks after explicit plugin uninstall', () => {
         add('worker-reply',400,{delivery:'turn',origin:{kind:'orca'}});
         const epoch={client:{drizzle:drizzle(sqlite)}};
         const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,sessions,messages,and,desc,eq,isNull,sql,
-          maker:{getSession:()=>({isTurnRunning:()=>true})},inputCoordinator:{getAcceptedInputProvenance:()=>delivery==='queued'?{clientId:'worker-reply'}:null},
+          maker:{getSession:()=>({isTurnRunning:()=>true})},inputCoordinator:{getAcceptedInputProvenance:()=>delivery==='queued'?{clientId:'worker-reply',originKind:'orca'}:null},
           createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:'{"ownershipRevoked":true}'}})};
-        const override=new Function(...Object.keys(bindings),js)(...Object.values(bindings));
+        const override=new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings),js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
         if(history==='human-after')await expect(override('lead')).resolves.toMatchObject({permissionMode:undefined});
         else await expect(override('lead')).rejects.toMatchObject({code:'PERMISSION_DENIED'});
       } finally {sqlite.close();}
@@ -1147,7 +1148,7 @@ describe('retained tasks after explicit plugin uninstall', () => {
         createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:state==='revoked'})}}),
         pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:state==='ask'?'default':'auto',planModeEnabled:state==='plan'})}),
         isPluginTaskAuthorized:()=>state!=='disabled',readGhostErrandConfig:()=>({permissionMode:'auto'})};
-      const override=new Function(...Object.keys(bindings),js)(...Object.values(bindings));
+      const override=new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings),js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
       const ordinary=state==='revoked'&&['human','idle'].includes(input);
       if(state==='healthy'||ordinary)await expect(override('lead')).resolves.toMatchObject({permissionMode:ordinary?undefined:'auto'});
       else await expect(override('lead')).rejects.toThrow();
@@ -1161,7 +1162,7 @@ describe('retained tasks after explicit plugin uninstall', () => {
         pluginTaskServiceForCurrentOwner: () => ({ get: async () => ({ status, permissionMode: 'auto', planModeEnabled }) }),
         isPluginTaskAuthorized: () => true, readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
       };
-      const override = new Function(...Object.keys(callbacks), js)(...Object.values(callbacks));
+      const override = new Function('hasAcceptedUserTaskInput', ...Object.keys(callbacks), js)(hasAcceptedUserTaskInput, ...Object.values(callbacks));
       const { deps, service } = createDeps({ getWorkerPermissionModeOverride: override,
         getActiveTeamByLead: vi.fn(async () => action === 'createWorker' ? activeTeam() : null),
       });
@@ -1184,7 +1185,7 @@ describe('retained tasks after explicit plugin uninstall', () => {
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => false,
       readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
     };
-    const override = new Function(...Object.keys(callbacks), js)(...Object.values(callbacks));
+    const override = new Function('hasAcceptedUserTaskInput', ...Object.keys(callbacks), js)(hasAcceptedUserTaskInput, ...Object.values(callbacks));
     const { deps, service } = createDeps({
       getWorkerPermissionModeOverride: override,
       getWorkerPermissionMode: () => 'bypassPermissions',

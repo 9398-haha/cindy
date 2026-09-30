@@ -1109,7 +1109,7 @@ export class AgentInputCoordinator {
 
   /** Authority follows the active input, never pending steering or cumulative reply attribution. */
   getAcceptedInputProvenance(sessionId: string): {
-    clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string;
+    clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string; originKind?: string;
   } | null {
     const active = this.states.get(sessionId)?.activeTurn;
     const item = active?.item;
@@ -1117,6 +1117,7 @@ export class AgentInputCoordinator {
     if (!item) return null;
     return { clientId: item.clientId, autoResume: item.autoResume,
       authoredText: typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : undefined,
+      originKind: item.origin?.kind,
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 

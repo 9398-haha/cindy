@@ -1,3 +1,4 @@
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
@@ -279,7 +280,7 @@ describe('OrcaTeamService', () => {
           : {operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:revoked})}}),
         pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:'auto'})}),
         isPluginTaskAuthorized:()=>!revoked,readGhostErrandConfig:()=>({permissionMode:'auto'})};
-      const capture = new Function(...Object.keys(bindings),ts.transpileModule(`${helper}\nreturn captureOrcaPluginAuthority;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(...Object.values(bindings));
+      const capture = new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings),ts.transpileModule(`${helper}\nreturn captureOrcaPluginAuthority;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(hasAcceptedUserTaskInput, ...Object.values(bindings));
       const {deps,service,getWorker}=createDeps({captureControlAuthority:async id=>(await capture(id)).assertCurrent});
       const list=deps.listWorkersByLead;
       deps.listWorkersByLead=vi.fn(async id=>{const r=await list(id);if(phase==='lookup')revoked=true;return r;});

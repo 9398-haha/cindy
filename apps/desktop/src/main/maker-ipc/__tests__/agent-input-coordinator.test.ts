@@ -3,6 +3,7 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type A
 import { createPluginTaskReviewResolver, type PluginReviewSnapshot } from '../pluginTaskReviewContext.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import {
   createPiTranslateContext, disposePiTranslateContext, translatePiEvent,
@@ -1502,7 +1503,20 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, {...makeItem('input', 'Continue'), autoReviewUserText: source});
     await flush();
     expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({clientId: 'input', authoredText});
+    const db = { get drizzle(): never { throw new Error('Current Host source must not borrow older transcript'); } };
+    await expect(hasAcceptedUserTaskInput(db, sid, h.coordinator.getAcceptedInputProvenance(sid)))
+      .resolves.toBe(typeof source === 'string');
     expect(h.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(typeof source === 'object' ? true : undefined);
+  });
+
+  it('keeps a Worker Lead directive distinct from accepted human input', async () => {
+    const h = createHarness(), sid = 'worker-input-origin';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, { ...makeItem('directive', 'Evaluate'), origin: { kind: 'orca', senderLabel: 'Lead' } });
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'directive', originKind: 'orca' });
+    await h.coordinator.steer(sid, { ...makeItem('human', 'New direction'), autoReviewUserText: 'New direction' });
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
   });
 
   it('keeps accepted plugin authority through pending and rejected human steering', async () => {
