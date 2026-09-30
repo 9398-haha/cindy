@@ -802,7 +802,8 @@ describe('mobile session composer desktop-first surface', () => {
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');
-    expect(source).toContain('{ width: voiceRecordingTimer.pillWidth }');
+    // 胶囊宽度驱动语音按钮外框(过渡由 voicePillWidthMotion 负责)。
+    expect(source).toContain('<VoicePillWidthFrame width={voiceRecordingTimer.pillWidth}>');
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
     expect(source).not.toContain('formatVoiceDuration');

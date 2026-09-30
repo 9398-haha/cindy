@@ -815,6 +815,16 @@ export const motionEasing = {
   move: [0.4, 0, 0.2, 1],
 } as const;
 
+/**
+ * 移动端列表展开 / 收起节奏(DESIGN.md §14.4 登记的移动端例外,2026-09-30 用户要求
+ * 「符合 iOS 节奏」)。桌面 base 档 200ms 适合指针;手机列表按 iOS 系统节奏用 450ms
+ * 二次缓出,约 300ms 完成九成位移,先快后缓、无回弹。只用于列表分组的展开 / 收起
+ * (session/listDisclosureTransition.tsx)。
+ */
+export const listDisclosureMotion = {
+  duration: 225,
+} as const;
+
 /** Shared size for floating iOS navigation/menu controls (points). */
 export const navigationChrome = {
   target: 44,
