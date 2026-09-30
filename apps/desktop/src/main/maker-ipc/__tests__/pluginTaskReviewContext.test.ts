@@ -1,8 +1,9 @@
 import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect } from 'vitest';
-import { appendAutoReviewUserIntent, type AutoReviewRequest, type AutoReviewUserIntent } from '@cindy/maker-core';
+import { describe, it, expect, vi } from 'vitest';
+import { appendAutoReviewUserIntent, type AutoReviewRequest, type AutoReviewUserIntent, type AutoReviewDecision } from '@cindy/maker-core';
+import { withAutoReviewContext, resolveAutoReviewDecision } from '../../../../../../packages/maker-core/src/agents/shared/auto-review-decision.js';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import {
   createPluginTaskReviewResolver,
@@ -261,13 +262,43 @@ describe('plugin delegated Auto context', () => {
     const result = await createPluginTaskReviewResolver(async () => s)(request);
     expect(result.userIntent).toMatchObject({ historyOmitted: true });
   });
-  it('keeps old plans usable without treating absent scope as authorization', async () => {
+  const missingScopes = ['no-plan', 'missing', 'empty', 'blank', 'null', 'number', 'oversized'] as const;
+  it.each([false, true].flatMap(worker => [false, true].flatMap(hostShortcut =>
+    missingScopes.map(scope => ({ worker, hostShortcut, scope })),
+  )))('blocks missing scope before shortcuts: $worker/$hostShortcut/$scope', async ({ worker, hostShortcut, scope }) => {
     const s = fixture();
-    delete s.plan!.items[0]!.task;
-    const result = await createPluginTaskReviewResolver(async () => s)(request);
-    expect(result.authorizationError).toBeUndefined();
-    expect(result.delegatedTask).toBeUndefined();
-    expect(result.userIntent).toBe('');
+    if (!worker) delete s.worker;
+    if (scope === 'no-plan') delete s.plan;
+    else {
+      const owner = worker ? s.plan!.items[0]! : s.plan!;
+      if (scope === 'missing') delete owner.task;
+      else Object.assign(owner, { task: ({ empty: '', blank: ' \t\n', null: null, number: 123, oversized: 'x'.repeat(8001) })[scope] });
+    }
+    const model = vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'allow' }));
+    const delegate = Object.assign(model, { prepareRequest: createPluginTaskReviewResolver(async () => s) });
+    const evaluate = vi.fn((prepared: AutoReviewRequest) => resolveAutoReviewDecision(prepared, delegate, hostShortcut));
+    const result = await withAutoReviewContext({ ...request, action: { kind: 'read', path: '/answer/src/a.ts' } }, delegate, evaluate);
+    expect(result.verdict).toBe('block');
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(model).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('does not reuse cached allow after scope disappears (worker=%s)', async worker => {
+    const s = fixture();
+    if (!worker) delete s.worker;
+    const delegate = Object.assign(async () => null, { prepareRequest: createPluginTaskReviewResolver(async () => s) });
+    const cached = vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'allow' }));
+    expect((await withAutoReviewContext(request, delegate, cached)).verdict).toBe('allow');
+    if (worker) delete s.plan!.items[0]!.task;
+    else delete s.plan!.task;
+    expect((await withAutoReviewContext(request, delegate, cached)).verdict).toBe('block');
+    expect(cached).toHaveBeenCalledOnce();
+  });
+  it.each([false, true])('keeps normal-task shortcuts (host=%s)', async host => {
+    const model = vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'block' }));
+    const delegate = Object.assign(model, { prepareRequest: createPluginTaskReviewResolver(async () => null) });
+    expect((await withAutoReviewContext({ ...request, action: { kind: 'read', path: '/answer/src/a.ts' } }, delegate,
+      prepared => resolveAutoReviewDecision(prepared, delegate, host))).verdict).toBe('allow');
+    expect(model).not.toHaveBeenCalled();
   });
   it('keeps normal task intent and strips any unverified delegation', async () => {
     const result = await createPluginTaskReviewResolver(async () => null)({

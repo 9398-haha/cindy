@@ -100,8 +100,9 @@ export function createPluginTaskReviewResolver(
     }
     if (request.workspaceRoots[0] !== snapshot.session.workingDir)
       return denied('Task working directory changed.');
-    if (!task) return { ...base, userIntent }; // Legacy plans keep existing review behavior, without an invented grant.
-    if (task.length > 8000) return denied('Host-registered delegated task scope is invalid.');
+    // Missing scope does not turn a recognized plugin task into an ordinary task.
+    if (typeof task !== 'string' || !task.trim() || task.length > 8000)
+      return denied('Host-registered delegated task scope is missing or invalid.');
     // Hash includes both scope and live ownership facts; cached decisions cannot cross a change.
     const authorizationRevision = createHash('sha256')
       .update(

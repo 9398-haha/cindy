@@ -10525,7 +10525,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         if (workers.length || reservations.length) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before creating Workers');
       },
-      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute) => {
+      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute, onPersistenceStarted) => {
         assertPlugin(pluginId);
         const cfg = readGhostErrandConfig(pluginId);
         const configurationIsCurrent = () => {
@@ -10555,6 +10555,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!configurationIsCurrent()) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task configuration changed');
         await createGhostErrandSession({
           ghostId: pluginId, sessionId: taskId, title, ...route,
+          onPersistenceStarted,
           permissionMode: clampErrandPermissionMode(cfg.permissionMode),
           ...(workingDir ? { workingDir } : {}),
           shouldContinue: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId) && configurationIsCurrent(),
@@ -10621,7 +10622,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
     return pluginTasks;
   };
-  const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: () => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
+  const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: (activationStarted?: boolean) => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
       try {
         await assertLeadCollabProjectEnabled(leadSessionId);
         return await startOrcaTeamWithPermissionGate(
@@ -10634,7 +10635,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 description: `${t('newChat.chatInput.fullAccessConfirmation.description')} ${t('newChat.chatInput.fullAccessConfirmation.note')}`,
               }),
             startTeam: async (params) => {
-              const start = async () => { await assertCurrent?.(); return orcaLifecycleService.startTeam(params); };
+              const start = async () => {
+                await assertCurrent?.();
+                return orcaLifecycleService.startTeam(params, assertCurrent ? () => assertCurrent(true) : undefined);
+              };
               // Track only admitted native work, never the permission dialog.
               return completeOperation ? completeOperation(start) : start();
             },
@@ -10763,19 +10767,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'startTeam': {
         const epoch = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
-        const assertActive = (status: string) => {
-          if (status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot start a team');
-        };
-        assertActive(task.status);
-        if (task.planModeEnabled || task.permissionMode === 'plan' || task.permissionMode === 'bypassPermissions') throw new PluginTaskError('PERMISSION_DENIED', 'Coordinator requires an allowed execution permission');
-        const result = await startOrcaTeamForCaller(task.taskId, undefined, async () => {
+        const configuredDirectory = readGhostErrandConfig(pluginId).workingDir;
+        // Becoming Lead changes revision through orcaRole, but may not change admission facts.
+        const admission = (view: typeof task) => JSON.stringify([view.resolvedConfig, view.permissionMode, view.planModeEnabled, view.workingDir]);
+        const expectedAdmission = admission(task);
+        assertPluginWorkerAutoAuthorized(pluginId, task);
+        const result = await startOrcaTeamForCaller(task.taskId, undefined, async (activationStarted) => {
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
           const fresh = await service.get(pluginId, task.taskId);
-          assertActive(fresh.status);
-          if (fresh.revision !== task.revision) throw new PluginTaskError('STALE_REVISION', 'Task changed during confirmation');
+          if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+          assertPluginWorkerAutoAuthorized(pluginId, fresh);
+          if (configuredDirectory !== readGhostErrandConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
+          if ((!activationStarted && fresh.revision !== task.revision) || admission(fresh) !== expectedAdmission) throw new PluginTaskError('STALE_REVISION', 'Task changed during team activation');
         }, service.completeOperation);
-        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-        await service.get(pluginId, task.taskId);
         assertPluginTaskResult(result, 'Collaboration could not be started');
         return result;
       }

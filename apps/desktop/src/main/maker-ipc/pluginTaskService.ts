@@ -44,6 +44,8 @@ export interface PluginTaskStore {
   ): Promise<PluginTaskReceipt[]>;
   forSession(taskId: string): Promise<PluginTaskReceipt[]>;
   insert(row: PluginTaskReceipt): Promise<void>;
+  /** Roll back only this new receipt, before any Session INSERT was attempted. */
+  discardUncreated(row: PluginTaskReceipt): Promise<void>;
   save(row: PluginTaskReceipt): Promise<void>;
   revokePlugin(pluginId: string): Promise<void>;
 }
@@ -101,8 +103,9 @@ export interface PluginTaskServiceDeps {
     taskId: string,
     title: string,
     route: PluginTaskRoute,
-    isolatedWorkspace?: boolean,
-    requestedRoute?: PluginTaskRoute,
+    isolatedWorkspace: boolean | undefined,
+    requestedRoute: PluginTaskRoute | undefined,
+    onPersistenceStarted: () => void,
   ): Promise<void>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
   assertTeamPlanUnstarted?(taskId: string): Promise<void>;
@@ -273,8 +276,17 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           taskId,
         );
         await deps.store.insert(row);
-        deps.assertCurrent();
-        await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace, request.route);
+        let persistenceStarted = false;
+        try {
+          deps.assertCurrent();
+          await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace, request.route,
+            () => { persistenceStarted = true; });
+        } catch (error) {
+          // Once INSERT starts, even an error is ambiguous. Never free that key
+          // or infer failure from a subsequently deleted/filtered Session.
+          if (!persistenceStarted) await deps.store.discardUncreated(row);
+          throw error;
+        }
         return ownTask(pluginId, taskId);
       }),
     setTeamPlan: (pluginId: string, taskId: string, plan: PluginTeamPlan) => exclusive(async () => {

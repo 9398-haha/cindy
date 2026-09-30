@@ -8,7 +8,7 @@ import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
 import { PluginTaskError } from '../pluginTaskService.js';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
-const start = source.indexOf('      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute) => {');
+const start = source.indexOf('      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute, onPersistenceStarted) => {');
 const branch = source.slice(start, source.indexOf('      readSession:', start)).trim().replace(/,$/, '');
 const js = ts.transpileModule(`return ({ ${branch} }).createSession;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const roots: string[] = [];
@@ -25,7 +25,8 @@ function fixture(workingDir?: string, afterResolve?: () => void) {
   let owner = snapshot;
   let authorized = true;
   const cfg = { workingDir, permissionMode: 'plan' };
-  const create = vi.fn(async (_args: { shouldContinue: () => boolean }) => 'task');
+  const create = vi.fn(async (_args: { shouldContinue: () => boolean; onPersistenceStarted: () => void }) => 'task');
+  const onPersistenceStarted = vi.fn();
   const resolve = vi.fn(async (input: Parameters<typeof resolvePluginWorkerDirectory>[0]) => {
     const result = await resolvePluginWorkerDirectory(input);
     afterResolve?.();
@@ -44,7 +45,7 @@ function fixture(workingDir?: string, afterResolve?: () => void) {
     notifyGhostSessionEvent: vi.fn(), broadcastSessionCreated: vi.fn(),
   };
   const run = new Function(...Object.keys(deps), js)(...Object.values(deps));
-  return { cfg, create, resolve, switchOwner: () => { owner = {}; }, revoke: () => { authorized = false; }, run: (isolated = false) => run('plugin', 'task', 'title', {}, isolated) };
+  return { cfg, create, resolve, onPersistenceStarted, switchOwner: () => { owner = {}; }, revoke: () => { authorized = false; }, run: (isolated = false) => run('plugin', 'task', 'title', {}, isolated, undefined, onPersistenceStarted) };
 }
 describe('ordinary plugin task configured-directory admission', () => {
   it('creates in the unchanged real directory', async () => {
@@ -52,6 +53,8 @@ describe('ordinary plugin task configured-directory admission', () => {
     const f = fixture(selected);
     await f.run();
     expect(f.create).toHaveBeenCalledWith(expect.objectContaining({ workingDir: selected }));
+    expect(f.create.mock.calls[0][0].onPersistenceStarted).toBe(f.onPersistenceStarted);
+    expect(f.onPersistenceStarted).not.toHaveBeenCalled();
   });
   it('rejects a saved root replaced by a link before any creator side effects', async () => {
     const { root, selected } = await directory();

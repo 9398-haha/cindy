@@ -3911,13 +3911,15 @@ const r = await cindy.agent.requestSchedule({
 先调用 \`capabilities()\` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
 \`create\`、\`get\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
 可对自有任务调用 \`startTeam({taskId})\` 启用 Orca 主任务，并用 \`getTeam({taskId})\` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
+这些任务及其 Worker 不提供 \`cindy_helper\` 的账号级历史或跨任务控制能力，\`cindy_memory.session_search\` 也拒绝历史检索；协调使用独立 Orca 工具，结果由插件通过 \`readMessages/getTeam\` 读取。旧 errand/workspace 不因来源标记受到限制；明确卸载撤销归属后，保留的用户任务恢复普通 helper 与历史检索能力。这不构成通用执行沙箱。
 在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,task,items}})\`，每项包含
 \`label, workingDir, route, task\`。可选 \`task\` 是插件提供的工作范围（每段最多 8000 字符），
 不是用户原话。Host 核对已批准启用的插件、自有主任务、真实 Worker 归属、模型和目录后，
 将范围单独交给 Auto 审阅；仍逐动作审批，用户限制、撤权和只读设置始终优先。
 计划须在首次派发或创建 Worker 前登记，之后不可改写（包括补填 task）；需要不同范围时创建新任务。
-缺少该字段的存量计划继续可读，不会从 Agent 消息推导额外授权。
+缺少该字段的存量计划继续可读，但不允许插件任务自动授权或普通 MCP 快捷放行，不会从 Agent 消息推导额外授权；Ask/acceptEdits 仍可沿原流程逐次确认。
 计划不授予目录权限。Worker 仅可使用宿主任务目录及解析后仍在其中的子目录、插件 AI 配置目录或用户亲选的确切目录；Library 绑定不自动变成 Agent 工作根。宿主在登记和创建时均复核。
+这描述准入检查，不是持续的 OS 目录隔离保证。首版用于可信本地工作区；同权限进程在检查后恶意置换目录对象仍可能改变实际 cwd，不提供此类对抗性沙箱。
 
 暂不支持选择现有任务、远程/伙伴任务、任意更新配置、归档、队列暂停或事件订阅。
 旧 \`agent.errand\` 接口不变。

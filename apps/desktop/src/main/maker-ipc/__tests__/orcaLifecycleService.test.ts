@@ -232,6 +232,7 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
+      'clearLeadVendorOptions:lead-1',
     ]);
   });
 
@@ -256,6 +257,7 @@ describe('OrcaLifecycleService', () => {
       'setLeadVendorOptions:lead-1:undefined',
       'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
+      'clearLeadVendorOptions:lead-1',
     ]);
   });
 

@@ -122,7 +122,8 @@ export interface OrcaLifecycleDeps {
 
 /** 协同生命周期入口，集中处理 start_team、enable_collab_mode 和 create_worker 的补偿顺序。 */
 export interface OrcaLifecycleService {
-  startTeam(params: OrcaStartTeamParams): Promise<OrcaStartTeamResult>;
+  /** Host-only admission check; kept inside native work and its existing compensation. */
+  startTeam(params: OrcaStartTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaStartTeamResult>;
   createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult>;
   enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult>;
 }
@@ -304,6 +305,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   }): Promise<Extract<OrcaStartTeamResult, { ok: false }>> {
     await deps.markTeamEnded(params.teamId, 'failed').catch(() => undefined);
     await deps.setSessionOrcaRole(params.leadSessionId, null).catch(() => undefined);
+    await deps.clearLeadVendorOptions(params.leadSessionId).catch(() => undefined);
     return internalFailure(params.err);
   }
 
@@ -319,12 +321,14 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     });
   }
 
-  async function startTeam(params: OrcaStartTeamParams): Promise<OrcaStartTeamResult> {
+  async function startTeam(params: OrcaStartTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaStartTeamResult> {
     const workerPermissionMode = await workerPermissionModeForCreate(params.leadSessionId, params.workerPermissionMode);
     const existing = await deps.getActiveTeamByLead(params.leadSessionId);
+    if (assertCurrent) await assertCurrent();
     if (existing) {
       try {
         await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: existing.id });
+        if (assertCurrent) await assertCurrent();
       } catch (err) {
         return internalFailure(err);
       }
@@ -334,7 +338,9 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     const team = await deps.createActiveTeam(params.leadSessionId);
     initializingTeamIds.add(team.id);
     try {
+      if (assertCurrent) await assertCurrent();
       await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: team.id });
+      if (assertCurrent) await assertCurrent();
     } catch (err) {
       return failCreatedTeamOnly({ teamId: team.id, leadSessionId: params.leadSessionId, err });
     } finally {

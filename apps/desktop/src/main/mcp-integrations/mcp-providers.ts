@@ -1,6 +1,6 @@
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { classifyHelperSurface } from './helperSurface.js';
+import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
@@ -355,7 +355,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');
         return receipt => saved({ ...receipt, kind: 'memory' });
       },
-      searchSessions: searchSessionsFn,
+      searchSessions: async (query, opts = {}) => {
+        const dbClient = tryGetDbClient();
+        if (!dbClient || isAppSessionBoundaryPending() || !opts.callerSessionId)
+          throw new Error('Task history caller unavailable');
+        // session_search bypasses cindy_helper, so share its ownership predicate.
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId) === 'restricted')
+          throw new Error('Task history search is unavailable for plugin-managed tasks');
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
+          throw new Error('Task history caller unavailable');
+        const hits = await searchSessionsFn(query, opts);
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
+          throw new Error('Task history caller unavailable');
+        return hits;
+      },
       logger: createLogger('mcp/cindy_memory'),
     },
     // 智能通讯录: 全局单库 manager 懒加载单例; 开关现读 settings store —
@@ -514,14 +527,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
-        if (!dbClient) return 'restricted';
-        const [row] = await dbClient.drizzle
-          .select({ source: sessions.source, botId: botSessionLinks.botId })
-          .from(sessions)
-          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-          .where(eq(sessions.id, sessionId))
-          .limit(1);
-        return classifyHelperSurface(row?.source, Boolean(row?.botId));
+        if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
+        const surface = await resolveHelperSurface(dbClient, sessionId);
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
+        return surface;
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
