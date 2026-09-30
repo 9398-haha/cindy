@@ -207,6 +207,7 @@ export type OrcaWorkerCreationPlanValidator = (
   params: OrcaWorkerCreateInTeamParams,
   resolvedWorkingDir?: string,
   resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean },
+  assertCurrent?: () => Promise<void>,
 ) => Promise<number | null | undefined>;
 
 /** creation service 的 I/O 边界；register.ts 负责把 DB、Maker 与 broadcast 注入进来。 */
@@ -280,7 +281,8 @@ export interface OrcaWorkerCreationDeps {
 /** Orca worker 创建服务，只负责创建既有 team 下的新 worker，不负责 team lifecycle。 */
 export interface OrcaWorkerCreationService {
   createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
+  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
 }
 
 function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok: false }> {
@@ -618,7 +620,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }, assertCurrent);
   }
 
-  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
+  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
     const role = normalizeRequiredText(params.role, 'role');
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     if (role.value.length > 32) {
@@ -629,9 +632,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     params = { ...params, label: label.value };
     const validatePlan = async (workingDir?: string, route?: Parameters<OrcaWorkerCreationPlanValidator>[2]) => {
       await assertCurrent?.();
-      const limit = await deps.validateCreationPlan?.(params, workingDir, route);
-      await assertCurrent?.();
-      return limit;
+      // Host validation runs the captured source check before its final synchronous
+      // directory grant check. No trailing await may stale that grant observation.
+      return deps.validateCreationPlan?.(params, workingDir, route, assertCurrent);
     };
 
     const existing = await deps.listWorkersByLead(params.leadSessionId);
@@ -1133,12 +1136,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
       try {
         await deps.markOrcaRoleIfNeeded(workerSession.id, 'worker');
+        await validatePlan(workingDir, resolved);
       } catch (err) {
         await cleanupBootstrappedWorkerSession(workerSession.id);
         await deps.removeWorker(workerId).catch(() => undefined);
         return toInternalFailure(err);
       }
 
+      // Carry the resolved spawn facts through lifecycle/accepted callbacks only;
+      // neither the function nor its closure is part of the public result.
+      onCreated?.(async () => { await validatePlan(workingDir, resolved); });
       return {
         ok: true,
         teamId: params.teamId,

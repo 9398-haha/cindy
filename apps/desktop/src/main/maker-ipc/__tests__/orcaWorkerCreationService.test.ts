@@ -1,4 +1,6 @@
 import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
+import { assertPluginWorkerDirectoryScope } from '../pluginWorkerDirectory.js';
+import { runAcceptedCallback } from '../acceptedCallbackRunner.js';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
@@ -16,7 +18,7 @@ import {
   type OrcaWorkerProviderRoutingContext,
   type OrcaWorkerProviderSnapshot,
 } from '../orcaWorkerCreationService';
-import type { DispatchWorkerTaskResult, OrcaWorkerStatus } from '../orcaTeamService';
+import { createOrcaTeamService, type OrcaTeamServiceDeps, type OrcaWorkerRecordSnapshot, type DispatchWorkerTaskResult, type OrcaWorkerStatus } from '../orcaTeamService';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
@@ -32,7 +34,7 @@ describe('Host provenance across Orca creation waits', () => {
     expect(from).toBeGreaterThan(0);
     expect(to).toBeGreaterThan(from);
     const js = ts.transpileModule(`${helper}\nreturn ({${source.slice(from, to)}});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-    return new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
+    return new Function('hasAcceptedUserTaskInput', 'assertPluginWorkerDirectoryScope', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, assertPluginWorkerDirectoryScope, ...Object.values(bindings));
   }
   type Action = 'createWorker' | 'enableTeam' | 'startNew' | 'startExisting';
   const phases: Record<Action, string[]> = {
@@ -41,8 +43,13 @@ describe('Host provenance across Orca creation waits', () => {
     startNew: ['team-query', 'team-create', 'lead-activation'],
     startExisting: ['team-query', 'lead-activation'],
   };
-  function setup(action: Action, phase: string, change: string) {
+  function setup(action: Action, phase: string, change: string, entry = 'task') {
     let epoch = { client: {} }, enabled = true;
+    const directoryCase = ['config', 'pick'].includes(change);
+    const candidate = path.resolve('synthetic-worker');
+    let configured = change === 'config' ? candidate : undefined, picked = change === 'pick';
+    let directoryResolved = false, directoryReads = 0;
+    let queuedAcceptance: (() => void | Promise<void>) | undefined;
     let receipt: { operation: string; pluginId: string; payload: string } | null = {
       operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: change === 'already-revoked' }),
     };
@@ -58,51 +65,106 @@ describe('Host provenance across Orca creation waits', () => {
       else if (change === 'plan') task.planModeEnabled = true;
       else if (change === 'archived') task.status = 'archived';
       else if (change === 'disabled') enabled = false;
+      else if (change === 'config') configured = undefined;
+      else if (change === 'pick') picked = false;
     };
     const bindings = {
       maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
       PluginTaskError, readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => receipt && { ...receipt } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async (pluginId: string) => {
+        if (directoryResolved) {
+          directoryReads++;
+          if (directoryReads === 2) mutate('final-task');
+          if (directoryReads === 3) mutate('final-source');
+        }
         if (!receipt || receipt.pluginId !== pluginId || JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked');
         return { ...task };
       } }),
-      isPluginTaskAuthorized: () => enabled, readGhostErrandConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
-      resolvePluginWorkerDirectory: async () => task.workingDir, isGhostPickedDir: () => false,
+      isPluginTaskAuthorized: () => enabled, readGhostErrandConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
+      resolvePluginWorkerDirectory: async () => {
+        directoryResolved = true; directoryReads = 0;
+        if (directoryCase && !configured && !picked) throw new PluginTaskError('PERMISSION_DENIED', 'Directory revoked');
+        return directoryCase ? candidate : task.workingDir;
+      }, isGhostPickedDir: () => picked,
     };
     const { deps, service: creation } = createDeps(callback('    validateCreationPlan: async (', '    getLeadSessionRow: async (', bindings));
     for (const [key, point] of [
       ['listWorkersByLead', 'worker-list'], ['bootstrapSession', 'bootstrap'],
       ['renewWorkerCreationReservation', 'renewal'], ['addOrUpdateWorker', 'worker-write'],
+      ['markOrcaRoleIfNeeded', 'role-write'], ['releaseWorkerCreationReservation', 'release'],
     ] as const) {
       const original = deps[key] as (...args: unknown[]) => Promise<unknown>;
       (deps as unknown as Record<string, unknown>)[key] = vi.fn(async (...args: unknown[]) => {
         const result = await original(...args); mutate(point); return result;
       });
     }
+    const queuedWorker: OrcaWorkerRecordSnapshot = {
+      id: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1', sessionId: WORKER_SESSION_ID,
+      status: 'idle', label: 'sample', role: 'eval', focused: false, idleSince: null,
+      session: { title: 'Worker', agentKind: 'codex', model: 'gpt-5.4', effort: null, permissionMode: 'auto', fastMode: false },
+    };
+    const queuedTeamDeps = {
+      getWorkerLinkBySessionId: async () => ({ workerId: queuedWorker.id, teamId: queuedWorker.teamId, workerSessionId: WORKER_SESSION_ID, leadSessionId: 'lead-1' }),
+      listWorkersByLead: async () => [queuedWorker],
+      getLiveSession: () => ({ isTurnRunning: () => true }),
+      getManualInterrupt: () => null, clearManualInterrupt: vi.fn(), broadcastOrcaWorkerChanged: vi.fn(),
+      updateWorkerStatus: vi.fn(async () => undefined), log: { info: vi.fn(), warn: vi.fn() },
+      dispatchWorkerMessage: async ({ onAccepted }) => {
+        queuedAcceptance = onAccepted;
+        return { ok: true, mode: 'queued', clientId: 'queued-1', targetTitle: 'Worker', targetLastUserSendAt: null,
+          dispatchOutcome: { kind: 'session-dispatch', dispatched: true, source: 'test', wakeKind: 'queued' } };
+      },
+    } satisfies Partial<OrcaTeamServiceDeps>;
+    // This fixture exercises only the queued dispatch/accepted path; unexpected
+    // dependencies remain absent so the test cannot silently use another path.
+    const queuedTeam = createOrcaTeamService(queuedTeamDeps as unknown as OrcaTeamServiceDeps);
     const lifecycleDeps: OrcaLifecycleDeps = {
       ...callback('    getWorkerPermissionModeOverride: async (', '    setWorkerPermissionMode: applyWorkerPermissionModePreference,', bindings),
       ...callback('    createWorkerInTeam: (params', '    dispatchWorkerTask: (params', { ...bindings, orcaWorkerCreationService: creation }),
       getActiveTeamByLead: vi.fn(async () => { mutate('team-query'); return action === 'createWorker' || action === 'startExisting' ? { id: 'team-1', leadSessionId: 'lead-1' } : null; }),
       createActiveTeam: vi.fn(async () => { mutate('team-create'); return { id: 'new-team', leadSessionId: 'lead-1' }; }),
       isOrphanedTeamInit: vi.fn(async () => false), getWorkerPermissionMode: () => 'bypassPermissions', setWorkerPermissionMode: vi.fn(),
-      dispatchWorkerTask: deps.dispatchWorkerTask, markTeamEnded: vi.fn(async () => undefined), setSessionOrcaRole: vi.fn(async () => undefined),
+      dispatchWorkerTask: async (params, assertCurrent) => {
+        if (entry === 'queued') {
+          return queuedTeam.dispatchWorkerTask(params, assertCurrent);
+        }
+        mutate('accepted'); await assertCurrent?.(); return deps.dispatchWorkerTask(params);
+      }, markTeamEnded: vi.fn(async () => undefined), setSessionOrcaRole: vi.fn(async () => undefined),
       clearKnownNonOrcaSession: vi.fn(), setLeadVendorOptions: vi.fn(async () => { mutate('lead-activation'); }), clearLeadVendorOptions: vi.fn(async () => undefined),
-      sendWorkerReadyPlaceholder: vi.fn(async () => undefined), rollbackCreatedWorker: vi.fn(async () => undefined),
+      sendWorkerReadyPlaceholder: vi.fn(async (_params, assertCurrent) => { mutate('accepted'); await assertCurrent?.(); }), rollbackCreatedWorker: vi.fn(async () => undefined),
       broadcastSessionCreated: vi.fn(), broadcastOrcaWorkerChanged: vi.fn(),
     };
     const lifecycle = createOrcaLifecycleService(lifecycleDeps);
     const run = () => action === 'createWorker'
-      ? lifecycle.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', initialTask: 'Synthetic task' })
+      ? lifecycle.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', initialTask: ['task', 'queued'].includes(entry) ? 'Synthetic task' : undefined, ...(directoryCase ? { workingDir: candidate } : {}) })
       : action === 'enableTeam'
-        ? lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: 'Synthetic task' })
+        ? lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: entry === 'placeholder' ? undefined : 'Synthetic task', deferDelegateTask: entry === 'deferred', ...(directoryCase ? { workingDir: candidate } : {}) })
         : lifecycle.startTeam({ leadSessionId: 'lead-1' });
-    return { deps, lifecycleDeps, run };
+    return { deps, lifecycleDeps, run, acceptQueued: async () => {
+      expect(queuedAcceptance).toBeTypeOf('function');
+      mutate('accepted');
+      return runAcceptedCallback(queuedAcceptance, WORKER_SESSION_ID, 'queued-1');
+    } };
   }
   const cases = (Object.keys(phases) as Action[]).flatMap(action => phases[action].flatMap(phase =>
     ['uninstalled', 'reinstalled', 'account'].map(change => ({ action, phase, change }))));
   cases.push(...(['createWorker', 'enableTeam'] as Action[]).flatMap(action =>
     ['owner', 'missing', 'ask', 'plan', 'archived', 'disabled'].map(change => ({ action, phase: 'bootstrap', change }))));
+  cases.push(...(['createWorker', 'enableTeam'] as Action[]).flatMap(action =>
+    ['worker-write', 'role-write', 'release', 'final-task', 'final-source', ...(action === 'enableTeam' ? ['lead-activation'] : [])].flatMap(phase =>
+      ['config', 'pick'].map(change => ({ action, phase, change })))));
+  it.each((['createWorker', 'enableTeam'] as const).flatMap(action => ['config', 'pick'].flatMap(change => ['', 'accepted'].map(phase => ({ action, change, phase }))))) (
+    'retains $action $change directory authority after the queued reply: $phase', async ({ action, change, phase }) => {
+      const { run, acceptQueued, deps, lifecycleDeps } = setup(action, phase, change, 'queued');
+      expect(await run()).toMatchObject({ ok: true, dispatched: false });
+      if (phase) await expect(acceptQueued()).rejects.toMatchObject({ name: 'AcceptedCallbackDispatchCancelled' });
+      else await expect(acceptQueued()).resolves.toBeUndefined();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+      expect(lifecycleDeps.rollbackCreatedWorker).not.toHaveBeenCalled();
+      expect(lifecycleDeps.markTeamEnded).not.toHaveBeenCalled();
+    },
+  );
   it.each(cases)('rejects $action after $change during $phase without dispatch', async ({ action, phase, change }) => {
     const { deps, lifecycleDeps, run } = setup(action, phase, change);
     const result = await run().catch(() => ({ ok: false }));
@@ -115,12 +177,27 @@ describe('Host provenance across Orca creation waits', () => {
       expect(deps.releaseWorkerCreationReservation).toHaveBeenCalled();
     }
     if (phase === 'worker-write' || (action === 'enableTeam' && phase === 'lead-activation')) {
-      expect(lifecycleDeps.rollbackCreatedWorker).toHaveBeenCalled();
+      expect(vi.mocked(lifecycleDeps.rollbackCreatedWorker).mock.calls.length + vi.mocked(deps.removeWorker).mock.calls.length).toBeGreaterThan(0);
     }
     if (vi.mocked(lifecycleDeps.createActiveTeam).mock.calls.length) expect(lifecycleDeps.markTeamEnded).toHaveBeenCalledWith('new-team', 'failed');
     else expect(lifecycleDeps.markTeamEnded).not.toHaveBeenCalled();
     expect(lifecycleDeps.setWorkerPermissionMode).not.toHaveBeenCalled();
   });
+  it.each((['createWorker', 'enableTeam'] as const).flatMap(action =>
+    (action === 'createWorker' ? ['task', 'placeholder'] : ['task', 'placeholder', 'deferred']).flatMap(entry =>
+      ['config', 'pick'].flatMap(change => ['', 'accepted'].map(phase => ({ action, entry, change, phase }))))))(
+    'retains resolved scope until $action $entry acceptance: $change $phase', async ({ action, entry, change, phase }) => {
+      const { run, deps, lifecycleDeps } = setup(action, phase, change, entry);
+      const result = await run();
+      expect(result.ok).toBe(phase === '');
+      if (phase) {
+        expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+        expect(lifecycleDeps.rollbackCreatedWorker).toHaveBeenCalled();
+      }
+      // Public result cannot carry the Host callback or captured authorization facts.
+      expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    },
+  );
   it.each((Object.keys(phases) as Action[]).flatMap(action => ['healthy', 'already-revoked'].map(change => ({ action, change }))))(
     'preserves $change behavior for $action', async ({ action, change }) => {
       const { deps, lifecycleDeps, run } = setup(action, '', change);
@@ -2845,7 +2922,7 @@ it('uses one canonical label at every plan check without mutating the caller', a
   const { service } = createDeps({ validateCreationPlan });
   const params = Object.freeze({ leadSessionId: 'lead-1', teamId: 'team-1', role: 'eval', agent: 'codex' as const, label: ' SAMPLE ', workerPermissionMode: 'auto' as const });
   await expect(service.createWorkerInTeam(params)).resolves.toMatchObject({ ok: true });
-  expect(validateCreationPlan).toHaveBeenCalledTimes(4);
+  expect(validateCreationPlan).toHaveBeenCalledTimes(5);
   for (const call of validateCreationPlan.mock.calls) expect(call[0]).toMatchObject({ label: 'sample' });
   expect(params.label).toBe(' SAMPLE ');
 });
@@ -2871,7 +2948,7 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
   const {deps, service} = createDeps({validateCreationPlan, resolveWorkerWorkingDir: vi.fn(async () => resolved)});
   const params = {leadSessionId:'lead-1',role:'eval',agent:'codex' as const,label:'sample',workingDir:path.resolve('candidate')};
   await expect(service.createWorker(params)).rejects.toThrow('Directory authorization revoked');
-  expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved, expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd' }));
+  expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved, expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd' }), undefined);
   expect(deps.bootstrapSession).not.toHaveBeenCalled();
   expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledTimes(1);
 });
@@ -2879,7 +2956,7 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
 describe('production plugin Auto admission after reservation', () => {
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  const callback = source.slice(source.indexOf('    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute) => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
+  const callback = source.slice(source.indexOf('    validateCreationPlan: async ('), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
   const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const override = source.slice(source.indexOf('    getWorkerPermissionModeOverride: async (leadSessionId) => {'), source.indexOf('    setWorkerPermissionMode: applyWorkerPermissionModePreference,'));
   const overrideJs = ts.transpileModule(`${helper}\nreturn ({${override}}).getWorkerPermissionModeOverride;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -2896,7 +2973,7 @@ describe('production plugin Auto admission after reservation', () => {
     } : {}) };
     const callbackDeps = {
       maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
-      readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
+      readPluginTaskPlanReceipt: JSON.parse, assertPluginWorkerDirectoryScope, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => {
         if (storageFailed) throw new Error('storage unavailable');
         return missing ? null : structuredClone(receipt);
@@ -2966,7 +3043,7 @@ describe('production plugin Auto admission after reservation', () => {
 
   it.each(['uninstalled', 'reinstalled', 'malformed'])('keeps ordinary Worker creation separate from %s plugin receipts', async state => {
     const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned'); });
-    const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+    const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginWorkerDirectoryScope,
       createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: state === 'malformed' ? '{' : JSON.stringify({ ownershipRevoked: true, teamPlan: { items: [] } }) }) }),
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
       readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
@@ -3005,6 +3082,7 @@ describe('production plugin Auto admission after reservation', () => {
     const receipt = { pluginId: 'plugin', operation: 'create', payload: payload() };
     const depsForCallback = {
       readPluginTaskPlanReceipt: JSON.parse,
+      assertPluginWorkerDirectoryScope,
       getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => { if (++receiptReads === 6 && point === 'receipt') revoke(); return structuredClone(receipt); } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
@@ -3089,7 +3167,7 @@ it('rechecks a newly registered plan under the Lead send lock before reserving',
   const bootstrap=deps.bootstrapSession;
   deps.bootstrapSession=vi.fn(async (opts: MakerSessionCreateOpts) => {expect(locked).toBe(false);return bootstrap(opts);});
   await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
-  expect(validateCreationPlan).toHaveBeenCalledTimes(4);
+  expect(validateCreationPlan).toHaveBeenCalledTimes(5);
   expect(deps.reserveWorkerCreation).toHaveBeenCalledOnce();
 });
 it('rejects a plan changed during preparation without reserving or bootstrapping', async () => {

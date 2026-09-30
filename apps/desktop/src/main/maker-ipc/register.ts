@@ -1,6 +1,6 @@
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, readPluginTaskPlanReceipt, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
-import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
+import { assertPluginWorkerDirectoryScope, resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
@@ -7489,7 +7489,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     teamId: string;
     leadSessionId: string;
     sessionId: string;
-  }): Promise<boolean> {
+  }, assertCurrent?: () => Promise<void>): Promise<boolean> {
     const live = maker.getSession(target.sessionId);
     if (live) return false;
 
@@ -7529,8 +7529,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...directoryGrantsForRuntime(storedExtraDirs),
       ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
+    await assertCurrent?.();
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
+    await assertCurrent?.();
     const { session: resumedSession } = await bootstrapSession(opts);
+    await assertCurrent?.();
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;
   }
@@ -11513,12 +11516,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 清 knownNonOrca cache、在线时清空 vendorOptions。抽出来给 disableOrcaInternal 的「正常关闭」
    * 和「悬空 lead 兜底」两条路径共用,避免两份漂移。
    */
-  async function clearLeadOrcaRoleState(leadSessionId: string): Promise<void> {
+  async function clearLeadOrcaRoleState(leadSessionId: string, assertCurrent?: () => Promise<void>): Promise<void> {
+    await assertCurrent?.();
     await setSessionOrcaRole(leadSessionId, null);
     knownNonOrcaSessionIds.delete(leadSessionId);
 
     const leadSess = maker.getSession(leadSessionId);
     if (leadSess) {
+      await assertCurrent?.();
       try {
         await leadSess.setVendorOptions({
           orcaRole: null,
@@ -11551,8 +11556,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    *   - SESSION_DISABLE_ORCA IPC handler (renderer 手动 toggle)
    *   - cindy_helper end_team MCP tool (Lead agent 自动调)
    */
-  async function disableOrcaInternal(leadSessionId: string): Promise<{ ok: true }> {
+  async function disableOrcaInternal(leadSessionId: string, assertCurrent?: () => Promise<void>): Promise<{ ok: true }> {
     const team = await getActiveTeamByLead(leadSessionId);
+    await assertCurrent?.();
     if (!team) {
       // 没有 active team —— 但 Lead 的 orca_role 可能因为上一次关闭被中途打断而悬空成 'lead'
       // (markTeamEnded / markWorkersStatusByTeam / archiveWorkersByTeam 已落库,setSessionOrcaRole(null)
@@ -11561,6 +11567,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // active team」之后,坏态自锁。所以这里做幂等兜底:仍是 stranded lead 就把角色清掉,
       // 让「关闭协同」成为可靠的逃生口。
       const role = await getSessionOrcaRole(leadSessionId);
+      await assertCurrent?.();
       if (role === 'lead') {
         log.warn('disableOrca: no active team but lead orca_role stranded; reconciling', {
           leadSessionId,
@@ -11568,9 +11575,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 上一次关闭若在 archiveWorkersByTeam 之前被打断,team 已非 active 但 worker session 还停在
         // active + hidden + unreachable —— 一并补齐归档,否则它们会成为永远触达不到的孤儿 worker。
         const workerRecycleScope = captureSessionRecycleScope();
-        const orphanedWorkerSessionIds = await reconcileInactiveTeamWorkersForLead(leadSessionId);
+        const orphanedWorkerSessionIds = await reconcileInactiveTeamWorkersForLead(leadSessionId, assertCurrent);
         for (const sid of orphanedWorkerSessionIds) {
+          await assertCurrent?.();
           await recycleSessionWorktreeForStatusChange(sid, 'archived', workerRecycleScope);
+          await assertCurrent?.();
           cleanupPendingInteractionsForSession(sid, 'orca_disable');
           forgetKnownOrcaWorkerSession(sid);
         }
@@ -11580,7 +11589,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             count: orphanedWorkerSessionIds.length,
           });
         }
-        await clearLeadOrcaRoleState(leadSessionId);
+        await clearLeadOrcaRoleState(leadSessionId, assertCurrent);
       } else {
         log.info('disableOrca: no active team, no-op', { leadSessionId });
       }
@@ -11590,8 +11599,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
     for (const w of activeWorkers) {
+      await assertCurrent?.();
       orcaTeamService.clearAutoBridgeState(w.sessionId);
       await cancelIOSSimulatorSessionOperations(w.sessionId);
+      await assertCurrent?.();
       const sess = maker.getSession(w.sessionId);
       if (sess) {
         try {
@@ -11604,6 +11615,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             err: err instanceof Error ? err.message : String(err),
           });
         }
+        await assertCurrent?.();
         try {
           await maker.closeSession(w.sessionId);
         } catch (err) {
@@ -11613,21 +11625,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         }
       }
+      await assertCurrent?.();
       cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
       forgetKnownOrcaWorkerSession(w.sessionId);
     }
 
+    await assertCurrent?.();
     await markTeamEnded(team.id, 'completed');
+    await assertCurrent?.();
     await markWorkersStatusByTeam(team.id, 'done');
+    await assertCurrent?.();
     const workerRecycleScope = captureSessionRecycleScope();
-    const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id);
+    const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent);
     await Promise.all(
-      archivedWorkerSessionIds.map((sessionId) =>
-        recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope),
-      ),
+      archivedWorkerSessionIds.map(async (sessionId) => {
+        await assertCurrent?.();
+        await recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope);
+      }),
     );
 
-    await clearLeadOrcaRoleState(leadSessionId);
+    await clearLeadOrcaRoleState(leadSessionId, assertCurrent);
 
     log.info('disableOrca done', {
       leadSessionId,
@@ -11790,11 +11807,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     markWorkerIdleIfStatus,
     restoreWorkerDoneIfIdle,
     cancelWorkerSessionOperations: cancelIOSSimulatorSessionOperations,
-    closeWorkerSession: async (sessionId) => {
+    closeWorkerSession: async (sessionId, beforeClose) => {
       const sess = maker.getSession(sessionId);
+      await beforeClose?.();
       if (sess) {
         await sess.abort();
       }
+      await beforeClose?.();
       await maker.closeSession(sessionId);
     },
     closeWorkerSessionIfIdle: async (sessionId, sendLockHeld = false) => {
@@ -11813,9 +11832,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       );
     },
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
-    archiveWorkerSession: async (sessionId) => {
+    archiveWorkerSession: async (sessionId, beforeMutation) => {
       const workerRecycleScope = captureSessionRecycleScope();
-      await archiveSingleWorkerSession(sessionId);
+      await archiveSingleWorkerSession(sessionId, beforeMutation);
+      await beforeMutation?.();
       await recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope);
     },
     getManualInterrupt,
@@ -12043,10 +12063,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     isActiveWorkerStatus,
     readCollaborationSettings,
-    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute) => {
+    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute, assertCurrent) => {
       const epoch = getCurrentDbClientSnapshot();
       if (!epoch) throw new PluginTaskError('HOST_NOT_READY','Task storage unavailable');
       const receipt = await createPluginTaskStore(epoch.client).get(params.leadSessionId);
+      await assertCurrent?.();
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
       if (!receipt || receipt.operation !== 'create' || hasRevokedPluginTaskOwnership(receipt)) return undefined;
       const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
@@ -12074,11 +12095,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const plannedDirectory = item && resolvedRoute
         ? await resolveAuthorizedDirectory(item.workingDir) : undefined;
       const currentTask = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
+      await assertCurrent?.();
       if (epoch !== getCurrentDbClientSnapshot() || currentTask.revision !== task.revision) throw new PluginTaskError('STALE_REVISION','Task changed during directory validation');
       // Last admission check also covers no-plan plugin tasks and revocation
       // while directory/receipt reads or the existing reservation were pending.
       assertPluginWorkerAutoAuthorized(receipt.pluginId, currentTask);
       if (cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
+      assertPluginWorkerDirectoryScope({ requested: directory, leadDirectory: currentTask.workingDir,
+        configuredDirectory: cfg.workingDir, isPickedDirectory: dir => isGhostPickedDir(receipt.pluginId, dir) });
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.
       if (!item || data.settledLabels?.includes(params.label)) throw new PluginTaskError('INVALID_REQUEST','Worker is not pending in the registered plan');
       const route = item.route;
@@ -12190,7 +12214,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return captureOrcaPluginAuthority(leadSessionId);
     },
     setWorkerPermissionMode: applyWorkerPermissionModePreference,
-    createWorkerInTeam: (params, assertCurrent) => orcaWorkerCreationService.createWorkerInTeam(params, assertCurrent),
+    createWorkerInTeam: (params, assertCurrent, onCreated) => orcaWorkerCreationService.createWorkerInTeam(params, assertCurrent, onCreated),
     dispatchWorkerTask: (params, assertCurrent) => orcaTeamService.dispatchWorkerTask(params, assertCurrent),
     markTeamEnded,
     setSessionOrcaRole,
@@ -13470,6 +13494,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     switchFocus: async ({ leadSessionId, workerIdOrLabel }) => {
       try {
+        const { assertCurrent } = await captureOrcaPluginAuthority(leadSessionId);
         const workers = await listWorkersByLead(leadSessionId);
         const target = findFocusTargetWorker(workers, workerIdOrLabel);
         if (!target)
@@ -13479,6 +13504,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             message: `no worker matching "${workerIdOrLabel}"`,
           };
 
+        await assertCurrent();
         await setWorkerFocus(target.teamId, target.id);
 
         // Resume closed session so it's ready to receive tasks, but DON'T change
@@ -13486,7 +13512,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // dispatched (sendToWorker). Setting 'running' here without a task causes
         // the icon to flash indefinitely (no turn → turn-done never fires).
         if (target.status === 'idle') {
-          await resumeOrcaWorkerSessionIfMissing(target);
+          await assertCurrent();
+          await resumeOrcaWorkerSessionIfMissing(target, assertCurrent);
         }
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true, workerId: target.id };
@@ -13500,7 +13527,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     idleWorker: async ({ callerLeadSessionId, workerId, expectedStatus }) => {
       try {
-        return await orcaTeamService.idleWorker({ callerLeadSessionId, workerId, expectedStatus });
+        const { assertCurrent } = await captureOrcaPluginAuthority(callerLeadSessionId);
+        return await orcaTeamService.idleWorker({ callerLeadSessionId, workerId, expectedStatus }, { assertCurrent });
       } catch (err) {
         return {
           ok: false,
@@ -13511,7 +13539,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     endTeam: async ({ leadSessionId }) => {
       try {
-        await disableOrcaInternal(leadSessionId);
+        const { assertCurrent } = await captureOrcaPluginAuthority(leadSessionId);
+        await disableOrcaInternal(leadSessionId, assertCurrent);
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true };
       } catch (err) {
@@ -13524,7 +13553,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     archiveWorker: async ({ callerLeadSessionId, workerId }) => {
       try {
-        return await orcaTeamService.archiveWorker({ callerLeadSessionId, workerId });
+        const { assertCurrent } = await captureOrcaPluginAuthority(callerLeadSessionId);
+        return await orcaTeamService.archiveWorker({ callerLeadSessionId, workerId, beforeArchive: assertCurrent });
       } catch (err) {
         return {
           ok: false,
