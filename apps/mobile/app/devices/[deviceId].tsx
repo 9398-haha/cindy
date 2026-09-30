@@ -32,7 +32,8 @@ import {
 } from '@/components/MobilePrimitives';
 import {
   SimpleStackHeader,
-  simpleScreenSafeAreaEdges,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
 } from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -681,7 +682,7 @@ function DeviceDetailScreenContent() {
       return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
     });
     return (
-      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           backTestID="deviceDetail.backButton"
@@ -701,9 +702,10 @@ function DeviceDetailScreenContent() {
           />
         ) : null}
         <SectionList
+          {...simpleScrollInsetProps}
           sections={runItems.length > 0 ? [{ key: 'automation-runs', title: '', data: runItems }] : []}
           keyExtractor={(item) => item.session.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
@@ -744,7 +746,7 @@ function DeviceDetailScreenContent() {
   if (projectWorkingDir) {
     const projectItems = sections.flatMap((section) => section.data);
     return (
-      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           action={{
@@ -814,12 +816,13 @@ function DeviceDetailScreenContent() {
           )}
         </View>
         <SectionList
+          {...simpleScrollInsetProps}
           sections={displaySections}
           keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
           // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
           // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
           removeClippedSubviews={false}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
@@ -865,7 +868,7 @@ function DeviceDetailScreenContent() {
   }
 
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
       <SimpleStackHeader
         syncing={!showConnectionBanner && (loading || status === 'connecting')}
         action={{
@@ -1155,9 +1158,10 @@ function DeviceDetailScreenContent() {
       </View>
 
       <SectionList
+        {...simpleScrollInsetProps}
         sections={displaySections}
         keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={[
           styles.listContent,
@@ -1422,25 +1426,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   projectSearchChrome: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-  },
-  searchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  searchInput: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    flex: 1,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.lg,
-  },
-  searchCloseButton: {
-    minHeight: 38,
   },
   segmentScroll: {
     marginHorizontal: -spacing.lg,

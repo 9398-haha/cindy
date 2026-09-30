@@ -63,6 +63,7 @@
     "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again."
   },
   "sharedTask": {
+    "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
     "cancelSharing": "Stop Sharing",
@@ -7828,6 +7829,10 @@
     },
     "model": {
       "description": "Choose the models this teammate uses.",
+      "primary": "Primary Model",
+      "task": "Task Model",
+      "inheritPrimary": "Inherit Primary Model",
+      "inheritingPrimary": "Inherits the primary model for new background tasks",
       "restoreDefault": "Restore default model"
     },
     "modelChain": {

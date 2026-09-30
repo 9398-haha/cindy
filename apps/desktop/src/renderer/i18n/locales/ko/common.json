@@ -63,6 +63,7 @@
     "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요."
   },
   "sharedTask": {
+    "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
     "manageSharing": "공유 관리",
     "manageMembers": "멤버 관리…",
     "cancelSharing": "공유 중지",
@@ -7826,6 +7827,10 @@
     },
     "model": {
       "description": "이 팀원이 사용할 모델을 선택합니다.",
+      "primary": "기본 모델",
+      "task": "세션 모델",
+      "inheritPrimary": "기본 모델 상속",
+      "inheritingPrimary": "새 백그라운드 세션은 기본 모델을 상속합니다",
       "restoreDefault": "기본 모델로 되돌리기"
     },
     "modelChain": {

@@ -5,10 +5,15 @@ import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
-import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { NewTaskSelectionSheet } from '@/session/NewTaskSelectionSheet';
 import { resolveWorkspacePickerFrame, type WorkspacePickerFrame } from '@/session/workspacePickerPlacement';
 import { simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
+import { readComposerEntry, useComposerDock } from '@/session/composerMorph';
+import { useComposerPillOpen } from '@/session/useComposerPillOpen';
+import { DockKeyboardBottomSpacer } from '@/session/ComposerDockKeyboardFollow';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
+import { composerGeometry } from '@/session/composerGeometry';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { formatMobileBuildLabel, normalizeBuildInfo } from '@/config/buildInfo';
@@ -454,6 +459,7 @@ export default function NewRemoteSessionScreen() {
     workingDir?: string;
     deviceExplicit?: string;
     visualFocusComposer?: string;
+    composerMorph?: string;
     visualDraft?: string;
     suggestion?: string;
     recoverySessionId?: string;
@@ -462,6 +468,20 @@ export default function NewRemoteSessionScreen() {
   const routeDeviceName = String(params.deviceName ?? routeDeviceId);
   const initialWorkingDir = readRouteString(params.workingDir);
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';
+  // The home action lands in the compact pill; only a user's tap opens the card and keyboard.
+  const [entryMorph] = useState(() => readComposerEntry(readRouteString(params.composerMorph) ?? undefined));
+  const navigation = useNavigation();
+  // The morph stood in for the push; leaving should still slide back normally.
+  // Switch only after the entry transition: changing it on mount would make the
+  // push itself slide in under the morph overlay.
+  useEffect(() => {
+    if (!entryMorph) return;
+    const restore = () => navigation.setOptions({ animation: 'default' });
+    const unsubscribe = navigation.addListener('transitionEnd' as never, restore);
+    const fallback = setTimeout(restore, 1600);
+    return () => { unsubscribe(); clearTimeout(fallback); };
+  }, [entryMorph, navigation]);
+  const composerDock = useComposerDock();
   const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;
   const router = useRouter();
   const nativeSelectionSheet = Platform.OS === 'ios';
@@ -931,6 +951,7 @@ export default function NewRemoteSessionScreen() {
   const userTouchedDeviceRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
   const firstMessageInputRef = useRef<NativeTextInput>(null);
+  const composerPillOpen = useComposerPillOpen(composerDock.enabled, () => firstMessageInputRef.current?.focus());
   const voiceDraftScrollRef = useRef<ScrollView>(null);
   const voiceRecordingActiveRef = useRef(false);
   const voicePermissionRequestInFlightRef = useRef(false);
@@ -948,7 +969,7 @@ export default function NewRemoteSessionScreen() {
   const voiceDictionaryLearningTrackerRef = useRef<MobileVoiceDictionaryLearningTracker | null>(null);
   const creatingRef = useRef(false);
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
-  const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(false);
+  const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(visualFocusComposer);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
   const voiceDraftCaretRef = useRef<View>(null);
   const voiceDraftMeasuredBlockRef = useRef<View>(null);
@@ -1714,7 +1735,7 @@ export default function NewRemoteSessionScreen() {
     armed: composerVoiceHoldArmed,
     draftText: draft.firstMessage,
   });
-  const composerCardActive = firstMessageInputFocused
+  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening
     || modelSheetOpen
     || permissionSheetOpen
     || voiceStartPending
@@ -5638,7 +5659,7 @@ export default function NewRemoteSessionScreen() {
   ]);
 
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="newSession.screen">
+    <SafeAreaView edges={composerDock.enabled ? ['left', 'right'] : simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="newSession.screen">
       {Platform.OS === 'ios' ? (
         <>
           <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '', headerStyle: { backgroundColor: colors.surface }, headerTintColor: colors.textPrimary }} />
@@ -5650,12 +5671,14 @@ export default function NewRemoteSessionScreen() {
       <ComposerKeyboardAvoidingView
         keyboard={keyboardState}
         bottomInset={safeAreaInsets.bottom}
+        // The dock spacer below follows the keyboard frame by frame instead.
+        enabled={!composerDock.enabled}
         behavior={keyboardAvoidingBehaviorForPlatform(
           Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
         )}
         style={styles.keyboard}
       >
-        <View style={styles.screen}>
+        <View style={[styles.screen, composerDock.enabled && { paddingHorizontal: composerGeometry.horizontalInset }]}>
           {Platform.OS !== 'ios' || buildLabel || creating ? <View style={styles.topBar}>
             {Platform.OS !== 'ios' ? <ScreenBackButton
               hitSlop={12}
@@ -5670,7 +5693,7 @@ export default function NewRemoteSessionScreen() {
           </View> : null}
 
           <View ref={workspacePickerHostRef} collapsable={false} onLayout={measureWorkspacePicker} style={{ flex: 1 }}>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.bottomCluster}
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.bottomCluster, composerDock.enabled && { paddingBottom: 0 }]}
             onScrollBeginDrag={() => setWorkspacePickerOpen(false)}
             keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.selectorStack}>
@@ -6107,6 +6130,10 @@ export default function NewRemoteSessionScreen() {
                   accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                   autoFocus={visualFocusComposer}
+                  entryTransitionId={entryMorph?.id}
+                  collapsedHeight={composerDock.enabled ? composerDock.pillHeight : undefined}
+                  onCollapsedPress={composerPillOpen.onCollapsedPress}
+                  expandToken={composerPillOpen.expandToken}
                   cardActive={composerCardActive}
                   caretHidden={voiceIsListening}
                   cursorColor={colors.inputCaret}
@@ -6200,6 +6227,9 @@ export default function NewRemoteSessionScreen() {
               </View>
             </View>
           </ScrollView>
+          {composerDock.enabled ? (
+            <DockKeyboardBottomSpacer restingBottom={composerDock.restingBottom} keyboardGap={composerDock.keyboardGap} />
+          ) : null}
           {/* Keep the floating panel inside its native touch bounds on Android. */}
           {!nativeSelectionSheet && workspacePickerOpen && workspacePickerFrame ? (
             <View style={[styles.workspacePickerPanel, workspacePickerFrame]} testID="newSession.workspacePickerPanel">
@@ -6940,9 +6970,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
     marginTop: 1,
   },
+  // 成句说明:§3「说明、提示」档 13/18 · textSecondary。
   workspaceEmptyText: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
@@ -7385,6 +7416,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
   },
   sendButtonPressed: { opacity: 0.86 },
-  pressed: { opacity: 0.65 },
+  pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.44 },
 });

@@ -68,6 +68,8 @@ vi.mock('react-native-reanimated', async () => {
     useAnimatedStyle: () => ({}),
     Easing: { bezier: () => undefined },
     runOnJS: (fn: unknown) => fn,
+    runOnUI: (fn: (...args: never[]) => void) => fn,
+    cancelAnimation: () => {},
     // 退场完成回调由测试手动投递,用来模拟退出动画结束。
     withTiming: (value: number, _config?: unknown, done?: (finished: boolean) => void) => {
       if (done) h.timing.push(done);
@@ -103,7 +105,7 @@ vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => h.redu
 vi.mock('@/platform/gestureHandler', () => {
   const chain = {
     enabled: () => chain, activeOffsetX: () => chain, failOffsetX: () => chain,
-    failOffsetY: () => chain, onUpdate: () => chain, onEnd: () => chain,
+    failOffsetY: () => chain, onStart: () => chain, onUpdate: () => chain, onEnd: () => chain, onFinalize: () => chain,
   };
   return {
     Gesture: { Pan: () => chain },
@@ -115,6 +117,7 @@ vi.mock('@/platform/gestureHandler', () => {
 vi.mock('@/session/HomeModeSwitch', () => ({ HomeModeSwitch: () => null }));
 
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => vi.fn() }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 vi.mock('@/session/AccountSwitcherSheet', () => ({ AccountSwitcherSheet: () => null }));
