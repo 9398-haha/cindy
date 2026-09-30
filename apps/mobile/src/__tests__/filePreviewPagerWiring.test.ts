@@ -63,6 +63,13 @@ describe('remote file preview pager wiring', () => {
     expect(source).toContain('requestedAtRecoveryEpochRef.current >= recoveryEpoch');
     expect(source).toContain('setRequestEpoch((epoch) => epoch + 1)');
   });
+
+  it('gives the audio/video player a definite height inside the preview page', () => {
+    // RemoteMediaPlayerWebView fills its wrapper with flex: 1. A width-only wrapper
+    // collapsed the player to 0 pt: media loaded, but no picture or controls to tap.
+    expect(source).toMatch(/avPlayer: \{[^}]*\bflex: 1\b[^}]*\}/);
+    expect(source).toContain('style={styles.avPlayer}');
+  });
 });
 
 const htmlReaderSource = readSource('src/session/HtmlFileReader.tsx');
