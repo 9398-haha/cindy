@@ -91,11 +91,14 @@ Host 只接受经绑定插件身份写入的自有创建收据；已登记计划
 
 明确带任务范围的所有动作（包括读取）均检查范围；不会仅凭工作目录安全而忽略插件的禁读条款。明确的 Host 续行凭据在 SQL 限量前过滤，避免频繁协调消息挤走真实用户限制；空字符串凭据仍保留，因为用户只发送附件时也可能没有文字。用户消息携带新资源时，沿用普通任务规则，先清除旧指代授权再追加该行可信原话；不以可编辑的 origin 判定作者。缺凭据的旧卡片保守标记历史不完整。
 
-Host 信任的 MCP 工具也先经过现有委派上下文复核；只有复核后的普通任务可跳过模型审阅。
+Host 信任的 MCP 快捷路径在 Auto、Ask/acceptEdits 下都先经过现有委派上下文复核；只有复核后的普通任务可免确认。
 同一判据覆盖 Claude 本地/SSH、Codex MCP elicitation/Host dynamic tool、Pi 主进程/持久子代理；
 保留真实工具参数、审阅前后 Host 核验及最后的意图/缓存/目录时效检查。
-Host 快捷放行标志计入既有审阅缓存键；Pi 子代理未成功投递的 Auto allow 再次投递前重走现有核验，
-不把旧决定当成持久授权。普通任务的可信 MCP 快捷放行、非 Auto 档位及故障 ask/unavailable 语义保持。
+Host 快捷放行及仅检查快捷资格的标志计入既有审阅缓存键；非 Auto 不调用模型，
+核验不能放行时走既有逐次人工确认，无确认界面则拒绝；不会把 Host 的“Auto 不可用”误当成禁止用户逐次授权。
+人工允许只批准当前动作，不恢复 Auto 或插件控制权，插件 API 自身仍核对调用者归属。
+Auto 明确撤权仍直接拒绝，故障仍走 ask/unavailable。Full access、Plan 和独立 turn policy 保持原判据。
+Pi 子代理未成功投递的自动 allow 再次投递前重走现有核验，不把旧决定当成持久授权；人工答复保留原投递重试行为。
 
 验证入口：`pluginTaskReviewContext.test.ts`、`pluginTaskService.test.ts`、`taskSlot.test.ts`、
 `auto-review-context.test.ts`、Pi/Claude Code 审批接线回归以及 `eval-auto-approval.mts` 的

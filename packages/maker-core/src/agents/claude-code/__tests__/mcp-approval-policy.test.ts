@@ -1437,27 +1437,36 @@ describe('remote sessions share the same permission semantics', () => {
   }
 
   describe.each(['local', 'remote'] as const)('delegated trusted MCP %s', (transport) => {
-    it.each(['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope'] as const)(
-      'keeps live authorization before the Host shortcut: %s', async (scenario) => {
-        let active = scenario !== 'revoked';
+    it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+      (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+        .map(scenario => ({ permissionMode, scenario }))))(
+      'keeps live authorization before the Host shortcut: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+        let active = scenario !== 'revoked' && scenario !== 'confirmed';
         let revision = 'scope-1';
+        let preparations = 0;
         const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
           if (scenario === 'late-revoke') active = false;
           if (scenario === 'late-scope') revision = 'scope-2';
           return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
         }), {
           prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+            if (++preparations === 2 && permissionMode !== 'auto') {
+              if (scenario === 'late-revoke') active = false;
+              if (scenario === 'late-scope') revision = 'scope-2';
+            }
             if (scenario === 'unavailable') throw new Error('storage unavailable');
             if (scenario === 'ordinary') return request;
+            // Prove a previously ordinary shortcut cannot cross a late Host change.
+            if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
             return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
               task: 'Run the approved evaluation only', workingDir: request.workspaceRoots[0], authorizationRevision: revision } }
               : { ...request, authorizationError: 'Plugin authorization revoked' };
           }),
         });
-        const deny = (): InteractionDecision => ({ kind: 'permission', behavior: 'deny' });
+        const deny = (): InteractionDecision => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' });
         const session = transport === 'local'
-        ? await startSession(() => 'auto-approve', { permissionMode: 'auto', mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, decide: deny })
-        : await startRemoteSession(() => 'auto-approve', { permissionMode: 'auto', mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, attachResolver: deny });
+        ? await startSession(() => 'auto-approve', { permissionMode, mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, decide: deny })
+        : await startRemoteSession(() => 'auto-approve', { permissionMode, mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, attachResolver: deny });
         try {
           await session.handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
           const toolName = 'mcp__cindy_scheduler__call_tool';
@@ -1465,10 +1474,10 @@ describe('remote sessions share the same permission semantics', () => {
           const result = 'canUseTool' in session
             ? await session.canUseTool(toolName, input, { toolUseID: 'delegated-mcp' })
             : await session.onApprovalRequest({ requestId: 'delegated-mcp', kind: 'permission', toolName, input });
-          expect(result.behavior).toBe(['ordinary', 'allow'].includes(scenario) ? 'allow' : 'deny');
+          expect(result.behavior).toBe(scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') ? 'allow' : 'deny');
           expect(review.prepareRequest).toHaveBeenCalled();
-          expect(review).toHaveBeenCalledTimes(['ordinary', 'revoked', 'unavailable'].includes(scenario) ? 0 : 1);
-          expect(session.seen).toHaveLength(['ask', 'unavailable'].includes(scenario) ? 1 : 0);
+          expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+          expect(session.seen).toHaveLength((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
           if (review.mock.calls.length) {
             const request = review.mock.calls[0][0];
             expect(request.delegatedTask?.pluginId).toBe('eval');

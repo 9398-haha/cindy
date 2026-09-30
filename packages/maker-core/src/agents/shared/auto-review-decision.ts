@@ -473,10 +473,14 @@ export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
   hostAutoApprove = false,
+  hostShortcutOnly = false,
 ): Promise<AutoReviewDecision> {
   // Host trust skips model review only after live context preparation has
   // established that this is not a delegated task with a narrower scope.
   if (hostAutoApprove && !request.delegatedTask) return { verdict: 'allow' };
+  // Outside Auto, only establish whether Host trust can skip confirmation.
+  // A delegated request must use the existing human approval path, never AI.
+  if (hostShortcutOnly) return { verdict: 'ask' };
   // Bound untrusted input before the static classifier's command/path parsers,
   // not merely before the model request. Neither may inspect an oversized action.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);

@@ -4667,31 +4667,40 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   });
 
-  it.each(['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope'] as const)('delegated trusted MCP main keeps live authorization: %s', async (scenario) => {
-    let active = scenario !== 'revoked';
+  it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+    (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+      .map(scenario => ({ permissionMode, scenario }))))('delegated trusted MCP main keeps live authorization: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+    let active = scenario !== 'revoked' && scenario !== 'confirmed';
     let revision = 'scope-1';
+    let preparations = 0;
     const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
       if (scenario === 'late-revoke') active = false;
       if (scenario === 'late-scope') revision = 'scope-2';
       return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
     }), { prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+      if (++preparations === 2 && permissionMode !== 'auto') {
+        if (scenario === 'late-revoke') active = false;
+        if (scenario === 'late-scope') revision = 'scope-2';
+      }
       if (scenario === 'unavailable') throw new Error('Host storage unavailable');
       if (scenario === 'ordinary') return request;
+      // Prove a previously ordinary shortcut cannot cross a late Host change.
+      if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
       return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
         task: 'Run the approved evaluation only', workingDir: cwd, authorizationRevision: revision } }
         : { ...request, authorizationError: 'Plugin authorization revoked' };
     }) });
-    const handle = await start('auto', review, false, { serverNames: ['cindy_scheduler'], policy: () => 'auto-approve' });
+    const handle = await start(permissionMode, review, false, { serverNames: ['cindy_scheduler'], policy: () => 'auto-approve' });
     try {
-      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' }) as const);
       handle.setInteractionResolver(resolver);
       await handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
       firePermissionRequest('delegated-mcp', 'mcp__cindy_scheduler__call_tool', { name: 'schedule_create', args: { prompt: 'outside task scope' } });
       await vi.waitFor(() => expect(captured.sent).toContainEqual(expect.objectContaining({ type: 'extension_ui_response', id: 'delegated-mcp' })));
-      expect(captured.sent).toContainEqual(expect.objectContaining({ id: 'delegated-mcp', confirmed: scenario === 'ordinary' || scenario === 'allow' }));
+      expect(captured.sent).toContainEqual(expect.objectContaining({ id: 'delegated-mcp', confirmed: scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') }));
       expect(review.prepareRequest).toHaveBeenCalled();
-      expect(review).toHaveBeenCalledTimes(['ordinary', 'revoked', 'unavailable'].includes(scenario) ? 0 : 1);
-      expect(resolver).toHaveBeenCalledTimes(['ask', 'unavailable'].includes(scenario) ? 1 : 0);
+      expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+      expect(resolver).toHaveBeenCalledTimes((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
       if (review.mock.calls.length) {
         expect(review.mock.calls[0]![0].delegatedTask?.pluginId).toBe('eval');
         expect(JSON.stringify(review.mock.calls[0]![0].action)).toContain('schedule_create');

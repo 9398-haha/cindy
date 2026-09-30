@@ -2399,7 +2399,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         : normalizedAction;
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
-      if (mutablePermissionMode === 'auto') {
+      const reviewPermissionMode = mutablePermissionMode;
+      if (reviewPermissionMode === 'auto' || (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt)) {
         const workspaceRoots = [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs].filter(
           (d): d is string => typeof d === 'string' && d.length > 0,
         );
@@ -2435,6 +2436,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           writableRoots,
           opts.remoteHostId ? 'linux' : process.platform,
           mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt,
+          reviewPermissionMode !== 'auto',
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
         // 或放宽(→Full)。必须按**最新**档位决策,否则进入审查前的旧 auto 档 allow 会绕过用户
@@ -2451,12 +2453,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           return { behavior: 'allow', updatedInput: executionInput };
         }
-        if (modeAfterReview !== 'auto') {
+        if (modeAfterReview !== reviewPermissionMode) {
           // 已收紧到 Ask/更严:不吃 auto 裁决,强制走用户确认(下方 forcePrompt 流程)。
           forcePrompt = true;
         } else if (!forcePrompt && autoDecision.verdict === 'allow') {
           return { behavior: 'allow', updatedInput: executionInput };
-        } else if (!forcePrompt && autoDecision.verdict === 'block') {
+        } else if (!forcePrompt && reviewPermissionMode === 'auto' && autoDecision.verdict === 'block') {
           // 模型判定动作有更安全的做法 —— 按 Auto 本意保持静默,只把 reason 喂给模型。
           // (审阅器故障已在 resolveAutoReviewDecision 降级成 ask,不会走到这条分支。)
           return {
@@ -2474,9 +2476,6 @@ export class ClaudeCodeAgent extends BaseAgent {
           forcePrompt = true;
         }
       } else {
-        if (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
-          return { behavior: 'allow', updatedInput: input };
-        }
         forcePrompt = forcePrompt || mcpApprovalPolicy === 'prompt-each-time';
       }
       const permissionRequest = {
@@ -2720,6 +2719,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       writableRoots: string[],
       platform: NodeJS.Platform,
       hostAutoApprove = false,
+      hostShortcutOnly = false,
     ): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
@@ -2741,12 +2741,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        key = JSON.stringify([prepared, hostAutoApprove]);
+        key = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
         const cached = autoReviewDecisionCache.get(key);
         pending = cached ?? resolveAutoReviewDecision(
             prepared,
             this.deps.reviewAutoPermissionAction,
             hostAutoApprove,
+            hostShortcutOnly,
           );
         if (!cached) autoReviewDecisionCache.set(key, pending);
         return pending;
@@ -3702,7 +3703,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             );
             let remoteForcePrompt = mutablePermissionMode !== 'auto' && remoteTurnPolicyForcePrompt;
             let remoteUnavailableHandoff = false;
-            if (mutablePermissionMode === 'auto') {
+            const reviewPermissionMode = mutablePermissionMode;
+            if (reviewPermissionMode === 'auto' || (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt)) {
               const normalizedAction = normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {});
               const action = normalizedAction.kind === 'other'
                 ? toolAutoReviewAction(remoteToolName, params.input ?? {}, remoteHostApprovalPresentation?.description)
@@ -3722,6 +3724,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 ),
                 'linux',
                 remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt,
+                reviewPermissionMode !== 'auto',
               );
               const modeAfterReview = mutablePermissionMode as PermissionMode;
               if (isPlanToolBlocked(remoteToolName)) {
@@ -3732,10 +3735,10 @@ export class ClaudeCodeAgent extends BaseAgent {
                   ? { kind: 'permission', behavior: 'deny', reason: 'Permission mode changed; retry within the authorized turn scope.' }
                   : { kind: 'permission', behavior: 'allow' };
               }
-              if (modeAfterReview === 'auto' && autoDecision.verdict === 'allow') {
+              if (modeAfterReview === reviewPermissionMode && autoDecision.verdict === 'allow') {
                 return { kind: 'permission', behavior: 'allow' };
               }
-              if (modeAfterReview === 'auto' && autoDecision.verdict === 'block') {
+              if (modeAfterReview === 'auto' && reviewPermissionMode === 'auto' && autoDecision.verdict === 'block') {
                 // 与本地分支同口径:模型判定保持静默(审阅器故障已降级成 ask)。
                 return {
                   kind: 'permission',
@@ -3750,9 +3753,6 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               remoteForcePrompt = true;
             } else {
-              if (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt) {
-                return { kind: 'permission', behavior: 'allow' };
-              }
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';
             }
             const remotePermissionRequest = {

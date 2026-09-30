@@ -107,3 +107,14 @@ it('does not execute a stale allow when the final authority lookup fails', async
   expect(await withAutoReviewContext(request, delegate, async () => ({verdict: 'allow'})))
     .toMatchObject({verdict: 'ask', unavailable: true});
 });
+
+it.each([false, true])('non-Auto Host shortcut never invokes a model (delegated=%s)', async delegated => {
+  const delegate = vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'allow' }));
+  const prepared: AutoReviewRequest = delegated ? { ...request, delegatedTask: {
+    source: 'approved-plugin', pluginId: 'eval', role: 'worker', task: 'Run tests',
+    workingDir: '/answer', authorizationRevision: '1',
+  } } : request;
+  expect((await resolveAutoReviewDecision(prepared, delegate, true, true)).verdict)
+    .toBe(delegated ? 'ask' : 'allow');
+  expect(delegate).not.toHaveBeenCalled();
+});

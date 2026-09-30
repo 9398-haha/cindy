@@ -5631,7 +5631,7 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -5659,12 +5659,13 @@ assertRouteCurrent();
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        key = JSON.stringify([prepared, hostAutoApprove]);
+        key = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
         const cached = autoReviewDecisionCache.get(key);
         pending = cached ?? resolveAutoReviewDecision(
             prepared,
             this.deps.reviewAutoPermissionAction,
             hostAutoApprove,
+            hostShortcutOnly,
           );
         if (!cached) autoReviewDecisionCache.set(key, pending);
         return pending;
@@ -7844,8 +7845,9 @@ assertRouteCurrent();
         // Every Auto approval callback uses the shared reviewer, including
         // policy turns and MCP actions. Static green decisions stay local;
         // AI allow/block are silent and ask uses the existing interaction path.
+        const reviewPermissionMode = mutablePermissionMode;
         if (
-          mutablePermissionMode === 'auto' &&
+          (reviewPermissionMode === 'auto' || (opts?.hostAutoApprove === true && !forcePrompt)) &&
           req.kind === 'permission'
         ) {
           const reviewThreadId = threadId;
@@ -7870,6 +7872,7 @@ assertRouteCurrent();
                 ? toolAutoReviewAction(req.toolName, req.input, req.description)
                 : opts.autoReviewAction,
               opts?.hostAutoApprove === true && !forcePrompt,
+              reviewPermissionMode !== 'auto',
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
@@ -7899,11 +7902,11 @@ assertRouteCurrent();
             }
             return 'accept';
           }
-          if (modeAfterReview !== 'auto') {
+          if (modeAfterReview !== reviewPermissionMode) {
             forcePrompt = true;
           } else if (decision.verdict === 'allow') {
             return 'accept';
-          } else if (decision.verdict === 'block') {
+          } else if (reviewPermissionMode === 'auto' && decision.verdict === 'block') {
             denialReason = formatPermissionDenial('auto', decision.reason);
             // Keep the denial, but distinguish it from a user decision in Cindy.
             reportMcpDenial('auto-review');
@@ -9289,16 +9292,6 @@ assertRouteCurrent();
         `mcp:${params.serverName}`,
         policyPermissionInput,
       );
-      if (mutablePermissionMode !== 'auto' && approvalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
-        log.debug('mcp elicitation auto-approved by host policy', {
-          serverName: params.serverName,
-          mode: params.mode,
-          toolName: policyPermissionInput.toolName,
-          innerToolName: mcpInnerToolName(params),
-        });
-        return { action: 'accept', content: null, _meta: null };
-      }
-
       const meta = mcpElicitationMeta(params);
       const toolTitle = stringFromMeta(meta, 'tool_title');
       const innerToolName = mcpInnerToolName(params);
@@ -9912,7 +9905,7 @@ assertRouteCurrent();
       };
       const approvalPolicy = classifyMcpToolApprovalPolicy(approvalContext);
       const hostApprovalPresentation = mcpToolApprovalPresentation(approvalContext);
-      if (approvalPolicy !== 'auto-approve' || mutablePermissionMode === 'auto') {
+      {
         const requestId = `dynamic-tool:${serverName}:${params.turnId}:${params.callId}`;
         const decision = await awaitApprovalDecision(
           params.threadId,

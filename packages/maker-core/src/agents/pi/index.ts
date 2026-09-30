@@ -3931,7 +3931,7 @@ export class PiAgent extends BaseAgent {
     };
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
       // Directory grants become active only after their permission snapshot is
       // durable. While persistence is pending, neither the requested roots nor
       // the old runtime roots are a complete authorization view, so fail closed
@@ -3965,10 +3965,10 @@ export class PiAgent extends BaseAgent {
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        cacheKey = JSON.stringify([prepared, hostAutoApprove]);
+        cacheKey = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
         pending = autoReviewDecisionCache.get(cacheKey);
         if (!pending) {
-          pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction, hostAutoApprove);
+          pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction, hostAutoApprove, hostShortcutOnly);
           autoReviewDecisionCache.set(cacheKey, pending);
         }
         return pending;
@@ -4258,13 +4258,13 @@ export class PiAgent extends BaseAgent {
       // otherwise the entry is filed under the new generation and the retry gate
       // below never opens again.
       const offeredUnderGeneration = interactionResolverGeneration;
-      const offeredInAuto = permissionMode === 'auto';
+      let checkingAutomaticPermission = permissionMode === 'auto';
       const offeredWhileClosed = closed;
       const offeredAfterProcessExit = piProcessExited;
       // Detached runs outlive the root, but an Auto verdict must not straddle
       // its teardown. Reuse the durable unanswered path without stopping later
       // offers that begin under the already-detached lifecycle.
-      const autoReviewOfferExpired = (): boolean => offeredInAuto
+      const autoReviewOfferExpired = (): boolean => checkingAutomaticPermission
         && (closed !== offeredWhileClosed || piProcessExited !== offeredAfterProcessExit);
       piSubagentApprovalRequests.add(key);
       if (turnChangeCapture) {
@@ -4521,15 +4521,12 @@ export class PiAgent extends BaseAgent {
           }
           return 'prompt-each-time' as const;
         })();
-        if (mcpPolicy !== null && !adopted) {
-          if (permissionMode !== 'auto' && mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt) return 'allow';
-          if (permissionMode !== 'auto') {
-            return requestUserDecision({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' });
-          }
+        const hostAutoApprove = mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt && !adopted;
+        const reviewPermissionMode = permissionMode;
+        if (reviewPermissionMode !== 'auto' && !hostAutoApprove) {
+          return requestUserDecision({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' });
         }
-        if (permissionMode !== 'auto') {
-          return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
-        }
+        checkingAutomaticPermission = true;
         try {
           const action = mcpTarget
             ? toolAutoReviewAction(toolName, input)
@@ -4551,9 +4548,9 @@ export class PiAgent extends BaseAgent {
             ? toolAutoReviewAction(toolName, input,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
-            : action, mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt && !adopted);
+            : action, hostAutoApprove, reviewPermissionMode !== 'auto');
           if (autoReviewOfferExpired()) return null;
-          if (permissionMode !== 'auto') {
+          if (permissionMode !== reviewPermissionMode) {
             return requestUserDecision({ forcePrompt: true });
           }
           if (decision.verdict === 'allow') {
@@ -4562,7 +4559,7 @@ export class PiAgent extends BaseAgent {
             cacheResolution = false;
             return 'allow';
           }
-          if (decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
+          if (reviewPermissionMode === 'auto' && decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
           if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return requestUserDecision({
             forcePrompt: true,
@@ -7895,7 +7892,7 @@ export class PiAgent extends BaseAgent {
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
-      reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean) => Promise<AutoReviewDecision>;
+      reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean, hostShortcutOnly?: boolean) => Promise<AutoReviewDecision>;
       recordUserClarification: (question: string, answer: string) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
@@ -8613,22 +8610,10 @@ export class PiAgent extends BaseAgent {
           }
           return 'prompt-each-time';
         })();
-        if (mcpPolicy !== null && permissionMode !== 'auto') {
-          // Pi 的权限门只有放行/拒绝两态,没有会话级持久化规则,因此 prompt 与
-          // prompt-each-time 在这里收敛成同一个动作:每次都问用户。本轮策略命中时
-          // auto-approve 也不放行 —— 渠道安全契约压过第一方 MCP 自动批准(§7.4)。
+        const hostAutoApprove = mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt;
+        if (permissionMode !== 'auto' && !hostAutoApprove) {
           sendPermissionResolution(
-            mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt
-              ? 'allow'
-              : await requestUserConfirmation({
-                  forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time',
-                }),
-          );
-          return;
-        }
-        if (permissionMode !== 'auto') {
-          sendPermissionResolution(
-            await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt }),
+            await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' }),
           );
           return;
         }
@@ -8652,7 +8637,7 @@ export class PiAgent extends BaseAgent {
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt
             ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description, action)
-            : action, mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt);
+            : action, hostAutoApprove, permissionMode !== 'auto');
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):
           //   - 已收紧到 ask(或其它非 auto/bypass)→ 破坏性调用即便 verdict=allow 也必须走
@@ -8664,13 +8649,13 @@ export class PiAgent extends BaseAgent {
             sendPermissionResolution(turnPolicyForcePrompt ? 'system-deny' : 'allow');
             return;
           }
-          if (modeAfterReview !== 'auto') {
+          if (modeAfterReview !== permissionMode) {
             // 审查期间用户主动收紧了档位 → 这一次必须拿到明确确认,等卡期间再放宽也不追认
             // (forcePrompt,与 CC 对 AI ask / 确定性红线的处理同口径)。
             sendPermissionResolution(await requestUserConfirmation({ forcePrompt: true }));
             return;
           }
-          if (decision.verdict === 'ask') {
+          if (decision.verdict === 'ask' || (permissionMode !== 'auto' && decision.verdict !== 'allow')) {
             // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
             // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
             if (decision.unavailable) notifyAutoReviewUnavailable();
