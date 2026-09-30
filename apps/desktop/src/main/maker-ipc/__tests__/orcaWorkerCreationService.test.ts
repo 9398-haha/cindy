@@ -59,6 +59,7 @@ describe('Host provenance across Orca creation waits', () => {
       else if (change === 'disabled') enabled = false;
     };
     const bindings = {
+      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
       PluginTaskError, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => receipt && { ...receipt } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async (pluginId: string) => {

@@ -4,6 +4,10 @@ import { PluginTaskError } from '../pluginTaskService.js';
 import type { AgentKind } from '@cindy/maker-core';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 // The lifecycle unit owns no credential/runtime I/O.
 vi.mock('../../maker-host/codex-credential-switch.js', () => ({isCredentialModeSwitchBusyError: () => false}));
@@ -1108,10 +1112,51 @@ describe('retained tasks after explicit plugin uninstall', () => {
   const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
   const callback = source.slice(source.indexOf('    getWorkerPermissionModeOverride: async (leadSessionId) => {'), source.indexOf('    setWorkerPermissionMode: applyWorkerPermissionModePreference,'));
   const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).getWorkerPermissionModeOverride;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  it.each(['direct','queued'].flatMap(delivery=>['plugin','human-after','plugin-after','none','cleared','forged','rewound','child','manual-retry','unknown'].map(history=>({delivery,history}))))(
+    'retains the source across $delivery automatic Worker replies after $history', async({delivery,history})=>{
+      const sqlite=new Database(':memory:');
+      try {
+        sqlite.exec('CREATE TABLE sessions(id TEXT, cleared_at INTEGER); CREATE TABLE messages(client_id TEXT, session_id TEXT, role TEXT, created_at INTEGER, agent_meta TEXT, rewind_at INTEGER);');
+        const sessions=sqliteTable('sessions',{id:text('id'),clearedAt:integer('cleared_at')});
+        const messages=sqliteTable('messages',{clientId:text('client_id'),sessionId:text('session_id'),role:text('role'),createdAt:integer('created_at'),agentMeta:text('agent_meta'),rewindAt:integer('rewind_at')});
+        sqlite.prepare('INSERT INTO sessions VALUES (?,?)').run('lead',history==='cleared'?300:0);
+        const insert=sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)');
+        const add=(id:string,at:number,meta:object,rewind:number|null=null)=>insert.run(id,'lead','user',at,JSON.stringify(meta),rewind);
+        if(['manual-retry','unknown'].includes(history))add('old-human',50,{delivery:'turn',autoReviewUserText:'Earlier task'});
+        if(history!=='none') add('plugin-task:run',100,{delivery:'turn'},history==='manual-retry'?250:null);
+        if(['manual-retry','unknown'].includes(history))add(history,300,{delivery:'turn'});
+        if(['human-after','plugin-after','rewound','child'].includes(history))add('human',200,{delivery:'turn',autoReviewUserText:'My new task',...(history==='child'?{parentUuid:'child'}:{})},history==='rewound'?250:null);
+        if(history==='plugin-after')add('plugin-task:run',250,{delivery:'turn'});
+        if(history==='forged')add('fake-human',200,{delivery:'turn',origin:{kind:'desktop'}});
+        add('worker-reply',400,{delivery:'turn',origin:{kind:'orca'}});
+        const epoch={client:{drizzle:drizzle(sqlite)}};
+        const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,sessions,messages,and,desc,eq,isNull,sql,
+          maker:{getSession:()=>({isTurnRunning:()=>true})},inputCoordinator:{getAcceptedInputProvenance:()=>delivery==='queued'?{clientId:'worker-reply'}:null},
+          createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:'{"ownershipRevoked":true}'}})};
+        const override=new Function(...Object.keys(bindings),js)(...Object.values(bindings));
+        if(history==='human-after')await expect(override('lead')).resolves.toMatchObject({permissionMode:undefined});
+        else await expect(override('lead')).rejects.toMatchObject({code:'PERMISSION_DENIED'});
+      } finally {sqlite.close();}
+    });
+  it.each(['plugin','auto-retry','human','manual-retry','idle'].flatMap(input=>['revoked','disabled','ask','plan','healthy'].map(state=>({input,state}))))(
+    'keeps $input source distinct from $state task ownership',async({input,state})=>{
+      const epoch={client:{}};
+      const active=input==='idle'?null:input==='plugin'?{clientId:'plugin-task:run'}:input==='human'?{clientId:'human',authoredText:'Continue my task'}:{clientId:'retry',retrySourceClientId:'plugin-task:run',autoResume:input==='auto-retry'};
+      const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,
+        maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>active},
+        createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:state==='revoked'})}}),
+        pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:state==='ask'?'default':'auto',planModeEnabled:state==='plan'})}),
+        isPluginTaskAuthorized:()=>state!=='disabled',readGhostErrandConfig:()=>({permissionMode:'auto'})};
+      const override=new Function(...Object.keys(bindings),js)(...Object.values(bindings));
+      const ordinary=state==='revoked'&&['human','idle'].includes(input);
+      if(state==='healthy'||ordinary)await expect(override('lead')).resolves.toMatchObject({permissionMode:ordinary?undefined:'auto'});
+      else await expect(override('lead')).rejects.toThrow();
+    });
   it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('requires an active plugin task outside Plan Mode for %s', async action => {
     for (const {status,planModeEnabled} of [{status:'active',planModeEnabled:false},{status:'archived',planModeEnabled:false},{status:'active',planModeEnabled:true}]) {
       const epoch = { client: {} };
       const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+        maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
         createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: '{}' }) }),
         pluginTaskServiceForCurrentOwner: () => ({ get: async () => ({ status, permissionMode: 'auto', planModeEnabled }) }),
         isPluginTaskAuthorized: () => true, readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
@@ -1134,6 +1179,7 @@ describe('retained tasks after explicit plugin uninstall', () => {
   it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('uses ordinary permissions for %s with a retained revoked receipt', async action => {
     const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked'); });
     const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
+      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
       createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: true }) }) }),
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => false,
       readGhostErrandConfig: () => ({ permissionMode: 'auto' }),

@@ -10707,12 +10707,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const readPluginWorkerCompletion = async (epoch: NonNullable<ReturnType<typeof getCurrentDbClientSnapshot>>, sessionId: string, status: string) => {
     const [row] = await epoch.client.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     const safeMeta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
-    const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta}).from(messages)
+    const [anchor] = await epoch.client.drizzle.select({role:messages.role, createdAt:messages.createdAt, agentMeta:messages.agentMeta, rowid:sql<number>`rowid`}).from(messages)
       .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), inArray(messages.role, ['user', 'assistant']), sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`))
       .orderBy(desc(messages.createdAt), desc(sql`rowid`)).limit(1);
+    const [taskInput] = anchor ? await epoch.client.drizzle.select({createdAt:messages.createdAt, content:messages.content}).from(messages)
+      .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), eq(messages.role, 'user'),
+        sql`json_extract(${safeMeta}, '$.parentUuid') IS NULL`,
+        sql`COALESCE(json_extract(${safeMeta}, '$.autoResume'), 0) != 1`,
+        sql`${messages.createdAt} > ${row?.clearedAt ?? 0}`,
+        sql`(${messages.createdAt} < ${anchor.createdAt} OR (${messages.createdAt} = ${anchor.createdAt} AND rowid < ${anchor.rowid}))`))
+      .orderBy(desc(messages.createdAt), desc(sql`rowid`)).limit(1) : [];
     const flow = await createOrcaDiagnosticsDeps().getWorkerFlowStatus(sessionId);
     if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-    return {row, completedAt: pluginWorkerCompletedAt({status, working:flow.isWorking, queued:flow.queuedCount, paused:flow.queuePaused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor})};
+    const completedAt = pluginWorkerCompletedAt({status, working:flow.isWorking, queued:flow.queuedCount, paused:flow.queuePaused, startedAt:row?.activeTurnStartedAt ?? null, endedAt:row?.lastTurnEndedAt ?? null, clearedAt:row?.clearedAt, anchor, taskInput});
+    return {row, completedAt, status: completedAt !== null ? 'done' : status === 'done' ? 'idle' : status};
   };
   const handlePluginTask = async (pluginId: string, request: PluginTaskRequest, explicitWriteAccess = false, assertCallerCurrent = () => {}): Promise<unknown> => {
     const service = pluginTaskServiceForCurrentOwner!();
@@ -10883,10 +10891,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const team = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), request.taskId);
         if (!team.ok) throw new PluginTaskError('HOST_NOT_READY', 'Collaboration state unavailable', true);
         const workers = await Promise.all(team.workers.map(async worker => {
-          const {row, completedAt} = await readPluginWorkerCompletion(epoch, worker.session_id, worker.status);
+          const {row, completedAt, status} = await readPluginWorkerCompletion(epoch, worker.session_id, worker.status);
           const [firstInput] = await epoch.client.drizzle.select({at:messages.createdAt}).from(messages).where(and(eq(messages.sessionId,worker.session_id),eq(messages.role,'user'),isNull(messages.rewindAt))).orderBy(asc(messages.createdAt)).limit(1);
           const [firstActivity] = await epoch.client.drizzle.select({at:messages.createdAt}).from(messages).where(and(eq(messages.sessionId,worker.session_id),inArray(messages.role,['assistant','thinking','tool_use']),gte(messages.createdAt,firstInput?.at??row?.createdAt??0),isNull(messages.rewindAt))).orderBy(asc(messages.createdAt)).limit(1);
-          return {...worker, acceptedAt:firstInput?.at, startedAt:firstActivity?.at, timingBasis:'host-message-window', createdAt:row?.createdAt, lastTurnStartedAt:row?.activeTurnStartedAt, lastTurnEndedAt:row?.lastTurnEndedAt, waitingForUser:!!maker.getSession(worker.session_id)?.getTurnControlSnapshot().pendingInteractionCount, usage: {scope:'session-total', tokens:row?.totalTokenUsage ?? null, costUSD:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? row.totalCostAmount : null, approximate:row?.totalCostIsApproximate ?? false, reason:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? null : 'No confirmed USD cost; subscription value and other currencies are not a bill'}, status:completedAt ? 'done' : worker.status, permissionMode:row?.permissionMode, providerId:row?.providerId, fastMode:row?.fastMode, completedAt};
+          return {...worker, acceptedAt:firstInput?.at, startedAt:firstActivity?.at, timingBasis:'host-message-window', createdAt:row?.createdAt, lastTurnStartedAt:row?.activeTurnStartedAt, lastTurnEndedAt:row?.lastTurnEndedAt, waitingForUser:!!maker.getSession(worker.session_id)?.getTurnControlSnapshot().pendingInteractionCount, usage: {scope:'session-total', tokens:row?.totalTokenUsage ?? null, costUSD:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? row.totalCostAmount : null, approximate:row?.totalCostIsApproximate ?? false, reason:row?.totalCostCurrency === 'USD' && row.totalCostAmount > 0 ? null : 'No confirmed USD cost; subscription value and other currencies are not a bill'}, status, permissionMode:row?.permissionMode, providerId:row?.providerId, fastMode:row?.fastMode, completedAt};
         }));
         if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
         await service.get(pluginId, request.taskId);
@@ -11299,11 +11307,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         inputCoordinator.enqueue(sessionId, item);
       })();
     },
-    reserveNextQueuedMessage: async (sessionId, item, onReserved) => {
+    reserveNextQueuedMessage: async (sessionId, item, onReserved, beforeReserve) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
       if (!inputCoordinator.isQueueRestored(sessionId)) {
         throw new Error(`queue restore incomplete for ${sessionId}`);
       }
+      await beforeReserve?.();
       return inputCoordinator.reserveNextInput(sessionId, item, { onReserved }).reserved;
     },
     sendToSessionInternal,
@@ -11427,6 +11436,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof waitForLeadHistory !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'waitForLeadHistory must be a boolean');
       }
+      const { assertCurrent } = await captureOrcaPluginAuthority(leadSessionId);
       if (waitForLeadHistory) {
         const queryable = await orcaUiAssignmentHistoryGate.waitUntilQueryable(
           leadSessionId,
@@ -11450,7 +11460,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               initialTask: initialTask.trim(),
               snapshotBeforeMs,
             }),
-          });
+          }, assertCurrent);
           if (!result.ok) throwOrcaServiceFailure(result);
           return result;
         },
@@ -11720,6 +11730,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const orcaTeamService = createOrcaTeamService({
+    captureControlAuthority: async (leadSessionId) => (await captureOrcaPluginAuthority(leadSessionId)).assertCurrent,
     withSessionSendLock: withSendToSessionLock,
     getWorkerLinkBySessionId: (workerSessionId) => getWorkerLink({ workerSessionId }),
     getWorkerLinkByWorkerId: (workerId) => getWorkerLink({ workerId }),
@@ -11812,6 +11823,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       message,
       workerId,
       dispatchMeta,
+      beforeReserve,
       onReserved,
       onAccepted,
       onAcceptedRollback,
@@ -11824,6 +11836,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         senderLabel: 'Lead',
         workerId,
         meta: dispatchMeta,
+        beforeReserve,
         onReserved,
         onAccepted,
         onAcceptedRollback,
@@ -11894,16 +11907,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
       return inputCoordinator.isQueueRestored(sessionId);
     },
-    removeQueuedMessage: (sessionId, clientId) => {
-      if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId)) {
+    removeQueuedMessage: (sessionId, clientId, expected) => {
+      if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
         return false;
       }
       // remove 内部对 steering 条目静默拒绝,以移除后的队列状态为准判定成败。
       inputCoordinator.remove(sessionId, clientId);
       return !inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId);
     },
-    replaceQueuedMessage: (sessionId, clientId, next) =>
-      inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+    replaceQueuedMessage: (sessionId, clientId, next, expected) =>
+      (!expected || inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
+      && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
     mergeQueuedMessages: (sessionId, clientIds, buildReplacement) =>
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
     sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
@@ -11944,6 +11958,69 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const hasRevokedPluginTaskOwnership = (receipt: { payload: string }): boolean => {
     try { return JSON.parse(receipt.payload)?.ownershipRevoked === true; }
     catch { return false; }
+  };
+
+  const captureOrcaPluginAuthority = async (leadSessionId: string) => {
+    const epoch = getCurrentDbClientSnapshot();
+    if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
+    const input = inputCoordinator.getAcceptedInputProvenance(leadSessionId);
+    const executing = !!input || !!maker.getSession(leadSessionId)?.isTurnRunning();
+    const store = createPluginTaskStore(epoch.client);
+    const receipt = await store.get(leadSessionId);
+    // Retry continues the original input; only a new accepted user message
+    // replaces that source. The stable lineage already survives automatic retries.
+    let inputId = input?.retrySourceClientId ?? input?.clientId;
+    if (receipt?.operation === 'create' && hasRevokedPluginTaskOwnership(receipt) && executing && !inputId?.startsWith('plugin-task:')) {
+      const authored = input && !input.autoResume && !input.retrySourceClientId && typeof input.authoredText === 'string'
+        && input.authoredText.trim() && !input.authoredText.startsWith('[UI_ACTION_TRIGGER]');
+      if (!authored) {
+        // Worker replies and automatic inputs are not user takeover. Direct native
+        // replies bypass the coordinator, so use the same accepted transcript evidence.
+        const meta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
+        const [source] = await epoch.client.drizzle.select({clientId:messages.clientId, agentMeta:messages.agentMeta}).from(messages)
+          .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+          .where(and(eq(messages.sessionId, leadSessionId), eq(messages.role, 'user'), isNull(messages.rewindAt),
+            sql`${messages.createdAt} > COALESCE(${sessions.clearedAt}, 0)`,
+            sql`json_extract(${meta}, '$.parentUuid') IS NULL`,
+            sql`(${messages.clientId} LIKE 'plugin-task:%' OR (
+              COALESCE(json_extract(${meta}, '$.autoResume'), 0) != 1
+              AND COALESCE(json_extract(${meta}, '$.contextRebuild'), 0) != 1
+              AND COALESCE(json_extract(${meta}, '$.origin.kind'), '') != 'orca'))`))
+          .orderBy(desc(messages.createdAt), desc(sql`messages.rowid`)).limit(1);
+        if (!source) throw new PluginTaskError('PERMISSION_DENIED', 'Orca input provenance unavailable');
+        if (!source.clientId.startsWith('plugin-task:')) {
+          let evidence: Record<string, unknown> = {};
+          try { evidence = JSON.parse(source.agentMeta ?? '{}'); } catch { /* Unknown source rejects below. */ }
+          if (!evidence || !['turn', 'steer'].includes(String(evidence.delivery)) || typeof evidence.autoReviewUserText !== 'string'
+            || !evidence.autoReviewUserText.trim() || evidence.autoReviewUserText.startsWith('[UI_ACTION_TRIGGER]')) {
+            throw new PluginTaskError('PERMISSION_DENIED', 'Orca input provenance unavailable');
+          }
+        }
+        inputId = source.clientId;
+      }
+    }
+    const run = inputId?.startsWith('plugin-task:') ? await store.get(inputId.slice('plugin-task:'.length)) : undefined;
+    let inputPluginId: string | null = null;
+    if (inputId?.startsWith('plugin-task:')) {
+      if (!run || run.operation !== 'send' || run.targetId !== leadSessionId || JSON.parse(run.payload).inputMessageId !== inputId) {
+        throw new PluginTaskError('PERMISSION_DENIED', 'Plugin input provenance unavailable');
+      }
+      inputPluginId = run.pluginId;
+    }
+    if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+    const pluginId = inputPluginId ?? (receipt?.operation === 'create' && !hasRevokedPluginTaskOwnership(receipt) ? receipt.pluginId : null);
+    const assertCurrent = async () => {
+      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+      const current = await store.get(leadSessionId);
+      const currentPluginId = current?.operation === 'create' && !hasRevokedPluginTaskOwnership(current) ? current.pluginId : null;
+      if (epoch !== getCurrentDbClientSnapshot() || currentPluginId !== pluginId) throw new PluginTaskError('PERMISSION_DENIED', 'Orca task ownership changed');
+      if (pluginId === null) return;
+      const task = await pluginTaskServiceForCurrentOwner!().get(pluginId, leadSessionId);
+      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+      assertPluginWorkerAutoAuthorized(pluginId, task);
+    };
+    await assertCurrent();
+    return { permissionMode: pluginId === null ? undefined : 'auto' as const, assertCurrent };
   };
 
   const orcaWorkerCreationService = createOrcaWorkerCreationService({
@@ -12094,27 +12171,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createActiveTeam: async (leadSessionId) => createActiveTeam({ leadSessionId }),
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     getWorkerPermissionModeOverride: async (leadSessionId) => {
-      const epoch = getCurrentDbClientSnapshot();
-      if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
-      const store = createPluginTaskStore(epoch.client);
-      const receipt = await store.get(leadSessionId);
-      if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-      const pluginId = receipt?.operation === 'create' && !hasRevokedPluginTaskOwnership(receipt) ? receipt.pluginId : null;
-      // Capture provenance together with Auto, before team/list/bootstrap awaits.
-      // Revocation cannot turn this in-flight plugin request into ordinary Orca.
-      const assertCurrent = async () => {
-        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-        const current = await store.get(leadSessionId);
-        const currentPluginId = current?.operation === 'create' && !hasRevokedPluginTaskOwnership(current) ? current.pluginId : null;
-        if (epoch !== getCurrentDbClientSnapshot() || currentPluginId !== pluginId) throw new PluginTaskError('PERMISSION_DENIED', 'Worker creation ownership changed');
-        if (pluginId === null) return; // A new user call on an already revoked task stays ordinary Orca.
-        const task = await pluginTaskServiceForCurrentOwner!().get(pluginId, leadSessionId);
-        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-        assertPluginWorkerAutoAuthorized(pluginId, task);
-      };
-      await assertCurrent();
-      // Plugin tasks never inherit or modify an unrelated global Full access preference.
-      return { permissionMode: pluginId === null ? undefined : 'auto' as const, assertCurrent };
+      return captureOrcaPluginAuthority(leadSessionId);
     },
     setWorkerPermissionMode: applyWorkerPermissionModePreference,
     createWorkerInTeam: (params, assertCurrent) => orcaWorkerCreationService.createWorkerInTeam(params, assertCurrent),
@@ -13204,10 +13261,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .map((entry) => entry.queuedMessageId);
       return { pendingQueue: snapshot.pendingQueue, consumingClientIds };
     },
-    replaceQueuedMessage: (sessionId, clientId, next) =>
-      inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
-    removeQueuedMessage: (sessionId, clientId) => {
-      if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId)) {
+    replaceQueuedMessage: (sessionId, clientId, next, expected) =>
+      (!expected || inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
+      && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+    removeQueuedMessage: (sessionId, clientId, expected) => {
+      if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
         return false;
       }
       inputCoordinator.remove(sessionId, clientId);

@@ -1474,6 +1474,40 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getActiveInputClientIds(sid)).not.toContain('bot-delegation-completion:pending');
   });
 
+  it('retains plugin provenance while native dispatch acknowledgement is pending', async () => {
+    const h = createHarness(), sid = 'plugin-pending-dispatch-ack';
+    let acknowledge!: () => void;
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.setRunning(true);
+      await new Promise<void>(resolve => { acknowledge = resolve; });
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    acknowledge(); await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+  });
+
+  it('keeps accepted plugin authority through pending and rejected human steering', async () => {
+    const h = createHarness(), sid = 'accepted-plugin-authority';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    await flush();
+    let reject!: (error: Error) => void;
+    h.steerToAgent.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const steering = h.coordinator.steer(sid, makeItem('human-pending', 'New direction'));
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    reject(new Error('not accepted')); await steering;
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    await h.coordinator.steer(sid, makeItem('human-accepted', 'New direction'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toContain('plugin-task:run');
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('human-accepted');
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toBeNull();
+  });
+
   it('silently keeps a queue head when dispatch races with an already running turn', async () => {
     const h = createHarness();
     const sid = 'send-session-running-race';

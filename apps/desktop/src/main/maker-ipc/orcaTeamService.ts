@@ -222,6 +222,7 @@ export interface WorkerTerminalTurnCapture {
 
 /** service 的 I/O 边界。register.ts 只负责把 DB、Maker、IPC broadcast 作为依赖组合进来。 */
 export interface OrcaTeamServiceDeps {
+  captureControlAuthority?(leadSessionId: string): Promise<() => Promise<void>>;
   getWorkerLinkBySessionId(workerSessionId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   getWorkerLinkByWorkerId(workerId: string): Promise<OrcaWorkerLinkSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerRecordSnapshot[]>;
@@ -268,6 +269,7 @@ export interface OrcaTeamServiceDeps {
     message: string;
     workerId: string;
     dispatchMeta: { source: string; context: string };
+    beforeReserve?: () => Promise<void>;
     /** Runs synchronously after head insertion and before drain is scheduled. */
     onReserved?: () => void;
     onAccepted?: () => void | Promise<void>;
@@ -302,9 +304,9 @@ export interface OrcaTeamServiceDeps {
   /** Strict restore gate for atomic merge; false means no mutation is allowed. */
   ensureWorkerQueueRestored(sessionId: string): Promise<boolean>;
   /** 从队列移除一条排队消息;实现方必须走 coordinator.remove(带 discard settle)。返回是否真的移除。 */
-  removeQueuedMessage(sessionId: string, clientId: string): boolean;
+  removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   /** 整条替换一条排队消息(同 clientId 原位替换);steering / 已派发返回 false。 */
-  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage): boolean;
+  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
   mergeQueuedMessages(
     sessionId: string,
     clientIds: readonly string[],
@@ -327,7 +329,7 @@ export interface OrcaTeamService {
     callerLeadSessionId: string;
     targetSessionId: string;
     message: string;
-  }): Promise<SendToWorkerResult>;
+  }, assertCurrent?: () => Promise<void>): Promise<SendToWorkerResult>;
   /** Sole public entry for replacing the active worker turn. */
   interruptWorker(params: {
     callerLeadSessionId: string;
@@ -943,11 +945,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
       let result: DispatchWorkerMessageResult;
       try {
+        await params.assertCurrent?.();
         if (params.mode === 'normal') {
           // Runtime liveness is independent from the persisted worker status. After a restart a
           // running/error worker can be dormant too, and must rehydrate through the Worker-specific
           // path so its stored permission mode and Orca vendor options are preserved.
           if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);
+          await params.assertCurrent?.();
           result = await deps.dispatchWorkerMessage({
             targetSessionId: target.sessionId,
             message: params.message,
@@ -963,6 +967,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             message: params.message,
             workerId: target.id,
             dispatchMeta: params.dispatchMeta,
+            beforeReserve: params.assertCurrent,
             onReserved: () => {
               // The dependency marks the manual interrupt and calls the Session stop API before
               // its first await. Coordinator has not scheduled drain yet, so this can only target
@@ -1032,8 +1037,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     callerLeadSessionId: string;
     targetSessionId: string;
     message: string;
-  }): Promise<SendToWorkerResult> {
-    return dispatchToWorker({ ...params, mode: 'normal' }) as Promise<SendToWorkerResult>;
+  }, assertCurrent?: () => Promise<void>): Promise<SendToWorkerResult> {
+    return dispatchToWorker({ ...params, mode: 'normal' }, assertCurrent) as Promise<SendToWorkerResult>;
   }
 
   async function interruptWorker(params: {
@@ -1050,7 +1055,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     targetSessionId: string;
     message: string;
     mode: 'normal' | 'interrupt';
-  }): Promise<SendToWorkerResult | InterruptWorkerResult> {
+  }, captured?: () => Promise<void>): Promise<SendToWorkerResult | InterruptWorkerResult> {
+    const assertCurrent = captured ?? await deps.captureControlAuthority?.(params.callerLeadSessionId);
     const resolved = await resolveWorkerRef(params.callerLeadSessionId, params.targetSessionId);
     if (!resolved.ok) {
       return {
@@ -1066,6 +1072,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       resolved,
       message: params.message,
       mode: params.mode,
+      assertCurrent,
       dispatchMeta: {
         source: 'maker-ipc/collab',
         context:
@@ -1324,6 +1331,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     queuedMessageId: string;
     message: string;
   }): Promise<WorkerQueuedMessageControlResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
     if (!found.ok) {
       return found.errorCode === 'NOT_FOUND'
@@ -1335,6 +1343,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         : { ok: false, errorCode: 'INTERNAL', message: found.message };
     }
     const controlled = await queueControl.update({
+      beforeMutation: assertCurrent,
       sessionId: found.worker.sessionId,
       queuedMessageId: params.queuedMessageId,
       message: params.message,
@@ -1361,6 +1370,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     workerRef: string;
     queuedMessageId: string;
   }): Promise<WorkerQueuedMessageControlResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
     if (!found.ok) {
       return found.errorCode === 'NOT_FOUND'
@@ -1373,6 +1383,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
     // coordinator.remove 仍负责 discard settle；公共 service 只统一定位、授权与竞态分类。
     const controlled = await queueControl.cancel({
+      beforeMutation: assertCurrent,
       sessionId: found.worker.sessionId,
       queuedMessageId: params.queuedMessageId,
       authorize: (entry) =>
@@ -1398,6 +1409,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     queuedMessageIds: string[];
     message: string;
   }): Promise<MergeWorkerQueuedMessagesResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerRef);
     if (!found.ok) {
       return found.errorCode === 'NOT_FOUND'
@@ -1431,6 +1443,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         message: 'worker queue could not be restored; no messages were changed',
       };
     }
+    await assertCurrent?.();
     const merged = deps.mergeQueuedMessages(
       found.worker.sessionId,
       params.queuedMessageIds,
