@@ -1,5 +1,6 @@
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useSharedValue } from 'react-native-reanimated';
 import {
   ActivityIndicator,
   AppState,
@@ -73,7 +74,7 @@ import {
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
 import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
-import { HomeSessionRow } from '@/session/HomeSurface';
+import { HomeListViewportContext, HomeSessionRow } from '@/session/HomeSurface';
 import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
@@ -117,9 +118,14 @@ type RemoteListStatusFilter = Extract<RemoteSessionStatusFilter, 'active' | 'arc
 
 export default function DeviceDetailScreen() {
   const screenFocused = useIsFocused();
+  const scrollY = useSharedValue(0);
+  const { height: viewportHeight } = useWindowDimensions();
+  const viewport = useMemo(() => ({ scrollY, viewportHeight }), [scrollY, viewportHeight]);
   return (
     <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
-      <DeviceDetailScreenContent />
+      <HomeListViewportContext.Provider value={viewport}>
+        <DeviceDetailScreenContent />
+      </HomeListViewportContext.Provider>
     </RemoteSessionStoreSubscriptionGate>
   );
 }
@@ -128,6 +134,7 @@ export default function DeviceDetailScreen() {
 const DeviceListCell = createDisclosureListCell();
 
 function DeviceDetailScreenContent() {
+  const viewport = useContext(HomeListViewportContext);
   const screenFocused = useIsFocused();
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
@@ -823,6 +830,8 @@ function DeviceDetailScreenContent() {
         <ListDisclosureScope controller={disclosure.controller}>
           <SectionList
             CellRendererComponent={DeviceListCell}
+            onScroll={(event) => { if (viewport) viewport.scrollY.value = event.nativeEvent.contentOffset.y; }}
+            scrollEventThrottle={16}
             {...simpleScrollInsetProps}
             sections={displaySections}
             keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
@@ -1168,6 +1177,8 @@ function DeviceDetailScreenContent() {
       <ListDisclosureScope controller={disclosure.controller}>
         <SectionList
           CellRendererComponent={DeviceListCell}
+          onScroll={(event) => { if (viewport) viewport.scrollY.value = event.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={16}
           {...simpleScrollInsetProps}
           sections={displaySections}
           keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
