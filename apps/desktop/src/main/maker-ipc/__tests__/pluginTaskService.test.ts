@@ -740,7 +740,7 @@ describe('current plugin dispatch authority', () => {
     if(point==='route') f.deps.resolveRoute=async()=>{enable();return f.route;};
     if(point==='insert') {const insert=f.deps.store.insert;f.deps.store.insert=async row=>{await insert(row);enable();};}
     const send=f.service.send('p',{taskId:task.taskId,expectedRevision:task.revision,requestKey:'plan',text:'input'});
-    if(point==='insert') await expect(send).resolves.toMatchObject({status:'reconciling'});
+    if(point==='insert') await expect(send).resolves.toMatchObject({status:'failed'});
     else await expect(send).rejects.toMatchObject({code:'PERMISSION_DENIED'});
     expect(f.deps.dispatch).not.toHaveBeenCalled();
   });
@@ -772,7 +772,7 @@ describe('current plugin dispatch authority', () => {
       f.deps.store.insert = async row => { await insert(row); mode = 'plan'; };
     }
     const attempt = f.service.send('p', {taskId:task.taskId,expectedRevision:task.revision,requestKey:'new',text:'input'});
-    if (point === 'insert') await expect(attempt).resolves.toMatchObject({status:'reconciling'});
+    if (point === 'insert') await expect(attempt).resolves.toMatchObject({status:'failed'});
     else await expect(attempt).rejects.toMatchObject({code:'PERMISSION_DENIED'});
     expect(f.deps.dispatch).not.toHaveBeenCalled();
   });
@@ -791,6 +791,90 @@ describe('current plugin dispatch authority', () => {
     const calls = vi.mocked(f.deps.dispatch).mock.calls.length;
     await f.send(); expect(f.deps.dispatch).toHaveBeenCalledTimes(calls);
     await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
+  });
+
+  it.each(['plan', 'permission', 'archive', 'read failure'] as const)(
+    'persists a known pre-dispatch failure after %s without reopening the request key', async change => {
+      const f = fixture(), task = await f.create();
+      f.tasks.get(task.taskId)!.permissionMode = 'auto';
+      const insert = f.deps.store.insert;
+      const readSession = f.deps.readSession;
+      f.deps.store.insert = async row => {
+        await insert(row);
+        if (change === 'plan') f.tasks.get(task.taskId)!.planModeEnabled = true;
+        if (change === 'permission') f.deps.readPermissionMode = () => 'plan';
+        if (change === 'archive') f.tasks.get(task.taskId)!.status = 'archived';
+        if (change === 'read failure') f.deps.readSession = vi.fn()
+          .mockRejectedValueOnce(new Error('Read unavailable')).mockImplementation(readSession);
+      };
+      const request = { taskId: task.taskId, expectedRevision: task.revision, requestKey: 'known', text: 'input' };
+      const run = await f.service.send('p', request);
+      expect(run).toMatchObject({ status: 'failed', error: 'Input was not accepted by the host.' });
+      expect(await f.service.getRun('p', run.runId)).toEqual(run);
+      expect((await f.service.listRuns('p', task.taskId)).items).toEqual([run]);
+      expect(f.deps.inspect).not.toHaveBeenCalled();
+      const restarted = createPluginTaskService(f.deps);
+      expect(await restarted.send('p', request)).toEqual(run);
+      expect(f.deps.dispatch).not.toHaveBeenCalled();
+      // Restored authority permits an explicit new request, never replay of the old input.
+      f.deps.store.insert = insert;
+      Object.assign(f.tasks.get(task.taskId)!, { planModeEnabled: false, status: 'active' });
+      f.deps.readPermissionMode = () => 'auto';
+      expect(await restarted.send('p', request)).toEqual(run);
+      expect(await restarted.send('p', { ...request, requestKey: 'new' })).toMatchObject({ status: 'queued' });
+      expect(f.deps.dispatch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['approval', 'ownership', 'deleted', 'account', 'save'] as const)(
+    'keeps the request receipt and rejects when %s prevents failure settlement', async change => {
+      const f = fixture(), task = await f.create();
+      const insert = f.deps.store.insert;
+      f.deps.store.insert = async row => {
+        await insert(row);
+        f.tasks.get(task.taskId)!.planModeEnabled = true;
+        if (change === 'approval') f.deps.assertAuthorized = () => { throw new Error('Approval revoked'); };
+        if (change === 'ownership') await f.deps.store.revokePlugin('p');
+        if (change === 'deleted') f.tasks.get(task.taskId)!.status = 'deleted';
+        if (change === 'account') f.switchOwner();
+        if (change === 'save') f.deps.store.save = async () => { throw new Error('Write unavailable'); };
+      };
+      await expect(f.service.send('p', {
+        taskId: task.taskId, expectedRevision: task.revision, requestKey: 'blocked', text: 'input',
+      })).rejects.toThrow();
+      expect(f.deps.dispatch).not.toHaveBeenCalled();
+      const receipts = [...f.rows.values()].filter(row => row.operation === 'send');
+      expect(receipts).toHaveLength(1);
+      expect(JSON.parse(receipts[0].payload).status).toBe('queued');
+      expect(f.deps.store.discardUncreated).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['reject', 'throw'] as const)('preserves native progress over a late dispatch %s', async response => {
+    for (const status of ['running', 'stopping', 'completed', 'cancelled'] as const) {
+      const f = fixture();
+      f.deps.dispatch = vi.fn(async (_plugin, taskId, clientId) => {
+        await f.service.accept(taskId, { clientId }, f.execution);
+        if (status === 'stopping' || status === 'cancelled') {
+          f.deps.cancel = async () => status;
+          await f.service.cancel('p', [...f.rows.values()].find(row => row.operation === 'send')!.id);
+        }
+        if (status === 'completed') await f.service.settle(taskId, f.execution, 'completed', 'answer');
+        if (response === 'throw') throw new Error('Late response lost');
+        return { ok: false };
+      });
+      expect(await f.send()).toMatchObject({ status });
+    }
+  });
+
+  it('settles an explicit host rejection as failed', async () => {
+    const f = fixture();
+    f.deps.dispatch = vi.fn(async () => ({ ok: false }));
+    const run = await f.send();
+    expect(run.status).toBe('failed');
+    expect(await f.service.getRun('p', run.runId)).toEqual(run);
+    expect(await f.send()).toEqual(run);
+    expect(f.deps.dispatch).toHaveBeenCalledTimes(1);
   });
 });
 
