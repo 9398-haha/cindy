@@ -154,6 +154,12 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             />
             {p.drives.length ? (
               <NativePullDownMenu
+                accessibilityLabel={[
+                  t("session.new.drive"),
+                  p.drives.find((drive) => drive.current)?.name,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
                 disabled={unavailable}
                 actions={p.drives.map((drive) => ({
                   id: drive.path,

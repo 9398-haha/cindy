@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 
 const modal = vi.hoisted(() => ({ props: null as any }));
+const driveMenu = vi.hoisted(() => ({ props: null as any }));
 vi.mock("react-native", () => ({
   View: ({ children }: any) => <div>{children}</div>,
   ActivityIndicator: () => <span>loading</span>,
@@ -46,7 +47,10 @@ vi.mock("@/session/NewTaskSelectionRow", () => ({
   ),
 }));
 vi.mock("@/platform/chrome", () => ({
-  NativePullDownMenu: ({ children }: any) => children,
+  NativePullDownMenu: (p: any) => {
+    driveMenu.props = p;
+    return p.children;
+  },
   NativeSwitch: () => null,
 }));
 vi.mock("@/session/SheetModal", () => ({
@@ -146,6 +150,16 @@ it("keeps directory Back separate from backdrop dismissal and uses remote paths"
   expect(props.onEnter).toHaveBeenNthCalledWith(2, "D:/project/src");
   click("remoteBrowseSelectCurrent");
   expect(props.onChoose).toHaveBeenCalledWith("D:/project");
+});
+it("gives the native drive menu an explicit screen-reader label", () => {
+  render({
+    page: "directory",
+    drives: [
+      { name: "C:", path: "C:/", current: true },
+      { name: "D:", path: "D:/", current: false },
+    ],
+  });
+  expect(driveMenu.props.accessibilityLabel).toBe("session.new.drive, C:");
 });
 it.each([
   { loading: true },

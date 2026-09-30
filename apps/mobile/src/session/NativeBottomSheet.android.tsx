@@ -77,7 +77,9 @@ export function NativeBottomSheet({
         contentColor={colors.textPrimary}
         scrimColor={colors.overlay}
         onDismissRequest={() => {
-          setMounted(false);
+          // The native sheet has already started its dismiss animation. Keep
+          // the host mounted until the controlled visible=false path awaits
+          // hide(), then let onClosed run after the animation completes.
           onClose();
         }}
       >

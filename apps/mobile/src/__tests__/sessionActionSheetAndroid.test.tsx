@@ -68,7 +68,7 @@ beforeEach(() => {
   });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-  native.hide.mockReset();
+  native.hide.mockReset().mockResolvedValue();
   native.expand.mockReset().mockResolvedValue();
   native.mode = "light";
   container = document.createElement("div");
@@ -122,7 +122,14 @@ describe.each([SessionActionSheetFrame, NativeBottomSheet])(
       expect(closed).toHaveBeenCalledOnce();
     });
 
-    it("handles native swipe, scrim and Back dismissal without an extra hide animation", () => {
+    it("waits for the native swipe, scrim or Back dismissal animation", async () => {
+      let finish!: () => void;
+      native.hide.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
       const closed = vi.fn();
       function Presenter() {
         const [visible, setVisible] = useState(true);
@@ -138,10 +145,15 @@ describe.each([SessionActionSheetFrame, NativeBottomSheet])(
       }
       act(() => root.render(<Presenter />));
       act(() => native.props.onDismissRequest());
-      expect(container.textContent).toBe("");
+      expect(container.textContent).toContain("actions");
+      expect(native.hide).toHaveBeenCalledOnce();
+      expect(closed).not.toHaveBeenCalled();
+      await act(async () => {
+        finish();
+      });
       flushFrames();
       expect(closed).toHaveBeenCalledOnce();
-      expect(native.hide).not.toHaveBeenCalled();
+      expect(container.textContent).toBe("");
     });
 
     it("does not let an old hide completion dismiss a newly reopened sheet", async () => {
