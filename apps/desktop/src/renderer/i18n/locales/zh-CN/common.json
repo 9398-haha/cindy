@@ -8318,6 +8318,11 @@
       "automationInvalid": "自动化定义无法转换，尚未创建。",
       "itemFailed": "此项未完成，可重试并查看导入详情。",
       "chatPartial": "伙伴已创建，但部分资料未完整保存。以下项目仍需处理；其他内容和对话可以正常使用。"
+    },
+    "learning": {
+      "memory": "已记住：{{title}}",
+      "skillCreated": "已建立技能：{{title}}",
+      "skillUpdated": "已更新技能：{{title}}"
     }
   },
   "common": {

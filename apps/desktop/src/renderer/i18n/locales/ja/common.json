@@ -8318,6 +8318,11 @@
       "automationInvalid": "自動化の定義を変換できず、作成されていません。",
       "itemFailed": "この項目は未完了です。再試行するか詳細を確認してください。",
       "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。"
+    },
+    "learning": {
+      "memory": "記憶しました：{{title}}",
+      "skillCreated": "スキルを作成：{{title}}",
+      "skillUpdated": "スキルを更新：{{title}}"
     }
   },
   "common": {
