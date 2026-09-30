@@ -352,10 +352,12 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       });
       if (!prepared.dispatch) return prepared.run;
       let failure: 'failed' | 'reconciling' | undefined;
+      let dispatchStarted = false;
       // Never hold the receipt lock while entering Session dispatch/control. The
       // coordinator awaits accept() before vendor dispatch under its own lock.
       try {
         await assertDispatch(pluginId, prepared.run.taskId);
+        dispatchStarted = true;
         const outcome = await deps.dispatch(
           pluginId,
           prepared.run.taskId,
@@ -364,7 +366,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         );
         if (!outcome.ok) failure = 'failed';
       } catch {
-        failure = 'reconciling';
+        // Before entering dispatch, this input is known not to have reached the host.
+        failure = dispatchStarted ? 'reconciling' : 'failed';
       }
       return exclusive(async () => {
         const row = await ownRun(pluginId, prepared.run.runId);
