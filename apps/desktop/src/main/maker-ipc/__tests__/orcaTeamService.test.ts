@@ -39,6 +39,131 @@ function createWorker(overrides: Partial<OrcaWorkerRecordSnapshot> = {}): OrcaWo
   };
 }
 
+describe('model Orca cleanup authority', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const callbacks = source.slice(source.indexOf('    switchFocus: async ('), source.indexOf('    listAvailableModels: async ('));
+  const disable = source.slice(source.indexOf('  async function clearLeadOrcaRoleState('), source.indexOf('  ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA'));
+  function compile(bindings: Record<string, unknown>, text = `return ({${callbacks}});`) {
+    return new Function(...Object.keys(bindings), ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(bindings));
+  }
+  it.each(['idleWorker', 'archiveWorker'].flatMap(action => ['revoked', 'close-error', 'healthy'].map(outcome => ({ action, outcome }))))(
+    'preserves $action close semantics after abort: $outcome', async ({ action, outcome }) => {
+      let allowed = true;
+      const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
+      const from = source.indexOf('    closeWorkerSession: async (sessionId, beforeClose)');
+      const to = source.indexOf('    closeWorkerSessionIfIdle:', from);
+      expect(from).toBeGreaterThan(0); expect(to).toBeGreaterThan(from);
+      const closeSession = vi.fn(async () => { if (outcome === 'close-error') throw Error('ordinary close error'); });
+      const adapter = compile({ maker: {
+        getSession: () => ({ abort: async () => { allowed = outcome !== 'revoked'; } }), closeSession,
+      } }, `return ({${source.slice(from, to)}});`);
+      const { deps, service, setWorker } = createDeps(adapter);
+      setWorker(createWorker({ status: 'running' }));
+      const result = action === 'idleWorker'
+        ? service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }, { assertCurrent })
+        : service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', beforeArchive: assertCurrent });
+      if (outcome === 'revoked') {
+        await expect(result).rejects.toThrow('Revoked');
+        expect(closeSession).not.toHaveBeenCalled();
+        expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+      } else {
+        await expect(result).resolves.toMatchObject({ ok: true });
+        expect(closeSession).toHaveBeenCalledOnce();
+        expect(deps.archiveWorkerSession).toHaveBeenCalledTimes(action === 'archiveWorker' ? 1 : 0);
+      }
+    },
+  );
+  it.each(['turn', 'send'].flatMap(reason => ['guarded', 'guarded-user', 'user-guarded', 'healthy'].map(order => ({ reason, order }))))(
+    'retains $reason deferred acknowledgement authority for $order', async ({ reason, order }) => {
+      let busy = true, allowed = true;
+      const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
+      const { service, deps, setWorker, getWorker } = createDeps({
+        getLiveSession: () => ({ isTurnRunning: () => reason === 'turn' && busy }),
+        hasSendToSessionLock: () => reason === 'send' && busy,
+      });
+      setWorker(createWorker({ status: 'done' }));
+      for (const caller of order.split('-')) {
+        await service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' }, caller === 'user' ? undefined : { assertCurrent });
+      }
+      busy = false; allowed = order === 'healthy';
+      await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'finished' });
+      expect(getWorker().status).toBe(order === 'guarded' ? 'done' : 'idle');
+      const closes = vi.mocked(deps.closeWorkerSessionIfIdle).mock.calls.length;
+      await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'finished' });
+      expect(deps.closeWorkerSessionIfIdle).toHaveBeenCalledTimes(closes);
+    },
+  );
+  it('restores done when authority is revoked during the acknowledgement write', async () => {
+    let allowed = true;
+    const { deps, service, setWorker, getWorker } = createDeps();
+    setWorker(createWorker({ status: 'done' }));
+    const mark = deps.markWorkerIdleIfStatus;
+    deps.markWorkerIdleIfStatus = async (...args) => { const result = await mark(...args); allowed = false; return result; };
+    await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1', expectedStatus: 'done' },
+      { assertCurrent: async () => { if (!allowed) throw Error('Revoked'); } })).rejects.toThrow('Revoked');
+    expect(getWorker().status).toBe('done');
+    expect(deps.closeWorkerSessionIfIdle).not.toHaveBeenCalled();
+  });
+
+  it.each(['idleWorker', 'archiveWorker', 'switchFocus'].flatMap(action => ['admission', 'lookup', 'after-write', 'healthy'].map(phase => ({ action, phase }))))(
+    'guards model $action at $phase', async ({ action, phase }) => {
+      let allowed = phase !== 'admission';
+      const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
+      const { deps, service, setWorker } = createDeps();
+      setWorker(createWorker({ status: action === 'switchFocus' ? 'idle' : 'running' }));
+      const list = deps.listWorkersByLead;
+      deps.listWorkersByLead = vi.fn(async id => { const result = await list(id); if (phase === 'lookup') allowed = false; return result; });
+      const mark = deps.markWorkerIdle;
+      deps.markWorkerIdle = vi.fn(async id => { await mark(id); if (phase === 'after-write') allowed = false; });
+      deps.cancelWorkerSessionOperations = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
+      const focus = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
+      const resume = vi.fn(async () => undefined);
+      const api = compile({
+        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        orcaTeamService: service, listWorkersByLead: deps.listWorkersByLead, findFocusTargetWorker,
+        setWorkerFocus: focus, resumeOrcaWorkerSessionIfMissing: resume,
+        broadcastToAllWindows: vi.fn(), MAKER_PUSH: { ORCA_WORKER_CHANGED: 'changed' },
+      });
+      const result = await api[action]({ callerLeadSessionId: 'lead-1', leadSessionId: 'lead-1', workerId: 'worker-1', workerIdOrLabel: 'worker-1' });
+      expect(result.ok).toBe(phase === 'healthy');
+      const effect = action === 'switchFocus' ? resume : deps.closeWorkerSession;
+      expect(effect).toHaveBeenCalledTimes(phase === 'healthy' ? 1 : 0);
+      if (phase !== 'healthy') expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false].flatMap(team => ['admission', 'lookup', 'before-close', 'healthy', 'user'].map(phase => ({ team, phase }))))(
+    'guards model endTeam with team=$team at $phase, preserving direct user cleanup', async ({ team, phase }) => {
+      let allowed = phase !== 'admission' && phase !== 'user';
+      const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
+      const close = vi.fn(async () => undefined), archive = vi.fn(async () => []);
+      const bindings = {
+        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        getActiveTeamByLead: async () => team ? { id: 'team-1' } : null,
+        getSessionOrcaRole: async () => { if (phase === 'lookup') allowed = false; return 'lead'; },
+        listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
+        maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession: close },
+        orcaTeamService: { clearAutoBridgeState: vi.fn() },
+        cancelIOSSimulatorSessionOperations: async () => { if (phase === 'before-close') allowed = false; },
+        setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+        reconcileInactiveTeamWorkersForLead: vi.fn(async () => { if (phase === 'before-close') allowed = false; return ['worker-session-1']; }),
+        recycleSessionWorktreeForStatusChange: vi.fn(), captureSessionRecycleScope: vi.fn(),
+        cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),
+        markTeamEnded: vi.fn(), markWorkersStatusByTeam: vi.fn(), archiveWorkersByTeam: archive,
+        broadcastToAllWindows: vi.fn(), MAKER_PUSH: { ORCA_WORKER_CHANGED: 'changed' }, log: { info: vi.fn(), warn: vi.fn() },
+      };
+      const api = compile(bindings, `${disable}\nreturn { api: {${callbacks}}, disableOrcaInternal };`);
+      const result = phase === 'user' ? await api.disableOrcaInternal('lead-1') : await api.api.endTeam({ leadSessionId: 'lead-1' });
+      expect(result.ok).toBe(['healthy', 'user'].includes(phase));
+      if (!['healthy', 'user'].includes(phase)) {
+        expect(close).not.toHaveBeenCalled();
+        expect(archive).not.toHaveBeenCalled();
+        expect(bindings.setSessionOrcaRole).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+
 describe('findFocusTargetWorker', () => {
   const a = createWorker({ id: 'wid-a', sessionId: 'sid-a', label: 'tester' });
   const b = createWorker({ id: 'wid-b', sessionId: 'sid-b', label: 'dev' });

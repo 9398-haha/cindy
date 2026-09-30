@@ -93,7 +93,8 @@ export interface OrcaLifecycleDeps {
     assertCurrent: () => Promise<void>;
   }>;
   setWorkerPermissionMode(workerPermissionMode: OrcaWorkerPermissionMode): void;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
+  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
   dispatchWorkerTask(params: {
     targetSessionId: string;
     message: string;
@@ -254,14 +255,15 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     }
     const { workerPermissionMode, assertCurrent } = workerPermissionModeForCreate(params.workerPermissionMode, override);
     const initialTask = hasNonEmptyInitialTask(params.initialTask) ? params.initialTask : undefined;
+    let assertCreatedCurrent = assertCurrent;
     const created = await deps.createWorkerInTeam({
       ...params,
       teamId: team.id,
       workerPermissionMode,
-    }, assertCurrent);
+    }, assertCurrent, guard => { assertCreatedCurrent = guard; });
     if (!created.ok) return created;
     try {
-      await assertCurrent?.();
+      await assertCreatedCurrent?.();
     } catch (err) {
       await deps.rollbackCreatedWorker(created).catch(() => undefined);
       return internalFailure(err);
@@ -274,14 +276,14 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
           workerSessionId: created.workerSessionId,
           message: initialTask,
           context: `create_worker/${created.workerSessionId}/initial_task`,
-        }, assertCurrent);
+        }, assertCreatedCurrent);
       } else {
         await deps.sendWorkerReadyPlaceholder({
           workerSessionId: created.workerSessionId,
           agentKind: created.resolved.agent,
           entrypoint: 'create_worker',
           context: `create_worker/${created.workerSessionId}/worker-ready-placeholder`,
-        }, assertCurrent);
+        }, assertCreatedCurrent);
       }
     } catch (err) {
       await deps.rollbackCreatedWorker(created).catch(() => undefined);
@@ -378,6 +380,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
 
   async function enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult> {
     const { workerPermissionMode, assertCurrent } = workerPermissionModeForCreate(params.workerPermissionMode, await deps.getWorkerPermissionModeOverride?.(params.leadSessionId));
+    let assertCreatedCurrent = assertCurrent;
     const normalized = normalizeEnableParams(params);
     const validationFailure = validateEnableParams(normalized);
     if (validationFailure) return validationFailure;
@@ -414,7 +417,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         ...normalized,
         teamId: team.id,
         workerPermissionMode,
-      }, assertCurrent);
+      }, assertCurrent, guard => { assertCreatedCurrent = guard; });
     } catch (err) {
       return failCreatedTeam({ teamId: team.id, leadSessionId: params.leadSessionId, err });
     } finally {
@@ -431,7 +434,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
 
     let leadVendorOptionsSet = false;
     try {
-      await assertCurrent?.();
+      await assertCreatedCurrent?.();
       await deps.setSessionOrcaRole(params.leadSessionId, 'lead');
       deps.clearKnownNonOrcaSession(params.leadSessionId);
       await deps.setLeadVendorOptions({
@@ -441,7 +444,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
         workerSessionId: created.workerSessionId,
       });
       leadVendorOptionsSet = true;
-      await assertCurrent?.();
+      await assertCreatedCurrent?.();
     } catch (err) {
       return failCreatedTeam({
         teamId: team.id,
@@ -463,14 +466,14 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
             initialTask: normalized.initialTask,
           }),
           context: `enable_collab_mode/${created.workerSessionId}/delegate_task`,
-        }, assertCurrent);
+        }, assertCreatedCurrent);
       } else {
         await deps.sendWorkerReadyPlaceholder({
           workerSessionId: created.workerSessionId,
           agentKind: created.resolved.agent,
           entrypoint: 'enable_collab_mode',
           context: `enable_collab_mode/${created.workerSessionId}/worker-ready-placeholder`,
-        }, assertCurrent);
+        }, assertCreatedCurrent);
       }
     } catch (err) {
       return failCreatedTeam({

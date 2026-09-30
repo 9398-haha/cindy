@@ -129,13 +129,19 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
 }
 
 describe('OrcaLifecycleService', () => {
-  it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].map(revoked => ({ action, revoked }))))(
-    'guards $action at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked }) => {
+  it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].flatMap(revoked => ['source', 'directory'].map(scope => ({ action, revoked, scope }))))) (
+    'guards $action $scope at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked, scope }) => {
       let allowed = true, insideSend = false, nativeCalls = 0;
       const { deps, service } = createDeps({
         getActiveTeamByLead: async () => action.startsWith('create') ? activeTeam() : null,
-        getWorkerPermissionModeOverride: async () => ({ permissionMode: 'auto', assertCurrent: async () => { if (!allowed) throw new Error('Revoked'); } }),
+        getWorkerPermissionModeOverride: async () => ({ permissionMode: 'auto', assertCurrent: async () => { if (scope === 'source' && !allowed) throw new Error('Revoked'); } }),
       });
+      const create = deps.createWorkerInTeam;
+      deps.createWorkerInTeam = async (params, assertCurrent, onCreated) => {
+        const result = await create(params, assertCurrent);
+        onCreated?.(async () => { await assertCurrent?.(); if (scope === 'directory' && !allowed) throw Error('Revoked'); });
+        return result;
+      };
       deps.dispatchWorkerTask = vi.fn(async (params, assertCurrent): Promise<DispatchWorkerTaskResult> => {
         insideSend = true; allowed = !revoked;
         try {
@@ -171,14 +177,14 @@ describe('OrcaLifecycleService', () => {
     },
   );
 
-  it.each(['createWorker', 'enableTeam'] as const)(
-    'keeps the Worker when queued acceptance rejects before %s returns', async action => {
+  it.each((['createWorker', 'enableTeam'] as const).flatMap(action => ['source', 'directory'].map(scope => ({ action, scope }))))(
+    'keeps the Worker when queued $scope acceptance rejects before $action returns', async ({ action, scope }) => {
       let allowed = true;
       const { deps, service } = createDeps({
         getActiveTeamByLead: async () => action === 'createWorker' ? activeTeam() : null,
         getWorkerPermissionModeOverride: async () => ({
           permissionMode: 'auto',
-          assertCurrent: async () => { if (!allowed) throw new Error('Revoked'); },
+          assertCurrent: async () => { if (scope === 'source' && !allowed) throw new Error('Revoked'); },
         }),
         dispatchWorkerTask: vi.fn(async (_params, assertCurrent): Promise<DispatchWorkerTaskResult> => {
           // A coordinator drain can reject independently before the queued
@@ -197,6 +203,12 @@ describe('OrcaLifecycleService', () => {
           };
         }),
       });
+      const create = deps.createWorkerInTeam;
+      deps.createWorkerInTeam = async (params, assertCurrent, onCreated) => {
+        const result = await create(params, assertCurrent);
+        onCreated?.(async () => { await assertCurrent?.(); if (scope === 'directory' && !allowed) throw Error('Revoked'); });
+        return result;
+      };
       const result = action === 'createWorker'
         ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', initialTask: 'Evaluate' })
         : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', delegateTask: 'Evaluate' });
@@ -385,7 +397,7 @@ describe('OrcaLifecycleService', () => {
     });
 
     expect(deps.createActiveTeam).not.toHaveBeenCalled();
-    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/explicit-project' }), undefined);
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/explicit-project' }), undefined, expect.any(Function));
     expect(calls).toEqual([
       'createWorkerInTeam:team-existing:reviewer',
       'dispatchWorkerTask:create_worker/worker-session-1/initial_task',
@@ -422,8 +434,7 @@ describe('OrcaLifecycleService', () => {
 
     expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
       expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
-      undefined,
-    );
+      undefined, expect.any(Function));
   });
 
   it('keeps a created worker when initial task dispatch throws before vendor dispatch', async () => {
@@ -662,8 +673,7 @@ describe('OrcaLifecycleService', () => {
     expect(deps.setWorkerPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
       expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
-      undefined,
-    );
+      undefined, expect.any(Function));
   });
 
   it('uses the worker role slug as the default label when enabling a team', async () => {
@@ -1093,7 +1103,7 @@ describe('host-scoped Worker permissions', () => {
     });
     expect(await service.startTeam({leadSessionId: 'lead-1', workerPermissionMode})).toMatchObject({ok: true, workerPermissionMode: 'auto'});
     await service.createWorker({leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex', workerPermissionMode});
-    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({workerPermissionMode: 'auto'}), expect.any(Function));
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({workerPermissionMode: 'auto'}), expect.any(Function), expect.any(Function));
     expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
   });
   it('does not create a Worker after host authorization is revoked', async () => {
@@ -1196,6 +1206,6 @@ describe('retained tasks after explicit plugin uninstall', () => {
       : service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' });
     await expect(result).resolves.toMatchObject({ ok: true });
     expect(get).not.toHaveBeenCalled();
-    if (action !== 'startTeam') expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }), expect.any(Function));
+    if (action !== 'startTeam') expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }), expect.any(Function), expect.any(Function));
   });
 });

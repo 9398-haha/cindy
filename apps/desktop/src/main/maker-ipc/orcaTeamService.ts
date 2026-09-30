@@ -237,7 +237,7 @@ export interface OrcaTeamServiceDeps {
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
   /** Stop Host-owned work (for example iOS builds) before archiving this worker task. */
   cancelWorkerSessionOperations(sessionId: string): Promise<void>;
-  closeWorkerSession(sessionId: string): Promise<void>;
+  closeWorkerSession(sessionId: string, beforeClose?: () => Promise<void>): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
   closeWorkerSessionIfIdle(sessionId: string, sendLockHeld?: boolean): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
@@ -245,7 +245,7 @@ export interface OrcaTeamServiceDeps {
   /** send_to_session 的恢复/直发锁覆盖 bootstrap 到 Session.send reservation 的窗口。 */
   hasSendToSessionLock(sessionId: string): boolean;
   withSessionSendLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T>;
-  archiveWorkerSession(sessionId: string): Promise<void>;
+  archiveWorkerSession(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void>;
   getManualInterrupt(sessionId: string): OrcaManualInterruptSnapshot | null;
   clearManualInterrupt(sessionId: string): void;
   restoreManualInterrupt(sessionId: string, snapshot: OrcaManualInterruptSnapshot): void;
@@ -341,7 +341,7 @@ export interface OrcaTeamService {
     callerLeadSessionId: string;
     workerId: string;
     expectedStatus?: 'done';
-  }): Promise<OrcaOkResult>;
+  }, opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void> }): Promise<OrcaOkResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。 */
   archiveWorker(params: { callerLeadSessionId: string; workerId: string; onlyIfIdle?: boolean; beforeArchive?: () => Promise<void> }): Promise<OrcaOkResult>;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
@@ -449,7 +449,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
    * 下一次 done 广播仍会走 renderer 的可见性 ack 路径。done 的产品语义是
    * 「保持到用户看到为止」,所以只在 renderer 已尝试过确认时补收口,不做无条件自动 ack。
    */
-  const deferredDoneAcknowledgements = new Set<string>();
+  const deferredDoneAcknowledgements = new Map<string, { assertCurrent?: () => Promise<void> }>();
+  const deferDoneAcknowledgement = (workerId: string, assertCurrent?: () => Promise<void>) => {
+    // An independent UI acknowledgement must not acquire a model caller's guard.
+    if (!deferredDoneAcknowledgements.has(workerId) || deferredDoneAcknowledgements.get(workerId)?.assertCurrent) {
+      deferredDoneAcknowledgements.set(workerId, { assertCurrent });
+    }
+  };
 
   async function withWorkerTransition<T>(
     workerId: string,
@@ -1120,7 +1126,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
      * 否则 fire-once 契约被打破,且该 terminal 边界之后未必还有下一个 terminal
      * 事件来消费,worker 会带着悬置登记卡回 done(正是本机制要修的状态)。
      */
-    opts?: { deferredRetry?: boolean },
+    opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void> },
   ): Promise<OrcaOkResult> {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
@@ -1129,6 +1135,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       current: Extract<Awaited<ReturnType<typeof resolveWorkerRef>>, { ok: true }>,
     ): Promise<OrcaOkResult> => {
       const { link, worker } = current;
+      await opts?.assertCurrent?.();
       if (params.expectedStatus && worker.status !== params.expectedStatus) {
         return {
           ok: false,
@@ -1147,7 +1154,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 回报 settle 先落库、worker 自己的 turn 还在收尾:登记后由 terminal 边界重试(#3153)。
         // terminal 重试自身被拒时不登记(见 idleWorker 的 opts 注释)。
         if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
-          deferredDoneAcknowledgements.add(worker.id);
+          deferDoneAcknowledgement(worker.id, opts?.assertCurrent);
         }
         return {
           ok: false,
@@ -1157,7 +1164,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       }
       if (params.expectedStatus && deps.hasSendToSessionLock(worker.sessionId)) {
         if (params.expectedStatus === 'done' && !opts?.deferredRetry) {
-          deferredDoneAcknowledgements.add(worker.id);
+          deferDoneAcknowledgement(worker.id, opts?.assertCurrent);
         }
         return {
           ok: false,
@@ -1173,6 +1180,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
 
+      await opts?.assertCurrent?.();
       const didIdle = params.expectedStatus
         ? await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)
         : (await deps.markWorkerIdle(worker.id), true);
@@ -1187,6 +1195,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         await deps.restoreWorkerDoneIfIdle(worker.id);
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       };
+      const assertAfterIdle = async () => {
+        try { await opts?.assertCurrent?.(); }
+        catch (err) {
+          if (params.expectedStatus) await rollbackDoneAcknowledgement();
+          throw err;
+        }
+      };
       // Queue state can change while the DB CAS awaits I/O. Preserve newly queued
       // follow-ups before close, then use Session.closeIfIdle for atomic send/close ordering.
       if (params.expectedStatus && (await deps.hasPendingWorkerInput(worker.sessionId))) {
@@ -1198,6 +1213,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
       if (params.expectedStatus) {
+        await assertAfterIdle();
         const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
         if (!didClose) {
           await rollbackDoneAcknowledgement();
@@ -1208,9 +1224,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           };
         }
       }
+      await assertAfterIdle();
       clearRuntimeState(worker.sessionId);
       if (!params.expectedStatus) {
-        await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
+        await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker', opts?.assertCurrent);
       }
       deferredDoneAcknowledgements.delete(worker.id);
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
@@ -1250,17 +1267,20 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       if ((activeWorkerDispatches.get(worker.id) ?? 0)>0 || await deps.hasPendingWorkerInput(worker.sessionId) || !await closeWorkerSessionIfIdleBestEffort(worker.sessionId,'releaseWorker',true)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has active or queued input'};
       if (await deps.hasPendingWorkerInput(worker.sessionId)) return {ok:false,errorCode:'WORKER_STATE_CHANGED',message:'Worker has queued input'};
     }
+    await params.beforeArchive?.();
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
     deferredDoneAcknowledgements.delete(worker.id);
     await deps.cancelWorkerSessionOperations(worker.sessionId);
-    await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
     await params.beforeArchive?.();
-    await deps.archiveWorkerSession(worker.sessionId);
+    await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker', params.beforeArchive);
+    await params.beforeArchive?.();
+    await deps.archiveWorkerSession(worker.sessionId, params.beforeArchive);
     // The archived status is the admission barrier for new Host work. Cancel
     // once more after publishing it to catch a build that registered between
     // the pre-close cancellation and the status transition.
     await deps.cancelWorkerSessionOperations(worker.sessionId);
+    await params.beforeArchive?.();
     await deps.updateWorkerStatus(worker.id, 'done');
     deps.broadcastOrcaWorkerChanged(link.leadSessionId);
     return { ok: true, workerId: worker.id };
@@ -1498,10 +1518,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
-  async function closeWorkerSessionBestEffort(sessionId: string, owner: string): Promise<void> {
+  async function closeWorkerSessionBestEffort(sessionId: string, owner: string, assertCurrent?: () => Promise<void>): Promise<void> {
+    let authorityRejected = false;
+    const beforeClose = assertCurrent ? async () => {
+      try { await assertCurrent(); }
+      catch (err) { authorityRejected = true; throw err; }
+    } : undefined;
     try {
-      await deps.closeWorkerSession(sessionId);
+      if (beforeClose) await deps.closeWorkerSession(sessionId, beforeClose);
+      else await deps.closeWorkerSession(sessionId);
     } catch (err) {
+      if (authorityRejected) throw err;
       deps.log.warn(`${owner}: close worker session failed`, {
         sessionId,
         err: err instanceof Error ? err.message : String(err),
@@ -1591,6 +1618,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       if (!link) return;
 
       let retryAcknowledgeDone = false;
+      let retryAuthority: (() => Promise<void>) | undefined;
       let manualInterruptSuppressed = false;
       for (;;) {
         const workers = await deps.listWorkersByLead(link.leadSessionId);
@@ -1658,6 +1686,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             // 即 ack」在 active-turn 守卫处被拒后没有重试闭环,worker 会永久停在 done
             // (runtime/attention 悬置)。这里在该 turn 的 terminal 边界补一次收口;
             // 没登记过被拒确认的 done 保持原样(维持「done 保持到用户看到为止」语义)。
+            retryAuthority = deferredDoneAcknowledgements.get(link.workerId)?.assertCurrent;
             retryAcknowledgeDone =
               worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
             clearRuntimeState(params.sessionId);
@@ -1721,8 +1750,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           expectedStatus: 'done',
         },
         // 补收口重试被拒时不得重新登记,保证 fire-once(见 idleWorker 的 opts 注释)。
-        { deferredRetry: true },
-      );
+        { deferredRetry: true, assertCurrent: retryAuthority },
+      ).catch((err): OrcaOkResult => ({ ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) }));
       if (!acknowledged.ok) {
         deps.log.info('orca deferred done acknowledgement skipped', {
           workerId: link.workerId,

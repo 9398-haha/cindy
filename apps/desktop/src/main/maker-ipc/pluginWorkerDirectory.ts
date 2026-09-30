@@ -44,12 +44,27 @@ async function localRealpath(directory: string): Promise<string> {
   throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task directory contains too many links');
 }
 
-/** Plans describe work; only host directory facts authorize it. */
-export async function resolvePluginWorkerDirectory(input: {
+type DirectoryScope = {
   requested: string;
   leadDirectory?: string;
   configuredDirectory?: string;
   isPickedDirectory: (directory: string) => boolean;
+};
+
+/** Synchronous Host grant check, also used after the last asynchronous admission read. */
+export function assertPluginWorkerDirectoryScope(input: DirectoryScope): void {
+  const candidate = localDirectory(input.requested);
+  const lead = input.leadDirectory ? localDirectory(input.leadDirectory) : undefined;
+  const configured = input.configuredDirectory ? localDirectory(input.configuredDirectory) : undefined;
+  if (!(lead && isPathInsideDir(lead, candidate))
+    && !(configured && isPathInsideDir(configured, candidate) && isPathInsideDir(candidate, configured))
+    && !input.isPickedDirectory(candidate)) {
+    throw new PluginTaskError('PERMISSION_DENIED', 'Worker directory is outside the plugin task scope');
+  }
+}
+
+/** Plans describe work; only host directory facts authorize it. */
+export async function resolvePluginWorkerDirectory(input: DirectoryScope & {
   assertCurrent: () => void;
 }): Promise<string> {
   const deny = () => new PluginTaskError('PERMISSION_DENIED', 'Worker directory is outside the plugin task scope');
@@ -61,9 +76,7 @@ export async function resolvePluginWorkerDirectory(input: {
   };
   const leadRoot = localRoot(input.leadDirectory);
   const configuredRoot = localRoot(input.configuredDirectory);
-  if (!(leadRoot && isPathInsideDir(leadRoot, candidate))
-      && !(configuredRoot && sameDirectory(configuredRoot, candidate))
-      && !input.isPickedDirectory(candidate)) throw deny();
+  assertPluginWorkerDirectoryScope(input);
   const resolved = await localRealpath(candidate);
   if (!(await stat(resolved)).isDirectory()) throw deny();
   // Stored Host roots are canonical identities, not aliases to resolve into new grants.
