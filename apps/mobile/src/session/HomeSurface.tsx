@@ -68,7 +68,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '@/auth/AuthContext';
-import { configureCollapseAnimation } from '@/utils/collapseAnimation';
+import { createDisclosureListCell, DisclosureGroupView, DisclosureItem, ListDisclosureScope, useDisclosurePrepare, useListDisclosureTransition } from './listDisclosureTransition';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
 import {
@@ -280,6 +280,8 @@ const PROJECT_CHILD_WINDOW_SIZE = 15;
 const PROJECT_CHILD_WINDOW_OVERSCAN = 4;
 const PROJECT_CHILD_WINDOW_SHIFT = 4;
 const HOME_LIST_INITIAL_RENDER_COUNT = 12;
+// 首页列表的 cell:分组展开 / 收起与行的归档、置顶移位共用同一套过渡。
+const HomeListCell = createDisclosureListCell();
 const HOME_LIST_RENDER_BATCH_SIZE = 12;
 const HOME_LIST_WINDOW_SIZE = 5;
 const HOME_PROJECT_HEADER_HEIGHT = 56;
@@ -541,6 +543,11 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   // 打开账号切换 / 撤销授权弹窗必须等菜单完全卸载(onClosed)后再挂载,不能同一帧直接 set。
   const pendingMenuActionRef = useRef<(() => void) | null>(null);
   const pendingAccountSwitcherActionRef = useRef<(() => void) | null>(null);
+  // 分组展开 / 收起与行的归档、置顶移位统一走 disclosure.run:先挂上布局动画再改状态。
+  const disclosure = useListDisclosureTransition();
+  const runDisclosure = disclosure.run;
+  const prepareListDisclosure = disclosure.prepare;
+  const animateListChange = useCallback((apply: () => void) => runDisclosure(apply, { nested: true }), [runDisclosure]);
   const {
     actionSheetSession,
     archiveSession,
@@ -556,7 +563,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     showSessionOptions,
     swipeRegistry,
     toggleSessionPinned,
-  } = useSessionListActions();
+  } = useSessionListActions({ animateListChange });
   // 实测 header 高度(onLayout),用于下拉菜单定位;字体放大等导致 header 超过 HOME_HEADER_MIN_HEIGHT 时不再错位。
   const [headerHeight, setHeaderHeight] = useState<number | null>(null);
   const [headerFrosted, setHeaderFrosted] = useState(false);
@@ -2118,14 +2125,13 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
   }, [auth, loggingOut, router, t]);
 
   const toggleProject = useCallback((key: string) => {
-    configureCollapseAnimation();
-    setCollapsedProjectKeys((current) =>
-      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
-  }, []);
+    runDisclosure(() => setCollapsedProjectKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
+  }, [runDisclosure]);
 
   const showAllDialogueSessions = useCallback(() => {
-    setDialogueShowAll(true);
-  }, []);
+    runDisclosure(() => setDialogueShowAll(true));
+  }, [runDisclosure]);
 
   const applyDisplayView = useCallback((patch: {
     groupByProject?: boolean;
@@ -2379,10 +2385,10 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
 
   // 自动化组展开/收起,与项目组共用同一条折叠动画,保持视觉连续性。
   const toggleAutomationGroup = useCallback((key: string) => {
-    configureCollapseAnimation();
-    setExpandedAutomationGroups((current) =>
-      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
-  }, []);
+    // 自动化组可能嵌在项目块里:块内其它行也要让位。
+    runDisclosure(() => setExpandedAutomationGroups((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]), { nested: true });
+  }, [runDisclosure]);
 
   // 自动化组「查看全部 N 次运行」:与项目组「查看全部」一致,进入该任务的专属列表页
   // (设备详情页的自动化任务作用域模式),不在列表里原地铺开。
@@ -2415,9 +2421,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
 
   // 置顶组与项目组一致:点表头收起/展开,共用同一条收起动画。
   const togglePinned = useCallback(() => {
-    configureCollapseAnimation();
-    setPinnedCollapsed((collapsed) => !collapsed);
-  }, []);
+    runDisclosure(() => setPinnedCollapsed((collapsed) => !collapsed));
+  }, [runDisclosure]);
 
   const openProjectSessions = useCallback((project: MobileHomeProjectGroup) => {
     if (!project.deviceId) return;
@@ -2602,8 +2607,10 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     ? nativeHeaderHeight + (headerHeight ?? 0)
     : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
   const homeListNode = (
+    <ListDisclosureScope controller={disclosure.controller}>
       <SectionList
         ref={attachHomeList}
+        CellRendererComponent={HomeListCell}
         onLayout={(event) => {
           listViewportHeight.current = event.nativeEvent.layout.height;
           restoreListPosition();
@@ -2613,12 +2620,13 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           restoreListPosition();
         }}
         sections={sections}
-        ListHeaderComponent={sharedRows.length > 0 ? <View style={styles.projectGroup} testID="home.sharedGroup">
+        ListHeaderComponent={sharedRows.length > 0 ? <DisclosureItem clip style={styles.projectGroup} testID="home.sharedGroup">
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('sharedTask.title')}
             accessibilityState={{ expanded: !sharedCollapsed }}
-            onPress={() => { configureCollapseAnimation(); setSharedCollapsed(value => !value); }}
+            onPress={() => runDisclosure(() => setSharedCollapsed(value => !value))}
+            onPressIn={prepareListDisclosure}
             style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
             testID="home.sharedHeader"
           >
@@ -2628,7 +2636,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
             <UsersRound color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
             <Text style={styles.projectTitle} numberOfLines={1}>{t('sharedTask.title')}</Text>
           </Pressable>
-          {!sharedCollapsed && sharedRows.map((row, index) => {
+          {sharedCollapsed ? null : <DisclosureItem exit>{sharedRows.map((row, index) => {
             if (row.item) {
               const content = <HomeSessionRow
                 key={row.key}
@@ -2672,8 +2680,8 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
                 <Text style={styles.sessionTitle} numberOfLines={1} ellipsizeMode="tail">{row.task.title}</Text>
               </View>
             </View>
-          </Pressable>; })}
-        </View> : null}
+          </Pressable>; })}</DisclosureItem>}
+        </DisclosureItem> : null}
         style={styles.homeList}
         keyExtractor={(item) => item.key}
         initialNumToRender={HOME_LIST_INITIAL_RENDER_COUNT}
@@ -2716,6 +2724,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
               accessibilityRole="button"
               accessibilityState={{ expanded: !pinnedCollapsed }}
               onPress={togglePinned}
+              onPressIn={prepareListDisclosure}
               style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
               testID="home.pinnedHeader"
             >
@@ -2789,6 +2798,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         ) : null}
         renderItem={renderHomeRow}
       />
+    </ListDisclosureScope>
   );
   const homeListOverlays = (<>
 
@@ -3630,6 +3640,7 @@ function ProjectRow({
   );
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
   const projectRef = useAnimatedRef<View>();
+  const prepareDisclosure = useDisclosurePrepare();
   const [windowAnchor, setWindowAnchor] = useState(-1);
   const projectLayoutRevision = useSharedValue(0);
   const estimatedChildHeights = useMemo(() => {
@@ -3720,6 +3731,7 @@ function ProjectRow({
         if (Number.isFinite(height) && height > 0) projectHeaderHeight.value = height;
       }}
       onPress={dragging ? undefined : onToggle}
+      onPressIn={dragging ? undefined : () => prepareDisclosure()}
       ref={(node) => {
         if (!headerRefs || kind !== 'project') return;
         if (node) headerRefs.current.set(project.key, node);
@@ -3754,7 +3766,7 @@ function ProjectRow({
     </Pressable>
   );
   return (
-    <Reanimated.View
+    <DisclosureGroupView
       collapsable={false}
       onLayout={() => {
         if (!windowingEnabled) return;
@@ -3778,7 +3790,7 @@ function ProjectRow({
       {dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}
 
       {collapsed ? null : (
-        <View style={styles.projectChildren} testID="home.projectChildren">
+        <DisclosureItem exit style={styles.projectChildren} testID="home.projectChildren">
           {leadingSpacerHeight > 0 ? <View pointerEvents="none" style={{ height: leadingSpacerHeight }} /> : null}
           {renderedSessions.map((item, renderedIndex) => {
             const index = windowStart + renderedIndex;
@@ -3811,25 +3823,29 @@ function ProjectRow({
             );
             // 与顶层同一条规则:普通会话子行挂滑动,自动化组行不挂(组行语义含混,
             // 其展开子行由 AutomationGroupChildren 内的透传包裹)。
+            // 行外包一层 DisclosureItem:块内的自动化组展开 / 收起、行被归档或置顶移走时,
+            // 下面的行平滑让位,被移走的行最后淡掉。
             if (!swipeable) {
-              return <Fragment key={reactKey}>{row}</Fragment>;
+              return <DisclosureItem key={reactKey} exit nested>{row}</DisclosureItem>;
             }
             return (
-              <SwipeableSessionRow
-                key={reactKey}
-                onArchive={swipe.onArchive}
-                onShowOptions={swipe.onShowOptions}
-                onTogglePin={swipe.onTogglePin}
-                registry={swipe.registry}
-                session={item.session as RemoteSession}
-                testID={`${childTestID}.swipe`}
-              >
-                {row}
-              </SwipeableSessionRow>
+              <DisclosureItem key={reactKey} exit nested>
+                <SwipeableSessionRow
+                  onArchive={swipe.onArchive}
+                  onShowOptions={swipe.onShowOptions}
+                  onTogglePin={swipe.onTogglePin}
+                  registry={swipe.registry}
+                  session={item.session as RemoteSession}
+                  testID={`${childTestID}.swipe`}
+                >
+                  {row}
+                </SwipeableSessionRow>
+              </DisclosureItem>
             );
           })}
           {trailingSpacerHeight > 0 ? <View pointerEvents="none" style={{ height: trailingSpacerHeight }} /> : null}
           {hiddenRowCount > 0 ? (
+            <DisclosureItem nested>
             <Pressable
               accessibilityLabel={t('devices.list.viewAllConversations', { count: project.sessionCount })}
               accessibilityRole="button"
@@ -3847,10 +3863,11 @@ function ProjectRow({
               </Text>
               <ChevronRight color={colors.textTertiary} size={iconSize.action} strokeWidth={iconStroke.regular} />
             </Pressable>
+            </DisclosureItem>
           ) : null}
-        </View>
+        </DisclosureItem>
       )}
-    </Reanimated.View>
+    </DisclosureGroupView>
   );
 }
 
@@ -4073,6 +4090,7 @@ function HomeSessionRowInner({
 }) {
   const activeSessionId = useContext(ActiveHomeSession);
   const active = item.session.id === activeSessionId || !!(activeSessionId && item.automationGroup?.sessionIds.includes(activeSessionId));
+  const prepareDisclosure = useDisclosurePrepare();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -4139,7 +4157,8 @@ function HomeSessionRowInner({
       ? groupRowOpensPrimary ? openGroupPrimary : () => onToggleAutomationGroup?.(group.key)
       : () => onOpenSession(item);
   return (
-    <View
+    <HomeSessionRowShell
+      group={!!group}
       style={blockMode
         ? [
           styles.automationGroupBlock,
@@ -4160,6 +4179,7 @@ function HomeSessionRowInner({
               }
             : onLongPress}
         onPress={handlePress}
+        onPressIn={group && !groupRowOpensPrimary && !selectionMode ? () => prepareDisclosure(true) : undefined}
         style={({ pressed }) => [
           styles.sessionListRow,
           active && { backgroundColor: colors.surfaceChip },
@@ -4188,6 +4208,7 @@ function HomeSessionRowInner({
               event.stopPropagation();
               onToggleAutomationGroup?.(group.key);
             }}
+            onPressIn={() => prepareDisclosure(true)}
             style={styles.sessionGroupChevronCell}
             testID={`${testID}.automationGroupChevron`}
           >
@@ -4304,21 +4325,30 @@ function HomeSessionRowInner({
         </View>
       </Pressable>
       {group && groupExpanded && !selectionMode ? (
-        <AutomationGroupChildren
-          childTestID={automationChildTestID}
-          childrenTestID={automationChildrenTestID}
-          group={group}
-          inBlock={blockMode}
-          suppressTrailingDivider={hideDivider}
-          onOpenGroup={onOpenAutomationGroup}
-          onOpenSession={onOpenSession}
-          swipe={swipe}
-          testID={testID}
-          titleTestIDPrefix={titleTestIDPrefix}
-        />
+        <DisclosureItem exit>
+          <AutomationGroupChildren
+            childTestID={automationChildTestID}
+            childrenTestID={automationChildrenTestID}
+            group={group}
+            inBlock={blockMode}
+            suppressTrailingDivider={hideDivider}
+            onOpenGroup={onOpenAutomationGroup}
+            onOpenSession={onOpenSession}
+            swipe={swipe}
+            testID={testID}
+            titleTestIDPrefix={titleTestIDPrefix}
+          />
+        </DisclosureItem>
       ) : null}
-    </View>
+    </HomeSessionRowShell>
   );
+}
+
+/** 只有自动化组行会在自身内部展开子行,才需要挂过渡的外层;普通行保持原来的 View。 */
+function HomeSessionRowShell({ children, group, style }: { children: ReactNode; group: boolean; style?: StyleProp<ViewStyle> }) {
+  return group
+    ? <DisclosureItem clip style={style}>{children}</DisclosureItem>
+    : <View style={style}>{children}</View>;
 }
 
 /**
