@@ -203,6 +203,22 @@ link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订
 Mobile 以同一归纳算法在上传后的附件（含持久发件箱 `DurableUpload`，可选字段、旧记录缺省）
 上携带该字段；底图本身已是烧录图、旧红线位置不可知时不带区域。服务端无需改动。
 
+## 附件类型与直连附件体积
+
+Mobile 发送的队列附件（`RemoteSerializedAttachment.category`）与 Desktop `AgentInputFileCategory`
+对齐，追加 `'file'`：认不出的扩展名不再拒收，按通用文件以 `application/octet-stream` 上传。
+主机只按 `category === 'image'` 分流，其余一律作为文件路径交给 Agent，并以 `originalName`
+落地保留扩展名，新旧主机都已认得 `'file'`。
+
+附件不设产品层体积上限。直连附件（`cindy-peer-attach://`）的引用去掉固定 2GB 上限，只要求
+安全整数；接收端不设收件箱总量上限，只按剩余磁盘空间准入（未写完的上传按剩余待写字节预留）。
+OSS 保底仍受服务端 presign 单对象上限（`OSS_ATTACHMENT_MAX_BYTES`，2GB），超过它的附件
+没有保底，只能直连发送。`device-link:file-peer` 的 `caps` 追加可选 `largeAttachments: true`；
+发送端（Mobile 与 Desktop 控制端）仅在对端声明该能力时直连超过 2GB 的附件，旧主机未声明时
+直接放弃直连且不计入失败冷却，随后按 OSS 上限提示失败。旧控制端忽略新增字段，行为不变。
+文件读取（`open`）仍沿用 `FILE_PEER_MAX_BYTES`。不新增 channel、relay 类型或持久化 schema，
+服务端无需改动。
+
 ## 事实来源
 
 | 内容                     | 权威来源                                                                                                                                                                                   |
