@@ -59,6 +59,7 @@ describe('Host provenance across Orca creation waits', () => {
       else if (change === 'disabled') enabled = false;
     };
     const bindings = {
+      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
       PluginTaskError, readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => receipt && { ...receipt } }),
       pluginTaskServiceForCurrentOwner: () => ({ get: async (pluginId: string) => {
@@ -2893,6 +2894,7 @@ describe('production plugin Auto admission after reservation', () => {
         route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false } }] },
     } : {}) };
     const callbackDeps = {
+      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
       readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
       createPluginTaskStore: () => ({ get: async () => {
         if (storageFailed) throw new Error('storage unavailable');

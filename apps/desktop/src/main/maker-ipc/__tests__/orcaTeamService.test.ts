@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
+import {PluginTaskError} from '../pluginTaskService.js';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -262,6 +265,47 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
 }
 
 describe('OrcaTeamService', () => {
+  it.each(['send', 'interrupt'].flatMap(action => ['initial', 'lookup', 'restore', 'accept', 'queued', 'healthy'].map(phase => ({action,phase}))))(
+    'preserves plugin authority for public $action across $phase', async ({action,phase}) => {
+      let revoked = phase === 'initial', nativeCalls = 0;
+      let delayed: (() => Promise<void>) | undefined;
+      const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+      const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='),source.indexOf('  const orcaWorkerCreationService ='));
+      const epoch = {client:{}};
+      const bindings = {PluginTaskError,getCurrentDbClientSnapshot:()=>epoch,
+        maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>({clientId:'plugin-task:run'})},
+        createPluginTaskStore:()=>({get:async (id:string)=>id==='run'
+          ? {operation:'send',targetId:'lead-1',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}
+          : {operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:revoked})}}),
+        pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:'auto'})}),
+        isPluginTaskAuthorized:()=>!revoked,readGhostErrandConfig:()=>({permissionMode:'auto'})};
+      const capture = new Function(...Object.keys(bindings),ts.transpileModule(`${helper}\nreturn captureOrcaPluginAuthority;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(...Object.values(bindings));
+      const {deps,service,getWorker}=createDeps({captureControlAuthority:async id=>(await capture(id)).assertCurrent});
+      const list=deps.listWorkersByLead;
+      deps.listWorkersByLead=vi.fn(async id=>{const r=await list(id);if(phase==='lookup')revoked=true;return r;});
+      deps.resumeWorkerSession=vi.fn(async()=>{if(phase==='restore')revoked=true;});
+      const dispatch=async (params: Parameters<OrcaTeamServiceDeps['reserveWorkerMessage']>[0]):Promise<DispatchWorkerMessageResult>=>{
+        if(action==='interrupt'){
+          if(phase==='restore')revoked=true;
+          await params.beforeReserve?.(); params.onReserved?.();
+        }
+        const accept=async()=>{if(phase==='accept')revoked=true;await runAcceptedCallback(params.onAccepted,'worker-session-1','input',deps.log);nativeCalls++;};
+        if(phase==='queued')delayed=accept;else await accept();
+        return {ok:true,mode:phase==='queued'?'queued':'dispatched',clientId:'input',dispatchOutcome:{kind:'session-dispatch',source:'test',dispatched:true},targetTitle:'Worker',targetLastUserSendAt:null};
+      };
+      deps.dispatchWorkerMessage=vi.fn(dispatch);deps.reserveWorkerMessage=vi.fn(dispatch);
+      const run=()=>service[action==='send'?'sendToWorker':'interruptWorker']({callerLeadSessionId:'lead-1',targetSessionId:'worker-session-1',message:'Evaluate'});
+      if(phase==='initial')await expect(run()).rejects.toThrow();
+      else {
+        const result=await run();
+        if(phase==='queued'){expect(result.ok).toBe(true);revoked=true;await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);}
+        else expect(result.ok).toBe(phase==='healthy');
+      }
+      expect(nativeCalls).toBe(phase==='healthy'?1:0);
+      expect(getWorker().status).toBe(phase==='healthy'?'running':'idle');
+      if(action==='interrupt'&&['initial','lookup','restore'].includes(phase))expect(deps.requestWorkerInterrupt).not.toHaveBeenCalled();
+      expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+    });
   it.each(['lookup', 'resume', 'send', 'accepted-list', 'status-update', 'queued', 'healthy'])(
     'rechecks Host creation provenance at acceptance after %s', async phase => {
       let allowed = true, nativeCalls = 0;
@@ -2547,6 +2591,22 @@ describe('OrcaTeamService worker queued message control', () => {
 
   const leadOrigin = { kind: 'orca' as const, senderLabel: 'Lead', displayText: '原始任务' };
 
+  it.each(['update','cancel','merge'].flatMap(action=>['admission','restore','healthy'].map(phase=>({action,phase}))))('guards $action queue mutation at $phase',async({action,phase})=>{
+    let allowed=phase!=='admission';
+    const assertCurrent=async()=>{if(!allowed)throw new Error('Revoked');};
+    const {deps,service}=createDeps({
+      captureControlAuthority:async()=>{await assertCurrent();return assertCurrent;},
+      getSessionQueueSnapshot:vi.fn(async()=>{if(phase==='restore')allowed=false;return {pendingQueue:[queuedItem('q1',leadOrigin),queuedItem('q2',leadOrigin)],steeringClientIds:[],consumingClientIds:[],isWorking:false,willQueue:true,queuePaused:false};}),
+      ensureWorkerQueueRestored:vi.fn(async()=>{if(phase==='restore')allowed=false;return true;}),
+    });
+    const params={callerLeadSessionId:'lead-1',workerRef:'worker-1',queuedMessageId:'q1',queuedMessageIds:['q1','q2'],message:'Changed'};
+    const run=()=>action==='update'?service.updateWorkerQueuedMessage(params):action==='cancel'?service.cancelWorkerQueuedMessage(params):service.mergeWorkerQueuedMessages(params);
+    if(phase==='healthy')await expect(run()).resolves.toMatchObject({ok:true});
+    else await expect(run()).rejects.toThrow('Revoked');
+    const mutations=[deps.replaceQueuedMessage,deps.removeQueuedMessage,deps.mergeQueuedMessages].reduce((n,fn)=>n+vi.mocked(fn).mock.calls.length,0);
+    expect(mutations).toBe(phase==='healthy'?1:0);
+  });
+
   it('lists queue with content for all sources and marks consuming', async () => {
     const { deps, service } = createDeps({
       getSessionQueueSnapshot: vi.fn(async () => ({
@@ -2773,7 +2833,7 @@ describe('OrcaTeamService worker queued message control', () => {
         queuedMessageId: 'q-lead',
       }),
     ).resolves.toEqual({ ok: true, workerId: 'worker-1', queuedMessageId: 'q-lead' });
-    expect(removeQueuedMessage).toHaveBeenCalledWith('worker-session-1', 'q-lead');
+    expect(removeQueuedMessage).toHaveBeenCalledWith('worker-session-1', 'q-lead', expect.objectContaining({clientId:'q-lead',origin:leadOrigin}));
 
     // resolve 与 remove 之间的窄竞态:条目已被 drain 取走 → 明确报已消费。
     removeQueuedMessage.mockReturnValueOnce(false);
