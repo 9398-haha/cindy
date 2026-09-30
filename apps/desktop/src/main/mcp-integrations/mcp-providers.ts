@@ -52,6 +52,7 @@ import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
   isSessionInTurn,
+  getSessionInputProvenance,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
@@ -360,11 +361,15 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (!dbClient || isAppSessionBoundaryPending() || !opts.callerSessionId)
           throw new Error('Task history caller unavailable');
         // session_search bypasses cindy_helper, so share its ownership predicate.
-        if (await resolveHelperSurface(dbClient, opts.callerSessionId) === 'restricted')
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
           throw new Error('Task history search is unavailable for plugin-managed tasks');
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
         const hits = await searchSessionsFn(query, opts);
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
+          throw new Error('Task history caller unavailable');
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
+          throw new Error('Task history search is unavailable for plugin-managed tasks');
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
         return hits;
@@ -528,7 +533,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
-        const surface = await resolveHelperSurface(dbClient, sessionId);
+        const surface = await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance);
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
       },

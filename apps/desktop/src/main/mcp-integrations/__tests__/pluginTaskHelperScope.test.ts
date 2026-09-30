@@ -21,12 +21,13 @@ const wired = ts.transpileModule(`return {${callback}}.resolveSurface;`, {
 
 function fixture() {
   const sqlite = new Database(':memory:');
-  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT);
+  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT, cleared_at INTEGER DEFAULT 0);
+    CREATE TABLE messages(client_id TEXT, session_id TEXT, role TEXT, created_at INTEGER, agent_meta TEXT, rewind_at INTEGER);
     CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT);
     CREATE TABLE plugin_task_requests(id TEXT PRIMARY KEY, operation TEXT, payload TEXT);
     CREATE TABLE orca_teams(id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
     CREATE TABLE orca_workers(session_id TEXT PRIMARY KEY, team_id TEXT);
-    INSERT INTO sessions VALUES ('lead','plugin'),('worker','orca'),('legacy','plugin'),('user','user'),('bot','bot');
+    INSERT INTO sessions(id,source) VALUES ('lead','plugin'),('worker','orca'),('legacy','plugin'),('user','user'),('bot','bot');
     INSERT INTO bot_session_links VALUES ('bot','b');
     INSERT INTO plugin_task_requests VALUES ('lead','create','{}');
     INSERT INTO orca_teams VALUES ('team','lead','completed');
@@ -34,7 +35,9 @@ function fixture() {
   const db = { drizzle: drizzle(sqlite), queryOne: async (sql: string, args: unknown[]) => sqlite.prepare(sql).get(...args) } as unknown as DbClient;
   let current: DbClient | undefined = db;
   let pending = false;
+  let execution = { executing: false, input: null as null | { clientId: string; authoredText?: string; autoResume?: boolean; retrySourceClientId?: string; originKind?: string } };
   const deps = { ...surfaces, sessions, botSessionLinks, eq, tryGetDbClient: () => current,
+    getSessionInputProvenance: () => execution,
     isAppSessionBoundaryPending: () => pending };
   const resolve = new Function(...Object.keys(deps), wired)(...Object.values(deps)) as
     (input: { sessionId: string }) => Promise<'default' | 'bot' | 'restricted'>;
@@ -48,6 +51,7 @@ function fixture() {
   const searchSessions = new Function(...Object.keys(searchDeps), searchWired)(...Object.values(searchDeps)) as
     (query: string, opts: { callerSessionId: string; sessionId?: string }) => Promise<unknown[]>;
   return { sqlite, db, resolve, searchSessions, searchSessionsFn, setCurrent: (next?: DbClient) => { current = next; },
+    setExecution: (next: typeof execution) => { execution = next; },
     setPending: () => { pending = true; } };
 }
 
@@ -68,6 +72,29 @@ it.each(['lead', 'worker'])('restricts owned %s and preserves explicit revocatio
   } finally { f.sqlite.close(); }
 });
 
+it.each(['lead', 'worker'].flatMap(sessionId => ['plugin', 'auto-retry', 'manual-retry', 'queued-orca', 'native', 'unknown'].map(state => ({ sessionId, state }))))(
+  'keeps revoked $sessionId restricted during $state execution on helper and memory', async ({ sessionId, state }) => {
+    const f = fixture();
+    try {
+      f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+      const insert = f.sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, NULL)');
+      insert.run('older-human', sessionId, 'user', 10, JSON.stringify({ delivery: 'turn', autoReviewUserText: 'Previous user task' }));
+      insert.run('plugin-task:run', sessionId, 'user', 20, '{"delivery":"turn"}');
+      if (state === 'unknown') insert.run('unknown', sessionId, 'user', 30, '{}');
+      f.setExecution({ executing: true, input: state === 'native' ? null : state === 'plugin' ? { clientId: 'plugin-task:run' }
+        : state.includes('retry') ? { clientId: 'retry', retrySourceClientId: 'plugin-task:run', autoResume: state === 'auto-retry' }
+          : { clientId: state, originKind: state === 'queued-orca' ? 'orca' : undefined } });
+      expect(await f.resolve({ sessionId })).toBe('restricted');
+      await expect(f.searchSessions('private', { callerSessionId: sessionId })).rejects.toThrow();
+      expect(f.searchSessionsFn).not.toHaveBeenCalled();
+      f.setExecution({ executing: false, input: null });
+      expect(await f.resolve({ sessionId })).toBe('default');
+      f.setExecution({ executing: true, input: { clientId: 'new-human', authoredText: 'Continue my retained task' } });
+      expect(await f.resolve({ sessionId })).toBe('default');
+    } finally { f.sqlite.close(); }
+  },
+);
+
 it.each(['lead', 'worker'])('also rejects the separate memory history search for %s', async callerSessionId => {
   const f = fixture();
   try {
@@ -80,6 +107,57 @@ it.each(['lead', 'worker'])('also rejects the separate memory history search for
     await expect(f.searchSessions('private', { callerSessionId })).rejects.toThrow();
   } finally { f.sqlite.close(); }
 });
+
+it.each(['lead', 'worker'].flatMap(sessionId => ['human', 'orca-after-human', 'unknown-after-human', 'retry-unknown', 'retry-human', 'cleared', 'rewound', 'child', 'ui-trigger'].map(history => ({ sessionId, history }))))(
+  'uses only current accepted evidence for revoked $sessionId after $history', async ({ sessionId, history }) => {
+    const f = fixture();
+    try {
+      f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+      const add = (id: string, at: number, meta: object, rewind: number | null = null) =>
+        f.sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)').run(id, sessionId, 'user', at, JSON.stringify(meta), rewind);
+      add('plugin-task:run', 10, { delivery: 'turn' });
+      add('human', 20, { delivery: 'turn', autoReviewUserText: history === 'ui-trigger' ? '[UI_ACTION_TRIGGER] Continue' : 'New human task',
+        ...(history === 'child' ? { parentUuid: 'child' } : {}) }, history === 'rewound' ? 25 : null);
+      if (history === 'cleared') f.sqlite.exec('UPDATE sessions SET cleared_at=25');
+      if (history === 'orca-after-human') add('orca', 30, { delivery: 'turn', origin: { kind: 'orca' } });
+      if (history === 'unknown-after-human' || history === 'retry-unknown') add('unknown', 30, { delivery: 'turn' });
+      f.setExecution({ executing: true, input: history.startsWith('retry-') ? { clientId: 'retry', retrySourceClientId: history.slice(6) } : null });
+      const allowed = ['human', 'retry-human'].includes(history) || (sessionId === 'lead' && history === 'orca-after-human');
+      expect(await f.resolve({ sessionId })).toBe(allowed ? 'default' : 'restricted');
+      if (allowed) await expect(f.searchSessions('private', { callerSessionId: sessionId })).resolves.toHaveLength(1);
+      else await expect(f.searchSessions('private', { callerSessionId: sessionId })).rejects.toThrow();
+    } finally { f.sqlite.close(); }
+  },
+);
+
+it.each(['lead', 'worker'])('rejects late history and helper results when accepted input changes for %s', async sessionId => {
+  const f = fixture();
+  try {
+    f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+    const human = { executing: true, input: { clientId: 'human', authoredText: 'My new input' } };
+    const plugin = { executing: true, input: { clientId: 'plugin-task:run' } };
+    f.setExecution(human);
+    f.searchSessionsFn.mockImplementationOnce(async () => { f.setExecution(plugin); return [{ sessionId: 'user', snippet: 'private' }]; });
+    await expect(f.searchSessions('private', { callerSessionId: sessionId })).rejects.toThrow();
+    f.setExecution(human);
+    const pending = f.resolve({ sessionId });
+    queueMicrotask(() => f.setExecution(plugin));
+    expect(await pending).toBe('restricted');
+  } finally { f.sqlite.close(); }
+});
+
+it.each(['lead', 'worker'].flatMap(sessionId => [false, true].flatMap(autoResume => ['human', 'plugin-task:run'].map(retrySourceClientId => ({ sessionId, autoResume, retrySourceClientId })))))(
+  'preserves superseded $retrySourceClientId authority for $sessionId retry auto=$autoResume', async ({ sessionId, autoResume, retrySourceClientId }) => {
+    const f = fixture();
+    try {
+      f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+      f.sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)').run(retrySourceClientId, sessionId, 'user', 10,
+        JSON.stringify({ delivery: 'turn', autoReviewUserText: 'Original task' }), 20);
+      f.setExecution({ executing: true, input: { clientId: 'retry', retrySourceClientId, autoResume, authoredText: 'Original task' } });
+      expect(await f.resolve({ sessionId })).toBe(retrySourceClientId === 'human' ? 'default' : 'restricted');
+    } finally { f.sqlite.close(); }
+  },
+);
 
 it.each(['missing caller', 'missing DB', 'pending', 'switched after read'] as const)('fails closed: %s', async state => {
   const f = fixture();
@@ -96,6 +174,24 @@ it.each(['missing caller', 'missing DB', 'pending', 'switched after read'] as co
     expect(await f.resolve({ sessionId: 'lead' })).toBe('restricted');
   } finally { f.sqlite.close(); }
 });
+
+it.each(['lead', 'worker'].flatMap(sessionId => ['human', 'idle'].map(next => ({ sessionId, next }))))(
+  'does not transfer the old $sessionId tool call to $next during its first query', async ({ sessionId, next }) => {
+    const f = fixture();
+    try {
+      f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+      f.setExecution({ executing: true, input: { clientId: 'plugin-task:run' } });
+      const query = f.db.queryOne.bind(f.db);
+      f.db.queryOne = async <T = unknown>(sql: string, params?: unknown[]): Promise<T | undefined> => {
+        const row = await query<T>(sql, params);
+        f.setExecution(next === 'human' ? { executing: true, input: { clientId: 'human', authoredText: 'New user task' } } : { executing: false, input: null });
+        return row;
+      };
+      expect(await f.resolve({ sessionId })).toBe('restricted');
+      expect(await f.resolve({ sessionId })).toBe('default');
+    } finally { f.sqlite.close(); }
+  },
+);
 
 it.each(['codex', 'claude-code', 'pi'] as const)('blocks helper discovery and guessed calls for %s, rechecking each call', async agentKind => {
   const f = fixture();
@@ -121,6 +217,11 @@ it.each(['codex', 'claude-code', 'pi'] as const)('blocks helper discovery and gu
     }
     for (const fn of [...Object.values(history), listSessionQueue, sendToSession, messageAgent]) expect(fn).not.toHaveBeenCalled();
     f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+    f.setExecution({ executing: true, input: { clientId: 'plugin-task:run' } });
+    expect(payload(await client.callTool({ name: 'list_tools', arguments: {} })).categories).toEqual([]);
+    expect(payload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_chat_history', args: { session_id: 'user' } } })))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    f.setExecution({ executing: true, input: { clientId: 'new-human', authoredText: 'My new input' } });
     expect(payload(await client.callTool({ name: 'list_tools', arguments: {} })).categories.length).toBeGreaterThan(0);
     f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{}'`);
     expect(payload(await client.callTool({ name: 'list_tools', arguments: {} })).categories).toEqual([]);

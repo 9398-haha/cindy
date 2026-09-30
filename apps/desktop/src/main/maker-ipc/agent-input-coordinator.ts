@@ -1103,13 +1103,14 @@ export class AgentInputCoordinator {
 
   /** Authority follows the active input, never pending steering or cumulative reply attribution. */
   getAcceptedInputProvenance(sessionId: string): {
-    clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string;
+    clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string; originKind?: string;
   } | null {
     const active = this.states.get(sessionId)?.activeTurn;
     const item = active?.item;
     // Native tools may arrive before sendToAgent returns its dispatch acknowledgement.
     if (!item) return null;
     return { clientId: item.clientId, autoResume: item.autoResume, authoredText: item.autoReviewUserText,
+      originKind: item.origin?.kind,
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 

@@ -3,6 +3,7 @@ import { resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
+import { hasAcceptedUserTaskInput } from './pluginTaskInput.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { setPluginTaskHandler, setPluginTaskUninstaller, isPluginTaskAuthorized, getPluginTaskInstallRevision } from '../cindy-brain/index.js';
 import type { PluginTaskRoute, PluginTaskRequest } from '../../shared/pluginTasks.js';
@@ -3597,6 +3598,12 @@ export function createAutomationUserTurnGitBaselineHooks(): AutomationUserTurnGi
 
 export function isSessionInTurn(sessionId: string): boolean {
   return sessionTurnActivityTracker.isSessionInTurn(sessionId);
+}
+
+/** Runtime-only attribution; queued or rejected steering cannot take ownership. */
+export function getSessionInputProvenance(sessionId: string) {
+  const input = agentInputCoordinatorHolder?.getAcceptedInputProvenance(sessionId) ?? null;
+  return { input, executing: !!input || !!getMakerIfReady()?.getSession(sessionId)?.isTurnRunning() };
 }
 
 /**
@@ -11969,35 +11976,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const receipt = await store.get(leadSessionId);
     // Retry continues the original input; only a new accepted user message
     // replaces that source. The stable lineage already survives automatic retries.
-    let inputId = input?.retrySourceClientId ?? input?.clientId;
-    if (receipt?.operation === 'create' && hasRevokedPluginTaskOwnership(receipt) && executing && !inputId?.startsWith('plugin-task:')) {
-      const authored = input && !input.autoResume && !input.retrySourceClientId && typeof input.authoredText === 'string'
-        && input.authoredText.trim() && !input.authoredText.startsWith('[UI_ACTION_TRIGGER]');
-      if (!authored) {
-        // Worker replies and automatic inputs are not user takeover. Direct native
-        // replies bypass the coordinator, so use the same accepted transcript evidence.
-        const meta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
-        const [source] = await epoch.client.drizzle.select({clientId:messages.clientId, agentMeta:messages.agentMeta}).from(messages)
-          .innerJoin(sessions, eq(sessions.id, messages.sessionId))
-          .where(and(eq(messages.sessionId, leadSessionId), eq(messages.role, 'user'), isNull(messages.rewindAt),
-            sql`${messages.createdAt} > COALESCE(${sessions.clearedAt}, 0)`,
-            sql`json_extract(${meta}, '$.parentUuid') IS NULL`,
-            sql`(${messages.clientId} LIKE 'plugin-task:%' OR (
-              COALESCE(json_extract(${meta}, '$.autoResume'), 0) != 1
-              AND COALESCE(json_extract(${meta}, '$.contextRebuild'), 0) != 1
-              AND COALESCE(json_extract(${meta}, '$.origin.kind'), '') != 'orca'))`))
-          .orderBy(desc(messages.createdAt), desc(sql`messages.rowid`)).limit(1);
-        if (!source) throw new PluginTaskError('PERMISSION_DENIED', 'Orca input provenance unavailable');
-        if (!source.clientId.startsWith('plugin-task:')) {
-          let evidence: Record<string, unknown> = {};
-          try { evidence = JSON.parse(source.agentMeta ?? '{}'); } catch { /* Unknown source rejects below. */ }
-          if (!evidence || !['turn', 'steer'].includes(String(evidence.delivery)) || typeof evidence.autoReviewUserText !== 'string'
-            || !evidence.autoReviewUserText.trim() || evidence.autoReviewUserText.startsWith('[UI_ACTION_TRIGGER]')) {
-            throw new PluginTaskError('PERMISSION_DENIED', 'Orca input provenance unavailable');
-          }
-        }
-        inputId = source.clientId;
-      }
+    const inputId = input?.retrySourceClientId ?? input?.clientId;
+    if (receipt?.operation === 'create' && hasRevokedPluginTaskOwnership(receipt) && executing
+      && !await hasAcceptedUserTaskInput(epoch.client, leadSessionId, input)) {
+      throw new PluginTaskError('PERMISSION_DENIED', 'Orca input provenance unavailable');
     }
     const run = inputId?.startsWith('plugin-task:') ? await store.get(inputId.slice('plugin-task:'.length)) : undefined;
     let inputPluginId: string | null = null;

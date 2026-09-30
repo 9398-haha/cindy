@@ -1489,6 +1489,16 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
   });
 
+  it('keeps a Worker Lead directive distinct from accepted human input', async () => {
+    const h = createHarness(), sid = 'worker-input-origin';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, { ...makeItem('directive', 'Evaluate'), origin: { kind: 'orca', senderLabel: 'Lead' } });
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'directive', originKind: 'orca' });
+    await h.coordinator.steer(sid, { ...makeItem('human', 'New direction'), autoReviewUserText: 'New direction' });
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
+  });
+
   it('keeps accepted plugin authority through pending and rejected human steering', async () => {
     const h = createHarness(), sid = 'accepted-plugin-authority';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
