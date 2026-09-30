@@ -10675,6 +10675,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const startOrcaTeamForCaller = async (leadSessionId: string, workerPermissionMode?: OrcaWorkerPermissionMode, assertCurrent?: (activationStarted?: boolean) => Promise<void>, completeOperation?: PluginTaskService['completeOperation']) => {
       try {
         await assertLeadCollabProjectEnabled(leadSessionId);
+        // Plugin Auto cannot request Full access, including through the public
+        // Agent tool. Reject before showing a confirmation we cannot honor.
+        if (workerPermissionMode === 'bypassPermissions'
+          && (await captureOrcaPluginAuthority(leadSessionId)).permissionMode === 'auto') {
+          throw new PluginTaskError('PERMISSION_DENIED', 'Plugin tasks cannot request Worker Full access');
+        }
         return await startOrcaTeamWithPermissionGate(
           { leadSessionId, workerPermissionMode },
           {
