@@ -17,6 +17,7 @@ import {
 } from '../orcaWorkerCreationService';
 import type { DispatchWorkerTaskResult, OrcaWorkerStatus } from '../orcaTeamService';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
+import { createOrcaLifecycleService } from '../orcaLifecycleService';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch';
 import { isActiveWorkerStatus } from '../../../shared/orca-worker-status';
 import { sshCodexWorkerRoutingContext } from '../orcaProviderRoutingContext';
@@ -2727,20 +2728,20 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     });
   });
 
-it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
-it('uses one canonical label at all three plan checks without mutating the caller', async () => {
+it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({createCreationPlanValidator:()=>vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
+it('uses one canonical label at all plan checks without mutating the caller', async () => {
   const validateCreationPlan = vi.fn(async (_params: OrcaWorkerCreateParams) => 2);
-  const { service } = createDeps({ validateCreationPlan });
+  const { service } = createDeps({ createCreationPlanValidator: () => validateCreationPlan });
   const params = Object.freeze({ leadSessionId: 'lead-1', teamId: 'team-1', role: 'eval', agent: 'codex' as const, label: ' SAMPLE ', workerPermissionMode: 'auto' as const });
   await expect(service.createWorkerInTeam(params)).resolves.toMatchObject({ ok: true });
-  expect(validateCreationPlan).toHaveBeenCalledTimes(3);
+  expect(validateCreationPlan).toHaveBeenCalledTimes(4);
   for (const call of validateCreationPlan.mock.calls) expect(call[0]).toMatchObject({ label: 'sample' });
   expect(params.label).toBe(' SAMPLE ');
 });
-it('rejects invalid plan before reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>{throw Error('not pending');})});await expect(service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'})).rejects.toThrow('not pending');expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();});
+it('rejects invalid plan before reservation',async()=>{const {deps,service}=createDeps({createCreationPlanValidator:()=>vi.fn(async()=>{throw Error('not pending');})});await expect(service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'})).rejects.toThrow('not pending');expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();});
 it('revalidates a plan registered during creation preflight and releases the reservation on rejection', async () => {
   let reserved = false;
-  const {deps, service} = createDeps({validateCreationPlan: vi.fn(async () => {
+  const {deps, service} = createDeps({createCreationPlanValidator: () => vi.fn(async () => {
     if (reserved) throw new Error('Worker not in newly registered plan');
     return undefined;
   })});
@@ -2756,7 +2757,7 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
     if (directory !== undefined && validateCreationPlan.mock.calls.length >= 3) throw new Error('Directory authorization revoked');
     return undefined;
   });
-  const {deps, service} = createDeps({validateCreationPlan, resolveWorkerWorkingDir: vi.fn(async () => resolved)});
+  const {deps, service} = createDeps({createCreationPlanValidator: () => validateCreationPlan, resolveWorkerWorkingDir: vi.fn(async () => resolved)});
   const params = {leadSessionId:'lead-1',role:'eval',agent:'codex' as const,label:'sample',workingDir:path.resolve('candidate')};
   await expect(service.createWorker(params)).rejects.toThrow('Directory authorization revoked');
   expect(validateCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining(params), resolved, expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd' }));
@@ -2767,8 +2768,85 @@ it('checks the resolved creation directory before bootstrap and releases a rejec
 describe('production plugin Auto admission after reservation', () => {
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  const callback = source.slice(source.indexOf('    validateCreationPlan: async (params, resolvedWorkingDir, resolvedRoute) => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
-  const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).validateCreationPlan;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const callback = source.slice(source.indexOf('    createCreationPlanValidator: () => {'), source.indexOf('    getLeadSessionRow: async (leadSessionId) => {'));
+  const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).createCreationPlanValidator;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  it.each([false, true].flatMap(planned => ['bootstrap', 'renewal'].flatMap(stage =>
+    ['disabled', 'uninstalled', 'reinstalled', 'account', 'owner', 'missing', 'downgraded', 'plan', 'archived', 'storage', 'healthy'].map(change => ({ planned, stage, change })),
+  )))('rechecks $change after $stage with planned=$planned before persistence and dispatch', async ({ planned, stage, change }) => {
+    let epoch = { client: {} };
+    let enabled = true, missing = false, storageFailed = false;
+    const task = { revision: 1, status: 'active', permissionMode: 'auto', planModeEnabled: false, workingDir: path.resolve('repo') };
+    const receipt = { pluginId: 'plugin', operation: 'create', payload: JSON.stringify(planned ? {
+      teamPlan: { concurrency: 2, items: [{ label: 'sample', workingDir: task.workingDir,
+        route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false } }] },
+    } : {}) };
+    const callbackDeps = {
+      readPluginTaskPlanReceipt: JSON.parse, getCurrentDbClientSnapshot: () => epoch,
+      createPluginTaskStore: () => ({ get: async () => {
+        if (storageFailed) throw new Error('storage unavailable');
+        return missing ? null : structuredClone(receipt);
+      } }),
+      pluginTaskServiceForCurrentOwner: () => ({ get: async () => {
+        if (JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned');
+        return { ...task };
+      } }),
+      readGhostErrandConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
+      isPluginTaskAuthorized: () => enabled,
+      resolvePluginWorkerDirectory: async () => task.workingDir,
+      isGhostPickedDir: () => false, PluginTaskError,
+    };
+    const createCreationPlanValidator = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { deps, service } = createDeps({ createCreationPlanValidator });
+    const mutate = () => {
+      if (change === 'disabled') enabled = false;
+      if (['uninstalled', 'reinstalled'].includes(change)) {
+        receipt.payload = JSON.stringify({ ...JSON.parse(receipt.payload), ownershipRevoked: true });
+        enabled = change === 'reinstalled';
+      }
+      if (change === 'account') epoch = { client: {} };
+      if (change === 'owner') receipt.pluginId = 'other-plugin';
+      if (change === 'missing') missing = true;
+      if (change === 'downgraded') task.permissionMode = 'default';
+      if (change === 'plan') task.planModeEnabled = true;
+      if (change === 'archived') task.status = 'archived';
+      if (change === 'storage') storageFailed = true;
+    };
+    const bootstrap = deps.bootstrapSession;
+    deps.bootstrapSession = vi.fn(async opts => { const result = await bootstrap(opts); if (stage === 'bootstrap') mutate(); return result; });
+    deps.renewWorkerCreationReservation = vi.fn(async () => { if (stage === 'renewal') mutate(); return true; });
+    const markTeamEnded = vi.fn(async () => undefined);
+    const lifecycle = createOrcaLifecycleService({
+      getActiveTeamByLead: async () => planned ? null : { id: 'team-1', leadSessionId: 'lead-1' },
+      createActiveTeam: async () => ({ id: 'team-1', leadSessionId: 'lead-1' }),
+      isOrphanedTeamInit: async () => false, getWorkerPermissionMode: () => 'auto',
+      setWorkerPermissionMode: vi.fn(), createWorkerInTeam: service.createWorkerInTeam,
+      dispatchWorkerTask: deps.dispatchWorkerTask, markTeamEnded, setSessionOrcaRole: vi.fn(async () => undefined),
+      clearKnownNonOrcaSession: vi.fn(), setLeadVendorOptions: vi.fn(async () => undefined), clearLeadVendorOptions: vi.fn(async () => undefined),
+      sendWorkerReadyPlaceholder: vi.fn(async () => undefined), rollbackCreatedWorker: vi.fn(async () => undefined),
+      broadcastSessionCreated: deps.broadcastSessionCreated, broadcastOrcaWorkerChanged: deps.broadcastOrcaWorkerChanged,
+    });
+    const result = planned
+      ? await lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: 'Evaluate sample' })
+      : await lifecycle.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', initialTask: 'Evaluate sample' });
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledOnce();
+    if (change === 'healthy') {
+      expect(result.ok).toBe(true);
+      expect(deps.addOrUpdateWorker).toHaveBeenCalledOnce();
+      expect(deps.dispatchWorkerTask).toHaveBeenCalledOnce();
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+      expect(deps.markOrcaRoleIfNeeded).not.toHaveBeenCalled();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+      for (const cleanup of [deps.closeWorkerSession, deps.forgetWorkerSession, deps.archiveWorkerSession]) {
+        expect(cleanup).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID);
+      }
+      if (planned) expect(markTeamEnded).toHaveBeenCalledExactlyOnceWith('team-1', 'failed');
+    }
+  });
 
   it.each(['uninstalled', 'reinstalled', 'malformed'])('keeps ordinary Worker creation separate from %s plugin receipts', async state => {
     const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned'); });
@@ -2777,8 +2855,8 @@ describe('production plugin Auto admission after reservation', () => {
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
       readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
     };
-    const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
-    const { deps, service } = createDeps({ validateCreationPlan });
+    const createCreationPlanValidator = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
+    const { deps, service } = createDeps({ createCreationPlanValidator });
     const result = service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex' });
     if (state === 'malformed') {
       await expect(result).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
@@ -2836,8 +2914,8 @@ describe('production plugin Auto admission after reservation', () => {
       isGhostPickedDir: () => false,
       PluginTaskError,
     };
-    const validateCreationPlan = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
-    const { deps, service } = createDeps({ validateCreationPlan, withLeadSendLock: async (_id, operation) => {
+    const createCreationPlanValidator = new Function(...Object.keys(depsForCallback), js)(...Object.values(depsForCallback));
+    const { deps, service } = createDeps({ createCreationPlanValidator, withLeadSendLock: async (_id, operation) => {
       if (point === 'archive-admission') taskStatus = 'archived';
       return operation();
     } });
@@ -2880,8 +2958,9 @@ describe('production plugin Auto admission after reservation', () => {
 });
 it('rechecks a newly registered plan under the Lead send lock before reserving', async () => {
   let locked = false, limit: number | undefined;
+  const validateCreationPlan = vi.fn(async () => limit);
   const {deps,service}=createDeps({
-    validateCreationPlan: vi.fn(async () => limit),
+    createCreationPlanValidator: () => validateCreationPlan,
     withLeadSendLock: async (_id, operation) => {
       limit = 1; locked = true;
       try { return await operation(); } finally { locked = false; }
@@ -2894,12 +2973,12 @@ it('rechecks a newly registered plan under the Lead send lock before reserving',
   const bootstrap=deps.bootstrapSession;
   deps.bootstrapSession=vi.fn(async (opts: MakerSessionCreateOpts) => {expect(locked).toBe(false);return bootstrap(opts);});
   await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
-  expect(deps.validateCreationPlan).toHaveBeenCalledTimes(3);
+  expect(validateCreationPlan).toHaveBeenCalledTimes(4);
   expect(deps.reserveWorkerCreation).toHaveBeenCalledOnce();
 });
 it('rejects a plan changed during preparation without reserving or bootstrapping', async () => {
   const validate=vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('not pending'));
-  const {deps,service}=createDeps({validateCreationPlan:validate,withLeadSendLock:async (_id, operation)=>operation()});
+  const {deps,service}=createDeps({createCreationPlanValidator:()=>validate,withLeadSendLock:async (_id, operation)=>operation()});
   const result=await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
   expect(result.ok).toBe(false);expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();
 });
