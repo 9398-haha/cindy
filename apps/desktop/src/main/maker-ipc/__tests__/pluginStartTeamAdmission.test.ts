@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { assertPluginTaskResult, PluginTaskError } from '../pluginTaskService.js';
 import { createOrcaLifecycleService, type OrcaLifecycleDeps } from '../orcaLifecycleService.js';
 import { startOrcaTeamWithPermissionGate } from '../orcaStartTeamPermissionGate.js';
+import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 
 vi.mock('../../maker-host/codex-credential-switch.js', () => ({ isCredentialModeSwitchBusyError: () => false }));
 
@@ -44,6 +45,70 @@ describe('plugin team active-task admission', () => {
     await expect(f.run()).resolves.toEqual({ ok: true, teamId: 'team' });
     expect(f.create).toHaveBeenCalledOnce();
   });
+});
+
+describe('public start_team Full access admission', () => {
+  const helper = source.slice(source.indexOf('  const startOrcaTeamForCaller ='), source.indexOf('  const pluginPermissionRequests ='));
+  const authority = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
+  const wired = ts.transpileModule(`${authority}\n${helper}\nreturn { start: startOrcaTeamForCaller, capture: captureOrcaPluginAuthority };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const states = ['plugin', 'ask', 'plan', 'disabled', 'revoked-running', 'ordinary', 'revoked-idle', 'revoked-human'] as const;
+  const cases = (['auto', 'bypassPermissions'] as const).flatMap(preference => [
+    ...states.map(state => ({ state, preference, requested: 'bypassPermissions' as 'auto' | 'bypassPermissions' | undefined })),
+    ...(['auto', undefined] as const).map(requested => ({ state: 'plugin' as const, preference, requested })),
+  ]);
+
+  it.each(cases)(
+    '$state requests $requested with global preference $preference', async ({ state, preference, requested }) => {
+      const epoch = { client: {} };
+      const revoked = state.startsWith('revoked-');
+      const input = state === 'revoked-running' ? { clientId: 'plugin-task:run' }
+        : state === 'revoked-human' ? { clientId: 'human', authoredText: 'Start a team' } : null;
+      const ordinary = ['ordinary', 'revoked-idle', 'revoked-human'].includes(state);
+      const task = { status: 'active', permissionMode: state === 'ask' ? 'default' : 'auto', planModeEnabled: state === 'plan' };
+      const request = vi.fn(async () => ({ confirmed: true }));
+      const create = vi.fn(async () => ({ id: 'team', leadSessionId: 'lead' }));
+      const setPreference = vi.fn();
+      let capture: OrcaLifecycleDeps['getWorkerPermissionModeOverride'];
+      const lifecycle = createOrcaLifecycleService({
+        getWorkerPermissionMode: () => preference,
+        getWorkerPermissionModeOverride: (id: string) => capture!(id),
+        setWorkerPermissionMode: setPreference,
+        getActiveTeamByLead: async () => null, createActiveTeam: create,
+        setSessionOrcaRole: vi.fn(), clearKnownNonOrcaSession: vi.fn(), setLeadVendorOptions: vi.fn(),
+        markTeamEnded: vi.fn(), clearLeadVendorOptions: vi.fn(),
+      } as unknown as OrcaLifecycleDeps);
+      const bindings = {
+        PluginTaskError, hasAcceptedUserTaskInput, startOrcaTeamWithPermissionGate,
+        getCurrentDbClientSnapshot: () => epoch,
+        maker: { getSession: () => null }, inputCoordinator: { getAcceptedInputProvenance: () => input },
+        createPluginTaskStore: () => ({ get: async () => state === 'ordinary' ? null
+          : { operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: revoked }) } }),
+        pluginTaskServiceForCurrentOwner: () => ({ get: async () => task }),
+        isPluginTaskAuthorized: () => state !== 'disabled', readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
+        assertLeadCollabProjectEnabled: async () => {}, getWorkerPermissionModeFromCreationPrefs: () => preference,
+        orcaWorkerPermissionConfirmBridge: { request }, t: (key: string) => key, orcaLifecycleService: lifecycle,
+      };
+      const run = new Function(...Object.keys(bindings), wired)(...Object.values(bindings));
+      capture = run.capture;
+      const result = await run.start('lead', requested);
+      if (ordinary) {
+        expect(result).toMatchObject({ ok: true, workerPermissionMode: 'bypassPermissions' });
+        expect(request).toHaveBeenCalledTimes(preference === 'auto' ? 1 : 0);
+        expect(setPreference).toHaveBeenCalledWith('bypassPermissions');
+        expect(create).toHaveBeenCalledOnce();
+      } else if (requested === 'bypassPermissions') {
+        expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+        expect(request).not.toHaveBeenCalled();
+        expect(setPreference).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ ok: true, workerPermissionMode: 'auto' });
+        expect(request).not.toHaveBeenCalled();
+        expect(setPreference).not.toHaveBeenCalled();
+        expect(create).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });
 
 describe('plugin team activation uses the native lifecycle compensation', () => {

@@ -1,10 +1,12 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, promises as fs, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { createLiziMcpProviders, createXdtHelperMcpServer, type LiziMcpSessionContext } from '@cindy/mcps';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { botSessionLinks, sessions } from '../../localDb/schema.js';
@@ -50,7 +52,10 @@ function fixture() {
   }).outputText;
   const searchSessions = new Function(...Object.keys(searchDeps), searchWired)(...Object.values(searchDeps)) as
     (query: string, opts: { callerSessionId: string; sessionId?: string }) => Promise<unknown[]>;
-  return { sqlite, db, resolve, searchSessions, searchSessionsFn, setCurrent: (next?: DbClient) => { current = next; },
+  const accessSource = source.slice(source.indexOf('  const withAccountDataAccess ='), source.indexOf('  const providers ='));
+  const accessJs = ts.transpileModule(`${accessSource}\nreturn withAccountDataAccess;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const withAccountDataAccess = new Function(...Object.keys(deps), accessJs)(...Object.values(deps));
+  return { sqlite, db, resolve, searchSessions, searchSessionsFn, withAccountDataAccess, setCurrent: (next?: DbClient) => { current = next; },
     setExecution: (next: typeof execution) => { execution = next; },
     setPending: () => { pending = true; } };
 }
@@ -230,3 +235,84 @@ it.each(['codex', 'claude-code', 'pi'] as const)('blocks helper discovery and gu
       .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
   } finally { await client.close(); await server.close(); f.sqlite.close(); }
 });
+
+it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] as const).flatMap(agentKind =>
+  (['cindy_contacts', 'cindy_scheduler', 'cindy_slack'] as const).map(name => ({ sessionId, agentKind, name })))))(
+  'protects account data from $sessionId through $agentKind $name', async ({ sessionId, agentKind, name }) => {
+    const f = fixture();
+    const privateData = [{ id: 'private', displayName: 'Synthetic private contact', prompt: 'Synthetic private schedule' }];
+    const read = vi.fn(async () => privateData);
+    const manager = vi.fn(() => ({ getStore: () => ({ listContacts: read }) }));
+    const scheduler = vi.fn(() => ({ list: read }));
+    const getBridge = vi.fn(() => ({ availability: () => ({ bound: true, connected: true, serverSupportsTools: true }),
+      callTool: async () => ({ ok: true, result: await read() }) }));
+    const { withAccountDataAccess } = f;
+    const providers = createLiziMcpProviders({ enabled: [name],
+      contacts: { getManager: manager, withAccountDataAccess },
+      scheduler: { getScheduler: scheduler, withAccountDataAccess },
+      slackHook: { getBridge, withAccountDataAccess },
+    } as unknown as Parameters<typeof createLiziMcpProviders>[0]);
+    const workingDir = mkdtempSync(join(tmpdir(), 'plugin-account-scope-'));
+    let liveId = sessionId;
+    const ctx: LiziMcpSessionContext = { agentKind, workingDir, sessionId,
+      ...(agentKind !== 'claude-code' ? { sessionId: undefined, getSessionContext: () => ({ agentKind, workingDir, sessionId: liveId }) } : {}) };
+    const config = await providers[0]!.toClaudeSdkConfig(ctx);
+    const server = (config as { instance: ReturnType<typeof createXdtHelperMcpServer> }).instance;
+    const client = new Client({ name: 'plugin-account-scope', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    const call = (spill = false) => client.callTool(name === 'cindy_slack'
+      ? { name: 'slack_call_tool', arguments: { name: 'search', ...(spill ? { out_file: 'private.json' } : {}) } }
+      : { name: 'call_tool', arguments: { name: name === 'cindy_contacts' ? 'contacts_list' : 'schedule_list', args: {} } });
+    const denied = (result: unknown) => {
+      expect(result).toMatchObject({ isError: true });
+      expect(JSON.stringify(result)).not.toContain('Synthetic private');
+    };
+    try {
+      denied(await client.callTool({ name: name === 'cindy_slack' ? 'slack_list_tools' : 'list_tools', arguments: {} }));
+      denied(await call());
+      if (name === 'cindy_slack') denied(await client.callTool({ name: 'slack_status', arguments: {} }));
+      else for (const tool of name === 'cindy_contacts'
+        ? ['contacts_get', 'contacts_resolve', 'contacts_search', 'contacts_export_vcf', 'contacts_import_system', 'contacts_export_system', 'contacts_delete', 'contacts_create']
+        : ['schedule_get', 'schedule_list_runs', 'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now']) {
+        denied(await client.callTool({ name: 'call_tool', arguments: { name: tool, args: { id: 'private' } } }));
+      }
+      expect(manager).not.toHaveBeenCalled(); expect(scheduler).not.toHaveBeenCalled(); expect(getBridge).not.toHaveBeenCalled();
+      f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{"ownershipRevoked":true}'`);
+      f.setExecution({ executing: true, input: { clientId: 'plugin-task:run' } });
+      denied(await call());
+      f.setExecution({ executing: true, input: { clientId: 'new-human', authoredText: 'My own request' } });
+      expect(JSON.stringify(await call())).toContain('Synthetic private');
+      read.mockImplementationOnce(async () => { f.setCurrent(); return privateData; });
+      denied(await call(true));
+      expect(existsSync(join(workingDir, 'private.json'))).toBe(false);
+      f.setCurrent(f.db);
+      read.mockImplementationOnce(async () => { f.setExecution({ executing: true, input: { clientId: 'plugin-task:run' } }); return privateData; });
+      denied(await call(true));
+      expect(existsSync(join(workingDir, 'private.json'))).toBe(false);
+      f.setExecution({ executing: true, input: { clientId: 'new-human', authoredText: 'My own request' } });
+      if (name === 'cindy_slack') {
+        // Revocation after fetching data must also block the existing spill path.
+        const mkdir = fs.mkdir.bind(fs);
+        const spy = vi.spyOn(fs, 'mkdir').mockImplementation(async (...args) => {
+          const result = await mkdir(...args);
+          if (String(args[0]) === workingDir) f.setCurrent();
+          return result;
+        });
+        try {
+          denied(await call(true));
+          expect(existsSync(join(workingDir, 'private.json'))).toBe(false);
+        } finally { spy.mockRestore(); f.setCurrent(f.db); }
+      }
+      if (agentKind !== 'claude-code') {
+        liveId = 'user';
+        f.sqlite.exec(`UPDATE plugin_task_requests SET payload='{}'`);
+        expect(JSON.stringify(await call())).toContain('Synthetic private');
+        liveId = sessionId;
+        denied(await call());
+      }
+      f.setPending();
+      denied(await call());
+    } finally { await client.close(); await server.close(); f.sqlite.close(); rmSync(workingDir, { recursive: true, force: true }); }
+  },
+);
