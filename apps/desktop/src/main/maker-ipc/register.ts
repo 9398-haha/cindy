@@ -13555,18 +13555,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       LEFT JOIN orca_workers w ON w.session_id = s.id
       LEFT JOIN orca_teams t ON t.id = w.team_id
       JOIN plugin_task_requests r ON r.id = l.id
+      JOIN auto_review_projections p ON p.session_id = s.id AND p.lead_id = l.id
       WHERE s.id = ?
         AND json_array(s.source,s.orca_role,s.working_dir,s.permission_mode,coalesce(s.plan_mode_enabled,0),s.status,
           s.agent_kind,s.provider_id,s.model,s.effort,coalesce(s.fast_mode,0)) = ?
         AND json_array(l.source,l.permission_mode,coalesce(l.plan_mode_enabled,0),l.status) = ?
         AND json_array(w.label,t.lead_session_id,t.id,t.status) = ?
         AND json_array(r.id,r.target_id,r.plugin_id,r.operation,r.payload,r.revision) = ?
+        AND p.revision = ? AND p.projected_revision = p.revision AND p.version = 3
       LIMIT 1`, [leadId, sessionId,
       JSON.stringify([session.source,session.orcaRole,session.workingDir,session.permissionMode,Number(!!session.planModeEnabled),session.status,
         session.agentKind,session.providerId,session.model,session.effort,Number(!!session.fastMode)]),
       JSON.stringify([lead.source,lead.permissionMode,Number(!!lead.planModeEnabled),lead.status]),
       JSON.stringify([link?.label,link?.leadId,link?.teamId,link?.teamStatus]),
       JSON.stringify([receipt.id,receipt.targetId,receipt.pluginId,receipt.operation,receipt.payload,receipt.revision]),
+      projection.revision,
     ]);
     if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
     const config = readGhostErrandConfig(receipt.pluginId);
