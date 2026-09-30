@@ -8321,6 +8321,11 @@
       "automationInvalid": "自動化定義無法轉換，尚未建立。",
       "itemFailed": "此項未完成，可重試並查看匯入詳情。",
       "chatPartial": "夥伴已建立，但部分資料未完整儲存。以下項目仍需處理；其他內容和對話可以正常使用。"
+    },
+    "learning": {
+      "memory": "已記住：{{title}}",
+      "skillCreated": "已建立技能：{{title}}",
+      "skillUpdated": "已更新技能：{{title}}"
     }
   },
   "common": {

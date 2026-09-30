@@ -8323,6 +8323,11 @@
       "automationInvalid": "The automation definition could not be converted; it was not created.",
       "itemFailed": "This item is unfinished. Retry or view import details.",
       "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available."
+    },
+    "learning": {
+      "memory": "Remembered: {{title}}",
+      "skillCreated": "Created skill: {{title}}",
+      "skillUpdated": "Updated skill: {{title}}"
     }
   },
   "common": {
