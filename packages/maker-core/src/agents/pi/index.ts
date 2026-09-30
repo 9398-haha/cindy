@@ -3931,7 +3931,7 @@ export class PiAgent extends BaseAgent {
     };
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
-    const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false): Promise<AutoReviewDecision> => {
       // Directory grants become active only after their permission snapshot is
       // durable. While persistence is pending, neither the requested roots nor
       // the old runtime roots are a complete authorization view, so fail closed
@@ -3965,10 +3965,10 @@ export class PiAgent extends BaseAgent {
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        cacheKey = JSON.stringify(prepared);
+        cacheKey = JSON.stringify([prepared, hostAutoApprove]);
         pending = autoReviewDecisionCache.get(cacheKey);
         if (!pending) {
-          pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction);
+          pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction, hostAutoApprove);
           autoReviewDecisionCache.set(cacheKey, pending);
         }
         return pending;
@@ -4487,6 +4487,7 @@ export class PiAgent extends BaseAgent {
           });
         });
       };
+      let cacheResolution = true;
       const resolveConfirmation = async (): Promise<PiPermissionResolution | null> => {
         // Review resumed child evidence against current user authorization.
         // Other modes retain the independent confirmation for adopted work.
@@ -4521,7 +4522,7 @@ export class PiAgent extends BaseAgent {
           return 'prompt-each-time' as const;
         })();
         if (mcpPolicy !== null && !adopted) {
-          if (mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt) return 'allow';
+          if (permissionMode !== 'auto' && mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt) return 'allow';
           if (permissionMode !== 'auto') {
             return requestUserDecision({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' });
           }
@@ -4550,12 +4551,17 @@ export class PiAgent extends BaseAgent {
             ? toolAutoReviewAction(toolName, input,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
-            : action);
+            : action, mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt && !adopted);
           if (autoReviewOfferExpired()) return null;
           if (permissionMode !== 'auto') {
             return requestUserDecision({ forcePrompt: true });
           }
-          if (decision.verdict === 'allow') return 'allow';
+          if (decision.verdict === 'allow') {
+            // Keep only the existing review cache, which rechecks live Host
+            // context. A failed mailbox delivery must not freeze Auto authority.
+            cacheResolution = false;
+            return 'allow';
+          }
           if (decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
           if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return requestUserDecision({
@@ -4599,7 +4605,8 @@ export class PiAgent extends BaseAgent {
         });
       }
       if (resolution === undefined) resolution = 'system-deny';
-      piSubagentApprovalDecisions.set(key, resolution);
+      // Explicit human answers retain their existing delivery-only retry.
+      if (cacheResolution) piSubagentApprovalDecisions.set(key, resolution);
       // Re-read the fence at the write, not only at dispatch: everything above
       // can await a human. An answer decided under the outgoing account must
       // not reach the child's mailbox after that account stopped being the
@@ -7888,7 +7895,7 @@ export class PiAgent extends BaseAgent {
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
-      reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
+      reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean) => Promise<AutoReviewDecision>;
       recordUserClarification: (question: string, answer: string) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
@@ -8606,7 +8613,7 @@ export class PiAgent extends BaseAgent {
           }
           return 'prompt-each-time';
         })();
-        if (mcpPolicy !== null && (mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt || permissionMode !== 'auto')) {
+        if (mcpPolicy !== null && permissionMode !== 'auto') {
           // Pi 的权限门只有放行/拒绝两态,没有会话级持久化规则,因此 prompt 与
           // prompt-each-time 在这里收敛成同一个动作:每次都问用户。本轮策略命中时
           // auto-approve 也不放行 —— 渠道安全契约压过第一方 MCP 自动批准(§7.4)。
@@ -8645,7 +8652,7 @@ export class PiAgent extends BaseAgent {
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt
             ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description, action)
-            : action);
+            : action, mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt);
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):
           //   - 已收紧到 ask(或其它非 auto/bypass)→ 破坏性调用即便 verdict=allow 也必须走

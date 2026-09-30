@@ -472,7 +472,11 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
+  hostAutoApprove = false,
 ): Promise<AutoReviewDecision> {
+  // Host trust skips model review only after live context preparation has
+  // established that this is not a delegated task with a narrower scope.
+  if (hostAutoApprove && !request.delegatedTask) return { verdict: 'allow' };
   // Bound untrusted input before the static classifier's command/path parsers,
   // not merely before the model request. Neither may inspect an oversized action.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);

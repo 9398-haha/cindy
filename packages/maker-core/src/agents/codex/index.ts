@@ -5631,7 +5631,7 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
-    const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -5659,11 +5659,12 @@ assertRouteCurrent();
         if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
           return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
-        key = JSON.stringify(prepared);
+        key = JSON.stringify([prepared, hostAutoApprove]);
         const cached = autoReviewDecisionCache.get(key);
         pending = cached ?? resolveAutoReviewDecision(
             prepared,
             this.deps.reviewAutoPermissionAction,
+            hostAutoApprove,
           );
         if (!cached) autoReviewDecisionCache.set(key, pending);
         return pending;
@@ -7792,6 +7793,7 @@ assertRouteCurrent();
       opts?: {
         forcePrompt?: boolean;
         autoReviewAction?: ReviewableAction;
+        hostAutoApprove?: boolean;
         itemId?: string;
       },
     ): Promise<{ decision: ApprovalDecision; reason?: string }> {
@@ -7867,6 +7869,7 @@ assertRouteCurrent();
               !opts?.autoReviewAction || (forcePrompt && opts.autoReviewAction.kind !== 'other')
                 ? toolAutoReviewAction(req.toolName, req.input, req.description)
                 : opts.autoReviewAction,
+              opts?.hostAutoApprove === true && !forcePrompt,
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
@@ -9286,7 +9289,7 @@ assertRouteCurrent();
         `mcp:${params.serverName}`,
         policyPermissionInput,
       );
-      if (approvalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
+      if (mutablePermissionMode !== 'auto' && approvalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
         log.debug('mcp elicitation auto-approved by host policy', {
           serverName: params.serverName,
           mode: params.mode,
@@ -9325,6 +9328,7 @@ assertRouteCurrent();
         {
           forcePrompt:
             turnPolicyForcePrompt || approvalPolicy === 'prompt-each-time',
+          hostAutoApprove: approvalPolicy === 'auto-approve',
           // Display text is not execution evidence. An absent argument payload
           // must hit the shared missing-evidence denial, never reach AI as a
           // seemingly complete action made only of server/title/message fields.
@@ -9908,7 +9912,7 @@ assertRouteCurrent();
       };
       const approvalPolicy = classifyMcpToolApprovalPolicy(approvalContext);
       const hostApprovalPresentation = mcpToolApprovalPresentation(approvalContext);
-      if (approvalPolicy !== 'auto-approve') {
+      if (approvalPolicy !== 'auto-approve' || mutablePermissionMode === 'auto') {
         const requestId = `dynamic-tool:${serverName}:${params.turnId}:${params.callId}`;
         const decision = await awaitApprovalDecision(
           params.threadId,
@@ -9928,6 +9932,7 @@ assertRouteCurrent();
           },
           {
             forcePrompt: approvalPolicy === 'prompt-each-time',
+            hostAutoApprove: approvalPolicy === 'auto-approve',
             ...(toolUseId ? { itemId: toolUseId } : {}),
           },
         );
