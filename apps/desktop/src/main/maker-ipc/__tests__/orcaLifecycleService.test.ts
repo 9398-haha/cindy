@@ -302,13 +302,24 @@ describe('OrcaLifecycleService', () => {
     });
 
     expect(deps.createActiveTeam).not.toHaveBeenCalled();
-    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/explicit-project' }));
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/explicit-project' }), undefined);
     expect(calls).toEqual([
       'createWorkerInTeam:team-existing:reviewer',
       'dispatchWorkerTask:create_worker/worker-session-1/initial_task',
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
+  });
+
+  it.each(['missing', 'failed'])('does not change the ordinary preference when team lookup is %s', async outcome => {
+    const { deps, service } = createDeps({
+      getWorkerPermissionModeOverride: async () => ({ assertCurrent: async () => undefined }),
+      getActiveTeamByLead: async () => { if (outcome === 'failed') throw new Error('storage'); return null; },
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', workerPermissionMode: 'bypassPermissions' }).catch(() => ({ ok: false }));
+    expect(result.ok).toBe(false);
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
+    expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
   });
 
   it('uses the saved Worker creation preference for later create_worker calls', async () => {
@@ -328,6 +339,7 @@ describe('OrcaLifecycleService', () => {
 
     expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
       expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
+      undefined,
     );
   });
 
@@ -567,6 +579,7 @@ describe('OrcaLifecycleService', () => {
     expect(deps.setWorkerPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
       expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
+      undefined,
     );
   });
 
@@ -992,11 +1005,11 @@ describe('host-scoped Worker permissions', () => {
     const { deps, service } = createDeps({
       getActiveTeamByLead: vi.fn(async () => activeTeam()),
       getWorkerPermissionMode: vi.fn(() => 'bypassPermissions' as const),
-      getWorkerPermissionModeOverride: vi.fn(async () => 'auto' as const),
+      getWorkerPermissionModeOverride: vi.fn(async () => ({ permissionMode: 'auto' as const, assertCurrent: async () => undefined })),
     });
     expect(await service.startTeam({leadSessionId: 'lead-1', workerPermissionMode})).toMatchObject({ok: true, workerPermissionMode: 'auto'});
     await service.createWorker({leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex', workerPermissionMode});
-    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({workerPermissionMode: 'auto'}));
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({workerPermissionMode: 'auto'}), expect.any(Function));
     expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
   });
   it('does not create a Worker after host authorization is revoked', async () => {
@@ -1057,6 +1070,6 @@ describe('retained tasks after explicit plugin uninstall', () => {
       : service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' });
     await expect(result).resolves.toMatchObject({ ok: true });
     expect(get).not.toHaveBeenCalled();
-    if (action !== 'startTeam') expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }));
+    if (action !== 'startTeam') expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }), expect.any(Function));
   });
 });

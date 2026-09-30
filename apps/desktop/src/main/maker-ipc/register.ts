@@ -12096,16 +12096,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getWorkerPermissionModeOverride: async (leadSessionId) => {
       const epoch = getCurrentDbClientSnapshot();
       if (!epoch) throw new PluginTaskError('HOST_NOT_READY', 'Task storage unavailable', true);
-      const receipt = await createPluginTaskStore(epoch.client).get(leadSessionId);
-      if (!receipt || receipt.operation !== 'create' || hasRevokedPluginTaskOwnership(receipt)) return undefined;
-      const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId, leadSessionId);
+      const store = createPluginTaskStore(epoch.client);
+      const receipt = await store.get(leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-      // Plugin tasks never inherit an unrelated global Full access preference.
-      assertPluginWorkerAutoAuthorized(receipt.pluginId, task);
-      return 'auto';
+      const pluginId = receipt?.operation === 'create' && !hasRevokedPluginTaskOwnership(receipt) ? receipt.pluginId : null;
+      // Capture provenance together with Auto, before team/list/bootstrap awaits.
+      // Revocation cannot turn this in-flight plugin request into ordinary Orca.
+      const assertCurrent = async () => {
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        const current = await store.get(leadSessionId);
+        const currentPluginId = current?.operation === 'create' && !hasRevokedPluginTaskOwnership(current) ? current.pluginId : null;
+        if (epoch !== getCurrentDbClientSnapshot() || currentPluginId !== pluginId) throw new PluginTaskError('PERMISSION_DENIED', 'Worker creation ownership changed');
+        if (pluginId === null) return; // A new user call on an already revoked task stays ordinary Orca.
+        const task = await pluginTaskServiceForCurrentOwner!().get(pluginId, leadSessionId);
+        if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
+        assertPluginWorkerAutoAuthorized(pluginId, task);
+      };
+      await assertCurrent();
+      // Plugin tasks never inherit or modify an unrelated global Full access preference.
+      return { permissionMode: pluginId === null ? undefined : 'auto' as const, assertCurrent };
     },
     setWorkerPermissionMode: applyWorkerPermissionModePreference,
-    createWorkerInTeam: (params) => orcaWorkerCreationService.createWorkerInTeam(params),
+    createWorkerInTeam: (params, assertCurrent) => orcaWorkerCreationService.createWorkerInTeam(params, assertCurrent),
     dispatchWorkerTask: (params) => orcaTeamService.dispatchWorkerTask(params),
     markTeamEnded,
     setSessionOrcaRole,
