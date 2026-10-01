@@ -6,6 +6,7 @@ import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_LOCAL_CHANNEL,
   TASK_MIGRATION_MAX_FILES,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   DeviceLinkError,
   parseTaskMigrationRequest,
   buildAttachmentOssRef,
@@ -923,11 +924,17 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
     );
     const estimate = { fileCount: 0, bytes: 0 };
+    // Same budget as the remote wait, enforced here so a local or orphaned scan also stops.
+    const deadline = Date.now() + TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    const check = () => {
+      scope.assertCurrent();
+      if (Date.now() > deadline) throw new Error('MIGRATION_TIMEOUT');
+    };
     for (const root of roots) {
       // The cap covers every copied directory together.
       const next = await estimateWorkspace(
         root,
-        scope.assertCurrent,
+        check,
         TASK_MIGRATION_MAX_FILES - estimate.fileCount,
       );
       estimate.fileCount += next.fileCount;

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   parseAttachmentOssRef,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   TASK_MIGRATION_LOCAL_CHANNEL,
   TASK_MIGRATION_MAX_FILES,
 } from '@cindy/device-link';
@@ -210,8 +211,9 @@ vi.mock('../workspace', async (original) => ({
     .isExcludedFromWorkspace,
   managedWorktreeExclusions: (await original<typeof import('../workspace')>())
     .managedWorktreeExclusions,
-  estimateWorkspace: async (_root: string, _check: () => void, maxFiles: number) => {
+  estimateWorkspace: async (_root: string, check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
+    check();
     return { fileCount: 1, bytes: 8 };
   },
   snapshotWorkspace: async (source: string, directory: string) => {
@@ -501,6 +503,20 @@ describe('resumable cross-computer copy', () => {
     expect(state.estimateLimits).toEqual([TASK_MIGRATION_MAX_FILES, TASK_MIGRATION_MAX_FILES - 1]);
     expect(state.exported).not.toHaveBeenCalled();
     expect(state.files.size).toBe(0);
+  });
+  it('stops a local estimate at the same budget the remote wait uses', async () => {
+    const start = Date.now();
+    const now = vi
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(start)
+      .mockReturnValue(start + TASK_MIGRATION_ESTIMATE_TIMEOUT_MS + 1);
+    try {
+      await expect(requestTaskMigration({ action: 'estimate', sessionId: 'fork' })).rejects.toThrow(
+        'MIGRATION_TIMEOUT',
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
   it('reports a timed-out remote request as MIGRATION_TIMEOUT instead of a generic failure', async () => {
     const { ipcMain } = await import('electron');
