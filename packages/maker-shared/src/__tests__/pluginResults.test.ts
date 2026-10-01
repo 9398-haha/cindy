@@ -4,6 +4,31 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each(["'", '"'])('recognizes triple-quoted source strings using %s', (quote) => {
+    const delimiter = quote.repeat(3);
+    const url = 'xdt-file:///tmp/triple.pdf';
+    for (const body of [url, 'Open\n' + quote + 'example' + quote.repeat(2) + '\n' + url,
+      'Escaped ' + '\\' + delimiter + ' Open ' + url]) {
+      for (const prefix of ['', 'r', 'f']) {
+        const literal = prefix + delimiter + body + delimiter;
+        for (const source of ['path = ' + literal, 'path = "prefix" + ' + literal + ' + "suffix"']) {
+          expect(files(source), source).toEqual([]);
+          expect(files(JSON.stringify({ text: source })), source).toEqual([]);
+          expect(files(source + '\nSaved "' + url + '"')).toEqual([{ url, title: 'triple.pdf' }]);
+          expect(files(JSON.stringify({ text: source, _xdt_model_files: [{ url, name: 'Triple' }] })))
+            .toEqual([{ url, title: 'Triple' }]);
+        }
+        expect(files('path = ' + prefix + delimiter + body)).toEqual([]);
+      }
+    }
+  });
+  it('preserves hash-prefixed Markdown deliveries and hashes in legacy file names', () => {
+    const url = 'xdt-file:///tmp/report#final.pdf';
+    for (const text of ['# fixture: ' + url, '## Report: ' + url, '# [report](' + url + ')']) {
+      expect(files(text)).toEqual([{ url, title: 'report#final.pdf' }]);
+      expect(files(JSON.stringify({ text }))).toEqual([{ url, title: 'report#final.pdf' }]);
+    }
+  });
   it.each(["'", '"', String.fromCharCode(96)])('keeps concatenated source literals out of delivered files: %s', (quote) => {
     const url = 'xdt-file:///tmp/concatenated.pdf';
     const literal = quote + url + quote;

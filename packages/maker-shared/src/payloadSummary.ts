@@ -508,14 +508,20 @@ function* sourceContextTokens(text: string): Generator<{
     const start = index;
     const quote = text[index];
     if (quote === '"' || quote === "'" || quote === '`') {
-      index++;
+      // Python triple quotes delimit one literal, including internal single or
+      // double quotes and newlines. Backticks retain their existing semantics.
+      const delimiter = quote !== '`' && text.startsWith(quote.repeat(3), index) ? quote.repeat(3) : quote;
+      index += delimiter.length;
       let closed = false;
       while (index < text.length) {
         if (text[index] === '\\') {
           index = Math.min(index + 2, text.length);
-        } else if (text[index++] === quote) {
+        } else if (text.startsWith(delimiter, index)) {
+          index += delimiter.length;
           closed = true;
           break;
+        } else {
+          index++;
         }
       }
       yield { start, end: index, comment: false, closed };
