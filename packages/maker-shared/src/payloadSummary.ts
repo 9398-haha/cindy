@@ -466,7 +466,7 @@ export function extractPayloadToolCardIds(text: string): string[] {
 
 export interface PayloadToolFile { url: string; title: string }
 
-const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"'<>\\)`},;]+/g;
+const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"'<>\\)`};]+/g;
 
 function absoluteToolFilePath(url: string): string | null {
   try {

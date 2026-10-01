@@ -80,6 +80,21 @@ describe('portable plugin results', () => {
     expect(files('[报告](' + url + ')')).toEqual([{ url, title: 'report[final].pdf' }]);
     expect(files(JSON.stringify({ note: 'Saved ' + url }))).toEqual([{ url, title: 'report[final].pdf' }]);
   });
+  it.each([
+    'xdt-file:///tmp/report,final.pdf',
+    'xdt-file:///C:/reports/report,final.pdf',
+    'xdt-file://open?path=/tmp/report,final.pdf',
+    'xdt-file://open?path=%2Ftmp%2Freport%2Cfinal.pdf',
+  ])('preserves commas in file names without extracting source fixtures: %s', (url) => {
+    const expected = [{ url, title: 'report,final.pdf' }];
+    expect(files('[报告](' + url + ')')).toEqual(expected);
+    expect(files('Saved "' + url + '"')).toEqual(expected);
+    expect(files(JSON.stringify({ note: 'Saved ' + url }))).toEqual(expected);
+    expect(files(JSON.stringify([url]))).toEqual(expected);
+    const source = 'const urls = ["' + url + '", "xdt-file:///tmp/fixture.pdf"];';
+    expect(files(source)).toEqual([]);
+    expect(files(JSON.stringify({ text: source }))).toEqual([]);
+  });
   it.each(["'", '"', String.fromCharCode(96)])('keeps prose links quoted with %s without reviving source literals', (quote) => {
     const url = 'xdt-file:///tmp/report.pdf';
     const prose = 'Saved ' + quote + url + quote;
