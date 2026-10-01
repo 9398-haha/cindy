@@ -62,7 +62,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('<View style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain('<SafeAreaView style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
-    expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
+    expect(source).toContain("import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';");
     // iOS floats individual glass capsules over the message canvas.
     expect(source).not.toContain('<TranslucentBackdrop />');
     expect(source).not.toContain('colors.chatHeaderSurface');
