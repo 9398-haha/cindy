@@ -28,6 +28,7 @@ describe('plugin results are visible outside collapsed tool details', () => {
       + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
       + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
       + "const paths = names.map(() => 'Open xdt-file:///tmp/callback.pdf')\n"
+      + '// fixture: xdt-file:///tmp/comment.pdf\n/* example: xdt-file:///tmp/block.pdf */\n'
       + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']";
     for (const content of [source, { text: source }]) {
       const rows = messages(content);

@@ -4,6 +4,27 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each([
+    '// fixture: xdt-file:///tmp/example.pdf',
+    'const enabled = true; // fixture: xdt-file:///tmp/example.pdf',
+    '/* fixture: xdt-file:///tmp/example.pdf */',
+    '/* example\n * xdt-file:///tmp/example.pdf\n */',
+    '// fixture: "xdt-file:///tmp/example.pdf"',
+  ])('does not extract file deliveries from source comments: %s', (source) => {
+    const url = 'xdt-file:///tmp/actual.pdf';
+    expect(files(source)).toEqual([]);
+    expect(files(JSON.stringify({ text: source }))).toEqual([]);
+    expect(files(source + '\nSaved [report](' + url + ')')).toEqual([{ url, title: 'actual.pdf' }]);
+    expect(files(JSON.stringify({ text: source, _xdt_model_files: [{ url, name: 'Actual' }] })))
+      .toEqual([{ url, title: 'Actual' }]);
+  });
+  it.each(['xdt-file:///tmp/a//report.pdf', 'xdt-file:///tmp/a/*report.pdf'])('does not treat URL path characters as comments: %s', (url) => {
+    const next = 'xdt-file:///tmp/next.pdf';
+    const expected = [{ url, title: url.split('/').pop() }, { url: next, title: 'next.pdf' }];
+    expect(files('Saved ' + url + ' and ' + next)).toEqual(expected);
+    expect(files('[first](' + url + ') [next](' + next + ')')).toEqual(expected);
+    expect(files(JSON.stringify({ text: 'Saved ' + url + ' and ' + next }))).toEqual(expected);
+  });
   it.each(["'", '"', String.fromCharCode(96)])('recognizes arrow-function source literals quoted with %s', (quote) => {
     const url = 'xdt-file:///tmp/callback.pdf';
     for (const content of [url, 'Open ' + url]) {

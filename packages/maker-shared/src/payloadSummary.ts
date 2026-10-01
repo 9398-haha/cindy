@@ -494,7 +494,17 @@ function* sourceContextTokens(text: string): Generator<{
   // Always advance past a token, including unterminated strings/comments.
   // An unanchored regex can retry every escaped quote or /* in a long result.
   let index = 0;
+  const filePattern = new RegExp(TOOL_FILE_URL_RE.source, 'y');
   while (index < text.length) {
+    // Unquoted legacy paths may themselves contain // or /*. Consume the
+    // existing URL alphabet atomically so later deliveries are not commented out.
+    if (text.startsWith('xdt-file://', index)) {
+      filePattern.lastIndex = index;
+      if (filePattern.exec(text)) {
+        index = filePattern.lastIndex;
+        continue;
+      }
+    }
     const start = index;
     const quote = text[index];
     if (quote === '"' || quote === "'" || quote === '`') {
@@ -612,6 +622,8 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
       let previous: { end: number; source: boolean } | undefined;
       for (let match; (match = urlPattern.exec(value));) {
         const start = match.index;
+        // Comment masking preserves offsets; extract URLs only outside it.
+        if (sourceContext[start] !== value[start]) continue;
         while (!range.done && range.value.end < start) range = sourceRanges.next();
         if (!range.done && range.value.start < start && start < range.value.end) continue;
         // Quotes/backticks may be filename characters. Treat one as a delimiter
