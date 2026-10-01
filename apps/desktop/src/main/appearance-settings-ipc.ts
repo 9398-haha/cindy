@@ -65,6 +65,16 @@ export function registerAppearanceSettingsIpc(): void {
   });
 
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
+  ipcMain.handle('appearance-settings:ensure-wallpaper-video', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const assertOwner = captureWallpaperOwner();
+    const { ensureWallpaperVideo } = await import('./wallpaper-video.js');
+    assertOwner();
+    const result = await ensureWallpaperVideo(id);
+    assertOwner();
+    return result;
+  });
+
   ipcMain.handle('appearance-settings:import-wallpaper', async (event) => {
     assertTrustedAppRendererEvent(event);
     const parent = BrowserWindow.fromWebContents(event.sender);

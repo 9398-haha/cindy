@@ -103,7 +103,13 @@ contrast. Validate real long messages, not only empty chat views.
 
 The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
 Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
-camera, preserving the same composition and full-window crop. Decode one local video
+camera, preserving the same composition and full-window crop. Built-in static artwork
+uses 3584×2240 WebP. Keep the standard videos bundled; request the reviewed 2304×1440
+version from the configured CDN only when cover-fit demand exceeds 1920 physical
+pixels (window size × DPR), returning to standard below 1680 to avoid resize churn.
+Play standard immediately while downloading or if the CDN is missing/offline; cache
+verified HD bytes in the managed media store. HD playback failure falls back to standard.
+Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
 reduced motion or playback failure. Switching back to Static releases the video.
 For moving scenes, fade the message layer above the composer instead of painting a

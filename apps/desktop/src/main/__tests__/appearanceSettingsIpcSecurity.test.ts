@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   boundaryPending: false,
   importWallpaper: vi.fn(),
   removeWallpaper: vi.fn(),
+  ensureVideo: vi.fn(),
 }));
 
 vi.mock('../appSessionState.js', () => ({
@@ -26,6 +27,7 @@ vi.mock('../custom-wallpaper.js', () => ({
   importCustomWallpaper: mocks.importWallpaper,
   removeCustomWallpaper: mocks.removeWallpaper,
 }));
+vi.mock('../wallpaper-video.js', () => ({ ensureWallpaperVideo: mocks.ensureVideo }));
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: () => ({}) },
@@ -61,6 +63,20 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  it('authorizes the CDN video request and rechecks owner after download', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:ensure-wallpaper-video')?.[1];
+    mocks.ensureVideo.mockResolvedValueOnce(null);
+    expect(await handler({}, 'cindy-window')).toBeNull();
+    expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
+    mocks.ensureVideo.mockImplementationOnce(async () => { mocks.owner = 'owner-b:2'; return 'old-owner-url'; });
+    await expect(handler({}, 'cindy-window')).rejects.toThrow('Wallpaper owner changed');
+  });
+  it('rejects an untrusted CDN request before starting a download', async () => {
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted'); });
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:ensure-wallpaper-video')?.[1];
+    await expect(handler({}, 'cindy-window')).rejects.toThrow('untrusted');
+    expect(mocks.ensureVideo).not.toHaveBeenCalled();
+  });
   it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
     'rejects %s when the owner changes during module loading',
     async (channel) => {
@@ -123,6 +139,7 @@ describe('appearance settings IPC authorization', () => {
     mocks.boundaryPending = false;
     mocks.importWallpaper.mockReset();
     mocks.removeWallpaper.mockReset();
+    mocks.ensureVideo.mockReset();
     mocks.allWindows.length = 0;
     mocks.trustedRead.mockReset();
     mocks.trustedReadWindow.mockReset().mockReturnValue(false);

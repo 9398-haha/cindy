@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { WallpaperId, WallpaperMotion } from '@/../shared/appearanceSettings';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useWallpaperVideoTier } from '@/hooks/useWallpaperVideoTier';
 import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
 import { getWallpaperVideo } from '@/lib/wallpaper';
 
@@ -14,12 +15,38 @@ export function WallpaperVideo({
   motion: WallpaperMotion;
 }) {
   const reducedMotion = useReducedMotion();
-  const src = motion === 'dynamic' && !reducedMotion ? getWallpaperVideo(wallpaperId) : undefined;
-  return src ? <PlayingWallpaper key={src} src={src} /> : null;
+  return motion === 'dynamic' && !reducedMotion && getWallpaperVideo(wallpaperId)
+    ? <AdaptiveWallpaper key={wallpaperId} wallpaperId={wallpaperId} />
+    : null;
 }
 
-function PlayingWallpaper({ src }: { src: string }) {
+function AdaptiveWallpaper({ wallpaperId }: { wallpaperId: WallpaperId }) {
+  const tier = useWallpaperVideoTier();
+  const [hdFailed, setHdFailed] = useState(false);
+  const [hdSrc, setHdSrc] = useState<string | null>(null);
+  useEffect(() => {
+    if (tier !== 'hd' || hdFailed || hdSrc) return;
+    let current = true;
+    void window.electronAPI?.appearanceSettings?.ensureWallpaperVideo?.(wallpaperId)
+      .then(url => { if (current) setHdSrc(url); })
+      .catch(() => undefined);
+    return () => { current = false; };
+  }, [wallpaperId, tier, hdFailed, hdSrc]);
+  const useHd = tier === 'hd' && !hdFailed && !!hdSrc;
+  const src = useHd ? hdSrc : getWallpaperVideo(wallpaperId);
+  return src ? (
+    <PlayingWallpaper
+      key={src}
+      src={src}
+      onFailure={useHd ? () => setHdFailed(true) : undefined}
+    />
+  ) : null;
+}
+
+function PlayingWallpaper({ src, onFailure }: { src: string; onFailure?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const onFailureRef = useRef(onFailure);
+  onFailureRef.current = onFailure;
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -44,7 +71,10 @@ function PlayingWallpaper({ src }: { src: string }) {
         video.pause();
       } else {
         void video.play().catch(() => {
-          if (generation === current) setFailed(true);
+          if (generation === current) {
+            setFailed(true);
+            onFailureRef.current?.();
+          }
         });
       }
     };
@@ -81,7 +111,10 @@ function PlayingWallpaper({ src }: { src: string }) {
         preload="auto"
         disablePictureInPicture
         onPlaying={() => setReady(true)}
-        onError={() => setFailed(true)}
+        onError={() => {
+          setFailed(true);
+          onFailureRef.current?.();
+        }}
       />
     </div>,
     document.body,

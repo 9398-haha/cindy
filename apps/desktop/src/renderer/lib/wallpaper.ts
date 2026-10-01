@@ -1,7 +1,7 @@
 import type { WallpaperId } from '@/../shared/appearanceSettings';
-import cindyWindow from '@/assets/wallpapers/cindy-window.svg';
-import cindyStudio from '@/assets/wallpapers/cindy-studio.svg';
-import cindyDream from '@/assets/wallpapers/cindy-dream.svg';
+import cindyWindow from '@/assets/wallpapers/cindy-window.webp';
+import cindyStudio from '@/assets/wallpapers/cindy-studio.webp';
+import cindyDream from '@/assets/wallpapers/cindy-dream.webp';
 import cindyWindowVideo from '@/assets/wallpapers/cindy-window.mp4';
 import cindyStudioVideo from '@/assets/wallpapers/cindy-studio.mp4';
 import cindyDreamVideo from '@/assets/wallpapers/cindy-dream.mp4';
