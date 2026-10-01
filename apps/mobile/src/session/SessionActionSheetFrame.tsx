@@ -4,7 +4,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { GestureHandlerRootView } from "@/platform/gestureHandler";
 import { BlurBackdrop } from "@/session/BlurBackdrop";
-import { spacing } from "@/theme/tokens";
+import { motionDuration, motionEasing, spacing } from "@/theme/tokens";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 
 export interface SessionActionSheetFrameProps {
   visible: boolean;
@@ -24,27 +25,38 @@ export function SessionActionSheetFrame({
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  // Unknown system preference must also avoid motion on the first frame.
+  const animate = useReduceMotionEnabled() === false;
 
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      if (!animate) {
+        progress.setValue(1);
+        return;
+      }
       Animated.timing(progress, {
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
+        duration: motionDuration.enter,
+        easing: Easing.bezier(...motionEasing.out),
         toValue: 1,
         useNativeDriver: true,
       }).start();
     } else {
+      if (!animate) {
+        progress.setValue(0);
+        setMounted(false);
+        return;
+      }
       Animated.timing(progress, {
-        duration: 160,
-        easing: Easing.in(Easing.quad),
+        duration: motionDuration.exit,
+        easing: Easing.bezier(...motionEasing.in),
         toValue: 0,
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (finished) setMounted(false);
       });
     }
-  }, [visible, progress]);
+  }, [animate, visible, progress]);
 
   // onClosed 等 Modal 真正从树上卸载后再触发(同 DeviceMenuModal:动画回调里同步挂
   // 第二个 Modal 会和本 Modal 的卸载挤进同一个 commit,iOS 可能吞掉新弹窗)。
