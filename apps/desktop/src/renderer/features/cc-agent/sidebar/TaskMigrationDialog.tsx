@@ -10,6 +10,7 @@ import {
 import type { Session } from '@/lib/ccAgent.types';
 import type { TaskMoveDestination } from './TaskMoveSubmenu';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { Select } from '@/components/ui/select';
 import { FormField } from '@/components/ui/form-field';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -242,9 +243,21 @@ export function TaskMigrationDialog({
           ? destination.deviceName
           : t('taskMigration.selectedComputer')));
   const closeCancels = started && !status?.running;
+  const cancelling = copying && !!status?.cancelling;
+  const cancelRequested = useRef(false);
+  const cancelCopy = () => {
+    cancelRequested.current = true;
+    void act({ action: 'cancel', sessionId: session.id });
+  };
+  useEffect(() => {
+    // The running copy unwinds asynchronously; close once it has fully stopped.
+    if (cancelRequested.current && status?.stage === 'cancelled' && !status.running) onDismiss();
+  }, [status?.stage, status?.running]);
   const dismiss = () => {
-    if (pending.current || copying) return;
-    if (closeCancels) void act({ action: 'cancel', sessionId: session.id }, true);
+    if (pending.current) return;
+    // Closing never stops a running copy; the source task header reopens this view.
+    if (copying) onDismiss();
+    else if (closeCancels) void act({ action: 'cancel', sessionId: session.id }, true);
     else onDismiss();
   };
   const progress = status?.progress;
@@ -383,21 +396,36 @@ export function TaskMigrationDialog({
           )}
           {copying && (
             <div className="mt-4 space-y-2">
-              <p className="text-sm text-[var(--confirm-title)]" role="status">
+              <p
+                className="flex items-center gap-2 text-sm text-[var(--confirm-title)]"
+                role="status"
+              >
+                <Spinner size={14} className="shrink-0 text-[var(--confirm-desc)]" />
                 {t(
-                  progress?.phase === 'finishing'
-                    ? 'taskMigration.finishing'
-                    : `taskMigration.stages.${status?.stage ?? 'preparing'}`,
+                  cancelling
+                    ? 'taskMigration.cancelling'
+                    : progress?.phase === 'finishing'
+                      ? 'taskMigration.finishing'
+                      : `taskMigration.stages.${status?.stage ?? 'preparing'}`,
                   { name: computerName },
                 )}
               </p>
-              <progress
-                className="w-full accent-[var(--confirm-title)]"
+              <div
+                role="progressbar"
                 aria-label={t('taskMigration.copyingTitle', { name: computerName })}
-                max={100}
-                value={percent}
-              />
-              {progress?.phase === 'sending' && (
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-chip)]"
+              >
+                {percent !== undefined && (
+                  <div
+                    className="h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]"
+                    style={{ width: `${percent}%` }}
+                  />
+                )}
+              </div>
+              {progress?.phase === 'sending' && !cancelling && (
                 <p className="text-sm tabular-nums text-[var(--confirm-desc)]">
                   {t('taskMigration.transferProgress', {
                     sent: bytes(progress.sentBytes),
@@ -414,7 +442,18 @@ export function TaskMigrationDialog({
             </p>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            {!copying && (
+            {copying ? (
+              <>
+                {status?.cancellable && (
+                  <Button variant="secondary" disabled={busy} onClick={cancelCopy}>
+                    {t('taskMigration.cancelCopy')}
+                  </Button>
+                )}
+                <Button variant="secondary" disabled={busy} onClick={dismiss}>
+                  {t('taskMigration.runInBackground')}
+                </Button>
+              </>
+            ) : (
               <Button variant="secondary" disabled={busy} onClick={dismiss}>
                 {t(confirming ? 'taskMigration.cancel' : 'taskMigration.close')}
               </Button>

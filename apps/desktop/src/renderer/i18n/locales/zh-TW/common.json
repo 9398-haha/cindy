@@ -46,12 +46,16 @@
       "MIGRATION_UNSUPPORTED": "請將兩台電腦更新至支援任務複製的版本。",
       "MIGRATION_TASK_QUEUED": "此任務有排隊中的訊息，請先完成或移除這些訊息再複製。",
       "MIGRATION_SOURCE_CHANGED": "準備期間來源任務發生變更，請重試複製。",
-      "MIGRATION_TIMEOUT": "任務所在電腦回應逾時，請稍後重試。"
+      "MIGRATION_TIMEOUT": "任務所在電腦回應逾時，請稍後重試。",
+      "MIGRATION_CANNOT_CANCEL": "目標電腦已開始建立任務，無法再取消。"
     },
     "successTitle": "複製成功",
     "successDescription": "已複製到{{name}}。",
     "copyingTitle": "正在複製到{{name}}",
-    "keepOpen": "正在複製到{{name}}，請等待完成。",
+    "keepOpen": "正在複製到{{name}}。關閉視窗不會中斷複製，可在原任務頂部查看進度。",
+    "runInBackground": "背景繼續",
+    "cancelCopy": "取消複製",
+    "cancelling": "正在取消，目前檔案傳送完後停止…",
     "failureTitle": "複製失敗",
     "failureDescription": "關閉後可從任務選單重新發起複製。",
     "finishing": "{{name}}正在接收、驗證並建立任務…",

@@ -576,6 +576,26 @@ describe('resumable cross-computer copy', () => {
     expect(state.uploadedProgress).toHaveBeenCalled();
     expect(result.progress).toBeUndefined();
   });
+  it('cancels a running upload before the target receives it and removes source staging', async () => {
+    let cancel: Promise<Awaited<ReturnType<typeof requestTaskMigration>>> | undefined;
+    state.uploadedProgress.mockImplementation(async () => {
+      cancel ??= requestTaskMigration({ action: 'cancel', sessionId: 'fork' });
+    });
+    expect((await start()).cancellable).toBe(true);
+    const status = await settled();
+    expect(await cancel).toMatchObject({ running: true, cancelling: true });
+    expect(status.stage).toBe('cancelled');
+    expect(status.error).toBeUndefined();
+    expect(state.imports).not.toHaveBeenCalled();
+    expect(state.remove.mock.calls.map(([key]) => key)).toEqual([...state.files.keys()]);
+    await expect(
+      fs.stat(path.join(state.root, 'A', 'task-copies', 'outgoing', status.targetSessionId!)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+    state.uploadedProgress.mockReset();
+    await start();
+    expect((await settled()).stage).toBe('complete');
+  });
   it('closing a failed transfer removes source staging without deleting an already committed target', async () => {
     state.loseReply = 'receive';
     await start();
@@ -761,6 +781,19 @@ describe('resumable cross-computer copy', () => {
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
   });
+  it('refuses to cancel a resumed transfer before its receipt rules out a target import', async () => {
+    state.loseReply = 'receive';
+    await start();
+    expect((await settled()).stage).toBe('transferring');
+    const retry = await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect(retry.running).toBe(true);
+    expect(retry.cancellable).toBeUndefined();
+    await expect(requestTaskMigration({ action: 'cancel', sessionId: 'fork' })).rejects.toThrow(
+      'MIGRATION_CANNOT_CANCEL',
+    );
+    expect((await settled()).stage).toBe('complete');
+    expect(state.imports).toHaveBeenCalledTimes(1);
+  });
   it('allows another independent copy after completion', async () => {
     await start();
     const first = await settled();
@@ -882,7 +915,10 @@ describe('resumable cross-computer copy', () => {
   it('stops copying when source media exists but could not be packaged', async () => {
     state.exportMedia = { mediaMissing: 1, mediaDropped: 1 };
     await start();
-    expect(await settled()).toMatchObject({ stage: 'preparing', error: 'MIGRATION_INCOMPLETE_CONTEXT' });
+    expect(await settled()).toMatchObject({
+      stage: 'preparing',
+      error: 'MIGRATION_INCOMPLETE_CONTEXT',
+    });
     expect(state.imports).not.toHaveBeenCalled();
   });
   it('discards a snapshot when a new turn finishes during preparation', async () => {

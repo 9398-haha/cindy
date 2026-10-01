@@ -46,12 +46,16 @@
       "MIGRATION_UNSUPPORTED": "请将两台电脑更新至支持任务复制的版本。",
       "MIGRATION_TASK_QUEUED": "此任务有排队中的消息，请先完成或移除这些消息再复制。",
       "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。",
-      "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。"
+      "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。",
+      "MIGRATION_CANNOT_CANCEL": "目标电脑已开始创建任务，无法再取消。"
     },
     "successTitle": "复制成功",
     "successDescription": "已复制到{{name}}。",
     "copyingTitle": "正在复制到{{name}}",
-    "keepOpen": "正在复制到{{name}}，请等待完成。",
+    "keepOpen": "正在复制到{{name}}。关闭窗口不会中断复制，可在原任务顶部查看进度。",
+    "runInBackground": "后台继续",
+    "cancelCopy": "取消复制",
+    "cancelling": "正在取消，当前文件发送完后停止…",
     "failureTitle": "复制失败",
     "failureDescription": "关闭后可从任务菜单重新发起复制。",
     "finishing": "{{name}}正在接收、校验并创建任务…",

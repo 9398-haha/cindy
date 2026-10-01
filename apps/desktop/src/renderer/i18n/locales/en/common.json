@@ -46,12 +46,16 @@
       "MIGRATION_UNSUPPORTED": "Update both computers to a version that supports task copy.",
       "MIGRATION_TASK_QUEUED": "This task has queued messages. Finish or remove them before copying it.",
       "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy.",
-      "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later."
+      "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later.",
+      "MIGRATION_CANNOT_CANCEL": "The target computer has started creating the task. The copy can no longer be cancelled."
     },
     "successTitle": "Copy successful",
     "successDescription": "Copied to {{name}}.",
     "copyingTitle": "Copying to {{name}}",
-    "keepOpen": "Copying to {{name}}. Please wait until it finishes.",
+    "keepOpen": "Copying to {{name}}. Closing this window won't stop the copy; check progress at the top of the original task.",
+    "runInBackground": "Continue in background",
+    "cancelCopy": "Cancel copy",
+    "cancelling": "Cancelling. Stops after the current file finishes sending…",
     "failureTitle": "Copy failed",
     "failureDescription": "Close this window and start a new copy from the task menu.",
     "finishing": "{{name}} is receiving, checking and creating the task…",

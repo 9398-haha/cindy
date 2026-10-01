@@ -71,6 +71,10 @@ export interface TaskMigrationView {
   estimate?: { fileCount: number; bytes: number };
   copyEstimate?: true;
   running?: boolean;
+  /** A running copy accepts `cancel` (source staging only). Absent on older hosts. */
+  cancellable?: true;
+  /** `cancel` was accepted; the running copy is unwinding. Absent on older hosts. */
+  cancelling?: true;
   /** Optional live source-side upload telemetry; absent on older hosts. Never persisted. */
   progress?: {
     phase: "sending" | "finishing";

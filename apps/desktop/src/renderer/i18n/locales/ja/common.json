@@ -46,12 +46,16 @@
       "MIGRATION_UNSUPPORTED": "両方のコンピューターをタスクのコピーに対応したバージョンに更新してください。",
       "MIGRATION_TASK_QUEUED": "このタスクには待機中のメッセージがあります。処理または削除してからコピーしてください。",
       "MIGRATION_SOURCE_CHANGED": "準備中に元のタスクが変更されました。コピーを再試行してください。",
-      "MIGRATION_TIMEOUT": "コピー元のコンピューターが時間内に応答しませんでした。しばらくしてから再試行してください。"
+      "MIGRATION_TIMEOUT": "コピー元のコンピューターが時間内に応答しませんでした。しばらくしてから再試行してください。",
+      "MIGRATION_CANNOT_CANCEL": "移行先のコンピューターでタスクの作成が始まったため、キャンセルできません。"
     },
     "successTitle": "コピー完了",
     "successDescription": "{{name}}にコピーしました。",
     "copyingTitle": "{{name}}にコピー中",
-    "keepOpen": "{{name}}にコピーしています。完了までお待ちください。",
+    "keepOpen": "{{name}}にコピーしています。このウィンドウを閉じてもコピーは続行され、元のタスク上部で進捗を確認できます。",
+    "runInBackground": "バックグラウンドで続行",
+    "cancelCopy": "コピーをキャンセル",
+    "cancelling": "キャンセルしています。現在のファイルの送信が終わると停止します…",
     "failureTitle": "コピー失敗",
     "failureDescription": "閉じた後、タスクメニューから新しくコピーできます。",
     "finishing": "{{name}}で受信・検証し、タスクを作成中…",

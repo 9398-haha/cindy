@@ -253,10 +253,13 @@ it('keeps transfer progress in the dialog until the target completes, including 
   );
   mount();
   await screen.findByRole('progressbar');
-  expect(screen.getByRole('progressbar').hasAttribute('value')).toBe(false);
+  expect(screen.getByRole('progressbar').hasAttribute('aria-valuenow')).toBe(false);
   expect(screen.queryByRole('button', { name: 'taskMigration.close' })).toBeNull();
+  // Older hosts do not report cancellable, so only the background option is offered.
+  expect(screen.queryByRole('button', { name: 'taskMigration.cancelCopy' })).toBeNull();
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-  expect(state.dismiss).not.toHaveBeenCalled();
+  expect(state.dismiss).toHaveBeenCalledOnce();
+  expect(state.request.mock.calls.some(([, command]) => command.action === 'cancel')).toBe(false);
   snapshot = {
     stage: 'transferring',
     running: true,
@@ -267,9 +270,10 @@ it('keeps transfer progress in the dialog until the target completes, including 
       bytesPerSecond: 10,
     },
   };
-  await waitFor(() => expect(screen.getByRole('progressbar').getAttribute('value')).toBe('25'), {
-    timeout: 2500,
-  });
+  await waitFor(
+    () => expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25'),
+    { timeout: 2500 },
+  );
   expect(screen.getByText('taskMigration.transferProgress')).toBeTruthy();
   snapshot = {
     stage: 'transferring',
@@ -288,6 +292,31 @@ it('keeps transfer progress in the dialog until the target completes, including 
   expect(screen.queryByRole('progressbar')).toBeNull();
   expect(screen.queryByRole('button', { name: 'taskMigration.start' })).toBeNull();
   expect(screen.getAllByRole('button')).toHaveLength(2);
+});
+
+it('cancels a running copy and closes once the source has stopped it', async () => {
+  let snapshot: Record<string, unknown> = {
+    stage: 'transferring',
+    running: true,
+    cancellable: true,
+  };
+  state.request.mockImplementation(async (_device, command) => {
+    if (command.action === 'cancel')
+      snapshot = { stage: 'transferring', running: true, cancelling: true };
+    return command.action === 'status' || command.action === 'cancel'
+      ? snapshot
+      : { deviceId: 'local', projects: [] };
+  });
+  mount();
+  fireEvent.click(await screen.findByRole('button', { name: 'taskMigration.cancelCopy' }));
+  await waitFor(() =>
+    expect(state.request).toHaveBeenCalledWith('A', { action: 'cancel', sessionId: 'task' }),
+  );
+  await screen.findByText('taskMigration.cancelling');
+  expect(screen.queryByRole('button', { name: 'taskMigration.cancelCopy' })).toBeNull();
+  expect(state.dismiss).not.toHaveBeenCalled();
+  snapshot = { stage: 'cancelled', running: false };
+  await waitFor(() => expect(state.dismiss).toHaveBeenCalledOnce(), { timeout: 2500 });
 });
 
 it('a new destination selection does not reopen the previous copy success screen', async () => {
