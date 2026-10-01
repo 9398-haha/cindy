@@ -1,34 +1,54 @@
+import { Session } from '../../../../../../packages/maker-core/src/session.js';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { withSessionRestartLock, withSendToSessionLock, sendToSessionLocks } from '../sendToSessionLock.js';
 import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
 import { PluginWriteAccessGate } from '../pluginWriteAccessGate.js';
+import { withSessionPermissionChange } from '../sessionPermissionChange.js';
+import { changeSessionPermissionMode } from '../../im/shared/permissionModeControl.js';
+import type { PermissionMode } from '@cindy/maker-core';
+const ownership = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => ownership.current }));
 
 // Execute the real switch branch with controlled Host boundaries.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
 const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const settingSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'));
+const settingJs = ts.transpileModule(settingSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function fixture() {
  let identity = 'owner-epoch-install';
  const gate = new PluginWriteAccessGate();
  let cfg: Record<string, unknown> = { permissionMode: 'plan', model: 'old' };
- const history = { input: false, startedAt: null as number | null, endedAt: null as number | null };
+ const history = { input: false, startedAt: null as number | null, endedAt: null as number | null, permissionMode: 'plan' };
  const messages = {id:'message-id',sessionId:'session-id',role:'role'}, sessions = {id:'session-id',activeTurnStartedAt:'started',lastTurnEndedAt:'ended'};
- const select = vi.fn(() => ({from:(table:unknown)=>({where:()=>({limit:async()=>table===messages ? (history.input ? [{id:'manual-input'}] : []) : [{startedAt:history.startedAt,endedAt:history.endedAt}]})})}));
+ const select = vi.fn(() => ({from:(table:unknown)=>({where:()=>({limit:async()=>table===messages ? (history.input ? [{id:'manual-input'}] : []) : [{startedAt:history.startedAt,endedAt:history.endedAt,permissionMode:history.permissionMode}]})})}));
  const drain = vi.fn(async()=>{});
- const epoch = { client: { tx: vi.fn(async () => ({ updated: true })), drizzle: {select} } };
+ const epoch = { client: { tx: vi.fn(async (_name?: string, args?: {mode: string}) => {if(args) history.permissionMode=args.mode;return { updated: true };}), drizzle: {select} } };
+ ownership.current = epoch; let cold = false, runtimeMode = 'plan';
  const task = { taskId: 'task', revision: 1, status: 'active', permissionMode: 'plan' };
  const service = { get: vi.fn(async () => task), listRuns: vi.fn(async () => ({ items: [] })), completeOperation: vi.fn(async <T>(operation: () => Promise<T>) => operation()) };
- const live = { isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async () => {}) };
+ const live = { isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async (mode: string) => {runtimeMode=mode;}) };
  const queue = { ensureQueueRestored: vi.fn(async (_id: string) => {}), isQueueRestored: vi.fn((_id: string) => true), getQueueControlSnapshot: vi.fn((_id: string) => ({ pendingQueue: [] as string[] })) };
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
  const write = vi.fn((_id: string, value: Record<string, unknown>) => { cfg = value; });
- const deps = { isPluginTaskPermissionAllowed, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => epoch, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
+ const deps = { isPluginTaskPermissionAllowed, withSessionPermissionChange, withSessionRestartLock, drainPersistQueue:drain,messages,sessions,eq:()=>true,and:()=>true,service, getCurrentDbClientSnapshot: () => ownership.current, readGhostErrandConfig: () => cfg, pluginPermissionRequests: slots, PluginTaskError, maker: { getSession: () => cold ? null : live }, inputCoordinator: queue, dialog, t: (x: string) => x, getInstalledGhostName: () => 'fixture', clampErrandPermissionMode: (x: string) => x, writeGhostErrandConfig: write, broadcastSessionPatched: vi.fn() };
  const allDeps = {...deps, pluginWriteAccessGate:gate, pluginWriteAccessIdentity:()=>identity};
  const run = new Function(...Object.keys(allDeps), js)(...Object.values(allDeps));
- return { run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
+ let setMode!: (event: unknown, sessionId: string, mode: string) => Promise<unknown>;
+ let remote = false;
+ const persistedResults = new WeakSet<object>();
+ const settingDeps = {...deps, log:{warn:vi.fn()}, ipcMain:{handle:(_name:unknown,fn:typeof setMode)=>{setMode=fn;}}, MAKER_INVOKE:{SET_PERMISSION_MODE:'permission'}, isDeviceLinkInvoke:()=>remote, assertTrustedAppRendererEvent:()=>{}, assertReviewSettingsUnlocked:async()=>{}, isSessionPermissionMode:()=>true, throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});}, persistPermissionModeWithoutRuntime:async(_id:string,mode:string)=>(await epoch.client.tx('bots.persistSessionPermission',{mode})).updated, markRemoteSettingPersistedInsideHandler:(result:object)=>persistedResults.add(result)};
+ new Function(...Object.keys(settingDeps), settingJs)(...Object.values(settingDeps));
+ const setImMode = (mode: PermissionMode) => changeSessionPermissionMode({
+  sessionId:'task', mode, modes:[{id:mode,displayName:mode}],
+  readPreviousMode:async()=>history.permissionMode as PermissionMode,
+  getLiveSession:()=>cold?null:live,
+  persist:async next=>{await epoch.client.tx('bots.persistSessionPermission',{mode:next});},
+ });
+ return {setImMode, setMode:(mode:string)=>setMode({},'task',mode), persistedResults, remote:()=>{remote=true;}, cold:()=>{cold=true;}, runtimeMode:()=>runtimeMode, changeOwner:()=>{ownership.current={};}, run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('plugin write confirmation interleavings', () => {
  it.each(['auto','acceptEdits'].flatMap(mode=>['before','dialog','lastRead'].map(point=>({mode,point}))))('rejects independent Plan Mode at $point for $mode without reporting a grant',async ({point,mode})=>{
@@ -228,4 +248,107 @@ it('rejects archival while confirmation is open even if revision is unchanged',a
  });
  await expect(f.run()).rejects.toMatchObject({code:'TASK_BUSY'});
  expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();expect(f.write).not.toHaveBeenCalled();
+});
+
+describe('permission commits share the same order', () => {
+ it.each(['local','remote','cold','im','im-cold'].flatMap(entry=>['runtime','database','lastRead'].filter(point=>!entry.includes('cold')||point!=='runtime').map(point=>({entry,point}))))('keeps a later Ask after plugin grant/rollback: $entry $point',async({entry,point})=>{
+  const f=fixture();if(entry==='remote')f.remote();if(entry.includes('cold'))f.cold();
+  let release!:()=>void,entered!:()=>void;
+  const barrier=new Promise<void>(r=>{release=r;}), started=new Promise<void>(r=>{entered=r;});
+  const pause=async()=>{entered();await barrier;};
+  if(point==='runtime')f.live.setPermissionMode.mockImplementationOnce(pause);
+  if(point==='database')f.epoch.client.tx.mockImplementationOnce(async(_name,args)=>{await pause();f.history.permissionMode=args!.mode;return {updated:true};});
+  if(point==='lastRead')f.service.get.mockImplementationOnce(async()=>({taskId:'task',revision:1,status:'active',permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>({taskId:'task',revision:1,status:'active',permissionMode:'plan'}))
+   .mockImplementationOnce(async()=>{await pause();throw Error('owner revoked');});
+  const grant=f.run('auto').then(()=> 'granted',(e: Error)=>e.message);
+  await started;
+  const change=entry.startsWith('im')?f.setImMode('ask'):f.setMode('ask');
+  // Let the ordinary handler reach its old runtime-only boundary before the
+  // delayed plugin write, or queue behind the complete grant after the fix.
+  await Promise.resolve();await Promise.resolve();
+  release();await grant;const result=await change;
+  expect(f.history.permissionMode).toBe('ask');
+  if(!entry.includes('cold'))expect(f.runtimeMode()).toBe('ask');
+  if(entry==='remote')expect(f.persistedResults.has(result as object)).toBe(true);
+ });
+
+ it('does not block a user downgrade while the plugin dialog is open',async()=>{
+  const f=fixture();let answer!:()=>void;
+  f.dialog.showMessageBox.mockImplementationOnce(()=>new Promise(r=>{answer=()=>r({response:1});}));
+  const grant=f.run('auto');await vi.waitFor(()=>expect(answer).toBeTypeOf('function'));
+  await f.setMode('ask');expect(f.history.permissionMode).toBe('ask');
+  answer();await grant;
+ });
+
+ it('rejects a queued permission change after the account changes',async()=>{
+  const f=fixture();let release!:()=>void;
+  const prior=withSessionPermissionChange('task',()=>new Promise<void>(r=>{release=r;}));
+  await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+  const next=f.setMode('ask');const rejected=expect(next).rejects.toMatchObject({code:'PRECONDITION_FAILED'});
+  f.changeOwner();release();await prior;await rejected;
+  expect(f.live.setPermissionMode).not.toHaveBeenCalled();expect(f.epoch.client.tx).not.toHaveBeenCalled();
+ });
+});
+
+it.each(['local','remote','cold','im','im-cold'])('recovers from a failed %s commit before accepting the next change',async entry=>{
+ const f=fixture();if(entry==='remote')f.remote();if(entry.includes('cold'))f.cold();
+ f.epoch.client.tx.mockRejectedValueOnce(Error('db failed'));
+ const change=(mode:PermissionMode)=>entry.startsWith('im')?f.setImMode(mode):f.setMode(mode);
+ const first=change('auto').catch(e=>e.message);
+ const later=change('ask');
+ if(entry.startsWith('im'))expect(await first).toMatchObject({kind:'failed'});else expect(await first).toBe('db failed');
+ await later;
+ expect(f.history.permissionMode).toBe('ask');
+ if(!entry.includes('cold')){
+  expect(f.live.setPermissionMode.mock.calls).toEqual([['auto'],['plan'],['ask']]);
+  expect(f.runtimeMode()).toBe('ask');
+ }
+});
+it.each(['local','remote','cold','im','im-cold'])('preserves repeated/ABA choices through %s',async entry=>{
+ const f=fixture();if(entry==='remote')f.remote();if(entry.includes('cold'))f.cold();
+ const change=(mode:PermissionMode)=>entry.startsWith('im')?f.setImMode(mode):f.setMode(mode);
+ await Promise.all([change('ask'),change('auto'),change('ask'),change('ask')]);
+ expect(f.epoch.client.tx.mock.calls.map(call=>call[1]?.mode)).toEqual(['ask','auto','ask','ask']);
+ expect(f.history.permissionMode).toBe('ask');
+ if(!entry.includes('cold'))expect(f.runtimeMode()).toBe('ask');
+});
+it.each(['queued','runtime','database'])('rejects IM ownership changes during %s without touching the new account',async point=>{
+ const f=fixture();let release!:()=>void;
+ let prior:Promise<void>|undefined;
+ if(point==='queued'){
+  prior=withSessionPermissionChange('task',()=>new Promise<void>(r=>{release=r;}));
+  await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+ }
+ if(point==='runtime')f.live.setPermissionMode.mockImplementationOnce(async()=>{f.changeOwner();});
+ if(point==='database')f.epoch.client.tx.mockImplementationOnce(async()=>{f.changeOwner();return {updated:true};});
+ const next=f.setImMode('ask').catch(e=>({kind:'failed',reason:e.message}));
+ if(point==='queued'){f.changeOwner();release();await prior;}
+ expect(await next).toMatchObject({kind:'failed',reason:'Account changed during permission update'});
+ expect(f.live.setPermissionMode).toHaveBeenCalledTimes(point==='queued'?0:1);
+ expect(f.epoch.client.tx).toHaveBeenCalledTimes(point==='database'?1:0);
+});
+
+it('lets a real Session policy lease restore through the send fence while a permission commit waits',async()=>{
+ const f=fixture(), transport=vi.fn(async()=>{});
+ const logger={trace(){},debug(){},info(){},warn(){},error(){},fatal(){},child(){return logger;}};
+ const session=new Session({id:'task',agentKind:'codex',workDir:'/fixture',permissionMode:'ask',turnStallMs:0,
+  handle:{setPermissionMode:transport,setInteractionResolver(){},close:async()=>{}} as never,
+  capabilities:{permissionModes:[{id:'ask'},{id:'bypassPermissions'}],setPermissionModeMidSession:{supported:true},
+   turnPermissionPolicy:{unsupportedPermissionModes:['bypassPermissions']}} as never,logger});
+ const releaseLease=session.acquireTurnLease();
+ f.live.setPermissionMode.mockImplementation(mode=>session.setPermissionMode(mode as PermissionMode));
+ let started!:()=>void;const entered=new Promise<void>(r=>{started=r;});
+ f.live.setPermissionMode.mockImplementationOnce(mode=>{started();return session.setPermissionMode(mode as PermissionMode);});
+ const change=f.setMode('bypassPermissions');
+ try{
+  await entered;
+  expect(transport).not.toHaveBeenCalled();
+  // The continuation's existing send fence and Host-owned restore stay free.
+  await withSendToSessionLock('task',()=>session.setPermissionModeTracked('ask'));
+  expect(transport).toHaveBeenCalledExactlyOnceWith('ask');
+  expect(f.epoch.client.tx).not.toHaveBeenCalled();
+ }finally{releaseLease();await change;await session.close();}
+ expect(transport.mock.calls).toEqual([['ask'],['bypassPermissions']]);
+ expect(f.history.permissionMode).toBe('bypassPermissions');
 });
