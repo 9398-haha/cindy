@@ -572,7 +572,6 @@
     "workerCountSummary_other": "{{count}} Workers · {{running}} running",
     "loading": "Loading Workers…",
     "noWorkers": "No Workers yet",
-    "focused": "Focused",
     "manageGroup": "Manage",
     "hardLimitHint": "Hard limit of {{limit}} reached · Archive a Worker to create more",
     "softLimitHint": "Over the soft limit of {{limit}} · More Workers use more memory",
