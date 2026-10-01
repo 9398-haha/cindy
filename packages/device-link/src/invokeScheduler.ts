@@ -1,4 +1,5 @@
 import { DeviceLinkError } from "./protocol.js";
+import { parseSharedTaskPeer } from "./sharedTaskPeer.js";
 
 const MAX_ACTIVE = 12;
 const MAX_BACKGROUND_ACTIVE = 4;
@@ -7,6 +8,7 @@ const MAX_QUEUED = 128;
 const MAX_BACKGROUND_QUEUED = 96;
 
 interface Job {
+  peerId: string;
   background: boolean;
   start(): void;
   cancel(error: DeviceLinkError): void;
@@ -22,11 +24,14 @@ export class InvokeScheduler {
   private readonly peers = new Map<string, PeerQueue>();
 
   run<T>(
-    deviceId: string,
+    peerId: string,
     background: boolean,
     waitMs: number,
     run: () => Promise<T>,
   ): Promise<T> {
+    // Shared-task handles share the physical host's capacity, but keep their
+    // scoped peer identity for cancellation and all transport bookkeeping.
+    const deviceId = parseSharedTaskPeer(peerId)?.deviceId ?? peerId;
     let peer = this.peers.get(deviceId);
     if (!peer) {
       peer = { active: 0, background: 0, jobs: [] };
@@ -46,10 +51,12 @@ export class InvokeScheduler {
     return new Promise<T>((resolve, reject) => {
       const queuedAt = Date.now();
       const job: Job = {
+        peerId,
         background,
         cancel: (error) => {
           clearTimeout(timer);
-          reject(error);
+          // The transport may mark its error inFlight later; queued calls were never sent.
+          reject(new DeviceLinkError(error.code, error.message));
         },
         start: () => {
           clearTimeout(timer);
@@ -96,18 +103,21 @@ export class InvokeScheduler {
   }
 
   /** Keep active slots until their promises settle, including across reconnects. */
-  cancel(deviceId: string, error: DeviceLinkError): void {
+  cancel(peerId: string, error: DeviceLinkError): void {
+    const deviceId = parseSharedTaskPeer(peerId)?.deviceId ?? peerId;
     const state = this.peers.get(deviceId);
     if (!state) return;
-    for (const job of state.jobs.splice(0)) {
-      // The transport may mark its error inFlight later; queued calls were never sent.
-      job.cancel(new DeviceLinkError(error.code, error.message));
-    }
+    const cancelled = state.jobs.filter((job) => job.peerId === peerId);
+    state.jobs = state.jobs.filter((job) => job.peerId !== peerId);
+    for (const job of cancelled) job.cancel(error);
     this.drain(deviceId, state);
   }
 
   clear(error: DeviceLinkError): void {
-    for (const deviceId of this.peers.keys()) this.cancel(deviceId, error);
+    for (const [deviceId, state] of this.peers) {
+      for (const job of state.jobs.splice(0)) job.cancel(error);
+      this.drain(deviceId, state);
+    }
   }
 
   private drain(deviceId: string, state: PeerQueue): void {

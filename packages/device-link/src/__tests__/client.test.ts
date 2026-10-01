@@ -126,6 +126,37 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('outbound invoke admission', () => {
+  it('shares 12/4 across ordinary and shared-task destinations while preserving wire scope', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    const peers = ['desktop', sharedTaskHostPeer('task-a', 'desktop'), sharedTaskHostPeer('task-b', 'desktop')];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack([SHARED_TASK_RELAY_CAPABILITY]);
+      for (let i = 0; i < 6; i++) calls.push(h.client.invoke(peers[i % 3], {
+        channel: 'git-context:pr-refs:list', args: [i],
+      }).catch(e => e));
+      for (let i = 0; i < 10; i++) calls.push(h.client.invoke(peers[i % 3], {
+        channel: 'maker:send', args: [i],
+      }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'desktop');
+      expect(sent()).toHaveLength(12);
+      expect(sent().filter(e => (e.payload as { channel: string }).channel === 'git-context:pr-refs:list')).toHaveLength(4);
+      expect(sent().slice(0, 3).map(e => e.sharedTask?.sharedTaskId)).toEqual([undefined, 'task-a', 'task-b']);
+      calls.push(h.client.invoke(sharedTaskHostPeer('task-c', 'other'), { channel: 'maker:send', args: [] }).catch(e => e));
+      expect(h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'other')).toHaveLength(1);
+      // A normal-stream response releases shared capacity; the next task keeps its scoped route.
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'desktop', id: sent()[4].id,
+        payload: { ok: true, result: null } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent()).toHaveLength(13);
+      expect(sent().at(-1)).toMatchObject({ dst: 'desktop', sharedTask: { sharedTaskId: 'task-b', target: { role: 'host' } },
+        payload: { channel: 'maker:send', args: [8] } });
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+
   it('rechecks a queued write before dispatch and releases its slot when the caller cancels', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });

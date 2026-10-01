@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { InvokeScheduler } from "../invokeScheduler.js";
 import { DeviceLinkError } from "../protocol.js";
 import { isBackgroundInvoke, bypassInvokeScheduling } from "../invokePolicy.js";
+import { sharedTaskGuestPeer, sharedTaskHostPeer } from "../sharedTaskPeer.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -16,6 +17,46 @@ const flush = async () => {
 afterEach(() => vi.useRealTimers());
 
 describe("invoke admission", () => {
+  const sameHost = ["host", sharedTaskHostPeer("task-a", "host"), sharedTaskGuestPeer("task-b", "member", "host")];
+
+  it.each([false, true])("shares physical-host active and waiting limits across scoped peers (background=%s)", async (background) => {
+    const scheduler = new InvokeScheduler();
+    const active = deferred();
+    const send = vi.fn(() => active.promise);
+    const activeLimit = background ? 4 : 12;
+    const waitingLimit = background ? 96 : 128;
+    const pending = Array.from({ length: activeLimit + waitingLimit }, (_, i) =>
+      scheduler.run(sameHost[i % sameHost.length], background, 30_000, send).catch(e => e),
+    );
+    expect(send).toHaveBeenCalledTimes(activeLimit);
+    for (const peer of sameHost) {
+      await expect(scheduler.run(peer, background, 30_000, send)).rejects.toMatchObject({ code: "BACKPRESSURE" });
+    }
+    await expect(scheduler.run(sharedTaskHostPeer("task-c", "other"), background, 30_000, async () => 42)).resolves.toBe(42);
+    scheduler.clear(new DeviceLinkError("NOT_CONNECTED", "stop"));
+    active.resolve();
+    const results = await Promise.all(pending);
+    expect(send).toHaveBeenCalledTimes(activeLimit);
+    expect(results.slice(activeLimit)).toEqual(Array.from({ length: waitingLimit }, () => expect.objectContaining({ code: "NOT_CONNECTED", inFlight: undefined })));
+  });
+
+  it.each(sameHost)("cancels only %s while retaining shared capacity until active work settles", async (cancelledPeer) => {
+    const scheduler = new InvokeScheduler();
+    const active = deferred();
+    const running = Array.from({ length: 12 }, (_, i) => scheduler.run(sameHost[i % sameHost.length], false, 30_000, () => active.promise));
+    const started: string[] = [];
+    const pending = sameHost.map(peer => scheduler.run(peer, false, 30_000, async () => { started.push(peer); }).catch(e => e));
+    const error = new DeviceLinkError("NOT_CONNECTED", "scope closed");
+    scheduler.cancel(cancelledPeer, error);
+    error.inFlight = true;
+    expect(await pending[sameHost.indexOf(cancelledPeer)]).toMatchObject({ code: "NOT_CONNECTED", inFlight: undefined });
+    const fresh = scheduler.run(cancelledPeer, false, 30_000, async () => { started.push("fresh"); });
+    expect(started).toEqual([]);
+    active.resolve();
+    await Promise.all([...running, ...pending, fresh]);
+    expect(started).toEqual([...sameHost.filter(peer => peer !== cancelledPeer), "fresh"]);
+  });
+
   it("runs a 32-request burst in bounded batches and prioritizes current work", async () => {
     const scheduler = new InvokeScheduler();
     const started: string[] = [];
