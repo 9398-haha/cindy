@@ -46,8 +46,7 @@
       "MIGRATION_UNSUPPORTED": "両方のコンピューターをタスクのコピーに対応したバージョンに更新してください。",
       "MIGRATION_TASK_QUEUED": "このタスクには待機中のメッセージがあります。処理または削除してからコピーしてください。",
       "MIGRATION_SOURCE_CHANGED": "準備中に元のタスクが変更されました。コピーを再試行してください。",
-      "MIGRATION_TIMEOUT": "コピー元のコンピューターが時間内に応答しませんでした。しばらくしてから再試行してください。",
-      "MIGRATION_TOO_MANY_FILES": "プロジェクトのファイルが {{limit, number}} 個を超えたため、コピーを中止しました。ファイル数の少ないプロジェクトをコピーしてください。"
+      "MIGRATION_TIMEOUT": "コピー元のコンピューターが時間内に応答しませんでした。しばらくしてから再試行してください。"
     },
     "successTitle": "コピー完了",
     "successDescription": "{{name}}にコピーしました。",

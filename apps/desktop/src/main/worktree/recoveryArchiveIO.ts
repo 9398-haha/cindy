@@ -25,21 +25,18 @@ function restorableMode(mode: number): number {
   return mode & (process.platform === 'win32' ? 0o666 : 0o777);
 }
 
-/** `excludeRootNames` skips top-level directories (never files) — task copy leaves other tasks' worktrees behind.
- * `maxFiles` bounds files plus links, stopping the walk as soon as it is exceeded. */
-export async function inventoryWorktree(root: string, maxBytes?: number, excludeRootNames: readonly string[] = [], maxFiles?: number): Promise<Record<string, FileEvidence>> {
+/** `excludePaths` skips these root-relative directories (never files) — task copy leaves other tasks' worktrees behind. */
+export async function inventoryWorktree(root: string, maxBytes?: number, excludePaths: readonly string[] = []): Promise<Record<string, FileEvidence>> {
   const files: Record<string, FileEvidence> = Object.create(null);
   let bytes = 0;
-  let count = 0;
   const walk = async (directory: string): Promise<void> => {
     for (const name of await fs.readdir(directory)) {
       if (directory === root && name === '.git') continue;
       const absolute = path.join(directory, name);
       const stat = await fs.lstat(absolute);
-      if (directory === root && stat.isDirectory() && excludeRootNames.includes(name)) continue;
       const relative = path.relative(root, absolute);
+      if (stat.isDirectory() && excludePaths.includes(relative)) continue;
       const mode = restorableMode(stat.mode);
-      if (!stat.isDirectory() && maxFiles !== undefined && ++count > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
       if (stat.isSymbolicLink()) {
         files[relative] = { kind: 'link', hash: await fs.readlink(absolute), mode };
       } else if (stat.isDirectory()) {
@@ -133,8 +130,8 @@ export async function verifyRecoveryArchive(archive: WorktreeRecoveryArchive, di
   if (!sameWorktreeFiles(files, archive.files)) throw new Error('archive content does not match worktree inventory');
 }
 
-export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number, excludeRootNames: readonly string[] = [], maxFiles?: number): Promise<WorktreeRecoveryArchive> {
-  const files = await inventoryWorktree(root, maxBytes, excludeRootNames, maxFiles);
+export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number, excludePaths: readonly string[] = []): Promise<WorktreeRecoveryArchive> {
+  const files = await inventoryWorktree(root, maxBytes, excludePaths);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const file = `${resourceId}-${randomUUID()}.tar.gz.enc`;
   await fs.mkdir(directory, { recursive: true });
@@ -153,7 +150,7 @@ export async function createRecoveryArchive(root: string, resourceId: string, di
     try { await handle.sync(); } finally { await handle.close(); }
     const archive = { file, encryptedKey, iv: Buffer.from(iv).toString('base64'), tag: cipher.getAuthTag().toString('base64'), files };
     await verifyRecoveryArchive(archive, directory, key, maxBytes);
-    if (!sameWorktreeFiles(await inventoryWorktree(root, undefined, excludeRootNames, maxFiles), files)) throw new Error('worktree changed during archive');
+    if (!sameWorktreeFiles(await inventoryWorktree(root, undefined, excludePaths), files)) throw new Error('worktree changed during archive');
     return archive;
   } catch (error) {
     await fs.rm(target, { force: true });

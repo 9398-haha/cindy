@@ -108,23 +108,36 @@ describe('cross-machine project snapshots', () => {
     expect(await git(linked, 'diff', '--cached')).toBe(staged);
     expect(await fs.readFile(path.join(source, 'tracked'), 'utf8')).toBe('base\n');
   }, 30_000);
-  it("leaves other tasks' managed worktrees behind in a repository", async () => {
+  it("leaves other tasks' registered worktrees behind but keeps user files beside them", async () => {
     await git(source, 'init', '-b', 'main');
     await git(source, 'config', 'user.name', 'Migration test');
     await git(source, 'config', 'user.email', 'migration@localhost');
     await fs.writeFile(path.join(source, 'draft'), 'mine\n');
     await git(source, 'add', 'draft');
     await git(source, 'commit', '-m', 'fixture');
-    for (const name of ['.cindy-worktrees', '.xdt-worktrees']) {
-      await fs.mkdir(path.join(source, name, 'other-task'), { recursive: true });
-      // Nested Git metadata would otherwise make the whole snapshot non-portable.
-      await fs.writeFile(path.join(source, name, 'other-task', '.git'), 'gitdir: elsewhere\n');
-      await fs.writeFile(path.join(source, name, 'other-task', 'file'), 'not mine\n');
-    }
+    await git(
+      source,
+      'worktree',
+      'add',
+      '-b',
+      'other',
+      path.join('.cindy-worktrees', 'other-task'),
+    );
+    await fs.writeFile(path.join(source, '.cindy-worktrees', 'other-task', 'file'), 'not mine\n');
+    await fs.mkdir(path.join(source, '.cindy-worktrees', 'notes'));
+    await fs.writeFile(path.join(source, '.cindy-worktrees', 'notes', 'n'), 'mine too\n');
     const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());
-    expect(Object.keys(snapshot.archive.files)).toEqual(['draft']);
+    expect(Object.keys(snapshot.archive.files).sort()).toEqual([
+      '.cindy-worktrees',
+      '.cindy-worktrees/notes',
+      '.cindy-worktrees/notes/n',
+      'draft',
+    ]);
     await restoreWorkspace(snapshot, artifacts, target);
-    expect((await fs.readdir(target)).sort()).toEqual(['.git', 'draft']);
+    expect(await fs.readFile(path.join(target, '.cindy-worktrees', 'notes', 'n'), 'utf8')).toBe(
+      'mine too\n',
+    );
+    await expect(fs.stat(path.join(target, '.cindy-worktrees', 'other-task'))).rejects.toThrow();
     expect(
       await fs.readFile(path.join(source, '.cindy-worktrees', 'other-task', 'file'), 'utf8'),
     ).toBe('not mine\n');
@@ -137,36 +150,6 @@ describe('cross-machine project snapshots', () => {
     await restoreWorkspace(snapshot, artifacts, target);
     expect(await inventoryWorktree(target)).toEqual(before);
     expect(Object.keys(before)).toContain(path.join('.cindy-worktrees', 'notes'));
-  });
-  it('stops the snapshot walk once the file allowance is exceeded', async () => {
-    await fs.mkdir(path.join(source, 'sub'));
-    for (const name of ['a', 'b', path.join('sub', 'c')])
-      await fs.writeFile(path.join(source, name), name);
-    await expect(snapshotWorkspace(source, artifacts, randomUUID(), 2)).rejects.toThrow(
-      'MIGRATION_TOO_MANY_FILES',
-    );
-    const snapshot = await snapshotWorkspace(source, artifacts, randomUUID(), 3);
-    expect(Object.keys(snapshot.archive.files).sort()).toEqual(['a', 'b', 'sub', 'sub/c']);
-  });
-  it('keeps the file allowance when files appear while the archive is written', async () => {
-    await fs.writeFile(path.join(source, 'a'), 'a');
-    const open = fs.open.bind(fs);
-    let grown = false;
-    // The archive is fsynced via fs.open after packing; grow the tree at that moment.
-    const grow = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
-      grow.mockRestore();
-      grown = true;
-      for (const name of ['b', 'c']) await fs.writeFile(path.join(source, name), name);
-      return open(...(args as Parameters<typeof open>));
-    });
-    try {
-      await expect(snapshotWorkspace(source, artifacts, randomUUID(), 2)).rejects.toThrow(
-        'MIGRATION_TOO_MANY_FILES',
-      );
-      expect(grown).toBe(true);
-    } finally {
-      grow.mockRestore();
-    }
   });
   it('refuses to overwrite a destination directory', async () => {
     await fs.writeFile(path.join(source, 'source'), 'copy');

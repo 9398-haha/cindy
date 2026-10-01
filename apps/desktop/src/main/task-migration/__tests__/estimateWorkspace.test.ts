@@ -24,26 +24,37 @@ it('counts hidden and nested files, skips root Git metadata and does not count d
   }
 });
 
-it("skips other tasks' managed worktree directories only at a repository root", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-'));
+it("skips only other tasks' registered worktrees, never other content of those folders", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-')));
+  const git = (...args: string[]) =>
+    execFileSync('git', [
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@localhost',
+      '-c',
+      'commit.gpgsign=false',
+      '-C',
+      root,
+      ...args,
+    ]);
   try {
-    for (const name of ['.cindy-worktrees', '.xdt-worktrees']) {
-      await fs.mkdir(path.join(root, name, 'other-task'), { recursive: true });
-      await fs.writeFile(path.join(root, name, 'other-task', 'file'), 'not copied');
-    }
-    await fs.mkdir(path.join(root, 'sub', '.cindy-worktrees'), { recursive: true });
-    await fs.writeFile(path.join(root, 'sub', '.cindy-worktrees', 'file'), '1234');
-    // A plain directory never holds Cindy worktrees: same-named folders are user files,
-    // even when stray (invalid) `.git` metadata is left at the root.
-    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 24 });
+    await fs.writeFile(path.join(root, 'a'), 'a');
+    await fs.mkdir(path.join(root, '.cindy-worktrees', 'notes'), { recursive: true });
+    await fs.writeFile(path.join(root, '.cindy-worktrees', 'notes', 'n'), 'xy');
+    await fs.mkdir(path.join(root, '.xdt-worktrees', 'stale'), { recursive: true });
+    await fs.writeFile(path.join(root, '.xdt-worktrees', 'stale', 'old'), 'zzz');
+    // A plain directory excludes nothing, even with stray `.git` metadata at its root.
     await fs.mkdir(path.join(root, '.git'));
-    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 24 });
-    execFileSync('git', ['init', '-q', root]);
-    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 1, bytes: 4 });
-    // Only directories are skipped; a same-named file is still project content.
-    await fs.rm(path.join(root, '.xdt-worktrees'), { recursive: true });
-    await fs.writeFile(path.join(root, '.xdt-worktrees'), '12');
-    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 2, bytes: 6 });
+    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 6 });
+    await fs.rm(path.join(root, '.git'), { recursive: true });
+    git('init', '-q');
+    git('add', 'a');
+    git('commit', '-q', '-m', 'fixture');
+    git('worktree', 'add', '-q', '-b', 'other', path.join('.cindy-worktrees', 'other-task'));
+    // Only the registered worktree is skipped; user folders beside it and an unregistered
+    // folder in a managed container are still project content.
+    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 6 });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

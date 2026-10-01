@@ -42,7 +42,6 @@ const state = vi.hoisted(() => ({
   workers: [] as string[],
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
-  tooManyFiles: false,
 }));
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
@@ -209,25 +208,17 @@ vi.mock('../../session-share/sessionShareImport', () => ({
 vi.mock('../workspace', async (original) => ({
   isExcludedFromWorkspace: (await original<typeof import('../workspace')>())
     .isExcludedFromWorkspace,
-  excludedRootDirectories: (await original<typeof import('../workspace')>())
-    .excludedRootDirectories,
+  managedWorktreeExclusions: (await original<typeof import('../workspace')>())
+    .managedWorktreeExclusions,
   estimateWorkspace: async (_root: string, _check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
-    if (state.tooManyFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
     return { fileCount: 1, bytes: 8 };
   },
-  snapshotWorkspace: async (source: string, directory: string, _id: string, maxFiles: number) => {
-    state.snapshot(maxFiles);
+  snapshotWorkspace: async (source: string, directory: string) => {
+    state.snapshot();
     await fs.mkdir(directory, { recursive: true });
     await fs.copyFile(path.join(source, 'draft'), path.join(directory, 'a.tar.gz.enc'));
-    const file = { kind: 'file', mode: 0o644, hash: 'a'.repeat(64) };
-    return {
-      unpackedBytes: 8,
-      archive: {
-        file: 'a.tar.gz.enc',
-        files: { dir: { kind: 'directory', mode: 0o755, hash: '' }, 'dir/a': file, b: file },
-      },
-    };
+    return { unpackedBytes: 8, archive: { file: 'a.tar.gz.enc', files: {} } };
   },
   restoreWorkspace: async (_manifest: unknown, directory: string, target: string) => {
     await fs.copyFile(path.join(directory, 'a.tar.gz.enc'), path.join(target, 'draft'));
@@ -280,7 +271,6 @@ describe('resumable cross-computer copy', () => {
     state.workers = [];
     state.estimateLimits = [];
     state.timeoutAction = '';
-    state.tooManyFiles = false;
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -503,16 +493,6 @@ describe('resumable cross-computer copy', () => {
     expect(receipt().workingDir).not.toBe(firstDir);
     expect(receipt().workingDir).not.toBe(secondDir);
   });
-  it('hands each team snapshot only the file allowance the earlier ones left', async () => {
-    await team();
-    await start();
-    expect((await settled()).stage).toBe('complete');
-    // Two files per mocked snapshot; directories do not count toward the cap.
-    expect(state.snapshot.mock.calls).toEqual([
-      [TASK_MIGRATION_MAX_FILES],
-      [TASK_MIGRATION_MAX_FILES - 2],
-    ]);
-  });
   it('estimates each physical team workspace once without exporting or uploading', async () => {
     await team();
     const result = await requestTaskMigration({ action: 'estimate', sessionId: 'fork' });
@@ -532,23 +512,30 @@ describe('resumable cross-computer copy', () => {
       handler({} as never, 'B', { action: 'estimate', sessionId: 'fork' }),
     ).rejects.toThrow('MIGRATION_TIMEOUT');
   });
-  it('ignores tasks running in other managed worktrees under the copied root', async () => {
+  it('ignores tasks running in other registered worktrees under the copied root', async () => {
     const rows = state.rows.get('A')!;
     const cwd = rows.get('fork')!.workingDir as string;
+    const git = (...args: string[]) =>
+      execFileSync('git', [
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@localhost',
+        '-c',
+        'commit.gpgsign=false',
+        '-C',
+        cwd,
+        ...args,
+      ]);
+    git('init', '-q');
+    git('add', 'draft');
+    git('commit', '-q', '-m', 'fixture');
     const managed = path.join(cwd, '.cindy-worktrees', 'other');
-    await fs.mkdir(managed, { recursive: true });
-    execFileSync('git', ['init', '-q', cwd]);
+    git('worktree', 'add', '-q', '-b', 'other', managed);
     rows.get('sibling')!.workingDir = managed;
     state.siblingRunning = true;
     await start();
     expect((await settled()).stage).toBe('complete');
-  });
-  it('re-checks the file cap before exporting, since files may grow after the estimate', async () => {
-    state.tooManyFiles = true;
-    await start();
-    expect((await settled()).error).toBe('MIGRATION_TOO_MANY_FILES');
-    expect(state.exported).not.toHaveBeenCalled();
-    expect(state.snapshot).not.toHaveBeenCalled();
   });
   it('still refuses while another task runs in an ordinary subdirectory of the copied root', async () => {
     const rows = state.rows.get('A')!;

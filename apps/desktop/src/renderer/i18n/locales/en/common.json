@@ -46,8 +46,7 @@
       "MIGRATION_UNSUPPORTED": "Update both computers to a version that supports task copy.",
       "MIGRATION_TASK_QUEUED": "This task has queued messages. Finish or remove them before copying it.",
       "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy.",
-      "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later.",
-      "MIGRATION_TOO_MANY_FILES": "The project now has more than {{limit, number}} files, so copying stopped. Copy a project with fewer files instead."
+      "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later."
     },
     "successTitle": "Copy successful",
     "successDescription": "Copied to {{name}}.",

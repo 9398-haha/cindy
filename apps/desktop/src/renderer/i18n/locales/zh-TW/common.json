@@ -46,8 +46,7 @@
       "MIGRATION_UNSUPPORTED": "請將兩台電腦更新至支援任務複製的版本。",
       "MIGRATION_TASK_QUEUED": "此任務有排隊中的訊息，請先完成或移除這些訊息再複製。",
       "MIGRATION_SOURCE_CHANGED": "準備期間來源任務發生變更，請重試複製。",
-      "MIGRATION_TIMEOUT": "任務所在電腦回應逾時，請稍後重試。",
-      "MIGRATION_TOO_MANY_FILES": "專案檔案已超過 {{limit, number}} 個，已停止複製。請改為複製檔案較少的專案。"
+      "MIGRATION_TIMEOUT": "任務所在電腦回應逾時，請稍後重試。"
     },
     "successTitle": "複製成功",
     "successDescription": "已複製到{{name}}。",

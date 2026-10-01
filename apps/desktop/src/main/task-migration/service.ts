@@ -56,7 +56,7 @@ import {
   restoreWorkspace,
   estimateWorkspace,
   isExcludedFromWorkspace,
-  excludedRootDirectories,
+  managedWorktreeExclusions,
   type PortableWorkspace,
 } from './workspace';
 
@@ -298,7 +298,7 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
         ),
       ];
       // A task inside another managed worktree under a copied root does not touch copied files.
-      const excluded = await Promise.all(sourceKeys.map(excludedRootDirectories));
+      const excluded = await Promise.all(sourceKeys.map(managedWorktreeExclusions));
       for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
         if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
         const row = await scope.db.queryOne<{
@@ -327,9 +327,6 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       scope.assertCurrent();
       if (members.some((member) => sourceBoundary!.isBusy(member.id)))
         throw new Error('MIGRATION_TASK_RUNNING');
-      // The confirmation estimate is not a lasting admission: files may have grown since.
-      await estimateRoots(scope, sourceKeys);
-      scope.assertCurrent();
       const result = await exportSessionShare({
         sessionId: record.sessionId,
         targetPath: path.join(directory, 'session.cshare'),
@@ -341,20 +338,10 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
       const snapshots: PortableWorkspace[] = [];
-      // Files can still appear after the re-check above; bound the snapshot walk itself too.
-      let remainingFiles = TASK_MIGRATION_MAX_FILES;
-      for (const [index, dir] of sourceKeys.entries()) {
-        const snapshot = await snapshotWorkspace(
-          dir,
-          workspaceDirectory(directory, index),
-          record.id,
-          remainingFiles,
+      for (const [index, dir] of sourceKeys.entries())
+        snapshots.push(
+          await snapshotWorkspace(dir, workspaceDirectory(directory, index), record.id),
         );
-        remainingFiles -= Object.values(snapshot.archive.files).filter(
-          (entry) => entry.kind !== 'directory',
-        ).length;
-        snapshots.push(snapshot);
-      }
       // Copy does not freeze input. Discard preparation if the task or team changed
       // while capturing conversation and files, including a turn that already finished.
       await sourceBoundary!.drain();
@@ -382,21 +369,6 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       await preflight(scope, record, workspace, directory);
     },
   );
-}
-
-/** The file cap covers every copied directory together; MIGRATION_TOO_MANY_FILES above it. */
-async function estimateRoots(scope: Scope, roots: Iterable<string>) {
-  const estimate = { fileCount: 0, bytes: 0 };
-  for (const root of roots) {
-    const next = await estimateWorkspace(
-      root,
-      scope.assertCurrent,
-      TASK_MIGRATION_MAX_FILES - estimate.fileCount,
-    );
-    estimate.fileCount += next.fileCount;
-    estimate.bytes += next.bytes;
-  }
-  return estimate;
 }
 
 async function sendFile(
@@ -950,7 +922,17 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     const roots = new Set(
       await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
     );
-    const estimate = await estimateRoots(scope, roots);
+    const estimate = { fileCount: 0, bytes: 0 };
+    for (const root of roots) {
+      // The cap covers every copied directory together.
+      const next = await estimateWorkspace(
+        root,
+        scope.assertCurrent,
+        TASK_MIGRATION_MAX_FILES - estimate.fileCount,
+      );
+      estimate.fileCount += next.fileCount;
+      estimate.bytes += next.bytes;
+    }
     scope.assertCurrent();
     return { ...view(scope, null), estimate };
   }

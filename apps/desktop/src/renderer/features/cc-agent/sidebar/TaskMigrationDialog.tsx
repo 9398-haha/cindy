@@ -271,11 +271,7 @@ export function TaskMigrationDialog({
               })
             : t('taskMigration.estimating');
   const errorKey =
-    failure &&
-    t(`taskMigration.errors.${failure}`, {
-      defaultValue: t('taskMigration.failed'),
-      limit: TASK_MIGRATION_MAX_FILES,
-    });
+    failure && t(`taskMigration.errors.${failure}`, { defaultValue: t('taskMigration.failed') });
   return (
     <Dialog.Root
       open

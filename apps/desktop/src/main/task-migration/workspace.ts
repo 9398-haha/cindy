@@ -15,34 +15,45 @@ const ESTIMATE_CONCURRENCY = 32;
 const STAT_BATCH = 64;
 
 /**
- * Top-level directory names a copy of `root` leaves behind: other tasks' Cindy worktrees.
- * Cindy only creates them inside Git repositories, so only a Git repository root (the same
- * verdict snapshotWorkspace's probe reaches) excludes them; a plain directory, including one
- * with stray `.git` metadata, keeps same-named folders. Callers skip directories, never files.
+ * Directories (relative to `root`) a copy leaves behind: other tasks' Cindy worktrees, i.e.
+ * linked worktrees Git has registered for this repository that live in a managed container
+ * (`.cindy-worktrees/<name>`). Anything else in those folders is ordinary project content,
+ * and a root that is not itself a repository root excludes nothing.
  */
-export async function excludedRootDirectories(root: string): Promise<string[]> {
+export async function managedWorktreeExclusions(root: string): Promise<string[]> {
+  let listing: string;
   try {
+    root = await fs.realpath(root);
     const probe = await gitExec(['rev-parse', '--show-toplevel'], root, {
       extraEnv: { LC_ALL: 'C' },
     });
-    return (await fs.realpath(probe.stdout.trim())) === (await fs.realpath(root))
-      ? [...MANAGED_WORKTREE_DIR_NAMES]
-      : [];
+    if ((await fs.realpath(probe.stdout.trim())) !== root) return [];
+    listing = (await gitExec(['worktree', 'list', '--porcelain'], root)).stdout;
   } catch (error) {
     if (error instanceof GitExecError && error.stderr.includes('not a git repository')) return [];
     throw error;
   }
+  const excluded: string[] = [];
+  for (const line of listing.split('\n')) {
+    if (!line.startsWith('worktree ')) continue;
+    // A registered worktree whose directory is gone has nothing to copy or skip.
+    const worktree = await fs.realpath(line.slice('worktree '.length)).catch(() => null);
+    const relative = worktree && path.relative(root, worktree);
+    const parts = relative ? relative.split(path.sep) : [];
+    if (parts.length >= 2 && (MANAGED_WORKTREE_DIR_NAMES as readonly string[]).includes(parts[0]))
+      excluded.push(relative!);
+  }
+  return excluded;
 }
 
-/** Whether `file` lies in one of `root`'s `excluded` top-level directories. */
+/** Whether `file` lies in (or is) one of `root`'s `excluded` relative directories. */
 export function isExcludedFromWorkspace(
   root: string,
   file: string,
   excluded: readonly string[],
 ): boolean {
   const relative = path.relative(root, file);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
-  return excluded.includes(relative.split(path.sep)[0]);
+  return excluded.some((entry) => relative === entry || relative.startsWith(entry + path.sep));
 }
 
 export interface PortableWorkspace {
@@ -121,7 +132,6 @@ export async function snapshotWorkspace(
   root: string,
   directory: string,
   id: string,
-  maxFiles?: number,
 ): Promise<PortableWorkspace> {
   if ((await fs.lstat(root)).isSymbolicLink()) root = await fs.realpath(root);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -170,9 +180,7 @@ export async function snapshotWorkspace(
       encryptedKey: '',
       iv: randomBytes(12),
       maxBytes: Math.floor((space.bavail * space.bsize) / 1.1),
-      // `git` is set exactly when the probe above found `root` to be a repository root.
-      excludeRootNames: git ? [...MANAGED_WORKTREE_DIR_NAMES] : [],
-      maxFiles,
+      excludePaths: await managedWorktreeExclusions(root),
     });
     archive.files = Object.fromEntries(
       Object.entries(archive.files).map(([name, entry]) => [name.split(path.sep).join('/'), entry]),
@@ -292,7 +300,9 @@ export async function estimateWorkspace(
   maxFiles = Number.POSITIVE_INFINITY,
 ): Promise<{ fileCount: number; bytes: number }> {
   root = await fs.realpath(root);
-  const excluded = await excludedRootDirectories(root);
+  const excluded = new Set(
+    (await managedWorktreeExclusions(root)).map((entry) => path.join(root, entry)),
+  );
   const result = { fileCount: 0, bytes: 0 };
   const pending = [root];
   const visit = async (directory: string): Promise<void> => {
@@ -307,7 +317,7 @@ export async function estimateWorkspace(
           ? entry
           : await fs.lstat(file);
       if (kind.isDirectory()) {
-        if (directory !== root || !excluded.includes(entry.name)) pending.push(file);
+        if (!excluded.has(file)) pending.push(file);
       } else if (kind.isFile() || kind.isSymbolicLink()) {
         // Count as each file is recognised, before any per-file work beyond the cap.
         if (++result.fileCount > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');

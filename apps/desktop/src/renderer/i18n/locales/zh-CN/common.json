@@ -46,8 +46,7 @@
       "MIGRATION_UNSUPPORTED": "请将两台电脑更新至支持任务复制的版本。",
       "MIGRATION_TASK_QUEUED": "此任务有排队中的消息，请先完成或移除这些消息再复制。",
       "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。",
-      "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。",
-      "MIGRATION_TOO_MANY_FILES": "项目文件已超过 {{limit, number}} 个，已停止复制。请改为复制文件更少的项目。"
+      "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。"
     },
     "successTitle": "复制成功",
     "successDescription": "已复制到{{name}}。",
