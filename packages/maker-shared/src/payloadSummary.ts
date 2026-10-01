@@ -466,7 +466,9 @@ export function extractPayloadToolCardIds(text: string): string[] {
 
 export interface PayloadToolFile { url: string; title: string }
 
-const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"<>\\)`};]+/g;
+// Preserve the legacy URL alphabet. Source delimiters are contextual; adding
+// filename punctuation here silently turns a valid reference into another path.
+const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"<>\\)]+/g;
 
 function absoluteToolFilePath(url: string): string | null {
   try {
@@ -527,15 +529,15 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
       let previous: { end: number; source: boolean } | undefined;
       for (let match; (match = urlPattern.exec(value));) {
         const start = match.index;
-        // An apostrophe is valid inside a file name. Only strip a closing quote
-        // when the URL has an opening quote. Keep adjacent quoted references
-        // separate, and leave apostrophes within each file name untouched.
-        const closingQuote = value[start - 1] === "'"
-          ? /'(?=[,.:!?\]]*(?:'xdt-file:\/\/|$))/.exec(match[0])
+        // Quotes/backticks may be filename characters. Treat one as a delimiter
+        // only when it matches the opening wrapper around this reference.
+        const quote = value[start - 1];
+        const closingQuote = quote === "'" || quote === '`'
+          ? new RegExp(quote + '(?=[,.;:!?\\]}]*(?:' + quote + 'xdt-file://|$))').exec(match[0])
           : null;
         const url = closingQuote ? match[0].slice(0, closingQuote.index) : match[0];
         urlPattern.lastIndex = start + url.length;
-        const source = previous && /^'\s*,\s*'$/.test(value.slice(previous.end, start))
+        const source = previous && /^(['`])\s*,\s*\1$/.test(value.slice(previous.end, start))
           ? previous.source
           : looksLikeQuotedSourceLiteral(value, start, start + url.length);
         if (!source) add(url);

@@ -4,6 +4,19 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it('preserves the legacy direct-path punctuation alphabet in real references', () => {
+    // #4692 accepted these filename characters. Source filtering must not
+    // redefine the URL alphabet and silently point to a different file.
+    for (const punctuation of "!#$&'(*+,-.:;=?@[]^_{}~" + String.fromCharCode(96)) {
+      const title = 'report' + punctuation + 'final.pdf';
+      const url = 'xdt-file:///tmp/' + title;
+      const expected = [{ url, title }];
+      expect(files('[report](' + url + ')'), title).toEqual(expected);
+      expect(files(JSON.stringify({ note: url })), title).toEqual(expected);
+      expect(files(JSON.stringify([url])), title).toEqual(expected);
+      expect(files(JSON.stringify({ _xdt_model_files: [{ url, name: title }] })), title).toEqual(expected);
+    }
+  });
   it('reads host ledger images, video and audio and deduplicates declarations', () => {
     const result = JSON.stringify({ xdt_image_urls: [blob('png')], xdt_media_produced: [blob('png'), blob('mp4'), blob('mp3'), blob('glb'), 'file:///secret.png', 'https://external/p.png', 'cindy-media://other/p.png'] });
     expect(media(result).map(({ kind, url }) => [kind, url])).toEqual([['image', blob('png')], ['video', blob('mp4')], ['audio', blob('mp3')]]);
