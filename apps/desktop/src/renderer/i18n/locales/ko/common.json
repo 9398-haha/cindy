@@ -10490,6 +10490,7 @@
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
       "createProjectFailed": "프로젝트 생성 실패",
+      "selectFolderFailed": "폴더를 선택하지 못했습니다. 다시 시도해 주세요.",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
       "filterAria": "사이드바 표시 설정(상태: {{status}}, Harness: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",

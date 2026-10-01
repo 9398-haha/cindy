@@ -10490,6 +10490,7 @@
       "projects": "專案",
       "newProject": "新建專案",
       "createProjectFailed": "新建專案失敗",
+      "selectFolderFailed": "選擇目錄失敗，請重試",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
       "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",

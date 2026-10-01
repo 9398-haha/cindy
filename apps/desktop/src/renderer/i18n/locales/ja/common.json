@@ -10490,6 +10490,7 @@
       "projects": "プロジェクト",
       "newProject": "新規プロジェクト",
       "createProjectFailed": "プロジェクトの作成に失敗しました",
+      "selectFolderFailed": "フォルダーを選択できませんでした。もう一度お試しください。",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
       "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
       "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
