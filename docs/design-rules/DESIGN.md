@@ -103,9 +103,17 @@ contrast. Validate real long messages, not only empty chat views.
 
 The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
 Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
-camera, preserving the same composition and full-window crop. Built-in static artwork
+camera, preserving the same composition and full-window crop. Camera position,
+viewing angle and field of view must stay constant throughout the entire loop,
+including Dream Wander and Future Atelier (user correction, 2026-10-02). No pans,
+tilts, dolly movement, zooms or perspective drift; matching first and last frames
+alone is insufficient. Built-in static artwork
 uses 3584×2240 WebP. All three official 2304×1440 videos are bundled, fully offline,
 with no duplicate low-resolution assets or resolution switching on window resize.
+The motion approved on 2026-10-02 is preserved frame for frame at its original
+24fps. The bundled 2304×1440 delivery is Real-ESRGAN anime-video super-resolution
+of the approved 1214×758 sources, not native 2K generation; do not regenerate,
+retime or reverse the accepted motion while preparing higher-resolution assets.
 The CDN mechanism remains opt-in for future catalog entries marked as CDN-delivered;
 those entries can use a bundled fallback while downloading verified HD bytes into
 the managed media store. Official scenes never request CDN resources.
@@ -136,6 +144,15 @@ In the sunny window scene, keep the curtain close to its resting drape: small,
 slow folds rather than large billows across the window. Nearby leaves and light
 shadows should move gently without competing with messages (user correction,
 2026-10-01).
+The window scene needs infrequent, natural blinking and coherent whole-scene
+motion (user corrections, 2026-10-01). Judge hair, face, eyes, cat, curtains and
+foliage together at normal playback speed. Do not retime an isolated eye patch
+against a differently moving face or reverse hair motion to manufacture a loop.
+Keep the blink gentle and the environment moving at a steady pace: never speed
+up the entire frame to shorten a blink, which also accelerates curtains, hair and
+shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
+holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
+motion; inspect the complete action and loop boundary before accepting an asset.
 
 ### Task tag identity colors
 
