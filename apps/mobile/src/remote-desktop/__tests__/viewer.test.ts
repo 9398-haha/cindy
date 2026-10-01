@@ -1177,6 +1177,46 @@ describe("remote desktop network status layer", () => {
     expect(html).toContain("#image{z-index:2}");
     expect(html).toContain('id="network-status"');
   });
+
+  it("cuts the native video picture out of the status it would otherwise cover", () => {
+    const v = viewer(false, true, true);
+    const status = v.elements["network-status"];
+    let layoutReads = 0;
+    Object.defineProperties(status, {
+      offsetLeft: { get: () => (layoutReads++, 250) },
+      offsetTop: { get: () => (layoutReads++, 60) },
+    });
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    v.send({ type: "networkStatus", text: "Direct\n1 KB/s", top: 60 });
+    expect(status.style.clipPath ?? "").toBe("");
+    v.send({ type: "nativeVideo", epoch: "native", active: true });
+    const hole = () => {
+      const r = v.messages.findLast(
+        (m) => m.type === "nativeViewport",
+      ) as unknown as { x: number; y: number; width: number; height: number };
+      const [l, t] = [r.x - 250, r.y - 60];
+      const [rt, b] = [l + r.width, t + r.height];
+      return `${l}px ${t}px,${rt}px ${t}px,${rt}px ${b}px,${l}px ${b}px,${l}px ${t}px)`;
+    };
+    expect(status.style.clipPath).toMatch(
+      /^polygon\(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,/,
+    );
+    expect(status.style.clipPath.endsWith(hole())).toBe(true);
+    const width = v.elements.image.style.width;
+    const readsBeforePinch = layoutReads;
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 200);
+    v.pointer("pointerdown", 2, 300, 200);
+    v.pointer("pointermove", 1, 40, 200);
+    v.pointer("pointermove", 2, 360, 200);
+    v.frame();
+    v.frame(40);
+    expect(v.elements.image.style.width).not.toBe(width);
+    expect(status.style.clipPath.endsWith(hole())).toBe(true);
+    expect(layoutReads).toBe(readsBeforePinch);
+    v.send({ type: "nativeVideo", epoch: "native", active: false });
+    expect(status.style.clipPath).toBe("");
+  });
 });
 
 describe("remote desktop three-segment backdrop", () => {
