@@ -12,7 +12,8 @@ const ownership = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => ownership.current }));
 
 // Execute the real switch branch with controlled Host boundaries.
-const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+// Git may check out CRLF on Windows; all source boundaries below use LF.
+const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
 const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const settingSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'));
@@ -46,9 +47,11 @@ function fixture() {
  const persistedResults = new WeakSet<object>();
  const settingDeps = {...deps, log:{warn:vi.fn()}, ipcMain:{handle:(_name:unknown,fn:typeof setMode)=>{setMode=fn;}}, MAKER_INVOKE:{SET_PERMISSION_MODE:'permission'}, isDeviceLinkInvoke:()=>remote, assertTrustedAppRendererEvent:()=>{}, assertReviewSettingsUnlocked:async()=>{}, isSessionPermissionMode:()=>true, throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});}, persistPermissionModeWithoutRuntime:async(_id:string,mode:string)=>(await epoch.client.tx('bots.persistSessionPermission',{mode})).updated, markRemoteSettingPersistedInsideHandler:(result:object)=>persistedResults.add(result)};
  new Function(...Object.keys(settingDeps), settingJs)(...Object.values(settingDeps));
+ expect(setMode, 'SET_PERMISSION_MODE source extraction must register its handler').toBeTypeOf('function');
  const planPersist=vi.fn(async(_id:string,patch:{planModeEnabled:boolean})=>{history.planModeEnabled=patch.planModeEnabled;});
  const planDeps={...settingDeps,persistSessionFields:planPersist,ipcMain:{handle:(_name:unknown,fn:typeof setPlan)=>{setPlan=fn;}},MAKER_INVOKE:{SET_PLAN_MODE:'plan'}};
  new Function(...Object.keys(planDeps), planJs)(...Object.values(planDeps));
+ expect(setPlan, 'SET_PLAN_MODE source extraction must register its handler').toBeTypeOf('function');
  const setImMode = (mode: PermissionMode) => changeSessionPermissionMode({
   sessionId:'task', mode, modes:[{id:mode,displayName:mode}],
   readPreviousMode:async()=>history.permissionMode as PermissionMode,
