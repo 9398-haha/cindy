@@ -34,8 +34,12 @@ export async function managedWorktreeExclusions(root: string): Promise<string[]>
     throw error;
   }
   const excluded: string[] = [];
-  for (const line of listing.split('\n')) {
-    if (!line.startsWith('worktree ')) continue;
+  // Porcelain records are separated by blank lines. A `prunable` record is stale: its path
+  // may since hold ordinary files, which must be copied rather than skipped.
+  for (const record of listing.split('\n\n')) {
+    const lines = record.split('\n');
+    const line = lines.find((entry) => entry.startsWith('worktree '));
+    if (!line || lines.some((entry) => entry.startsWith('prunable'))) continue;
     // A registered worktree whose directory is gone has nothing to copy or skip.
     const worktree = await fs.realpath(line.slice('worktree '.length)).catch(() => null);
     const relative = worktree && path.relative(root, worktree);

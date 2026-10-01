@@ -173,6 +173,14 @@ describe('cross-machine project snapshots', () => {
     // Only the registered worktree is skipped; user folders beside it and an unregistered
     // folder in a managed container are still project content.
     expect(await estimateWorkspace(source, () => {})).toEqual({ fileCount: 3, bytes: 6 });
+    // Deleted outside Git and its path reused for ordinary files: the stale (prunable)
+    // registration must not hide them.
+    const reused = path.join(source, '.cindy-worktrees', 'other-task');
+    await fs.rm(reused, { recursive: true });
+    await fs.mkdir(reused);
+    await fs.writeFile(path.join(reused, 'r'), 'four');
+    expect(await git(source, 'worktree', 'list', '--porcelain')).toContain('prunable');
+    expect(await estimateWorkspace(source, () => {})).toEqual({ fileCount: 4, bytes: 10 });
   });
   it('keeps same-named folders of a plain directory', async () => {
     await fs.mkdir(path.join(source, '.cindy-worktrees'));
