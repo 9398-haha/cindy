@@ -183,3 +183,19 @@ describe('bot workbench judgments', () => {
     expect(normalized?.tasks.long.next).toHaveLength(120);
   });
 });
+
+describe('bot workbench directory removal normalization', () => {
+  it('removes a handed-over project addressed by an equivalent, differently-spelled path', async () => {
+    // 回归:add 存 path.resolve 后的路径, remove 曾按原始串比较 —— 尾分隔符、
+    // ./、../ 等等价写法会静默漏删, 广播后 UI 里项目仍在。
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const proj = path.join(root, 'proj');
+    const nested = path.join(proj, 'inner');
+    await mkdir(nested, { recursive: true });
+    await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T01:00:00.000Z'));
+
+    // 等价写法:inner/.. 投影回 proj, 再补一个尾分隔符。
+    await removeBotWorkbenchDirectory(root, 'bot-1', `${nested}${path.sep}..${path.sep}`);
+    expect((await readBotWorkbenchState(root, 'bot-1')).directories).toEqual([]);
+  });
+});
