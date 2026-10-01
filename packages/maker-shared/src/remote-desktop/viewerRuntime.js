@@ -24,11 +24,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fy,
       fillHeight = false,
     ) {
-      const scale =
-        (fillHeight
-          ? vh / Math.max(1, dh)
-          : Math.min(vw / Math.max(1, dw), vh / Math.max(1, dh))) *
-        Math.max(1, Math.min(5, zoom));
+      const fit = fillHeight
+        ? vh / Math.max(1, dh)
+        : Math.min(vw / Math.max(1, dw), vh / Math.max(1, dh));
+      // Pinch stops at two viewer points per desktop point, never below fit.
+      const maxZoom = Math.max(1, 2 / fit);
+      const scale = fit * Math.max(1, Math.min(maxZoom, zoom));
       const width = dw * scale;
       const height = dh * scale;
       const x =
@@ -39,7 +40,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         height <= vh
           ? (vh - height) / 2
           : Math.min(0, Math.max(vh - height, vh / 2 - fy * height));
-      return { x, y, width, height, scale };
+      return { x, y, width, height, scale, maxZoom };
     };
   /* END TRANSFORM */ const networkStats =
     /* BEGIN NETWORK_STATS */
@@ -288,6 +289,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             scale: desktopScale,
             width: dw * desktopScale,
             height: dh * desktopScale,
+            maxZoom: 1,
           }
         : transform(
             keyboardFitWidth?.stageWidth === stage.clientWidth
@@ -307,6 +309,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       y: viewportHeight() / 2 + verticalOffset(r.height) - fy * r.height,
     };
   };
+  // 0 at fit, 1 at the pinch limit for the current viewport and display.
+  const zoomProgress = (r = layout()) =>
+    r.maxZoom > 1
+      ? Math.max(0, Math.min(1, (zoom - 1) / (r.maxZoom - 1)))
+      : 0;
   // The backdrop uses 5% / 90% / 5% source segments. The middle 90%
   // keeps the fitted picture's scale; each outer 5% stretches uniformly
   // to fill the remaining space, horizontally or vertically as needed.
@@ -516,7 +523,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       vh = viewportHeight();
     // Grow extra resting travel continuously from zero at fit to 180 screen
     // points at maximum zoom. Never count the unused space of a fitting axis.
-    const clearance = (180 * (Math.max(1, Math.min(5, zoom)) - 1)) / 4;
+    const clearance = 180 * zoomProgress(r);
     const axis = (viewport, content) =>
       content <= viewport
         ? {
@@ -552,7 +559,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function rubber(v, min, max, inverse = false) {
     const edge = bounded(v, min, max),
       d = v - edge;
-    const reach = 40 + 10 * (Math.max(1, Math.min(5, zoom)) - 1);
+    const reach = 40 + 40 * zoomProgress();
     return (
       edge +
       Math.sign(d) *
@@ -1174,9 +1181,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (multi.kind === "pinch") {
       manualViewMoved = true;
       cursorNeedsEntry = true;
+      const { maxZoom } = layout();
       zoom = Math.max(
         1,
-        Math.min(5, (multi.zoom * next.d) / Math.max(1, multi.d)),
+        Math.min(
+          maxZoom,
+          (Math.min(maxZoom, multi.zoom) * next.d) / Math.max(1, multi.d),
+        ),
       );
       const r = layout();
       fx =
