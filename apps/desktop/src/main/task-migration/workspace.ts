@@ -121,6 +121,7 @@ export async function snapshotWorkspace(
   root: string,
   directory: string,
   id: string,
+  maxFiles?: number,
 ): Promise<PortableWorkspace> {
   if ((await fs.lstat(root)).isSymbolicLink()) root = await fs.realpath(root);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -171,6 +172,7 @@ export async function snapshotWorkspace(
       maxBytes: Math.floor((space.bavail * space.bsize) / 1.1),
       // `git` is set exactly when the probe above found `root` to be a repository root.
       excludeRootNames: git ? [...MANAGED_WORKTREE_DIR_NAMES] : [],
+      maxFiles,
     });
     archive.files = Object.fromEntries(
       Object.entries(archive.files).map(([name, entry]) => [name.split(path.sep).join('/'), entry]),

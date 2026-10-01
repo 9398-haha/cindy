@@ -20,6 +20,8 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   type Envelope,
 } from '@cindy/device-link';
 
@@ -672,6 +674,15 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
     expect(__testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session')).toBe(
       compactBudget * 2,
     );
+  });
+
+  it('按与控制端相同的动作级预算给任务复制统计留足时间', () => {
+    const orphan = (action: string) =>
+      __testing.remoteInvokeOrphanTimeoutForChannelMs(TASK_MIGRATION_CHANNEL, [
+        { action, sessionId: 's' },
+      ]);
+    expect(orphan('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(orphan('status')).toBe(60_000);
   });
 });
 

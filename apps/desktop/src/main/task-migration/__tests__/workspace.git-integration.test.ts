@@ -138,6 +138,16 @@ describe('cross-machine project snapshots', () => {
     expect(await inventoryWorktree(target)).toEqual(before);
     expect(Object.keys(before)).toContain(path.join('.cindy-worktrees', 'notes'));
   });
+  it('stops the snapshot walk once the file allowance is exceeded', async () => {
+    await fs.mkdir(path.join(source, 'sub'));
+    for (const name of ['a', 'b', path.join('sub', 'c')])
+      await fs.writeFile(path.join(source, name), name);
+    await expect(snapshotWorkspace(source, artifacts, randomUUID(), 2)).rejects.toThrow(
+      'MIGRATION_TOO_MANY_FILES',
+    );
+    const snapshot = await snapshotWorkspace(source, artifacts, randomUUID(), 3);
+    expect(Object.keys(snapshot.archive.files).sort()).toEqual(['a', 'b', 'sub', 'sub/c']);
+  });
   it('refuses to overwrite a destination directory', async () => {
     await fs.writeFile(path.join(source, 'source'), 'copy');
     const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());

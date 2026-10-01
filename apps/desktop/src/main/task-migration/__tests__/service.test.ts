@@ -216,11 +216,18 @@ vi.mock('../workspace', async (original) => ({
     if (state.tooManyFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
     return { fileCount: 1, bytes: 8 };
   },
-  snapshotWorkspace: async (source: string, directory: string) => {
-    state.snapshot();
+  snapshotWorkspace: async (source: string, directory: string, _id: string, maxFiles: number) => {
+    state.snapshot(maxFiles);
     await fs.mkdir(directory, { recursive: true });
     await fs.copyFile(path.join(source, 'draft'), path.join(directory, 'a.tar.gz.enc'));
-    return { unpackedBytes: 8, archive: { file: 'a.tar.gz.enc', files: {} } };
+    const file = { kind: 'file', mode: 0o644, hash: 'a'.repeat(64) };
+    return {
+      unpackedBytes: 8,
+      archive: {
+        file: 'a.tar.gz.enc',
+        files: { dir: { kind: 'directory', mode: 0o755, hash: '' }, 'dir/a': file, b: file },
+      },
+    };
   },
   restoreWorkspace: async (_manifest: unknown, directory: string, target: string) => {
     await fs.copyFile(path.join(directory, 'a.tar.gz.enc'), path.join(target, 'draft'));
@@ -495,6 +502,16 @@ describe('resumable cross-computer copy', () => {
     expect(await fs.readFile(path.join(secondDir, 'draft'), 'utf8')).toBe('original');
     expect(receipt().workingDir).not.toBe(firstDir);
     expect(receipt().workingDir).not.toBe(secondDir);
+  });
+  it('hands each team snapshot only the file allowance the earlier ones left', async () => {
+    await team();
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    // Two files per mocked snapshot; directories do not count toward the cap.
+    expect(state.snapshot.mock.calls).toEqual([
+      [TASK_MIGRATION_MAX_FILES],
+      [TASK_MIGRATION_MAX_FILES - 2],
+    ]);
   });
   it('estimates each physical team workspace once without exporting or uploading', async () => {
     await team();

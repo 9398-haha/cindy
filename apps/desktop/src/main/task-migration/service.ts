@@ -341,10 +341,20 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
       const snapshots: PortableWorkspace[] = [];
-      for (const [index, dir] of sourceKeys.entries())
-        snapshots.push(
-          await snapshotWorkspace(dir, workspaceDirectory(directory, index), record.id),
+      // Files can still appear after the re-check above; bound the snapshot walk itself too.
+      let remainingFiles = TASK_MIGRATION_MAX_FILES;
+      for (const [index, dir] of sourceKeys.entries()) {
+        const snapshot = await snapshotWorkspace(
+          dir,
+          workspaceDirectory(directory, index),
+          record.id,
+          remainingFiles,
         );
+        remainingFiles -= Object.values(snapshot.archive.files).filter(
+          (entry) => entry.kind !== 'directory',
+        ).length;
+        snapshots.push(snapshot);
+      }
       // Copy does not freeze input. Discard preparation if the task or team changed
       // while capturing conversation and files, including a turn that already finished.
       await sourceBoundary!.drain();

@@ -25,10 +25,12 @@ function restorableMode(mode: number): number {
   return mode & (process.platform === 'win32' ? 0o666 : 0o777);
 }
 
-/** `excludeRootNames` skips top-level directories (never files) — task copy leaves other tasks' worktrees behind. */
-export async function inventoryWorktree(root: string, maxBytes?: number, excludeRootNames: readonly string[] = []): Promise<Record<string, FileEvidence>> {
+/** `excludeRootNames` skips top-level directories (never files) — task copy leaves other tasks' worktrees behind.
+ * `maxFiles` bounds files plus links, stopping the walk as soon as it is exceeded. */
+export async function inventoryWorktree(root: string, maxBytes?: number, excludeRootNames: readonly string[] = [], maxFiles?: number): Promise<Record<string, FileEvidence>> {
   const files: Record<string, FileEvidence> = Object.create(null);
   let bytes = 0;
+  let count = 0;
   const walk = async (directory: string): Promise<void> => {
     for (const name of await fs.readdir(directory)) {
       if (directory === root && name === '.git') continue;
@@ -37,6 +39,7 @@ export async function inventoryWorktree(root: string, maxBytes?: number, exclude
       if (directory === root && stat.isDirectory() && excludeRootNames.includes(name)) continue;
       const relative = path.relative(root, absolute);
       const mode = restorableMode(stat.mode);
+      if (!stat.isDirectory() && maxFiles !== undefined && ++count > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
       if (stat.isSymbolicLink()) {
         files[relative] = { kind: 'link', hash: await fs.readlink(absolute), mode };
       } else if (stat.isDirectory()) {
@@ -130,8 +133,8 @@ export async function verifyRecoveryArchive(archive: WorktreeRecoveryArchive, di
   if (!sameWorktreeFiles(files, archive.files)) throw new Error('archive content does not match worktree inventory');
 }
 
-export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number, excludeRootNames: readonly string[] = []): Promise<WorktreeRecoveryArchive> {
-  const files = await inventoryWorktree(root, maxBytes, excludeRootNames);
+export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number, excludeRootNames: readonly string[] = [], maxFiles?: number): Promise<WorktreeRecoveryArchive> {
+  const files = await inventoryWorktree(root, maxBytes, excludeRootNames, maxFiles);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const file = `${resourceId}-${randomUUID()}.tar.gz.enc`;
   await fs.mkdir(directory, { recursive: true });

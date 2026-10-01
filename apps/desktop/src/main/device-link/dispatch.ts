@@ -36,6 +36,7 @@ import {
   canCoalesceRemoteListing,
   isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
+  resolveRemoteInvokeTimeoutMs,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   REMOTE_INVOKE_ALLOWLIST,
@@ -769,9 +770,12 @@ const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
  * 默认 30s handler 都会占满 controller 的 in-flight 配额整整 22 分钟,后续远程控制
  * 动作看起来卡住(BACKPRESSURE)。
  */
-function remoteInvokeOrphanTimeoutMs(channel: string | undefined): number {
+function remoteInvokeOrphanTimeoutMs(channel: string | undefined, args?: unknown[]): number {
+  // Same resolver as the desktop controller, so action-specific budgets (task copy
+  // estimate/receive) are honoured here too instead of the channel default.
   const budgetMs =
-    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
+    (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) ||
+    DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
   return Math.min(budgetMs * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
 }
 interface CachedRemoteInvokeResult {
@@ -2721,6 +2725,7 @@ async function handleInvoke(
     executionPromise,
     src,
     payload?.channel,
+    payload?.args,
   ).finally(releaseBusyLease);
   const inFlightEntry = {
     promise: resultPromise,
@@ -2777,9 +2782,10 @@ function settleRemoteInvokeWithOrphanDeadline(
   execution: Promise<InvokeResultPayload>,
   src: string,
   channel: string | undefined,
+  args?: unknown[],
 ): Promise<InvokeResultPayload> {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const orphanMs = remoteInvokeOrphanTimeoutMs(channel);
+  const orphanMs = remoteInvokeOrphanTimeoutMs(channel, args);
   const timeout = new Promise<InvokeResultPayload>((resolve) => {
     timer = setTimeout(() => {
       timer = null;
