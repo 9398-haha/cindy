@@ -25,7 +25,9 @@ vi.mock("@expo/ui/jetpack-compose", () => ({
   },
 }));
 vi.mock("react-native", () => ({
-  ScrollView: ({ children }: any) => <div>{children}</div>,
+  ScrollView: ({ children, nestedScrollEnabled }: any) => (
+    <div data-nested-scroll={nestedScrollEnabled ? "true" : "false"}>{children}</div>
+  ),
   StyleSheet: { create: (s: any) => s },
   useWindowDimensions: () => ({ width: 400, height: 800 }),
 }));
@@ -151,6 +153,7 @@ describe.each([SessionActionSheetFrame, NativeBottomSheet])(
       await act(async () => {
         finish();
       });
+
       flushFrames();
       expect(closed).toHaveBeenCalledOnce();
       expect(container.textContent).toBe("");
@@ -208,3 +211,14 @@ describe.each([SessionActionSheetFrame, NativeBottomSheet])(
     );
   },
 );
+
+it("enables nested scrolling for the native action-sheet content", () => {
+  act(() =>
+    root.render(
+      <SessionActionSheetFrame visible onClose={vi.fn()}>
+        actions
+      </SessionActionSheetFrame>,
+    ),
+  );
+  expect(container.querySelector('[data-nested-scroll="true"]')).not.toBeNull();
+});

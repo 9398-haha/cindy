@@ -84,6 +84,10 @@ export function SessionActionSheetFrame({
         <RNHostView matchContents>
           <GestureHandlerRootView style={{ maxHeight: height * 0.8 }}>
             <ScrollView
+              // Task tags and other expanded controls may host their own
+              // vertical lists. Let Android negotiate the child scroll first
+              // instead of locking gestures to the sheet viewport.
+              nestedScrollEnabled
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.content}
               testID="home.sessionActions"

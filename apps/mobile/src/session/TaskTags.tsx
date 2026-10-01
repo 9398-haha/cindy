@@ -937,6 +937,10 @@ export function TaskTagsPanel({
         <View ref={viewportRef} collapsable={false}>
           <ScrollView
             ref={listRef}
+            // This list is rendered inside the Android native action-sheet
+            // ScrollView; opt into Android's nested-scroll contract on both
+            // sides so tag scrolling remains usable at either edge.
+            nestedScrollEnabled
             scrollEnabled={!draggedId}
             scrollEventThrottle={16}
             onScroll={(event) => {
