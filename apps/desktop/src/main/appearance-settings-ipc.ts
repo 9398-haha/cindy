@@ -53,7 +53,7 @@ export function registerAppearanceSettingsIpc(): void {
   // the first synchronous bootstrap frame.
   ipcMain.on('appearance-settings:get-sync', (event) => {
     event.returnValue = isTrustedAppearanceSettingsReadEvent(event)
-      ? readAppearanceSettings()
+      ? appearanceForWindow(readAppearanceSettings(), BrowserWindow.fromWebContents(event.sender))
       : null;
   });
 
@@ -157,11 +157,21 @@ export async function updatePersistedWindowZoom(delta: number | null): Promise<A
   return settings;
 }
 
+// A font/theme reader is not a grant to the owner's private media capability.
+function appearanceForWindow(settings: AppearanceSettings, win: BrowserWindow | null): AppearanceSettings {
+  if (isAppContentWindow(win)) return settings;
+  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
+  return {
+    ...publicSettings,
+    wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
+  };
+}
+
 function broadcast(settings: AppearanceSettings): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppearanceSettingsReadWindow(win)) continue;
     try {
-      win.webContents.send(APPEARANCE_SETTINGS_CHANGED_CHANNEL, settings);
+      win.webContents.send(APPEARANCE_SETTINGS_CHANGED_CHANNEL, appearanceForWindow(settings, win));
     } catch {
       // A window may be torn down between enumeration and send.
     }

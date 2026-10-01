@@ -15,7 +15,7 @@ import { withCrossProcessLock } from './device-link/crossProcessLock.js';
 const log = createLogger('custom-wallpaper');
 const REF = { refKind: 'import' as const, refId: 'desktop-custom-wallpaper' };
 const MAX_BYTES = 20 * 1024 * 1024;
-let queue: Promise<unknown> = Promise.resolve();
+const queues = new Map<string, Promise<unknown>>();
 
 function captureScope() {
   const snapshot = getCurrentDbClientSnapshot();
@@ -31,7 +31,7 @@ function captureScope() {
 
 function serialize<T>(action: () => Promise<T>): Promise<T> {
   const lockPath = ownerScopedUserDataPath('custom-wallpaper-operation.lock');
-  const result = queue
+  const result = (queues.get(lockPath) ?? Promise.resolve())
     .catch(() => undefined)
     .then(() =>
       withCrossProcessLock(
@@ -44,7 +44,11 @@ function serialize<T>(action: () => Promise<T>): Promise<T> {
         },
       ),
     );
-  queue = result;
+  queues.set(lockPath, result);
+  const release = () => {
+    if (queues.get(lockPath) === result) queues.delete(lockPath);
+  };
+  void result.then(release, release);
   return result;
 }
 

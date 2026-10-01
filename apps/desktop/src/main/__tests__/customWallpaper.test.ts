@@ -17,7 +17,7 @@ vi.mock('electron', () => ({ dialog: { showOpenDialog: h.picker } }));
 vi.mock('../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../utils/readBoundedFile.js', () => ({ readBoundedFileNoFollow: h.read }));
 vi.mock('../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => h.snapshot }));
-vi.mock('../appSessionState.js', () => ({ ownerScopedUserDataPath: () => 'test-lock' }));
+vi.mock('../appSessionState.js', () => ({ ownerScopedUserDataPath: () => `test-lock-${h.snapshot.userId}` }));
 vi.mock('../device-link/crossProcessLock.js', () => ({
   withCrossProcessLock: (_p: string, _o: unknown, fn: Function) => fn({ held: true }),
 }));
@@ -42,6 +42,7 @@ import {
 const url = `cindy-media://blobs/${'a'.repeat(64)}.webp`;
 beforeEach(async () => {
   vi.resetAllMocks();
+  h.snapshot = { client: { drizzle: {} }, userId: 'test', clientEpoch: 1 };
   h.picker.mockResolvedValue({ canceled: false, filePaths: ['chosen-image'] });
   h.read.mockResolvedValue(
     await sharp({ create: { width: 8, height: 4, channels: 3, background: 'blue' } })
@@ -52,6 +53,38 @@ beforeEach(async () => {
 });
 
 describe('custom wallpaper import', () => {
+  it('lets another owner remove their image while the old owner picker remains open', async () => {
+    let closePicker!: (value: { canceled: boolean; filePaths: string[] }) => void;
+    h.picker.mockReturnValueOnce(new Promise(resolve => { closePicker = resolve; }));
+    const oldImport = importCustomWallpaper({} as never);
+    const rejected = expect(oldImport).rejects.toThrow('Wallpaper owner changed');
+    await vi.waitFor(() => expect(h.picker).toHaveBeenCalledOnce());
+    h.snapshot = { client: { drizzle: {} }, userId: 'other', clientEpoch: 2 };
+    const removal = removeCustomWallpaper();
+    try {
+      await vi.waitFor(() => expect(h.reset).toHaveBeenCalledOnce());
+    } finally {
+      closePicker({ canceled: true, filePaths: [] });
+      await rejected;
+      await removal;
+    }
+    expect(h.ingest).not.toHaveBeenCalled();
+    expect(h.remove).toHaveBeenCalledWith(expect.anything(), h.snapshot.client.drizzle);
+  });
+
+  it('serializes operations for the same owner until their picker closes', async () => {
+    let closePicker!: (value: { canceled: boolean; filePaths: string[] }) => void;
+    h.picker.mockReturnValueOnce(new Promise(resolve => { closePicker = resolve; }));
+    const importing = importCustomWallpaper({} as never);
+    await vi.waitFor(() => expect(h.picker).toHaveBeenCalledOnce());
+    const removal = removeCustomWallpaper();
+    await Promise.resolve();
+    expect(h.reset).not.toHaveBeenCalled();
+    closePicker({ canceled: true, filePaths: [] });
+    await importing;
+    await removal;
+    expect(h.reset).toHaveBeenCalledOnce();
+  });
   it('decodes and pins the image before publishing, then removes only older wallpaper refs', async () => {
     expect(await importCustomWallpaper({} as never)).toBe(true);
     expect(h.ingest).toHaveBeenCalledWith(

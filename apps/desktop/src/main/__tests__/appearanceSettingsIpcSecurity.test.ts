@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   importWallpaper: vi.fn(),
   removeWallpaper: vi.fn(),
   ensureVideo: vi.fn(),
+  fromWebContents: vi.fn(),
 }));
 
 vi.mock('../appSessionState.js', () => ({
@@ -30,7 +31,7 @@ vi.mock('../custom-wallpaper.js', () => ({
 vi.mock('../wallpaper-video.js', () => ({ ensureWallpaperVideo: mocks.ensureVideo }));
 
 vi.mock('electron', () => ({
-  BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: () => ({}) },
+  BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: mocks.fromWebContents },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
 }));
 
@@ -53,6 +54,7 @@ vi.mock('../appearance-settings-store.js', () => ({
 
 import { registerAppearanceSettingsIpc, __testing } from '../appearance-settings-ipc.js';
 import { normalizeAppearanceSettings } from '../../shared/appearanceSettings.js';
+import { markAppContentWindow } from '../windowFocusClassifier.js';
 
 const persisted = {
   uiFamily: 'Inter',
@@ -145,6 +147,7 @@ describe('appearance settings IPC authorization', () => {
     mocks.trustedReadWindow.mockReset().mockReturnValue(false);
     mocks.assertTrustedAppRendererEvent.mockReset();
     mocks.readAppearanceSettings.mockReset().mockReturnValue(persisted);
+    mocks.fromWebContents.mockReset().mockReturnValue({ isDestroyed: () => false });
   });
 
   it('同步启动读取只向已授权的外观 reader 返回持久快照', () => {
@@ -187,6 +190,35 @@ describe('appearance settings IPC authorization', () => {
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenNthCalledWith(1, event);
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenNthCalledWith(2, event);
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenNthCalledWith(3, event);
+  });
+
+  it('withholds private media from utility bootstrap and broadcasts, while retaining it for app content', async () => {
+    const settings = normalizeAppearanceSettings({
+      wallpaperId: 'custom',
+      customWallpaperUrl: `cindy-media://blobs/${'a'.repeat(64)}.webp`,
+    });
+    const utility = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn() } };
+    const content = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn(), setZoomFactor: vi.fn() } };
+    markAppContentWindow(content as never);
+    mocks.trustedRead.mockReturnValue(true);
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    const sync = mocks.ipcOn.mock.calls.find(([name]) => name === 'appearance-settings:get-sync')![1];
+    const event = { sender: {}, returnValue: undefined as unknown };
+    mocks.fromWebContents.mockReturnValue(utility);
+    sync(event);
+    expect(event.returnValue).not.toHaveProperty('customWallpaperUrl');
+    expect(event.returnValue).toMatchObject({ wallpaperId: 'none', uiSize: settings.uiSize });
+    mocks.fromWebContents.mockReturnValue(content);
+    sync(event);
+    expect(event.returnValue).toEqual(settings);
+
+    mocks.allWindows.push(utility, content);
+    mocks.trustedReadWindow.mockReturnValue(true);
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(settings);
+    const set = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:set-patch')![1];
+    await set({}, { uiSize: 15 });
+    expect(utility.webContents.send.mock.calls[0][1]).not.toHaveProperty('customWallpaperUrl');
+    expect(content.webContents.send).toHaveBeenCalledWith('appearance-settings:changed', settings);
   });
 
   it('外观变更广播也覆盖显式授权的 utility 窗口', async () => {

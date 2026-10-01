@@ -1,0 +1,109 @@
+// @vitest-environment jsdom
+import React, { act, type ReactNode } from 'react';
+import { afterEach, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_APPEARANCE_SETTINGS,
+  type AppearanceSettings,
+} from '../../shared/appearanceSettings';
+
+const h = vi.hoisted(() => ({ roots: [] as Array<{ unmount(): void }> }));
+vi.mock('react-dom/client', async (original) => {
+  const actual = await original<typeof import('react-dom/client')>();
+  return {
+    ...actual,
+    createRoot: (...args: Parameters<typeof actual.createRoot>) => {
+      const root = actual.createRoot(...args);
+      h.roots.push(root);
+      return root;
+    },
+  };
+});
+vi.mock('@/i18n', () => ({}));
+vi.mock('../themes/colors', () => ({}));
+vi.mock('../themes/local-themes', () => ({ bootstrapLocalThemesSync: vi.fn() }));
+vi.mock('../themes/theme-service', () => ({ themeService: { applyTheme: vi.fn() } }));
+vi.mock('../hooks/useTheme', () => ({ getInitialThemeVariant: () => ({ theme: 'test' }) }));
+vi.mock('../hooks/useFontSettings', () => ({
+  applyFontSettings: vi.fn(),
+  getInitialFontSettings: vi.fn(),
+}));
+vi.mock('../hooks/useLocale', () => ({
+  bootstrapInitialLocale: vi.fn(),
+  LocaleProvider: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('../components/error/TopLevelErrorBoundary', () => ({
+  TopLevelErrorBoundary: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('../components/ui/confirm-dialog-provider', () => ({
+  ConfirmDialogProvider: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('../contexts/AuthContext', () => ({
+  AuthProvider: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('../cindy-brain/ghostPanels', () => ({ ensureGhostPanelsRegistered: vi.fn() }));
+vi.mock('../components/layout/SidebarWindowLayout', () => ({
+  SidebarWindowLayout: () => <div>sidebar host</div>,
+}));
+vi.mock('../components/layout/GhostPanelWindowLayout', () => ({
+  GhostPanelWindowLayout: () => <div>plugin host</div>,
+}));
+
+afterEach(async () => {
+  await act(async () => {
+    for (const root of h.roots.splice(0)) root.unmount();
+  });
+  document.body.innerHTML = '';
+  document.documentElement.classList.remove('dark');
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+it.each(['sidebar', 'plugin'] as const)(
+  'boots %s with a wallpaper using its read-only bridge and follows live changes',
+  async (kind) => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    document.body.innerHTML = '<div id="root"></div>';
+    let changed!: (settings: AppearanceSettings) => void;
+    vi.stubGlobal('electronAPI', {
+      platform: 'win32',
+      appearanceSettings: {
+        getSync: () => ({
+          ...DEFAULT_APPEARANCE_SETTINGS,
+          wallpaperId: 'cindy-window',
+          wallpaperMotion: 'dynamic',
+        }),
+        onChanged: (fn: typeof changed) => {
+          changed = fn;
+          return () => {};
+        },
+      },
+    });
+    await act(async () => {
+      if (kind === 'sidebar') await import('../sidebar-window-entry');
+      else await import('../ghost-panel-window-entry');
+    });
+    expect(document.body.textContent).toContain(
+      kind === 'sidebar' ? 'sidebar host' : 'plugin host',
+    );
+    expect(document.documentElement.dataset.wallpaperActive).toBe('true');
+    expect(document.querySelectorAll('video')).toHaveLength(1);
+    const lightVeil = document.documentElement.style.getPropertyValue('--app-wallpaper-veil');
+    await act(async () => {
+      document.documentElement.classList.add('dark');
+    });
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).not.toBe(
+      lightVeil,
+    );
+    const url = 'cindy-media://blobs/' + 'a'.repeat(64) + '.webp';
+    await act(async () =>
+      changed({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: url }),
+    );
+    expect(document.querySelector('video')).toBeNull();
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url);
+    await act(async () => changed(DEFAULT_APPEARANCE_SETTINGS));
+    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+  },
+);
