@@ -467,6 +467,7 @@ export function createLiziMcpProviders(
         name: 'cindy_memory',
         instance: createCindyMemoryMcpServer({
           getManager: opts.memory!.getManager,
+          withAccountDataAccess: opts.memory!.withAccountDataAccess,
           workdir: ctx.workingDir,
           getSessionContext: () => resolveLiziMcpSessionContext(ctx),
           beginWrite: opts.memory!.beginWrite,
