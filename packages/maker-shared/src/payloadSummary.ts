@@ -547,18 +547,22 @@ function withoutSourceComments(text: string): string {
   return parts.join('');
 }
 
+function sourceLiteralPrefix(text: string, quoteIndex: number): string {
+  const rawPrefix = text.slice(0, quoteIndex);
+  // Python/C# literal markers sit between the source operator and quote.
+  // Only unwrap a recognized, adjacent marker; still require source syntax
+  // before it, and never strip a suffix from an identifier such as "offer".
+  const marker = text[quoteIndex] === '`' ? null : /(?:\b(?:br|rb|fr|rf|[rubf])|\$@|@\$|[$@])$/i.exec(rawPrefix);
+  return (marker ? rawPrefix.slice(0, marker.index) : rawPrefix).trimEnd();
+}
+
 function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
   const before = text[index - 1];
   const after = text[end];
   if (before !== '`' && before !== '\'' && before !== '"') return false;
   // Quotes alone also occur in prose and inline Markdown. Require source syntax
   // around the literal (assignment, collection entry, argument or conditional).
-  const rawPrefix = text.slice(0, index - 1);
-  // Python/C# literal markers sit between the source operator and quote.
-  // Only unwrap a recognized, adjacent marker; still require source syntax
-  // before it, and never strip a suffix from an identifier such as "offer".
-  const marker = before === '`' ? null : /(?:\b(?:br|rb|fr|rf|[rubf])|\$@|@\$|[$@])$/i.exec(rawPrefix);
-  const prefix = (marker ? rawPrefix.slice(0, marker.index) : rawPrefix).trimEnd();
+  const prefix = sourceLiteralPrefix(text, index - 1);
   return /(?:[=\[(,?]|=>|&&|\|\||\breturn)$/.test(prefix)
     // A colon alone is also a prose label ("File:"). Require a preceding
     // conditional, allowing indented continuation lines but not new prose.
@@ -576,9 +580,12 @@ function* quotedSourceRanges(text: string): Generator<{ start: number; end: numb
     const start = token.start;
     // Tool output may end mid-literal after the Host applies its byte budget.
     const end = token.end - (token.closed ? 1 : 0);
-    const continuesList = previous
-      && withoutSourceComments(text.slice(previous.end + 1, start)).trim() === ',';
-    const source: boolean = previous && continuesList
+    // Comments are already masked. Carry the established context across a list
+    // or concatenation, including prefixed literals, without treating prose +
+    // as source syntax by itself.
+    const separator = previous ? sourceLiteralPrefix(text, start).slice(previous.end + 1).trim() : '';
+    const continuesExpression = separator === ',' || separator === '+';
+    const source: boolean = previous && continuesExpression
       ? previous.source
       : looksLikeQuotedSourceLiteral(text, start + 1, end);
     if (source) yield { start, end };

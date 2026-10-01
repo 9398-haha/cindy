@@ -32,6 +32,7 @@ describe('mobile tool projection', () => {
       + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
       + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
       + "const paths = names.map(() => 'Open xdt-file:///tmp/callback.pdf')\n"
+      + 'const combined = "prefix" + "xdt-file:///tmp/combined.pdf"\n'
       + 'path = r"xdt-file:///tmp/python.pdf"\nvar path = @"Open xdt-file:///tmp/csharp.pdf"\n'
       + '// fixture: xdt-file:///tmp/comment.pdf\n/* example: xdt-file:///tmp/block.pdf */\n'
       + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']\n"

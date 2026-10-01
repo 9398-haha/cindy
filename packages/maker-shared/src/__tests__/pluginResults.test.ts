@@ -4,12 +4,33 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each(["'", '"', String.fromCharCode(96)])('keeps concatenated source literals out of delivered files: %s', (quote) => {
+    const url = 'xdt-file:///tmp/concatenated.pdf';
+    const literal = quote + url + quote;
+    for (const source of [
+      'const path = "prefix" + ' + literal,
+      'const path = "prefix" + /* continuation */\n  ' + literal,
+      'return "prefix" + " middle " + ' + literal,
+      'const path = "prefix"+' + quote + 'Open ' + url + quote,
+    ]) {
+      expect(files(source), source).toEqual([]);
+      expect(files(JSON.stringify({ text: source })), source).toEqual([]);
+      expect(files(source + '\nSaved ' + literal)).toEqual([{ url, title: 'concatenated.pdf' }]);
+      expect(files(JSON.stringify({ text: source, _xdt_model_files: [{ url, name: 'Concatenated' }] })))
+        .toEqual([{ url, title: 'Concatenated' }]);
+    }
+    const next = 'xdt-file:///tmp/next.pdf';
+    expect(files('Saved ' + literal + ' + ' + quote + next + quote)).toEqual([
+      { url, title: 'concatenated.pdf' }, { url: next, title: 'next.pdf' },
+    ]);
+    expect(files('Saved "prefix" + ' + literal)).toEqual([{ url, title: 'concatenated.pdf' }]);
+  });
   it.each(['r', 'R', 'f', 'F', 'b', 'u', 'br', 'rb', 'fr', 'rf', '@', '$', '@$', '$@'])('recognizes source literals with prefix %s', (prefix) => {
     const url = 'xdt-file:///tmp/prefixed.pdf';
     for (const quote of (prefix.includes('@') || prefix.includes('$') ? ['"'] : ["'", '"'])) {
       for (const content of [url, 'Open ' + url]) {
         const literal = prefix + quote + content + quote;
-        for (const source of ['path = ' + literal, 'return ' + literal, 'open(' + literal + ')', 'paths = [' + literal + ']']) {
+        for (const source of ['path = ' + literal, 'return ' + literal, 'open(' + literal + ')', 'paths = [' + literal + ']', 'path = "prefix" + ' + literal]) {
           expect(files(source), source).toEqual([]);
           expect(files(JSON.stringify({ text: source })), source).toEqual([]);
           expect(files(source + '\nSaved "' + url + '"')).toEqual([{ url, title: 'prefixed.pdf' }]);
