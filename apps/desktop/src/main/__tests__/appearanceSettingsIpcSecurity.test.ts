@@ -36,7 +36,8 @@ vi.mock('../appearance-settings-store.js', () => ({
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
 }));
 
-import { registerAppearanceSettingsIpc } from '../appearance-settings-ipc.js';
+import { registerAppearanceSettingsIpc, __testing } from '../appearance-settings-ipc.js';
+import { normalizeAppearanceSettings } from '../../shared/appearanceSettings.js';
 
 const persisted = {
   uiFamily: 'Inter',
@@ -47,6 +48,18 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  it('validates motion choices and preserves the static default for old settings', () => {
+    expect(normalizeAppearanceSettings({ wallpaperId: 'cindy-window' }).wallpaperMotion).toBe(
+      'static',
+    );
+    expect(__testing.parsePatch({ wallpaperMotion: 'dynamic' })).toEqual({
+      wallpaperMotion: 'dynamic',
+    });
+    expect(__testing.parsePatch({ wallpaperMotion: 'static' })).toEqual({
+      wallpaperMotion: 'static',
+    });
+    expect(() => __testing.parsePatch({ wallpaperMotion: 'auto' })).toThrow();
+  });
   beforeAll(() => {
     registerAppearanceSettingsIpc();
   });
@@ -124,4 +137,33 @@ describe('appearance settings IPC authorization', () => {
     expect(allowedSend).toHaveBeenCalledWith('appearance-settings:changed', persisted);
     expect(deniedSend).not.toHaveBeenCalled();
   });
+
+  it('accepts a validated wallpaper patch', async () => {
+    const setHandler = mocks.ipcHandle.mock.calls.find(
+      ([channel]) => channel === 'appearance-settings:set-patch',
+    )?.[1] as (event: unknown, patch: unknown) => Promise<unknown>;
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(persisted);
+
+    await setHandler(
+      {},
+      {
+        wallpaperId: 'cindy-window',
+        wallpaperOverlay: 0.35,
+      },
+    );
+
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledWith({
+      wallpaperId: 'cindy-window',
+      wallpaperOverlay: 0.35,
+    });
+  });
+  it.each(['cindy', 'cindy-portrait', 'aurora', 'sunset', 'paper', 'custom'])(
+    'rejects retired wallpaper %s at the write boundary',
+    async (wallpaperId) => {
+      const setHandler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === 'appearance-settings:set-patch',
+      )?.[1] as (event: unknown, patch: unknown) => Promise<unknown>;
+      await expect(setHandler({}, { wallpaperId })).rejects.toThrow('wallpaperId is not supported');
+    },
+  );
 });

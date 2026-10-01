@@ -867,6 +867,25 @@
         "bubble": "浮动气泡",
         "sidebar": "侧边栏"
       },
+      "wallpaper": {
+        "title": "壁纸",
+        "description": "为整个应用选择一款 Cindy 场景壁纸，支持静态或动态展示。",
+        "reset": "恢复默认",
+        "aria": "壁纸选择",
+        "nonePreview": "无",
+        "options": {
+          "none": "无",
+          "cindy-window": "Cindy · 窗边陪伴",
+          "cindy-studio": "Cindy · 未来工作室",
+          "cindy-dream": "Cindy · 梦境漫游"
+        },
+        "overlayLabel": "遮罩",
+        "overlayAria": "壁纸遮罩强度",
+        "motionLabel": "展示方式",
+        "motionHint": "默认静态；动态在窗口隐藏时暂停，并遵循系统减少动效设置。",
+        "motionStatic": "静态",
+        "motionDynamic": "动态"
+      },
       "layout": {
         "label": "面板布局",
         "hint": "面板位置和宽度会保留到下次启动。如果布局变得难以使用，可以恢复默认排列。",

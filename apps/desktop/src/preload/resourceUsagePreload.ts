@@ -30,6 +30,13 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+// This window is created hidden. Capture the initial main broadcast before the
+// lazy renderer entry loads, then replay it to late/HMR subscribers.
+let windowHidden = true;
+onPayload<boolean>('window-hidden-change', (hidden) => {
+  windowHidden = hidden;
+});
+
 function readPreferredSystemLocale(): ApplicationMenuLocale {
   try {
     const value = ipcRenderer.sendSync('app-locale:get-preferred-system-locale-sync');
@@ -50,6 +57,11 @@ const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => voi
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
+    const off = onPayload('window-hidden-change', cb);
+    cb(windowHidden);
+    return off;
+  },
   preferredSystemLocale: readPreferredSystemLocale(),
   windowMinimize: (): void => ipcRenderer.send('window-minimize'),
   windowMaximize: (): void => ipcRenderer.send('window-maximize'),

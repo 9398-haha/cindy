@@ -62,6 +62,64 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 > **Important — element-level vs. page-level:** The "flat Surface" rule in full-window layouts applies only to the **overall page structure**, not to individual widgets. Lifted widgets _within_ a full-window layout — inputs, chat input boxes, raised cards, modal overlays, panel popups — still use **Card** color per their component rules (see Section 4). A full-window chat interface can have a flat Surface page _and_ a Card-colored chat input box at the same time; those are two different scopes. "Surface flat" means "don't split the page into Page+Card layers," not "every element on the page must be Surface color."
 
+### Optional application wallpaper (user decision, 2026-10-01)
+
+An explicitly selected Desktop wallpaper replaces the flat page canvas across
+the whole host application: title bar, navigation, messages, tool-pane chrome,
+settings and other host pages share continuous viewport-aligned artwork. This
+opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
+disabling it restores the original theme without modifying theme files or tokens.
+Use a theme-surface veil, never a fixed black overlay in Light mode. Image opacity
+must not affect text or icons. Elevated controls, menus, dialogs and embedded web
+or editor content keep their readable surfaces. Composer scroll masking must
+align with the same wallpaper instead of introducing an opaque footer rectangle.
+Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
+Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
+
+The wallpaper catalog contains only Window Companion, Future Atelier and Dream
+Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
+Remove the previous arrow, standalone portrait, gradient, paper and custom-image
+options and assets. Retired saved selections normalize to None; unrelated theme
+and font preferences remain unchanged. All three scenes use the same cover fit,
+so do not expose a fit selector that cannot affect them.
+
+The scene-led Cindy wallpaper alternatives (2026-10-01) place the recognizable
+character and black cat in three distinct illustrated environments: a sunny
+window, a futuristic atelier and a floating garden above clouds. Preserve each
+landscape as one viewport-sized, cover-fitted canvas behind navigation, chat and
+tools. Do not confine the scene to chat, fade its edges into a separate backdrop,
+or reposition/scale it when sidebars open: that splits the app into disconnected
+pieces (user correction, 2026-10-01). Only window resizing changes the crop.
+These curated scenes use a lighter theme-derived
+veil than arbitrary photos, with a stronger Dark veil to preserve reading
+contrast. Validate real long messages, not only empty chat views.
+
+The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
+Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
+camera, preserving the same composition and full-window crop. Decode one local video
+per window, suspend playback while hidden/minimized, and use the original still for
+reduced motion or playback failure. Switching back to Static releases the video.
+For moving scenes, fade the message layer above the composer instead of painting a
+static duplicate of the wallpaper over it. Check the loop seam and actual Light/Dark
+chat readability, including collapsed sidebars and resized windows.
+
+Environment motion must be clearly perceptible rather than concentrated on the
+character (user correction, 2026-10-01). Animate existing foliage, curtains and
+leaf shadows in the sunny scene; rain, plants and reflections in the atelier;
+clouds, grasses, vines and waterfalls in the floating garden. Keep architecture
+and the camera stationary. Prefer several slow, independent environmental rhythms
+with restrained character movement; verify foliage crops and loop transitions,
+including after the Light/Dark readability veil is applied.
+For the floating garden, keep the environmental amplitude restrained: tiny leaf
+and vine-tip movement, slow cloud-edge drift and fine downward water flow. Avoid
+large drifting petals, rolling cloud banks and whole flowerbeds sweeping across
+the view (user correction, 2026-10-01). Demonstrate motion in recordings of the real
+chat interface with messages, composer and pane chrome, not only isolated artwork.
+In the sunny window scene, keep the curtain close to its resting drape: small,
+slow folds rather than large billows across the window. Nearby leaves and light
+shadows should move gently without competing with messages (user correction,
+2026-10-01).
+
 ### Task tag identity colors
 
 用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。只用于标签色球与编辑色板，表示用户分类，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。

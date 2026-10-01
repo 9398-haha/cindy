@@ -2,11 +2,14 @@ import { BrowserWindow, ipcMain } from 'electron';
 
 import {
   APPEARANCE_LIMITS,
+  WALLPAPER_IDS,
+  clampAppearanceWallpaperOverlay,
   clampAppearanceCodeSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
   type AppearanceOverrides,
   type AppearanceSettings,
+  type WallpaperId,
 } from '../shared/appearanceSettings.js';
 import {
   isTrustedAppearanceSettingsReadEvent,
@@ -82,13 +85,9 @@ export function getPersistedWindowZoom(): number {
   return readAppearanceSettings().windowZoom;
 }
 
-export async function updatePersistedWindowZoom(
-  delta: number | null,
-): Promise<AppearanceSettings> {
+export async function updatePersistedWindowZoom(delta: number | null): Promise<AppearanceSettings> {
   const settings = await updateAppearanceSettingsAtomic((current) => ({
-    windowZoom: clampAppearanceWindowZoom(
-      delta === null ? 1 : current.windowZoom + delta,
-    ),
+    windowZoom: clampAppearanceWindowZoom(delta === null ? 1 : current.windowZoom + delta),
   }));
   applyAppearanceToWindows(settings);
   broadcast(settings);
@@ -111,7 +110,16 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     throwIpcError('INVALID_PARAMS', 'appearance patch must be an object');
   }
   const raw = rawPatch as Record<string, unknown>;
-  const allowed = new Set(['uiFamily', 'codeFamily', 'uiSize', 'codeSize', 'windowZoom']);
+  const allowed = new Set([
+    'uiFamily',
+    'codeFamily',
+    'uiSize',
+    'codeSize',
+    'windowZoom',
+    'wallpaperId',
+    'wallpaperOverlay',
+    'wallpaperMotion',
+  ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
@@ -139,6 +147,29 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
       clampAppearanceWindowZoom,
       APPEARANCE_LIMITS.windowZoom,
     );
+  }
+  if ('wallpaperId' in raw) {
+    if (
+      typeof raw.wallpaperId !== 'string' ||
+      !(WALLPAPER_IDS as readonly string[]).includes(raw.wallpaperId)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'wallpaperId is not supported');
+    }
+    patch.wallpaperId = raw.wallpaperId as WallpaperId;
+  }
+  if ('wallpaperOverlay' in raw) {
+    patch.wallpaperOverlay = parseNumber(
+      raw.wallpaperOverlay,
+      'wallpaperOverlay',
+      clampAppearanceWallpaperOverlay,
+      APPEARANCE_LIMITS.wallpaperOverlay,
+    );
+  }
+  if ('wallpaperMotion' in raw) {
+    if (raw.wallpaperMotion !== 'static' && raw.wallpaperMotion !== 'dynamic') {
+      throwIpcError('INVALID_PARAMS', 'wallpaperMotion is not supported');
+    }
+    patch.wallpaperMotion = raw.wallpaperMotion;
   }
   return patch;
 }

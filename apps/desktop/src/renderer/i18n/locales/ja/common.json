@@ -867,6 +867,25 @@
         "bubble": "フローティングバブル",
         "sidebar": "サイドバー"
       },
+      "wallpaper": {
+        "title": "壁紙",
+        "description": "アプリ全体に表示する Cindy の壁紙を選び、静止画と動画を切り替えられます。",
+        "reset": "デフォルトに戻す",
+        "aria": "壁紙の選択",
+        "nonePreview": "なし",
+        "options": {
+          "none": "なし",
+          "cindy-window": "Cindy · 窓辺のひととき",
+          "cindy-studio": "Cindy · 未来のアトリエ",
+          "cindy-dream": "Cindy · 夢の旅"
+        },
+        "overlayLabel": "オーバーレイ",
+        "overlayAria": "壁紙オーバーレイの強さ",
+        "motionLabel": "表示方法",
+        "motionHint": "初期設定は静止画です。非表示時は停止し、システムの視差効果を減らす設定に従います。",
+        "motionStatic": "静止画",
+        "motionDynamic": "動画"
+      },
       "layout": {
         "label": "パネルレイアウト",
         "hint": "パネルの位置と幅は次回起動時も保持されます。使いにくい配置になった場合は、初期レイアウトに戻せます。",
