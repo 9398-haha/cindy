@@ -36,6 +36,7 @@ import {
   canCoalesceRemoteListing,
   isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
+  ACTION_INVOKE_TIMEOUTS_MS,
   resolveRemoteInvokeTimeoutMs,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -742,6 +743,7 @@ const DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS = 30_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
   DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
+  ...ACTION_INVOKE_TIMEOUTS_MS,
 );
 /** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
 const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;

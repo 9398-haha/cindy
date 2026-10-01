@@ -308,12 +308,12 @@ export async function estimateWorkspace(
           : await fs.lstat(file);
       if (kind.isDirectory()) {
         if (directory !== root || !excluded.includes(entry.name)) pending.push(file);
-      } else if (kind.isFile() || kind.isSymbolicLink()) files.push(file);
-      else throw new Error('MIGRATION_NONPORTABLE_PATH');
+      } else if (kind.isFile() || kind.isSymbolicLink()) {
+        // Count as each file is recognised, before any per-file work beyond the cap.
+        if (++result.fileCount > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
+        files.push(file);
+      } else throw new Error('MIGRATION_NONPORTABLE_PATH');
     }
-    // Count before stat so an oversized directory stops without statting every entry.
-    result.fileCount += files.length;
-    if (result.fileCount > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
     for (let index = 0; index < files.length; index += STAT_BATCH) {
       check();
       const stats = await Promise.all(

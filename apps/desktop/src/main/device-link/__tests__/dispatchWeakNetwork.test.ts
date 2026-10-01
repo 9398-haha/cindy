@@ -22,6 +22,7 @@ import {
   PROTOCOL_VERSION,
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  resolveRemoteInvokeTimeoutMs,
   type Envelope,
 } from '@cindy/device-link';
 
@@ -688,6 +689,24 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
       __testing.outboxEntryMaxAgeMs(TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]);
     expect(outbox('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
     expect(outbox('status')).toBe(60_000);
+  });
+
+  it('被控端从不早于控制端放弃：orphan 与 outbox 覆盖每个通道与动作的等待预算', () => {
+    const calls: Array<[string | undefined, unknown[] | undefined]> = [
+      [undefined, undefined],
+      ...Object.keys(INVOKE_TIMEOUT_OVERRIDES_MS).map(
+        (channel) => [channel, undefined] as [string, undefined],
+      ),
+      ...['estimate', 'receive', 'status', 'start', 'caps'].map(
+        (action) => [TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]] as [string, unknown[]],
+      ),
+    ];
+    for (const [channel, args] of calls) {
+      const budget =
+        (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) || 30_000;
+      expect(__testing.remoteInvokeOrphanTimeoutForChannelMs(channel, args)).toBeGreaterThanOrEqual(budget);
+      expect(__testing.outboxEntryMaxAgeMs(channel, args)).toBeGreaterThanOrEqual(budget);
+    }
   });
 });
 

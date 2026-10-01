@@ -86,6 +86,35 @@ it('counts a wide, deep tree and stops once the file cap is exceeded', async () 
   }
 });
 
+it('stops at the file cap even when every entry type is unknown', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-'));
+  const readdir = fs.readdir.bind(fs);
+  const unknown = vi.spyOn(fs, 'readdir').mockImplementation((async (
+    directory: string,
+    options: unknown,
+  ) =>
+    (await readdir(directory, options as { withFileTypes: true })).map((entry) => ({
+      name: entry.name,
+      isDirectory: () => false,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+    }))) as never);
+  const lstat = vi.spyOn(fs, 'lstat');
+  try {
+    await Promise.all(
+      Array.from({ length: 300 }, (_, i) => fs.writeFile(path.join(root, `f${i}`), '')),
+    );
+    lstat.mockClear();
+    await expect(estimateWorkspace(root, () => {}, 10)).rejects.toThrow('MIGRATION_TOO_MANY_FILES');
+    // Classifying the 11th file is the last per-file work; the other 289 are never statted.
+    expect(lstat.mock.calls.length).toBeLessThanOrEqual(11);
+  } finally {
+    lstat.mockRestore();
+    unknown.mockRestore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 it('classifies entries of unknown type with lstat instead of rejecting them', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-'));
   const readdir = fs.readdir.bind(fs);
