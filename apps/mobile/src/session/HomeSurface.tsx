@@ -4311,17 +4311,19 @@ function HomeSessionRowInner({
           (hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
         ]}>
           <View style={styles.sessionTitleRow}>
-            <Text
-              style={styles.sessionTitle}
-              ellipsizeMode="tail"
-              numberOfLines={1}
-              testID={titleTestIDPrefix === 'deviceDetail.sessionRowTitle'
-                ? `deviceDetail.sessionRowTitle.${item.session.id}`
-                : `home.sessionRowTitle.${item.session.id}`}
-            >
-              {item.title}
-            </Text>
-            <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
+            <View style={styles.sessionTitleCluster}>
+              <Text
+                style={styles.sessionTitle}
+                ellipsizeMode="tail"
+                numberOfLines={1}
+                testID={titleTestIDPrefix === 'deviceDetail.sessionRowTitle'
+                  ? `deviceDetail.sessionRowTitle.${item.session.id}`
+                  : `home.sessionRowTitle.${item.session.id}`}
+              >
+                {item.title}
+              </Text>
+              <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
+            </View>
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"

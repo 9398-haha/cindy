@@ -568,6 +568,17 @@ describe('mobile home desktop-first surface', () => {
     expect(projectRowSource).not.toContain('project.subtitle');
     expect(sessionRowSource).toContain('titleTestIDPrefix = \'home.sessionRowTitle\'');
     expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
+    // 标签色球紧跟标题(与桌面侧栏一致):标题与色球同在一组,标题只取文字宽度,
+    // 不能再用 flex: 1 把色球挤到行尾贴着时间。
+    const titleCluster = sessionRowSource.slice(
+      sessionRowSource.indexOf('<View style={styles.sessionTitleCluster}>'),
+      sessionRowSource.indexOf('{sourceLabel ? ('),
+    );
+    expect(titleCluster).toMatch(/\{item\.title\}\s*<\/Text>\s*<TaskTagDots tags=\{item\.session\.tags\}/);
+    const listStyles = readSource('src/session/HomeListVisuals.tsx');
+    const titleStyle = listStyles.slice(listStyles.indexOf('  sessionTitle: {'), listStyles.indexOf('},', listStyles.indexOf('  sessionTitle: {')));
+    expect(titleStyle).toContain('flexShrink: 1');
+    expect(titleStyle).not.toContain('flex: 1');
     expect(sessionRowSource).toContain('ellipsizeMode="tail"');
     expect(sessionRowSource).toContain('numberOfLines={1}');
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');

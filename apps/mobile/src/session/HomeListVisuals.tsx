@@ -184,9 +184,18 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     right: -3,
     width: 12,
   },
+  // 标题与标签色球一组占满行内剩余宽度:标题只取自身文字宽度、过长截断,
+  // 色球紧跟标题(与桌面侧栏一致),来源与时间仍靠右。
+  sessionTitleCluster: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minWidth: 0,
+  },
   sessionTitle: {
     color: colors.textPrimary,
-    flex: 1,
+    flexShrink: 1,
     fontSize: typeScale.subtitle,
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.listTitle,

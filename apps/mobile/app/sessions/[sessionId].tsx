@@ -10210,6 +10210,7 @@ function SessionHeaderBar({
             // Reserve the toolbar gaps in the width budget, outside the title.
             minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
             <SessionHeaderNativeTitle title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
+              tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
               syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
           </View>
         ),

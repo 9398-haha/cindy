@@ -23,6 +23,21 @@ describe('mobile session header desktop-first surface', () => {
     expect(native).toContain('flexShrink: 1');
   });
 
+  it('shows task tags right after the title in every header branch', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const titles = source.split('<SessionHeaderNativeTitle').slice(1)
+      .map((branch) => branch.slice(0, branch.indexOf('/>')));
+    // 竖屏原生标题栏与横屏／折叠屏系统标题栏都要带标签,不能只有一条分支显示。
+    expect(titles).toHaveLength(2);
+    for (const title of titles) {
+      expect(title).toContain('tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}');
+      expect(title).toContain('onTagsPress={onOpenSettings}');
+    }
+    const native = readTextLf(resolve(process.cwd(), 'src/session/SessionHeaderNativeControls.ios.tsx'), 'utf8');
+    const titleRow = native.slice(native.indexOf('{label}'), native.indexOf('<QuietSyncIndicator'));
+    expect(titleRow).toContain('<TaskTagDots');
+  });
+
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
