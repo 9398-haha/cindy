@@ -135,19 +135,19 @@ describe('outbound invoke admission', () => {
       for (let i = 0; i < 30; i++) calls.push(h.client.invoke('a', {
         channel: 'git-context:pr-refs:list', args: [`session-${i}`],
       }).catch(e => e));
-      for (let i = 0; i < 8; i++) calls.push(h.client.invoke('a', {
+      for (let i = 0; i < 10; i++) calls.push(h.client.invoke('a', {
         channel: 'local-db:task-tags:execute', args: [{ action: 'get', sessionIds: [`session-${i}`] }],
       }).catch(e => e));
       const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
-      expect(sent()).toHaveLength(8);
-      expect(sent().filter(e => (e.payload as { channel: string }).channel === 'git-context:pr-refs:list')).toHaveLength(2);
+      expect(sent()).toHaveLength(12);
+      expect(sent().filter(e => (e.payload as { channel: string }).channel === 'git-context:pr-refs:list')).toHaveLength(4);
       calls.push(h.client.invoke('a', { channel: 'device-link:subscribe', args: [] }).catch(e => e));
       calls.push(h.client.invoke('b', { channel: 'local-db:task-tags:execute', args: [] }).catch(e => e));
-      expect(sent()).toHaveLength(10);
+      expect(sent()).toHaveLength(14);
       const first = sent()[0];
       h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: first.id, payload: { ok: true, result: [] } });
       await vi.advanceTimersByTimeAsync(1);
-      expect(sent()).toHaveLength(11);
+      expect(sent()).toHaveLength(15);
       expect(sent().at(-1)?.payload).toMatchObject({ channel: 'local-db:task-tags:execute' });
     } finally {
       h.client.stop(); await Promise.all(calls); vi.useRealTimers();
@@ -9232,9 +9232,9 @@ describe('confirmed duplicate-open gap repair', () => {
         await pump(); await p;
       };
       await open(phone); await open(healthy);
-      // Eight requests are sent; two remain locally queued and must be cancelled on reconnect.
-      for (let i = 0; i < 8; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
-      const old = Promise.all(Array.from({ length: 10 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000).catch(e => e)));
+      // Twelve requests are sent; two remain locally queued and must be cancelled on reconnect.
+      for (let i = 0; i < 12; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
+      const old = Promise.all(Array.from({ length: 14 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000).catch(e => e)));
       await pump(); await vi.advanceTimersByTimeAsync(1000);
       phone.restartConnection('phone-only-reconnect');
       await vi.advanceTimersByTimeAsync(1); await pump(); await open(phone);
@@ -9247,8 +9247,8 @@ describe('confirmed duplicate-open gap repair', () => {
       expect(sockets.mock.calls.filter(x => x[0] === 'desktop')).toHaveLength(1);
       expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
       const oldResults = await old;
-      expect(oldResults.slice(0, 8)).toEqual(Array.from({ length: 8 }, () => ({ ok: true, result: 'x'.repeat(100000) })));
-      for (const result of oldResults.slice(8)) {
+      expect(oldResults.slice(0, 12)).toEqual(Array.from({ length: 12 }, () => ({ ok: true, result: 'x'.repeat(100000) })));
+      for (const result of oldResults.slice(12)) {
         expect(result).toMatchObject({ code: 'NOT_CONNECTED' });
         expect(result.inFlight).not.toBe(true);
       }

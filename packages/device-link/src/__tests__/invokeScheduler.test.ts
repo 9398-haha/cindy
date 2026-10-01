@@ -26,7 +26,7 @@ describe("invoke admission", () => {
         return job.promise;
       }),
     );
-    const foreground = Array.from({ length: 8 }, deferred);
+    const foreground = Array.from({ length: 10 }, deferred);
     const foregroundResults = foreground.map((job, index) =>
       scheduler.run("a", false, 30_000, () => {
         started.push(`foreground-${index}`);
@@ -36,26 +36,28 @@ describe("invoke admission", () => {
     expect(started).toEqual([
       "background-0",
       "background-1",
-      ...Array.from({ length: 6 }, (_, i) => `foreground-${i}`),
+      "background-2",
+      "background-3",
+      ...Array.from({ length: 8 }, (_, i) => `foreground-${i}`),
     ]);
     pending[0].resolve();
     await flush();
-    expect(started.at(-1)).toBe("foreground-6");
+    expect(started.at(-1)).toBe("foreground-8");
     pending[1].resolve();
     await flush();
-    expect(started.at(-1)).toBe("foreground-7");
+    expect(started.at(-1)).toBe("foreground-9");
     for (const job of foreground) job.resolve();
     await flush();
-    expect(started.slice(-2)).toEqual(["background-2", "background-3"]);
+    expect(started.slice(-2)).toEqual(["background-4", "background-5"]);
     for (const job of pending) job.resolve();
     await Promise.all([...results, ...foregroundResults]);
-    expect(started).toHaveLength(40);
+    expect(started).toHaveLength(42);
   });
 
   it("keeps two peers independent and never sends cancelled queued writes after reconnect", async () => {
     const scheduler = new InvokeScheduler();
     const active = deferred();
-    const running = Array.from({ length: 8 }, () =>
+    const running = Array.from({ length: 12 }, () =>
       scheduler.run("a", false, 30_000, () => active.promise),
     );
     const write = vi.fn(async () => {});
@@ -84,7 +86,7 @@ describe("invoke admission", () => {
     vi.useFakeTimers();
     const scheduler = new InvokeScheduler();
     const active = deferred();
-    const running = Array.from({ length: 8 }, () =>
+    const running = Array.from({ length: 12 }, () =>
       scheduler.run("a", false, 30_000, () => active.promise),
     );
     const send = vi.fn(async () => {});
@@ -107,7 +109,7 @@ describe("invoke admission", () => {
     vi.useFakeTimers();
     const scheduler = new InvokeScheduler();
     const active = deferred();
-    const running = Array.from({ length: 8 }, () =>
+    const running = Array.from({ length: 12 }, () =>
       scheduler.run("a", false, 30_000, () => active.promise),
     );
     const send = vi.fn(async () => {});
@@ -141,7 +143,7 @@ describe("invoke admission", () => {
   it("reserves waiting positions for user actions when background refreshes fill their queue", async () => {
     const scheduler = new InvokeScheduler();
     const active = deferred();
-    const pending = Array.from({ length: 98 }, () =>
+    const pending = Array.from({ length: 100 }, () =>
       scheduler.run("a", true, 30_000, () => active.promise).catch((e) => e),
     );
     await expect(

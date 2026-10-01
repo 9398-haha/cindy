@@ -1,7 +1,7 @@
 import { DeviceLinkError } from "./protocol.js";
 
-const MAX_ACTIVE = 8;
-const MAX_BACKGROUND_ACTIVE = 2;
+const MAX_ACTIVE = 12;
+const MAX_BACKGROUND_ACTIVE = 4;
 const MAX_QUEUED = 128;
 // Background refreshes cannot consume the last waiting positions for user actions.
 const MAX_BACKGROUND_QUEUED = 96;
