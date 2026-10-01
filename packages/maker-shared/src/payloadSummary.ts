@@ -553,7 +553,12 @@ function looksLikeQuotedSourceLiteral(text: string, index: number, end: number):
   if (before !== '`' && before !== '\'' && before !== '"') return false;
   // Quotes alone also occur in prose and inline Markdown. Require source syntax
   // around the literal (assignment, collection entry, argument or conditional).
-  const prefix = text.slice(0, index - 1).trimEnd();
+  const rawPrefix = text.slice(0, index - 1);
+  // Python/C# literal markers sit between the source operator and quote.
+  // Only unwrap a recognized, adjacent marker; still require source syntax
+  // before it, and never strip a suffix from an identifier such as "offer".
+  const marker = before === '`' ? null : /(?:\b(?:br|rb|fr|rf|[rubf])|\$@|@\$|[$@])$/i.exec(rawPrefix);
+  const prefix = (marker ? rawPrefix.slice(0, marker.index) : rawPrefix).trimEnd();
   return /(?:[=\[(,?]|=>|&&|\|\||\breturn)$/.test(prefix)
     // A colon alone is also a prose label ("File:"). Require a preceding
     // conditional, allowing indented continuation lines but not new prose.

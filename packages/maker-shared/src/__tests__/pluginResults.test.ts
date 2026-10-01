@@ -4,6 +4,23 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each(['r', 'R', 'f', 'F', 'b', 'u', 'br', 'rb', 'fr', 'rf', '@', '$', '@$', '$@'])('recognizes source literals with prefix %s', (prefix) => {
+    const url = 'xdt-file:///tmp/prefixed.pdf';
+    for (const quote of (prefix.includes('@') || prefix.includes('$') ? ['"'] : ["'", '"'])) {
+      for (const content of [url, 'Open ' + url]) {
+        const literal = prefix + quote + content + quote;
+        for (const source of ['path = ' + literal, 'return ' + literal, 'open(' + literal + ')', 'paths = [' + literal + ']']) {
+          expect(files(source), source).toEqual([]);
+          expect(files(JSON.stringify({ text: source })), source).toEqual([]);
+          expect(files(source + '\nSaved "' + url + '"')).toEqual([{ url, title: 'prefixed.pdf' }]);
+          expect(files(JSON.stringify({ text: source, _xdt_model_files: [{ url, name: 'Prefixed' }] })))
+            .toEqual([{ url, title: 'Prefixed' }]);
+        }
+      }
+    }
+    // A language prefix alone must not turn ordinary output into source code.
+    expect(files('Saved ' + prefix + '"' + url + '"')).toEqual([{ url, title: 'prefixed.pdf' }]);
+  });
   it.each([
     '// fixture: xdt-file:///tmp/example.pdf',
     'const enabled = true; // fixture: xdt-file:///tmp/example.pdf',
