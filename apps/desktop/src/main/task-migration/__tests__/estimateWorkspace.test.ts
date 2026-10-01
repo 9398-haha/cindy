@@ -2,8 +2,24 @@ import { expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { estimateWorkspace } from '../workspace';
+
+// Real Git (registered worktrees) is covered in workspace.git-integration.test.ts; here every
+// root is a plain directory, so the repository probe answers "not a git repository".
+vi.mock('../../worktree/gitExec', async (original) => {
+  const actual = await original<typeof import('../../worktree/gitExec')>();
+  return {
+    ...actual,
+    gitExec: async (args: string[]) => {
+      throw new actual.GitExecError({
+        args,
+        exitCode: 128,
+        stderr: 'fatal: not a git repository',
+        stdout: '',
+      });
+    },
+  };
+});
 
 it('counts hidden and nested files, skips root Git metadata and does not count directories', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-'));
@@ -19,42 +35,6 @@ it('counts hidden and nested files, skips root Git metadata and does not count d
         throw new Error('owner changed');
       }),
     ).rejects.toThrow('owner changed');
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-it("skips only other tasks' registered worktrees, never other content of those folders", async () => {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-')));
-  const git = (...args: string[]) =>
-    execFileSync('git', [
-      '-c',
-      'user.name=t',
-      '-c',
-      'user.email=t@localhost',
-      '-c',
-      'commit.gpgsign=false',
-      '-C',
-      root,
-      ...args,
-    ]);
-  try {
-    await fs.writeFile(path.join(root, 'a'), 'a');
-    await fs.mkdir(path.join(root, '.cindy-worktrees', 'notes'), { recursive: true });
-    await fs.writeFile(path.join(root, '.cindy-worktrees', 'notes', 'n'), 'xy');
-    await fs.mkdir(path.join(root, '.xdt-worktrees', 'stale'), { recursive: true });
-    await fs.writeFile(path.join(root, '.xdt-worktrees', 'stale', 'old'), 'zzz');
-    // A plain directory excludes nothing, even with stray `.git` metadata at its root.
-    await fs.mkdir(path.join(root, '.git'));
-    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 6 });
-    await fs.rm(path.join(root, '.git'), { recursive: true });
-    git('init', '-q');
-    git('add', 'a');
-    git('commit', '-q', '-m', 'fixture');
-    git('worktree', 'add', '-q', '-b', 'other', path.join('.cindy-worktrees', 'other-task'));
-    // Only the registered worktree is skipped; user folders beside it and an unregistered
-    // folder in a managed container are still project content.
-    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 6 });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

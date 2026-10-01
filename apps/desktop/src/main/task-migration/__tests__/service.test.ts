@@ -2,7 +2,6 @@ vi.mock('../../mcp-integrations/moveSession', () => ({ moveSessionProjectFromHos
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import syncFs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
@@ -43,6 +42,7 @@ const state = vi.hoisted(() => ({
   workers: [] as string[],
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
+  exclusions: [] as string[],
 }));
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
@@ -209,8 +209,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
 vi.mock('../workspace', async (original) => ({
   isExcludedFromWorkspace: (await original<typeof import('../workspace')>())
     .isExcludedFromWorkspace,
-  managedWorktreeExclusions: (await original<typeof import('../workspace')>())
-    .managedWorktreeExclusions,
+  managedWorktreeExclusions: async () => state.exclusions,
   estimateWorkspace: async (_root: string, check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
     check();
@@ -273,6 +272,7 @@ describe('resumable cross-computer copy', () => {
     state.workers = [];
     state.estimateLimits = [];
     state.timeoutAction = '';
+    state.exclusions = [];
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -531,23 +531,10 @@ describe('resumable cross-computer copy', () => {
   it('ignores tasks running in other registered worktrees under the copied root', async () => {
     const rows = state.rows.get('A')!;
     const cwd = rows.get('fork')!.workingDir as string;
-    const git = (...args: string[]) =>
-      execFileSync('git', [
-        '-c',
-        'user.name=t',
-        '-c',
-        'user.email=t@localhost',
-        '-c',
-        'commit.gpgsign=false',
-        '-C',
-        cwd,
-        ...args,
-      ]);
-    git('init', '-q');
-    git('add', 'draft');
-    git('commit', '-q', '-m', 'fixture');
     const managed = path.join(cwd, '.cindy-worktrees', 'other');
-    git('worktree', 'add', '-q', '-b', 'other', managed);
+    await fs.mkdir(managed, { recursive: true });
+    // Git's worktree registry is covered by the integration tier; inject its verdict here.
+    state.exclusions = [path.join('.cindy-worktrees', 'other')];
     rows.get('sibling')!.workingDir = managed;
     state.siblingRunning = true;
     await start();

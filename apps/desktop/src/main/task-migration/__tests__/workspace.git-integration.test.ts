@@ -33,7 +33,12 @@ vi.mock('../../worktree/gitExec', async (original) => {
       }),
   };
 });
-import { snapshotWorkspace, restoreWorkspace, validateWorkspaceEntries } from '../workspace';
+import {
+  estimateWorkspace,
+  snapshotWorkspace,
+  restoreWorkspace,
+  validateWorkspaceEntries,
+} from '../workspace';
 import { inventoryWorktree } from '../../worktree/recoveryArchiveIO';
 
 const exec = promisify(execFile);
@@ -141,6 +146,33 @@ describe('cross-machine project snapshots', () => {
     expect(
       await fs.readFile(path.join(source, '.cindy-worktrees', 'other-task', 'file'), 'utf8'),
     ).toBe('not mine\n');
+  });
+  it("counts only project content, not other tasks' registered worktrees", async () => {
+    await fs.writeFile(path.join(source, 'a'), 'a');
+    await fs.mkdir(path.join(source, '.cindy-worktrees', 'notes'), { recursive: true });
+    await fs.writeFile(path.join(source, '.cindy-worktrees', 'notes', 'n'), 'xy');
+    await fs.mkdir(path.join(source, '.xdt-worktrees', 'stale'), { recursive: true });
+    await fs.writeFile(path.join(source, '.xdt-worktrees', 'stale', 'old'), 'zzz');
+    // A plain directory excludes nothing, even with stray `.git` metadata at its root.
+    await fs.mkdir(path.join(source, '.git'));
+    expect(await estimateWorkspace(source, () => {})).toEqual({ fileCount: 3, bytes: 6 });
+    await fs.rm(path.join(source, '.git'), { recursive: true });
+    await git(source, 'init', '-b', 'main');
+    await git(source, 'config', 'user.name', 'Migration test');
+    await git(source, 'config', 'user.email', 'migration@localhost');
+    await git(source, 'add', 'a');
+    await git(source, 'commit', '-m', 'fixture');
+    await git(
+      source,
+      'worktree',
+      'add',
+      '-b',
+      'other',
+      path.join('.cindy-worktrees', 'other-task'),
+    );
+    // Only the registered worktree is skipped; user folders beside it and an unregistered
+    // folder in a managed container are still project content.
+    expect(await estimateWorkspace(source, () => {})).toEqual({ fileCount: 3, bytes: 6 });
   });
   it('keeps same-named folders of a plain directory', async () => {
     await fs.mkdir(path.join(source, '.cindy-worktrees'));
