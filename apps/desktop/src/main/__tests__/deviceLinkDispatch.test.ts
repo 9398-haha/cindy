@@ -2865,6 +2865,19 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it('set-permission-mode commits inside the handler without a later duplicate write', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const response = {};
+    markRemoteSettingPersistedInsideHandler(response);
+    registry.register('maker:set-permission-mode', () => response);
+    const result = await runInvoke('ctrl-a', {
+      channel: 'maker:set-permission-mode', args: ['sess-1', 'ask'],
+    });
+    expect(result).toEqual({ ok: true, result: response });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-fast-mode → {fastMode}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
