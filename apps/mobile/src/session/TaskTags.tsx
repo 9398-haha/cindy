@@ -743,7 +743,7 @@ export function TaskTagsPanel({
           {t('taskTags.title')}
         </Text>
         <Text
-          accessibilityRole={reason === 'loadFailed' ? 'alert' : 'text'}
+          accessibilityRole={reason === 'loadFailed' || reason === 'remoteBusy' ? 'alert' : 'text'}
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
@@ -1350,7 +1350,7 @@ export function TaskTagsPanel({
           {t(`taskTags.${blocked ? 'offline' : error}`)}
         </Text>
       )}
-      {!blocked && error === 'loadFailed' && (
+      {!blocked && (error === 'loadFailed' || error === 'remoteBusy') && (
         <Pressable
           accessibilityRole="button"
           disabled={busy}

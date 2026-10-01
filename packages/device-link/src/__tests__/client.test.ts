@@ -125,6 +125,36 @@ function makeHarness(opts?: {
 
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+describe('outbound invoke admission', () => {
+  it('batches PR refreshes, admits interactive work and keeps control traffic and other peers moving', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      for (let i = 0; i < 30; i++) calls.push(h.client.invoke('a', {
+        channel: 'git-context:pr-refs:list', args: [`session-${i}`],
+      }).catch(e => e));
+      for (let i = 0; i < 8; i++) calls.push(h.client.invoke('a', {
+        channel: 'local-db:task-tags:execute', args: [{ action: 'get', sessionIds: [`session-${i}`] }],
+      }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      expect(sent()).toHaveLength(8);
+      expect(sent().filter(e => (e.payload as { channel: string }).channel === 'git-context:pr-refs:list')).toHaveLength(2);
+      calls.push(h.client.invoke('a', { channel: 'device-link:subscribe', args: [] }).catch(e => e));
+      calls.push(h.client.invoke('b', { channel: 'local-db:task-tags:execute', args: [] }).catch(e => e));
+      expect(sent()).toHaveLength(10);
+      const first = sent()[0];
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: first.id, payload: { ok: true, result: [] } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent()).toHaveLength(11);
+      expect(sent().at(-1)?.payload).toMatchObject({ channel: 'local-db:task-tags:execute' });
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+});
+
 describe('verified outbound stream notification', () => {
   it('notifies before business delivery and keeps two peers independent across restart', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
@@ -9202,7 +9232,8 @@ describe('confirmed duplicate-open gap repair', () => {
         await pump(); await p;
       };
       await open(phone); await open(healthy);
-      for (let i = 0; i < 10; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
+      // Eight requests are sent; two remain locally queued and must be cancelled on reconnect.
+      for (let i = 0; i < 8; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
       const old = Promise.all(Array.from({ length: 10 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000).catch(e => e)));
       await pump(); await vi.advanceTimersByTimeAsync(1000);
       phone.restartConnection('phone-only-reconnect');
@@ -9215,7 +9246,12 @@ describe('confirmed duplicate-open gap repair', () => {
       expect(host.isLinkReady('healthy')).toBe(true);
       expect(sockets.mock.calls.filter(x => x[0] === 'desktop')).toHaveLength(1);
       expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
-      expect(await old).toEqual(Array.from({ length: 10 }, () => ({ ok: true, result: 'x'.repeat(100000) })));
+      const oldResults = await old;
+      expect(oldResults.slice(0, 8)).toEqual(Array.from({ length: 8 }, () => ({ ok: true, result: 'x'.repeat(100000) })));
+      for (const result of oldResults.slice(8)) {
+        expect(result).toMatchObject({ code: 'NOT_CONNECTED' });
+        expect(result.inFlight).not.toBe(true);
+      }
     } finally { off(); for (const c of [host, phone, healthy]) c.stop(); sockets.mockRestore(); vi.useRealTimers(); }
   });
 
