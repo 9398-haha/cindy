@@ -28,6 +28,13 @@ const storeMock = vi.hoisted(() => ({
   privateReplySessions: new Set<string>(),
   groupLaneSessions: new Set<string>(),
   recoverySessions: new Set<string>(),
+  orcaWorkers: new Map<string, Array<{ sessionId: string; status: string }>>(),
+}));
+
+vi.mock('@/features/cc-agent/hooks/workerProjectionStore', () => ({
+  getWorkerProjectionSnapshot: (leadSessionId: string) => ({
+    workers: storeMock.orcaWorkers.get(leadSessionId) ?? [],
+  }),
 }));
 
 vi.mock('@/lib/makerChatStore', () => ({
@@ -86,6 +93,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.sideTaskStopSessions.clear();
     storeMock.privateReplySessions.clear();
     storeMock.recoverySessions.clear();
+    storeMock.orcaWorkers.clear();
     resetSilencedSessionDoneStoreForTests();
     resetSessionStartingStoreForTests();
     vi.clearAllMocks();
@@ -717,5 +725,27 @@ describe('useSessionRunningStatus silenced completion handling', () => {
 
     expect(onSessionDone).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it('holds an Orca Lead completion while its Workers are still running', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+    storeMock.orcaWorkers.set('lead', [{ sessionId: 'worker', status: 'running' }]);
+
+    // The Lead only dispatched work; its turn ends while the Worker runs.
+    await emitSnapshot(new Map([['lead', status(true)]]));
+    await emitSnapshot(new Map([['lead', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(onSessionDone).not.toHaveBeenCalled();
+    expect(addSessionAttention).not.toHaveBeenCalledWith('lead', 'done');
+
+    // The Worker report wakes the Lead; that turn's done is the team's completion.
+    storeMock.orcaWorkers.set('lead', [{ sessionId: 'worker', status: 'done' }]);
+    await emitSnapshot(new Map([['lead', status(true)]]));
+    await emitSnapshot(new Map([['lead', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(onSessionDone).toHaveBeenCalledExactlyOnceWith('lead');
+    expect(addSessionAttention).toHaveBeenCalledWith('lead', 'done');
   });
 });

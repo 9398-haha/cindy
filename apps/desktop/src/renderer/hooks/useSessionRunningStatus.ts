@@ -54,6 +54,7 @@ import {
   isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
 import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
+import { hasActiveOrcaWorker } from '@/features/cc-agent/lib/orcaTeamActivity';
 
 // Codex maker 化后, codex session 也走 makerChatStore;
 // 不再需要双 store 合并 —— 直接订阅 makerChatStore 即可。
@@ -245,12 +246,16 @@ export function useSessionRunningStatus(
           pendingDoneTimersRef.current.delete(sessionId);
           // Recovery may have been projected after this timer was scheduled.
           if (makerChatStore.hasSessionRecoveryPending(sessionId)) return;
+          const runningSnapshot = makerChatStore.getRunningSnapshot();
+          // Orca Lead 只是派完活结束本轮:团队仍在干活,不算完成。Worker 回报会
+          // 再唤起 Lead,那一轮的 done 才发完成通知、亮完成角标。
+          if (hasActiveOrcaWorker(sessionId, runningSnapshot)) return;
           // 落地前重查一次当前状态:若此刻会话正等待用户输入(ask-user / permission /
           // plan-review),不要用 done 橙角标覆盖 section 3 已亮的 awaiting 黄角标 ——
           // 否则「需要处理的交互」被降级成「已完成」,用户看不到。非 debounce 版本里
           // section 3 在 section 2 之后跑、awaiting 天然覆盖 done;debounce 把 done 推迟到
           // section 3 之后,必须显式让 awaiting 优先。done 系统通知仍照常发(与原行为一致)。
-          const cur = makerChatStore.getRunningSnapshot().get(sessionId);
+          const cur = runningSnapshot.get(sessionId);
           const isActive = sessionId === activeSessionIdRef.current;
           const isRunning = cur?.isRunning === true;
           // debounce 期间下一轮可能在真正进入 running 前失败并写入 terminal error。
