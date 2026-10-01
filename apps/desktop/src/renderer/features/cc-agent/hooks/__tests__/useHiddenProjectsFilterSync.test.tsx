@@ -228,6 +228,75 @@ describe('hidden-project filter synchronization', () => {
     );
   });
 
+  it.each(['rejected', 'resolved'] as const)(
+    'reconciles refreshed pins when an old write is %s after the refresh',
+    async (outcome) => {
+      let resolveWrite!: (order: string[]) => void;
+      let rejectWrite!: (error: Error) => void;
+      const pending = new Promise<string[]>((resolve, reject) => {
+        resolveWrite = resolve;
+        rejectWrite = reject;
+      });
+      vi.mocked(window.electronAPI.sidebarSettings.mutatePinnedOrder).mockReturnValueOnce(pending);
+      const view = renderHook(useSyncedSidebarFilter);
+      let write!: Promise<void>;
+      act(() => { write = view.result.current.promotePin('old-pin'); });
+      await waitFor(() => expect(window.electronAPI.sidebarSettings.mutatePinnedOrder).toHaveBeenCalled());
+      expect(view.result.current.manualPinnedOrder).toEqual(['old-pin']);
+
+      const originalLoad = window.electronAPI.sidebarSettings.loadSnapshot;
+      window.electronAPI.sidebarSettings.loadSnapshot = () => ({
+        ...originalLoad(), ownerGeneration: 2,
+        pinnedOrderIsAuthoritative: true, pinnedOrder: ['saved-pin'],
+      });
+      act(() => setDataOwnerGeneration('owner-a', 2));
+      view.rerender();
+      await act(async () => {
+        if (outcome === 'rejected') {
+          rejectWrite(new Error('PRECONDITION_FAILED'));
+          await expect(write).rejects.toThrow('PRECONDITION_FAILED');
+        } else {
+          resolveWrite(['old-pin']);
+          await write;
+        }
+      });
+      expect(view.result.current.manualPinnedOrder).toEqual(['saved-pin']);
+    },
+  );
+
+  it('does not overwrite a newer optimistic pin while the refreshed write is pending', async () => {
+    let rejectOld!: (error: Error) => void;
+    let resolveNew!: (order: string[]) => void;
+    const oldPending = new Promise<string[]>((_resolve, reject) => { rejectOld = reject; });
+    const newPending = new Promise<string[]>((resolve) => { resolveNew = resolve; });
+    const mutate = vi.mocked(window.electronAPI.sidebarSettings.mutatePinnedOrder);
+    mutate.mockReturnValueOnce(oldPending).mockReturnValueOnce(newPending);
+    const view = renderHook(useSyncedSidebarFilter);
+    let oldWrite!: Promise<void>;
+    act(() => { oldWrite = view.result.current.promotePin('old-pin'); });
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    const originalLoad = window.electronAPI.sidebarSettings.loadSnapshot;
+    window.electronAPI.sidebarSettings.loadSnapshot = () => ({
+      ...originalLoad(), ownerGeneration: 2,
+      pinnedOrderIsAuthoritative: true, pinnedOrder: ['saved-pin'],
+    });
+    act(() => setDataOwnerGeneration('owner-a', 2));
+    view.rerender();
+    let newWrite!: Promise<void>;
+    act(() => { newWrite = view.result.current.promotePin('new-pin'); });
+    await act(async () => {
+      rejectOld(new Error('PRECONDITION_FAILED'));
+      await expect(oldWrite).rejects.toThrow('PRECONDITION_FAILED');
+    });
+    expect(mutate).toHaveBeenCalledTimes(2);
+    expect(view.result.current.manualPinnedOrder[0]).toBe('new-pin');
+    await act(async () => {
+      resolveNew(['new-pin', 'saved-pin']);
+      await newWrite;
+    });
+    expect(view.result.current.manualPinnedOrder).toEqual(['new-pin', 'saved-pin']);
+  });
+
   it('rehydrates current hidden projects after refresh and ignores late old-generation pushes', () => {
     const view = renderHook(() => useHiddenProjects());
     const refreshed = { ...OWNER_STAMP, ownerGeneration: 2 };
