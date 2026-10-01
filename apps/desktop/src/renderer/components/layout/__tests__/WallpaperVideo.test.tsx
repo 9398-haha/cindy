@@ -31,6 +31,7 @@ describe('dynamic wallpaper lifecycle', () => {
     document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
   it('does not create a decoder for static, reduced motion or unsupported artwork', () => {
     state.cdn = false;
@@ -56,10 +57,59 @@ describe('dynamic wallpaper lifecycle', () => {
     await act(async () => document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR));
     expect(video.play).toHaveBeenCalledTimes(2);
     rerender(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
-    expect(document.querySelector('video')).toBeNull();
+    await waitFor(() => expect(document.querySelector('video')).toBeNull());
     expect(video.getAttribute('src')).toBeNull();
     expect(video.load).toHaveBeenCalled();
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+  });
+  it('fades decoded video over the still, retaining it only until the exit finishes', () => {
+    vi.useFakeTimers();
+    state.cdn = false;
+    const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
+    const video = document.querySelector('video')!;
+    const layer = video.parentElement!;
+    layer.style.transitionDuration = '0.2s';
+    expect(layer.style.opacity).toBe('0');
+    fireEvent.playing(video);
+    expect(layer.style.opacity).toBe('1');
+    rerender(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
+    expect(layer.style.opacity).toBe('0');
+    expect(document.querySelector('video')).toBe(video);
+    expect(document.documentElement.dataset.wallpaperMotion).toBe('dynamic');
+    act(() => vi.advanceTimersByTime(100));
+    expect(video.getAttribute('src')).not.toBeNull();
+    fireEvent.transitionEnd(layer, { propertyName: 'opacity' });
+    expect(document.querySelector('video')).toBeNull();
+    expect(video.getAttribute('src')).toBeNull();
+    expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
+  });
+  it('reverses a rapid toggle without replacing the decoder or leaving a stale exit timer', () => {
+    vi.useFakeTimers();
+    state.cdn = false;
+    const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
+    const video = document.querySelector('video')!;
+    video.parentElement!.style.transitionDuration = '200ms';
+    fireEvent.playing(video);
+    rerender(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
+    act(() => vi.advanceTimersByTime(100));
+    rerender(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
+    act(() => vi.advanceTimersByTime(250));
+    expect(document.querySelector('video')).toBe(video);
+    expect(video.parentElement!.style.opacity).toBe('1');
+    rerender(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
+    act(() => vi.advanceTimersByTime(200));
+    expect(document.querySelector('video')).toBeNull();
+    expect(video.getAttribute('src')).toBeNull();
+  });
+  it('releases immediately if reduced motion is enabled during a fade', () => {
+    state.cdn = false;
+    const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
+    const video = document.querySelector('video')!;
+    fireEvent.playing(video);
+    state.reduced = true;
+    rerender(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
+    expect(document.querySelector('video')).toBeNull();
+    expect(video.getAttribute('src')).toBeNull();
   });
   it('keeps the still fallback when decode or playback fails', async () => {
     state.cdn = false;

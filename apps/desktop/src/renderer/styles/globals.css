@@ -2318,6 +2318,7 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
   inset: 0;
   z-index: -1;
   pointer-events: none;
+  transition: opacity var(--motion-base) var(--motion-ease-move);
 }
 .app-wallpaper-video video {
   width: 100%;

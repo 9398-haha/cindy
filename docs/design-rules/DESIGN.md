@@ -111,7 +111,11 @@ those entries can use a bundled fallback while downloading verified HD bytes int
 the managed media store. Official scenes never request CDN resources.
 Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
-reduced motion or playback failure. Switching back to Static releases the video.
+reduced motion or playback failure. Static / Dynamic switches crossfade the video
+over the retained high-resolution still using base/ease-move (200ms), starting
+only after playback is ready. Switching back to Static releases the video after
+the fade; rapid toggles reverse it without adding a decoder. Reduced motion
+bypasses the transition and releases the video immediately.
 For moving scenes, fade the message layer above the composer instead of painting a
 static duplicate of the wallpaper over it. Check the loop seam and actual Light/Dark
 chat readability, including collapsed sidebars and resized windows.
