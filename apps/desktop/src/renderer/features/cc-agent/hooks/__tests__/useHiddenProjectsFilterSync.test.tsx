@@ -5,9 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PROJECTS_KEY, useSidebarFilter } from '../useSidebarFilter';
 import { useHiddenProjects } from '../useHiddenProjects';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
+import { restoreSelectedHiddenProject } from '../../lib/sidebarProjectRestore';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
+
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ dataOwnerGeneration: getDataOwnerGeneration().generation }),
+}));
 
 type HiddenProjectsListener = (projectKeys: string[], ownerStamp: DataOwnerPushStamp) => void;
 
@@ -164,12 +169,86 @@ describe('hidden-project filter synchronization', () => {
         ownerGeneration: 2,
       });
     });
+    const originalLoad = window.electronAPI.sidebarSettings.loadSnapshot;
+    window.electronAPI.sidebarSettings.loadSnapshot = () => ({
+      ...originalLoad(), dataOwnerId: 'owner-b', ownerGeneration: 2,
+      hiddenProjectKeys: [PROJECT_A],
+    });
+    view.rerender();
     expect([...view.result.current.hiddenProjectKeys]).toEqual([]);
 
     await act(async () => {
       await view.result.current.setProjectHidden(PROJECT_A, true);
     });
     expect(setProjectHidden).toHaveBeenCalledWith(PROJECT_A, true, OWNER_STAMP);
+  });
+
+  it('restores a selected folder after a same-account refresh without remounting', async () => {
+    initialHiddenProjectKeys = [PROJECT_A];
+    window.localStorage.setItem(OWNER_PROJECTS_KEY, JSON.stringify([PROJECT_B]));
+    const view = renderHook(() => {
+      const hidden = useHiddenProjects();
+      const filter = useSidebarFilter(hidden.hiddenProjectKeys, hidden.initialSnapshot);
+      return { ...hidden, filter };
+    });
+    const staleWrite = view.result.current.setProjectHidden;
+    const refreshed = { ...OWNER_STAMP, ownerGeneration: 2 };
+    const originalLoad = window.electronAPI.sidebarSettings.loadSnapshot;
+    window.electronAPI.sidebarSettings.loadSnapshot = () => ({ ...originalLoad(), ...refreshed });
+    setProjectHidden.mockImplementation(async (_key, _hidden, stamp) => {
+      if (stamp.ownerGeneration !== refreshed.ownerGeneration) {
+        throw new Error('[PRECONDITION_FAILED] active account changed during sidebar mutation');
+      }
+      for (const listener of hiddenProjectsListeners) listener([], refreshed);
+      return true;
+    });
+    act(() => setDataOwnerGeneration('owner-a', 2));
+    view.rerender();
+    await expect(staleWrite(PROJECT_A, false)).rejects.toThrow('PRECONDITION_FAILED');
+
+    await act(async () => {
+      await restoreSelectedHiddenProject({
+        projectKey: PROJECT_A,
+        hiddenProjectKeys: view.result.current.hiddenProjectKeys,
+        setProjectHidden: view.result.current.setProjectHidden,
+        getCurrentProjectKeys: () => new Set([PROJECT_A, PROJECT_B]),
+        ensureProjectIncluded: view.result.current.filter.ensureProjectIncluded,
+        localPlatform: 'linux',
+      });
+    });
+    expect(setProjectHidden).toHaveBeenCalledWith(PROJECT_A, false, refreshed);
+    expect([...view.result.current.hiddenProjectKeys]).toEqual([]);
+    expect(view.result.current.filter.projects).toEqual([PROJECT_B, PROJECT_A]);
+    await act(async () => {
+      await view.result.current.filter.promotePin(PROJECT_A);
+    });
+    expect(window.electronAPI.sidebarSettings.mutatePinnedOrder).toHaveBeenLastCalledWith(
+      { kind: 'promote', entryId: PROJECT_A },
+      refreshed,
+    );
+  });
+
+  it('rehydrates current hidden projects after refresh and ignores late old-generation pushes', () => {
+    const view = renderHook(() => useHiddenProjects());
+    const refreshed = { ...OWNER_STAMP, ownerGeneration: 2 };
+    const originalLoad = window.electronAPI.sidebarSettings.loadSnapshot;
+    window.electronAPI.sidebarSettings.loadSnapshot = () => ({
+      ...originalLoad(), ...refreshed, hiddenProjectKeys: [PROJECT_B],
+    });
+    act(() => setDataOwnerGeneration('owner-a', 2));
+    view.rerender();
+    expect([...view.result.current.hiddenProjectKeys]).toEqual([PROJECT_B]);
+    act(() => {
+      for (const listener of hiddenProjectsListeners) listener([PROJECT_A], OWNER_STAMP);
+    });
+    expect([...view.result.current.hiddenProjectKeys]).toEqual([PROJECT_B]);
+    act(() => {
+      for (const listener of hiddenProjectsListeners) listener([PROJECT_A], refreshed);
+    });
+    expect([...view.result.current.hiddenProjectKeys]).toEqual([PROJECT_A]);
+    expect(hiddenProjectsListeners).toHaveLength(1);
+    view.unmount();
+    expect(hiddenProjectsListeners).toHaveLength(0);
   });
 
   it('fails closed when the synchronous snapshot belongs to another owner', () => {
