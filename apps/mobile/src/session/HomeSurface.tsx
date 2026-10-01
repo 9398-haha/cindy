@@ -7,7 +7,7 @@ import { ResidentHomeList, useResidentHomeList } from './ResidentHomeList';
 import { HomeNewTaskButton } from './HomeNewTaskButton';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
-import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark } from '@/session/HomeListVisuals';
+import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark, SessionStatusPulse } from '@/session/HomeListVisuals';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { SessionHeaderNativeBlur } from "@/session/SessionHeaderNativeControls";
 import { rememberComposerEntry } from './composerMorph';
@@ -254,7 +254,11 @@ import {
   replaceSessionScheduleIndexEntries,
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
-import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
+import {
+  latestMobileSessionRow,
+  resolveMobileCollapsedGroupStatus,
+  resolveMobileSessionRowStatus,
+} from '@/session/sessionRightStatus';
 import { SessionRightSpinner } from '@/session/SessionRightSpinner';
 import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
@@ -3659,6 +3663,16 @@ function ProjectRow({
       isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
     },
   );
+  // 与桌面侧栏收起项目同一规则:仅收起时汇总组内全部任务——任一在跑则组头图标橙色呼吸,
+  // 右槽只放一颗点(出错红 > 等你回复蓝 > 完成未读绿);展开后由子行各自显示,组头不重复。
+  // 运行态命令式读取,依赖 homeStatusVersion 兜底感知变化(理由同上方折叠豁免)。
+  const collapsedStatus = useMemo(
+    () => (collapsed
+      ? resolveMobileCollapsedGroupStatus(project.sessions, (sessionId) => remoteSessionStore.isSessionRunning(sessionId))
+      : null),
+    [collapsed, homeStatusVersion, project.sessions],
+  );
+  const groupIconColor = collapsedStatus?.running ? colors.statusAccent : colors.textSecondary;
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
   const projectRef = useAnimatedRef<View>();
   const prepareDisclosure = useDisclosurePrepare();
@@ -3770,20 +3784,43 @@ function ProjectRow({
       ) : (
         <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
       )}
-      {kind === 'dialogue' ? (
-        <MessagesSquare color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      ) : kind === 'cindy-make' ? (
-        <Hammer color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      ) : collapsed ? (
-        <Folder color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      ) : (
-        <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      )}
+      <SessionStatusPulse running={!!collapsedStatus?.running}>
+        {kind === 'dialogue' ? (
+          <MessagesSquare color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : kind === 'cindy-make' ? (
+          <Hammer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : collapsed ? (
+          <Folder color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : (
+          <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        )}
+      </SessionStatusPulse>
       <View style={styles.projectLabel}>
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
+      {collapsedStatus?.dot ? (
+        // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
+        <View style={styles.sessionRightStatusCell}>
+          <View
+            accessibilityLabel={collapsedStatus.dot === 'error'
+              ? t('devices.list.a11y.taskError')
+              : collapsedStatus.dot === 'awaiting'
+                ? t('devices.list.a11y.awaitingYou')
+                : t('devices.list.a11y.doneUnread')}
+            accessibilityRole="image"
+            style={[styles.sessionRightDot, {
+              backgroundColor: collapsedStatus.dot === 'error'
+                ? colors.statusError
+                : collapsedStatus.dot === 'awaiting'
+                  ? colors.statusAwaiting
+                  : colors.statusDone,
+            }]}
+            testID={`home.projectCollapsedStatus.${collapsedStatus.dot}.${project.key}`}
+          />
+        </View>
+      ) : null}
     </Pressable>
   );
   return (

@@ -558,6 +558,11 @@ describe('mobile home desktop-first surface', () => {
     expect(projectRowSource).not.toContain('<SquarePen');
     expect(projectRowSource).not.toContain('<Ellipsis');
     expect(projectRowSource).not.toContain('project.pendingInteractionCount');
+    // 收起组头汇总对齐桌面 ProjectNode:仅收起时计算,运行态走图标呼吸,右槽只放一颗点。
+    expect(desktopProjectNode).toContain('isCollapsed && lamp?.running');
+    expect(projectRowSource).toMatch(/collapsed\s*\?\s*resolveMobileCollapsedGroupStatus\(project\.sessions,/);
+    expect(projectRowSource).toContain('<SessionStatusPulse running={!!collapsedStatus?.running}>');
+    expect(projectRowSource).toContain('home.projectCollapsedStatus.');
     expect(projectRowSource).not.toContain('project.subtitle');
     expect(sessionRowSource).toContain('titleTestIDPrefix = \'home.sessionRowTitle\'');
     expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
