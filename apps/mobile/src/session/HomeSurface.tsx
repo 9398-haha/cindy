@@ -3673,6 +3673,17 @@ function ProjectRow({
     [collapsed, homeStatusVersion, project.sessions],
   );
   const groupIconColor = collapsedStatus?.running ? colors.statusAccent : colors.textSecondary;
+  // 组头按钮是单个无障碍元素(子节点标签不会被读出),汇总状态挂在按钮自身的 value 上。
+  const collapsedStatusA11y = [
+    collapsedStatus?.running ? t('devices.list.a11y.running') : null,
+    collapsedStatus?.dot === 'error'
+      ? t('devices.list.a11y.taskError')
+      : collapsedStatus?.dot === 'awaiting'
+        ? t('devices.list.a11y.awaitingYou')
+        : collapsedStatus?.dot === 'done'
+          ? t('devices.list.a11y.doneUnread')
+          : null,
+  ].filter(Boolean).join(', ');
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
   const projectRef = useAnimatedRef<View>();
   const prepareDisclosure = useDisclosurePrepare();
@@ -3761,6 +3772,7 @@ function ProjectRow({
         : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
+      accessibilityValue={collapsedStatusA11y ? { text: collapsedStatusA11y } : undefined}
       onLayout={(event) => {
         const height = event.nativeEvent.layout.height;
         if (Number.isFinite(height) && height > 0) projectHeaderHeight.value = height;
@@ -3804,12 +3816,6 @@ function ProjectRow({
         // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
         <View style={styles.sessionRightStatusCell}>
           <View
-            accessibilityLabel={collapsedStatus.dot === 'error'
-              ? t('devices.list.a11y.taskError')
-              : collapsedStatus.dot === 'awaiting'
-                ? t('devices.list.a11y.awaitingYou')
-                : t('devices.list.a11y.doneUnread')}
-            accessibilityRole="image"
             style={[styles.sessionRightDot, {
               backgroundColor: collapsedStatus.dot === 'error'
                 ? colors.statusError
