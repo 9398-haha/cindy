@@ -4,6 +4,44 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each(["'", '"', String.fromCharCode(96)])('ignores URLs anywhere inside source literals quoted with %s', (quote) => {
+    const url = 'xdt-file:///tmp/fixture.pdf';
+    const body = 'Open ' + url + ' or [report](xdt-file://open?path=%2Ftmp%2Fother.pdf)';
+    const literal = quote + body + quote;
+    for (const source of [
+      'const message = ' + literal,
+      'return ' + literal,
+      'notify(' + literal + ')',
+      'const messages = [' + literal + ', /* next */ ' + literal + ']',
+      'const message = { text: ' + literal + ' }',
+      'const message = enabled ? ' + literal + ' : undefined',
+      'const message = fallback || ' + literal,
+      'const message = ' + quote + 'Open \\' + quote + 'report\\' + quote + ' at ' + url + quote,
+    ]) {
+      expect(files(source), source).toEqual([]);
+      expect(files(JSON.stringify({ content: [{ type: 'text', text: source }] })), source).toEqual([]);
+      expect(files(source + '\nSaved [report](' + url + ')'), source).toEqual([{ url, title: 'fixture.pdf' }]);
+      expect(files(JSON.stringify({ text: source, _xdt_model_files: [{ url, name: 'Report' }] }))).toEqual([{ url, title: 'Report' }]);
+    }
+  });
+  it('keeps URLs in quoted prose and does not inherit source context from a previous statement', () => {
+    const a = 'xdt-file:///tmp/first.pdf';
+    const b = 'xdt-file:///tmp/second.pdf';
+    const expected = [{ url: a, title: 'first.pdf' }, { url: b, title: 'second.pdf' }];
+    for (const quote of ["'", '"', String.fromCharCode(96)]) {
+      const prose = 'Saved ' + quote + 'first [file](' + a + ')' + quote + ', ' + quote + 'second [file](' + b + ')' + quote;
+      expect(files(prose)).toEqual(expected);
+      expect(files('const label = "example";\n' + prose)).toEqual(expected);
+      expect(files(JSON.stringify({ note: prose }))).toEqual(expected);
+    }
+    expect(files('Saved "Open ' + a + '", "Open ' + b + '"')).toEqual(expected);
+  });
+  it('filters multiple URLs in a multiline source template', () => {
+    const source = 'const message = ' + String.fromCharCode(96)
+      + 'Open\nxdt-file:///tmp/first.pdf\nand xdt-file:///tmp/second.pdf\n'
+      + String.fromCharCode(96);
+    expect(files(source)).toEqual([]);
+  });
   it('preserves the legacy direct-path punctuation alphabet in real references', () => {
     // #4692 accepted these filename characters. Source filtering must not
     // redefine the URL alphabet and silently point to a different file.

@@ -488,11 +488,13 @@ function absoluteToolFilePath(url: string): string | null {
   }
 }
 
+const SOURCE_CONTEXT_TOKEN_RE = /"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)|\/\*[\s\S]*?\*\/|(?<![:/])\/\/[^\r\n]*/g;
+
 function withoutSourceComments(text: string): string {
-  // Skip complete string literals before recognizing comments, so URL schemes
+  // Skip string literals before recognizing comments, so URL schemes
   // and comment-like file names inside strings remain part of the context.
   return text.replace(
-    /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|(?<![:/])\/\/[^\r\n]*/g,
+    SOURCE_CONTEXT_TOKEN_RE,
     (token) => token.startsWith('/') ? token.replace(/[^\r\n]/g, ' ') : token,
   );
 }
@@ -503,13 +505,33 @@ function looksLikeQuotedSourceLiteral(text: string, index: number, end: number):
   if (before !== '`' && before !== '\'' && before !== '"') return false;
   // Quotes alone also occur in prose and inline Markdown. Require source syntax
   // around the literal (assignment, collection entry, argument or conditional).
-  const prefix = withoutSourceComments(text.slice(0, index - 1)).trimEnd();
+  const prefix = text.slice(0, index - 1).trimEnd();
   return /(?:[=\[(,?]|&&|\|\||\breturn)$/.test(prefix)
     // A colon alone is also a prose label ("File:"). Require a preceding
     // conditional, allowing indented continuation lines but not new prose.
     || (prefix.endsWith(':') && /\?(?:[^;\r\n]|\r?\n[ \t])*:$/.test(prefix))
     || /[{,]\s*(?:[\w$]+|["'][^"']+["'])\s*:$/.test(prefix)
     || (after === before && /^\s*;/.test(text.slice(end + 1)));
+}
+
+function* quotedSourceRanges(text: string): Generator<{ start: number; end: number }> {
+  // Classify the whole literal, not only URLs touching its opening quote.
+  // Comments and escaped quotes use the same token boundaries as source context.
+  let previous: { end: number; source: boolean } | undefined;
+  for (const match of text.matchAll(SOURCE_CONTEXT_TOKEN_RE)) {
+    if (match[0].startsWith('/')) continue;
+    const start = match.index;
+    // Tool output may end mid-literal after the Host applies its byte budget.
+    const closed = match[0].length > 1 && match[0].endsWith(match[0][0]);
+    const end = start + match[0].length - (closed ? 1 : 0);
+    const continuesList = previous
+      && withoutSourceComments(text.slice(previous.end + 1, start)).trim() === ',';
+    const source: boolean = previous && continuesList
+      ? previous.source
+      : looksLikeQuotedSourceLiteral(text, start + 1, end);
+    if (source) yield { start, end };
+    previous = { end, source };
+  }
 }
 
 /** Existing 3D attachments and managed file references retain a usable file entry on Mobile. */
@@ -543,10 +565,18 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
   while (pending.length) {
     const value = pending.pop();
     if (typeof value === 'string') {
+      if (!value.includes('xdt-file://')) continue;
       const urlPattern = new RegExp(TOOL_FILE_URL_RE);
+      // Strip comments once; repeatedly lexing the prefix of every literal is
+      // quadratic for large source-file output. Offsets stay in the original text.
+      const sourceContext = withoutSourceComments(value);
+      const sourceRanges = quotedSourceRanges(sourceContext);
+      let range = sourceRanges.next();
       let previous: { end: number; source: boolean } | undefined;
       for (let match; (match = urlPattern.exec(value));) {
         const start = match.index;
+        while (!range.done && range.value.end < start) range = sourceRanges.next();
+        if (!range.done && range.value.start < start && start < range.value.end) continue;
         // Quotes/backticks may be filename characters. Treat one as a delimiter
         // only when it matches the opening wrapper around this reference.
         const quote = value[start - 1];
@@ -560,7 +590,7 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
           && withoutSourceComments(value.slice(previous.end + 1, start - 1)).trim() === ',';
         const source = previous && continuesList
           ? previous.source
-          : looksLikeQuotedSourceLiteral(value, start, start + url.length);
+          : looksLikeQuotedSourceLiteral(sourceContext, start, start + url.length);
         if (!source) add(url);
         previous = { end: start + url.length, source };
       }

@@ -11,6 +11,18 @@ function messages(content: unknown): RemoteMessage[] {
   ];
 }
 describe('plugin results are visible outside collapsed tool details', () => {
+  it.each([true, false])('keeps URLs later in source literals out of file cards (streaming=%s)', (isSessionStreaming) => {
+    for (const source of [
+      'const message = "Open xdt-file:///tmp/fixture.pdf";',
+      'const message = "Open xdt-file:///tmp/fixture.pdf\n[remote content truncated]',
+    ]) {
+      const rows = messages({ text: source });
+      const normalized = normalizeRemoteMessages(rows).find((row) => row.kind === 'tool');
+      expect(normalized?.files).toEqual([]);
+      expect(normalized?.secondaryBody).toBe(JSON.stringify({ text: source }));
+      expect(buildMobileMessageRenderItems(rows, { isSessionStreaming }).some((row) => row.type === 'tool_media')).toBe(false);
+    }
+  });
   it.each([true, false])('does not render source fixtures as delivered files (streaming=%s)', (isSessionStreaming) => {
     const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
       + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
