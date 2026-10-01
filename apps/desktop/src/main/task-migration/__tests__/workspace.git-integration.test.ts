@@ -108,8 +108,13 @@ describe('cross-machine project snapshots', () => {
     expect(await git(linked, 'diff', '--cached')).toBe(staged);
     expect(await fs.readFile(path.join(source, 'tracked'), 'utf8')).toBe('base\n');
   }, 30_000);
-  it("leaves other tasks' managed worktrees behind", async () => {
+  it("leaves other tasks' managed worktrees behind in a repository", async () => {
+    await git(source, 'init', '-b', 'main');
+    await git(source, 'config', 'user.name', 'Migration test');
+    await git(source, 'config', 'user.email', 'migration@localhost');
     await fs.writeFile(path.join(source, 'draft'), 'mine\n');
+    await git(source, 'add', 'draft');
+    await git(source, 'commit', '-m', 'fixture');
     for (const name of ['.cindy-worktrees', '.xdt-worktrees']) {
       await fs.mkdir(path.join(source, name, 'other-task'), { recursive: true });
       // Nested Git metadata would otherwise make the whole snapshot non-portable.
@@ -119,10 +124,19 @@ describe('cross-machine project snapshots', () => {
     const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());
     expect(Object.keys(snapshot.archive.files)).toEqual(['draft']);
     await restoreWorkspace(snapshot, artifacts, target);
-    expect(await fs.readdir(target)).toEqual(['draft']);
+    expect((await fs.readdir(target)).sort()).toEqual(['.git', 'draft']);
     expect(
       await fs.readFile(path.join(source, '.cindy-worktrees', 'other-task', 'file'), 'utf8'),
     ).toBe('not mine\n');
+  });
+  it('keeps same-named folders of a plain directory', async () => {
+    await fs.mkdir(path.join(source, '.cindy-worktrees'));
+    await fs.writeFile(path.join(source, '.cindy-worktrees', 'notes'), 'user file\n');
+    const before = await inventoryWorktree(source);
+    const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());
+    await restoreWorkspace(snapshot, artifacts, target);
+    expect(await inventoryWorktree(target)).toEqual(before);
+    expect(Object.keys(before)).toContain(path.join('.cindy-worktrees', 'notes'));
   });
   it('refuses to overwrite a destination directory', async () => {
     await fs.writeFile(path.join(source, 'source'), 'copy');

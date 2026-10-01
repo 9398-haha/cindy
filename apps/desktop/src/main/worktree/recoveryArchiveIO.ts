@@ -25,15 +25,16 @@ function restorableMode(mode: number): number {
   return mode & (process.platform === 'win32' ? 0o666 : 0o777);
 }
 
-/** `excludeRootNames` skips extra top-level entries (task copy leaves other tasks' worktrees behind). */
+/** `excludeRootNames` skips top-level directories (never files) — task copy leaves other tasks' worktrees behind. */
 export async function inventoryWorktree(root: string, maxBytes?: number, excludeRootNames: readonly string[] = []): Promise<Record<string, FileEvidence>> {
   const files: Record<string, FileEvidence> = Object.create(null);
   let bytes = 0;
   const walk = async (directory: string): Promise<void> => {
     for (const name of await fs.readdir(directory)) {
-      if (directory === root && (name === '.git' || excludeRootNames.includes(name))) continue;
+      if (directory === root && name === '.git') continue;
       const absolute = path.join(directory, name);
       const stat = await fs.lstat(absolute);
+      if (directory === root && stat.isDirectory() && excludeRootNames.includes(name)) continue;
       const relative = path.relative(root, absolute);
       const mode = restorableMode(stat.mode);
       if (stat.isSymbolicLink()) {

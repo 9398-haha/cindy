@@ -207,6 +207,8 @@ vi.mock('../../session-share/sessionShareImport', () => ({
 vi.mock('../workspace', async (original) => ({
   isExcludedFromWorkspace: (await original<typeof import('../workspace')>())
     .isExcludedFromWorkspace,
+  excludedRootDirectories: (await original<typeof import('../workspace')>())
+    .excludedRootDirectories,
   estimateWorkspace: async (_root: string, _check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
     return { fileCount: 1, bytes: 8 };
@@ -514,6 +516,7 @@ describe('resumable cross-computer copy', () => {
     const cwd = rows.get('fork')!.workingDir as string;
     const managed = path.join(cwd, '.cindy-worktrees', 'other');
     await fs.mkdir(managed, { recursive: true });
+    await fs.mkdir(path.join(cwd, '.git'));
     rows.get('sibling')!.workingDir = managed;
     state.siblingRunning = true;
     await start();

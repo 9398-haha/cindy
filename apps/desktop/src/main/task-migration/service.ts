@@ -56,6 +56,7 @@ import {
   restoreWorkspace,
   estimateWorkspace,
   isExcludedFromWorkspace,
+  excludedRootDirectories,
   type PortableWorkspace,
 } from './workspace';
 
@@ -296,6 +297,8 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
         ),
       ];
+      // A task inside another managed worktree under a copied root does not touch copied files.
+      const excluded = await Promise.all(sourceKeys.map(excludedRootDirectories));
       for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
         if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
         const row = await scope.db.queryOne<{
@@ -309,10 +312,10 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           const key = await physicalWorktreeKey(row.workingDir);
           if (
             sourceKeys.some(
-              (sourceKey) =>
+              (sourceKey, index) =>
                 key === sourceKey ||
                 (key.startsWith(sourceKey + path.sep) &&
-                  !isExcludedFromWorkspace(sourceKey, key)) ||
+                  !isExcludedFromWorkspace(sourceKey, key, excluded[index])) ||
                 sourceKey.startsWith(key + path.sep),
             )
           )

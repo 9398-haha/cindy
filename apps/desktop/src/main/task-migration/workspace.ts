@@ -11,15 +11,33 @@ import { gitExec, GitExecError } from '../worktree/gitExec';
 import { assertDiskCapacity } from './resources';
 import { MANAGED_WORKTREE_DIR_NAMES } from '../../shared/managedWorktreePaths';
 
-/** Other tasks' Cindy worktrees live under the repository root; a copy never carries them. */
-const EXCLUDED_ROOT_NAMES: readonly string[] = MANAGED_WORKTREE_DIR_NAMES;
 const ESTIMATE_CONCURRENCY = 32;
+const STAT_BATCH = 64;
 
-/** Whether `file` lies in a top-level directory that copies of `root` leave behind. */
-export function isExcludedFromWorkspace(root: string, file: string): boolean {
+/**
+ * Top-level directory names a copy of `root` leaves behind: other tasks' Cindy worktrees.
+ * Cindy only creates them inside Git repositories, so a plain directory keeps same-named
+ * folders. Callers skip only directories with these names, never files.
+ */
+export async function excludedRootDirectories(root: string): Promise<string[]> {
+  try {
+    await fs.lstat(path.join(root, '.git'));
+    return [...MANAGED_WORKTREE_DIR_NAMES];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+/** Whether `file` lies in one of `root`'s `excluded` top-level directories. */
+export function isExcludedFromWorkspace(
+  root: string,
+  file: string,
+  excluded: readonly string[],
+): boolean {
   const relative = path.relative(root, file);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false;
-  return EXCLUDED_ROOT_NAMES.includes(relative.split(path.sep)[0]);
+  return excluded.includes(relative.split(path.sep)[0]);
 }
 
 export interface PortableWorkspace {
@@ -146,7 +164,7 @@ export async function snapshotWorkspace(
       encryptedKey: '',
       iv: randomBytes(12),
       maxBytes: Math.floor((space.bavail * space.bsize) / 1.1),
-      excludeRootNames: [...EXCLUDED_ROOT_NAMES],
+      excludeRootNames: await excludedRootDirectories(root),
     });
     archive.files = Object.fromEntries(
       Object.entries(archive.files).map(([name, entry]) => [name.split(path.sep).join('/'), entry]),
@@ -266,27 +284,33 @@ export async function estimateWorkspace(
   maxFiles = Number.POSITIVE_INFINITY,
 ): Promise<{ fileCount: number; bytes: number }> {
   root = await fs.realpath(root);
+  const excluded = await excludedRootDirectories(root);
   const result = { fileCount: 0, bytes: 0 };
   const pending = [root];
   const visit = async (directory: string): Promise<void> => {
     const files: string[] = [];
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       check();
-      if (directory === root && (entry.name === '.git' || EXCLUDED_ROOT_NAMES.includes(entry.name)))
-        continue;
+      if (directory === root && entry.name === '.git') continue;
       const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) pending.push(file);
-      else if (entry.isFile() || entry.isSymbolicLink()) files.push(file);
+      if (entry.isDirectory()) {
+        if (directory !== root || !excluded.includes(entry.name)) pending.push(file);
+      } else if (entry.isFile() || entry.isSymbolicLink()) files.push(file);
       else throw new Error('MIGRATION_NONPORTABLE_PATH');
     }
-    for (const stat of await Promise.all(files.map((file) => fs.lstat(file)))) {
-      result.fileCount++;
-      result.bytes += stat.size;
-    }
+    // Count before stat so an oversized directory stops without statting every entry.
+    result.fileCount += files.length;
     if (result.fileCount > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
+    for (let index = 0; index < files.length; index += STAT_BATCH) {
+      check();
+      const stats = await Promise.all(
+        files.slice(index, index + STAT_BATCH).map((file) => fs.lstat(file)),
+      );
+      for (const stat of stats) result.bytes += stat.size;
+    }
   };
-  // A sequential walk of a dependency-heavy project takes minutes; unbounded recursion
-  // would hold the whole tree in memory. Visit a bounded number of directories at once.
+  // A sequential walk of a dependency-heavy project takes minutes; unbounded fan-out would
+  // hold the whole tree in memory. At most ESTIMATE_CONCURRENCY × STAT_BATCH stats in flight.
   await new Promise<void>((resolve, reject) => {
     let active = 0;
     let settled = false;
