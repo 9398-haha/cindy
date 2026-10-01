@@ -126,6 +126,38 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('outbound invoke admission', () => {
+  it('sends initial session lists and recovery probes while all background slots are occupied', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      for (let i = 0; i < 5; i++) calls.push(h.client.invoke('a', {
+        channel: 'git-context:pr-refs:list', args: [`session-${i}`],
+      }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      expect(sent()).toHaveLength(4);
+      for (const args of [[30, 'active'], [1, 'all', { includePinned: false }]]) calls.push(h.client.invoke('a', {
+        channel: 'local-db:sessions:list', args,
+      }, 12_000).catch(e => e));
+      const lists = sent().filter(e => (e.payload as { channel: string }).channel === 'local-db:sessions:list');
+      expect(lists).toHaveLength(2);
+      expect(sent()).toHaveLength(6);
+      for (const request of lists) h.current().push({
+        v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: request.id,
+        payload: { ok: true, result: [] },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(Promise.all(calls.slice(5))).resolves.toEqual([
+        { ok: true, result: [] }, { ok: true, result: [] },
+      ]);
+      // Releasing foreground slots must not let the fifth background request exceed its quota.
+      expect(sent()).toHaveLength(6);
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+
   it('batches PR refreshes, admits interactive work and keeps control traffic and other peers moving', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });

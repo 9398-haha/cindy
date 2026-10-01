@@ -2,11 +2,12 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
 
-/** These reads may wait behind current-task work. Not a retry or authorization policy. */
+/** These reads may wait behind current-task work. Not a retry or authorization policy.
+ * sessions:list also serves initial loading and recovery probes, so it stays foreground.
+ */
 const BACKGROUND_INVOKE_CHANNELS = new Set([
   'git-context:pr-refs:list',
   'git-context:pr-status',
-  'local-db:sessions:list',
   'maker:schedule:list-sidebar-index-runs',
   'maker:usage:device-rows',
 ]);
