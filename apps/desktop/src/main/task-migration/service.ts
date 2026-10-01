@@ -327,6 +327,9 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       scope.assertCurrent();
       if (members.some((member) => sourceBoundary!.isBusy(member.id)))
         throw new Error('MIGRATION_TASK_RUNNING');
+      // The confirmation estimate is not a lasting admission: files may have grown since.
+      await estimateRoots(scope, sourceKeys);
+      scope.assertCurrent();
       const result = await exportSessionShare({
         sessionId: record.sessionId,
         targetPath: path.join(directory, 'session.cshare'),
@@ -369,6 +372,21 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       await preflight(scope, record, workspace, directory);
     },
   );
+}
+
+/** The file cap covers every copied directory together; MIGRATION_TOO_MANY_FILES above it. */
+async function estimateRoots(scope: Scope, roots: Iterable<string>) {
+  const estimate = { fileCount: 0, bytes: 0 };
+  for (const root of roots) {
+    const next = await estimateWorkspace(
+      root,
+      scope.assertCurrent,
+      TASK_MIGRATION_MAX_FILES - estimate.fileCount,
+    );
+    estimate.fileCount += next.fileCount;
+    estimate.bytes += next.bytes;
+  }
+  return estimate;
 }
 
 async function sendFile(
@@ -922,16 +940,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     const roots = new Set(
       await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
     );
-    const estimate = { fileCount: 0, bytes: 0 };
-    for (const root of roots) {
-      const next = await estimateWorkspace(
-        root,
-        scope.assertCurrent,
-        TASK_MIGRATION_MAX_FILES - estimate.fileCount,
-      );
-      estimate.fileCount += next.fileCount;
-      estimate.bytes += next.bytes;
-    }
+    const estimate = await estimateRoots(scope, roots);
     scope.assertCurrent();
     return { ...view(scope, null), estimate };
   }

@@ -2,6 +2,7 @@ vi.mock('../../mcp-integrations/moveSession', () => ({ moveSessionProjectFromHos
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import syncFs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
@@ -41,6 +42,7 @@ const state = vi.hoisted(() => ({
   workers: [] as string[],
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
+  tooManyFiles: false,
 }));
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
@@ -211,6 +213,7 @@ vi.mock('../workspace', async (original) => ({
     .excludedRootDirectories,
   estimateWorkspace: async (_root: string, _check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
+    if (state.tooManyFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
     return { fileCount: 1, bytes: 8 };
   },
   snapshotWorkspace: async (source: string, directory: string) => {
@@ -270,6 +273,7 @@ describe('resumable cross-computer copy', () => {
     state.workers = [];
     state.estimateLimits = [];
     state.timeoutAction = '';
+    state.tooManyFiles = false;
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -516,11 +520,18 @@ describe('resumable cross-computer copy', () => {
     const cwd = rows.get('fork')!.workingDir as string;
     const managed = path.join(cwd, '.cindy-worktrees', 'other');
     await fs.mkdir(managed, { recursive: true });
-    await fs.mkdir(path.join(cwd, '.git'));
+    execFileSync('git', ['init', '-q', cwd]);
     rows.get('sibling')!.workingDir = managed;
     state.siblingRunning = true;
     await start();
     expect((await settled()).stage).toBe('complete');
+  });
+  it('re-checks the file cap before exporting, since files may grow after the estimate', async () => {
+    state.tooManyFiles = true;
+    await start();
+    expect((await settled()).error).toBe('MIGRATION_TOO_MANY_FILES');
+    expect(state.exported).not.toHaveBeenCalled();
+    expect(state.snapshot).not.toHaveBeenCalled();
   });
   it('still refuses while another task runs in an ordinary subdirectory of the copied root', async () => {
     const rows = state.rows.get('A')!;

@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { estimateWorkspace } from '../workspace';
 
 it('counts hidden and nested files, skips root Git metadata and does not count directories', async () => {
@@ -32,9 +33,12 @@ it("skips other tasks' managed worktree directories only at a repository root", 
     }
     await fs.mkdir(path.join(root, 'sub', '.cindy-worktrees'), { recursive: true });
     await fs.writeFile(path.join(root, 'sub', '.cindy-worktrees', 'file'), '1234');
-    // A plain directory never holds Cindy worktrees: same-named folders are user files.
+    // A plain directory never holds Cindy worktrees: same-named folders are user files,
+    // even when stray (invalid) `.git` metadata is left at the root.
     expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 24 });
     await fs.mkdir(path.join(root, '.git'));
+    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 3, bytes: 24 });
+    execFileSync('git', ['init', '-q', root]);
     expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 1, bytes: 4 });
     // Only directories are skipped; a same-named file is still project content.
     await fs.rm(path.join(root, '.xdt-worktrees'), { recursive: true });
@@ -78,6 +82,30 @@ it('counts a wide, deep tree and stops once the file cap is exceeded', async () 
       'MIGRATION_TOO_MANY_FILES',
     );
   } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it('classifies entries of unknown type with lstat instead of rejecting them', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-estimate-'));
+  const readdir = fs.readdir.bind(fs);
+  const unknown = vi.spyOn(fs, 'readdir').mockImplementation((async (
+    directory: string,
+    options: unknown,
+  ) =>
+    (await readdir(directory, options as { withFileTypes: true })).map((entry) => ({
+      name: entry.name,
+      isDirectory: () => false,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+    }))) as never);
+  try {
+    await fs.mkdir(path.join(root, 'sub'));
+    await fs.writeFile(path.join(root, 'sub', 'file'), '12345');
+    await fs.writeFile(path.join(root, 'top'), 'ab');
+    expect(await estimateWorkspace(root, () => {})).toEqual({ fileCount: 2, bytes: 7 });
+  } finally {
+    unknown.mockRestore();
     await fs.rm(root, { recursive: true, force: true });
   }
 });

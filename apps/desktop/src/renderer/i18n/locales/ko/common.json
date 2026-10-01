@@ -46,7 +46,8 @@
       "MIGRATION_UNSUPPORTED": "두 컴퓨터 모두 작업 복사을 지원하는 버전으로 업데이트하세요.",
       "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
       "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요.",
-      "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요."
+      "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요.",
+      "MIGRATION_TOO_MANY_FILES": "프로젝트 파일이 {{limit, number}}개를 넘어 복사를 중단했습니다. 파일이 더 적은 프로젝트를 복사하세요."
     },
     "successTitle": "복사 완료",
     "successDescription": "{{name}}에 복사했습니다.",

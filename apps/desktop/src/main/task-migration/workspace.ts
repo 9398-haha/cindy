@@ -16,15 +16,20 @@ const STAT_BATCH = 64;
 
 /**
  * Top-level directory names a copy of `root` leaves behind: other tasks' Cindy worktrees.
- * Cindy only creates them inside Git repositories, so a plain directory keeps same-named
- * folders. Callers skip only directories with these names, never files.
+ * Cindy only creates them inside Git repositories, so only a Git repository root (the same
+ * verdict snapshotWorkspace's probe reaches) excludes them; a plain directory, including one
+ * with stray `.git` metadata, keeps same-named folders. Callers skip directories, never files.
  */
 export async function excludedRootDirectories(root: string): Promise<string[]> {
   try {
-    await fs.lstat(path.join(root, '.git'));
-    return [...MANAGED_WORKTREE_DIR_NAMES];
+    const probe = await gitExec(['rev-parse', '--show-toplevel'], root, {
+      extraEnv: { LC_ALL: 'C' },
+    });
+    return (await fs.realpath(probe.stdout.trim())) === (await fs.realpath(root))
+      ? [...MANAGED_WORKTREE_DIR_NAMES]
+      : [];
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (error instanceof GitExecError && error.stderr.includes('not a git repository')) return [];
     throw error;
   }
 }
@@ -164,7 +169,8 @@ export async function snapshotWorkspace(
       encryptedKey: '',
       iv: randomBytes(12),
       maxBytes: Math.floor((space.bavail * space.bsize) / 1.1),
-      excludeRootNames: await excludedRootDirectories(root),
+      // `git` is set exactly when the probe above found `root` to be a repository root.
+      excludeRootNames: git ? [...MANAGED_WORKTREE_DIR_NAMES] : [],
     });
     archive.files = Object.fromEntries(
       Object.entries(archive.files).map(([name, entry]) => [name.split(path.sep).join('/'), entry]),
@@ -293,9 +299,14 @@ export async function estimateWorkspace(
       check();
       if (directory === root && entry.name === '.git') continue;
       const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
+      // Some filesystems (e.g. network mounts) report DT_UNKNOWN; classify those with lstat.
+      const kind =
+        entry.isDirectory() || entry.isFile() || entry.isSymbolicLink()
+          ? entry
+          : await fs.lstat(file);
+      if (kind.isDirectory()) {
         if (directory !== root || !excluded.includes(entry.name)) pending.push(file);
-      } else if (entry.isFile() || entry.isSymbolicLink()) files.push(file);
+      } else if (kind.isFile() || kind.isSymbolicLink()) files.push(file);
       else throw new Error('MIGRATION_NONPORTABLE_PATH');
     }
     // Count before stat so an oversized directory stops without statting every entry.
