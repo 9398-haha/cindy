@@ -568,7 +568,6 @@
     "workerCountSummary_other": "{{count}} 个 Worker · {{running}} 运行中",
     "loading": "正在读取 Worker…",
     "noWorkers": "还没有 Worker",
-    "focused": "焦点",
     "manageGroup": "管理",
     "hardLimitHint": "已达硬上限 {{limit}} 个 · 归档现有 Worker 后可继续创建",
     "softLimitHint": "已超过软上限 {{limit}} 个 · Worker 过多会增加内存占用",

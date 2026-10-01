@@ -568,7 +568,6 @@
     "workerCountSummary_other": "Worker {{count}}개 · 실행 중 {{running}}",
     "loading": "Worker를 불러오는 중…",
     "noWorkers": "아직 Worker가 없습니다",
-    "focused": "포커스",
     "manageGroup": "관리",
     "hardLimitHint": "최대 {{limit}}개에 도달 · Worker를 보관하면 더 만들 수 있습니다",
     "softLimitHint": "권장 {{limit}}개 초과 · Worker가 많으면 메모리 사용량이 늘어납니다",
