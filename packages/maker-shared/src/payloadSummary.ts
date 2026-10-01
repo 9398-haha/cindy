@@ -466,6 +466,29 @@ export function extractPayloadToolCardIds(text: string): string[] {
 
 export interface PayloadToolFile { url: string; title: string }
 
+const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"'<>\\)`\]},;]+/g;
+
+function absoluteToolFilePath(url: string): string | null {
+  try {
+    // Keep both legacy direct-path links and the query-based local/open URLs.
+    const path = url.startsWith('xdt-file:///')
+      ? decodeURIComponent(url.slice('xdt-file://'.length))
+      : new URL(url).searchParams.get('path') ?? '';
+    return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
+  const before = text[index - 1];
+  const after = text[end];
+  // Tool output often contains source files and test fixtures. A protocol URL
+  // surrounded by a string/template delimiter is source text, not a produced file.
+  return before === '`' || before === '\'' || before === '"'
+    || after === '`' || after === '\'' || after === '"';
+}
+
 /** Existing 3D attachments and managed file references retain a usable file entry on Mobile. */
 export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
   const parsed = parseToolResultPayload(text);
@@ -475,7 +498,9 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
     if (typeof url !== 'string' || !/^(?:xdt-file:\/\/[^\s]+|cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb)$/.test(url)) return;
     let name = url.split('/').pop()!;
     if (url.startsWith('xdt-file://')) {
-      try { name = (new URL(url).searchParams.get('path') ?? name).split(/[\\/]/).pop() || name; } catch { /* Keep the original reference as fallback. */ }
+      const path = absoluteToolFilePath(url);
+      if (path === null) return;
+      name = path.split(/[\\/]/).pop() || name;
     }
     if (!files.some((file) => file.url === url)) files.push({ url, title: typeof title === 'string' && title.trim() ? title : name });
   };
@@ -483,8 +508,28 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
     for (const raw of parsed._xdt_model_files) { const file = readPayloadRecord(raw); add(file?.url, file?.name); }
   }
   if (Array.isArray(parsed?.xdt_media_produced)) for (const url of parsed.xdt_media_produced) add(url);
-  // Files supplied as links in a result remain accessible without scanning arbitrary local paths.
-  for (const match of text.matchAll(/xdt-file:\/\/[^\s"<>\\)]+/g)) add(match[0]);
+  // Scan decoded JSON values, not serialized JSON: its quotes are structural,
+  // while quotes inside a value can identify source/test literals. Use a stack
+  // so deeply nested tool output cannot overflow the call stack.
+  const pending: unknown[] = [parsed ?? text];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === 'string') {
+      for (const match of value.matchAll(TOOL_FILE_URL_RE)) {
+        const start = match.index ?? 0;
+        if (!looksLikeQuotedSourceLiteral(value, start, start + match[0].length)) add(match[0]);
+      }
+    } else if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) pending.push(value[i]);
+    } else if (value !== null && typeof value === 'object') {
+      const entries = Object.entries(value);
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [key, child] = entries[i];
+        // Explicit declarations above already retain full URLs and display names.
+        if (key !== '_xdt_model_files' && key !== 'xdt_media_produced') pending.push(child);
+      }
+    }
+  }
   return files;
 }
 

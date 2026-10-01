@@ -29,4 +29,57 @@ describe('portable plugin results', () => {
     expect(files('Saved xdt-file://open?path=%2Ftmp%2Freport.pdf')[0].title).toBe('report.pdf');
     expect(hasVisibleHistoryResult(JSON.stringify({ ok: true, result: { xdt_card_id: 'c' } }))).toBe(true);
   });
+  it('ignores quoted protocol URLs when a tool prints source code or test fixtures', () => {
+    const source = [
+      "const urls = ['xdt-file://open?path=%2Ftmp%2Freport.pdf', 'xdt-file://open?path=%2Ftmp%2Findex.html'];",
+      "const template = `xdt-file://open?path=${encodeURIComponent(absPath)}`;",
+    ].join('\n');
+    expect(files(source)).toEqual([]);
+    expect(files('Saved xdt-file://open?path=%2Ftmp%2Freport.pdf')).toEqual([
+      { url: 'xdt-file://open?path=%2Ftmp%2Freport.pdf', title: 'report.pdf' },
+    ]);
+  });
+  it.each([
+    ['xdt-file:///tmp/report.pdf', 'report.pdf'],
+    ['xdt-file:///C:/reports/report.pdf', 'report.pdf'],
+    ['xdt-file:///tmp/report%20final.pdf', 'report final.pdf'],
+    ['xdt-file://open?path=%2Ftmp%2Freport.pdf', 'report.pdf'],
+    ['xdt-file://local/?path=C%3A%5Creports%5Creport.pdf', 'report.pdf'],
+  ])('retains absolute file references in both supported URL forms: %s', (url, title) => {
+    expect(files(`Saved [report](${url})`)).toEqual([{ url, title }]);
+    expect(files(JSON.stringify({ _xdt_model_files: [{ url, name: title }] }))).toEqual([{ url, title }]);
+    expect(files(JSON.stringify({ xdt_media_produced: [url] }))).toEqual([{ url, title }]);
+  });
+  it.each(['note', 'text', 'output'])('ignores source literals inside JSON %s while retaining real links', (field) => {
+    const source = [
+      "const a = 'xdt-file://open?path=%2Ftmp%2Ffixture.pdf';",
+      'const b = "xdt-file:///tmp/fixture.html";',
+      'const c = `xdt-file://open?path=${encodeURIComponent(absPath)}`;',
+    ].join('\n');
+    const url = 'xdt-file://open?path=%2Ftmp%2Factual.pdf';
+    for (const wrap of [
+      (text: string) => ({ [field]: text }),
+      (text: string) => ({ ok: true, result: { [field]: text } }),
+      (text: string) => ({ content: [{ type: 'text', text }] }),
+    ]) {
+      expect(files(JSON.stringify(wrap(source)))).toEqual([]);
+      expect(files(JSON.stringify(wrap(`${source}\nSaved ${url}`)))).toEqual([{ url, title: 'actual.pdf' }]);
+    }
+  });
+  it('keeps explicit file declarations when neighboring JSON text contains source examples', () => {
+    const url = 'xdt-file:///tmp/report.pdf';
+    expect(files(JSON.stringify({ ok: true, result: {
+      _xdt_model_files: [{ url, name: 'Report' }],
+      text: `const example = '${url}';`,
+    } }))).toEqual([{ url, title: 'Report' }]);
+  });
+  it.each([
+    'xdt-file://report.pdf',
+    'xdt-file://open?path=relative%2Freport.pdf',
+    'xdt-file://open?path=${encodeURIComponent(absPath)}',
+    'xdt-file://open?path=',
+  ])('rejects incomplete or non-absolute file references: %s', (url) => {
+    expect(files(`Saved ${url}`)).toEqual([]);
+    expect(files(JSON.stringify({ _xdt_model_files: [{ url }] }))).toEqual([]);
+  });
 });
