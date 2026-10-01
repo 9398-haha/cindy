@@ -383,7 +383,7 @@ test('actual layer reporter keeps visible keycap and chart marks separate from t
   }
 });
 
-test('CI design commands feed the existing verify job and preserve Windows aggregation', () => {
+test('CI design commands feed the existing verify job and preserve Windows aggregation', (t) => {
   const workflow = matter.engines.yaml.parse(fs.readFileSync(path.join(root,'.github/workflows/ci.yml'),'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
   const checks = workflow.jobs['verify-checks'];
