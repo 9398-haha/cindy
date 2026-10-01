@@ -473,9 +473,15 @@ const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"<>\\)]+/g;
 function absoluteToolFilePath(url: string): string | null {
   try {
     // Keep both legacy direct-path links and the query-based local/open URLs.
-    const path = url.startsWith('xdt-file:///')
-      ? decodeURIComponent(url.slice('xdt-file://'.length))
-      : new URL(url).searchParams.get('path') ?? '';
+    let path: string;
+    if (url.startsWith('xdt-file:///')) {
+      path = url.slice('xdt-file://'.length);
+      // Legacy direct paths may contain a literal percent sign. Decode valid
+      // escapes once, but retain the original path if it is not URI-encoded.
+      try { path = decodeURIComponent(path); } catch { /* Keep the literal path. */ }
+    } else {
+      path = new URL(url).searchParams.get('path') ?? '';
+    }
     return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) ? path : null;
   } catch {
     return null;

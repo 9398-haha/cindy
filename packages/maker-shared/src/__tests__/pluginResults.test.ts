@@ -7,7 +7,7 @@ describe('portable plugin results', () => {
   it('preserves the legacy direct-path punctuation alphabet in real references', () => {
     // #4692 accepted these filename characters. Source filtering must not
     // redefine the URL alphabet and silently point to a different file.
-    for (const punctuation of "!#$&'(*+,-.:;=?@[]^_{}~" + String.fromCharCode(96)) {
+    for (const punctuation of "!#$%&'(*+,-.:;=?@[]^_{}~" + String.fromCharCode(96)) {
       const title = 'report' + punctuation + 'final.pdf';
       const url = 'xdt-file:///tmp/' + title;
       const expected = [{ url, title }];
@@ -62,6 +62,22 @@ describe('portable plugin results', () => {
     expect(files(`Saved [report](${url})`)).toEqual([{ url, title }]);
     expect(files(JSON.stringify({ _xdt_model_files: [{ url, name: title }] }))).toEqual([{ url, title }]);
     expect(files(JSON.stringify({ xdt_media_produced: [url] }))).toEqual([{ url, title }]);
+  });
+  it.each([
+    ['xdt-file:///tmp/report100%.pdf', 'report100%.pdf'],
+    ['xdt-file:///C:/reports/report100%.pdf', 'report100%.pdf'],
+    ['xdt-file:///tmp/report%ZZ.pdf', 'report%ZZ.pdf'],
+    ['xdt-file:///tmp/report%2', 'report%2'],
+    ['xdt-file:///tmp/report%FF.pdf', 'report%FF.pdf'],
+    ['xdt-file:///tmp/report%20at100%25.pdf', 'report at100%.pdf'],
+    ['xdt-file:///tmp/report%2520.pdf', 'report%20.pdf'],
+    ['xdt-file://open?path=%2Ftmp%2Freport100%25.pdf', 'report100%.pdf'],
+  ])('retains percent file names and decodes valid escapes once: %s', (url, title) => {
+    const expected = [{ url, title }];
+    expect(files('[report](' + url + ')')).toEqual(expected);
+    expect(files(JSON.stringify({ note: url }))).toEqual(expected);
+    expect(files(JSON.stringify({ _xdt_model_files: [{ url }] }))).toEqual(expected);
+    expect(files('const path = "' + url + '";')).toEqual([]);
   });
   it.each(['note', 'text', 'output'])('ignores source literals inside JSON %s while retaining real links', (field) => {
     const source = [
