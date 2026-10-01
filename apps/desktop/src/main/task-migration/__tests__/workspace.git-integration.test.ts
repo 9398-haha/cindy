@@ -148,6 +148,26 @@ describe('cross-machine project snapshots', () => {
     const snapshot = await snapshotWorkspace(source, artifacts, randomUUID(), 3);
     expect(Object.keys(snapshot.archive.files).sort()).toEqual(['a', 'b', 'sub', 'sub/c']);
   });
+  it('keeps the file allowance when files appear while the archive is written', async () => {
+    await fs.writeFile(path.join(source, 'a'), 'a');
+    const open = fs.open.bind(fs);
+    let grown = false;
+    // The archive is fsynced via fs.open after packing; grow the tree at that moment.
+    const grow = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      grow.mockRestore();
+      grown = true;
+      for (const name of ['b', 'c']) await fs.writeFile(path.join(source, name), name);
+      return open(...(args as Parameters<typeof open>));
+    });
+    try {
+      await expect(snapshotWorkspace(source, artifacts, randomUUID(), 2)).rejects.toThrow(
+        'MIGRATION_TOO_MANY_FILES',
+      );
+      expect(grown).toBe(true);
+    } finally {
+      grow.mockRestore();
+    }
+  });
   it('refuses to overwrite a destination directory', async () => {
     await fs.writeFile(path.join(source, 'source'), 'copy');
     const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());

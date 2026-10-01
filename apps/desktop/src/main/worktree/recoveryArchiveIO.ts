@@ -153,7 +153,7 @@ export async function createRecoveryArchive(root: string, resourceId: string, di
     try { await handle.sync(); } finally { await handle.close(); }
     const archive = { file, encryptedKey, iv: Buffer.from(iv).toString('base64'), tag: cipher.getAuthTag().toString('base64'), files };
     await verifyRecoveryArchive(archive, directory, key, maxBytes);
-    if (!sameWorktreeFiles(await inventoryWorktree(root, undefined, excludeRootNames), files)) throw new Error('worktree changed during archive');
+    if (!sameWorktreeFiles(await inventoryWorktree(root, undefined, excludeRootNames, maxFiles), files)) throw new Error('worktree changed during archive');
     return archive;
   } catch (error) {
     await fs.rm(target, { force: true });

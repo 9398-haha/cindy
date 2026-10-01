@@ -683,6 +683,11 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
       ]);
     expect(orphan('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
     expect(orphan('status')).toBe(60_000);
+    // A reply that could not be sent is kept for the same action-specific window.
+    const outbox = (action: string) =>
+      __testing.outboxEntryMaxAgeMs(TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]);
+    expect(outbox('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(outbox('status')).toBe(60_000);
   });
 });
 
