@@ -29,6 +29,8 @@ export interface AppearanceSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperMotion: WallpaperMotion;
+  /** Read-only, host-owned media reference; never accepted by set-patch. */
+  customWallpaperUrl?: string;
 }
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
@@ -40,6 +42,7 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   wallpaperId: 'none',
   wallpaperOverlay: 0.2,
   wallpaperMotion: 'static',
+  customWallpaperUrl: '',
 };
 
 export const APPEARANCE_LIMITS = {
@@ -49,8 +52,20 @@ export const APPEARANCE_LIMITS = {
   wallpaperOverlay: { min: 0, max: 0.6, step: 0.05 },
 } as const;
 
-export const WALLPAPER_IDS = ['none', 'cindy-window', 'cindy-studio', 'cindy-dream'] as const;
+export const WALLPAPER_IDS = [
+  'none',
+  'cindy-window',
+  'cindy-studio',
+  'cindy-dream',
+  'custom',
+] as const;
 export type WallpaperId = (typeof WALLPAPER_IDS)[number];
+
+export function normalizeCustomWallpaperUrl(value: unknown): string {
+  return typeof value === 'string' && /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.webp$/.test(value)
+    ? value
+    : '';
+}
 
 export function clampAppearanceWallpaperOverlay(
   value: number,
@@ -127,6 +142,7 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
         ? clampAppearanceWallpaperOverlay(value.wallpaperOverlay)
         : DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
     wallpaperMotion: value.wallpaperMotion === 'dynamic' ? 'dynamic' : 'static',
+    customWallpaperUrl: normalizeCustomWallpaperUrl(value.customWallpaperUrl),
   };
 }
 

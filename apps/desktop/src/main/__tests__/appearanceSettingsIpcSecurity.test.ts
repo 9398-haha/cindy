@@ -12,10 +12,23 @@ const mocks = vi.hoisted(() => ({
   writeAppearanceSettingsPatch: vi.fn(),
   resetAppearanceSettings: vi.fn(),
   updateAppearanceSettingsAtomic: vi.fn(),
+  owner: 'owner-a:1',
+  boundaryPending: false,
+  importWallpaper: vi.fn(),
+  removeWallpaper: vi.fn(),
+}));
+
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.owner,
+  isAppSessionBoundaryPending: () => mocks.boundaryPending,
+}));
+vi.mock('../custom-wallpaper.js', () => ({
+  importCustomWallpaper: mocks.importWallpaper,
+  removeCustomWallpaper: mocks.removeWallpaper,
 }));
 
 vi.mock('electron', () => ({
-  BrowserWindow: { getAllWindows: () => mocks.allWindows },
+  BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: () => ({}) },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
 }));
 
@@ -48,6 +61,47 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
+    'rejects %s when the owner changes during module loading',
+    async (channel) => {
+      const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === channel)?.[1];
+      const pending = handler({ sender: {} });
+      mocks.owner = 'owner-b:2';
+      await expect(pending).rejects.toThrow('Unable to');
+      expect(mocks.importWallpaper).not.toHaveBeenCalled();
+      expect(mocks.removeWallpaper).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
+    'rejects %s while the owner boundary is pending',
+    async (channel) => {
+      const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === channel)?.[1];
+      const pending = handler({ sender: {} });
+      mocks.boundaryPending = true;
+      await expect(pending).rejects.toThrow('Unable to');
+      expect(mocks.importWallpaper).not.toHaveBeenCalled();
+      expect(mocks.removeWallpaper).not.toHaveBeenCalled();
+    },
+  );
+  it('does not let a renderer inject a path or media URL through the generic preference channel', () => {
+    expect(__testing.parsePatch({ wallpaperId: 'custom' })).toEqual({ wallpaperId: 'custom' });
+    expect(() =>
+      __testing.parsePatch({ customWallpaperUrl: `cindy-media://blobs/${'a'.repeat(64)}.webp` }),
+    ).toThrow('unknown appearance field');
+    expect(() => __testing.parsePatch({ wallpaperPath: '/private.png' })).toThrow(
+      'unknown appearance field',
+    );
+  });
+  it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
+    'rejects untrusted callers before %s can access a picker or media',
+    async (channel) => {
+      mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
+        throw new Error('untrusted');
+      });
+      const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === channel)?.[1];
+      await expect(handler({})).rejects.toThrow('untrusted');
+    },
+  );
   it('validates motion choices and preserves the static default for old settings', () => {
     expect(normalizeAppearanceSettings({ wallpaperId: 'cindy-window' }).wallpaperMotion).toBe(
       'static',
@@ -65,6 +119,10 @@ describe('appearance settings IPC authorization', () => {
   });
 
   beforeEach(() => {
+    mocks.owner = 'owner-a:1';
+    mocks.boundaryPending = false;
+    mocks.importWallpaper.mockReset();
+    mocks.removeWallpaper.mockReset();
     mocks.allWindows.length = 0;
     mocks.trustedRead.mockReset();
     mocks.trustedReadWindow.mockReset().mockReturnValue(false);
@@ -99,7 +157,7 @@ describe('appearance settings IPC authorization', () => {
       ([channel]) => channel === 'appearance-settings:reset',
     )?.[1] as (event: unknown) => Promise<unknown>;
 
-    mocks.readAppearanceSettingsState.mockReturnValue({ settings: persisted, overrides: {} });
+    mocks.readAppearanceSettingsState.mockReturnValue({ value: persisted, overrides: {} });
     mocks.writeAppearanceSettingsPatch.mockResolvedValue(persisted);
     mocks.resetAppearanceSettings.mockResolvedValue(persisted);
 
@@ -157,7 +215,7 @@ describe('appearance settings IPC authorization', () => {
       wallpaperOverlay: 0.35,
     });
   });
-  it.each(['cindy', 'cindy-portrait', 'aurora', 'sunset', 'paper', 'custom'])(
+  it.each(['cindy', 'cindy-portrait', 'aurora', 'sunset', 'paper'])(
     'rejects retired wallpaper %s at the write boundary',
     async (wallpaperId) => {
       const setHandler = mocks.ipcHandle.mock.calls.find(

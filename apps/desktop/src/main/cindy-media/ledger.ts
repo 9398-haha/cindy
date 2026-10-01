@@ -338,6 +338,24 @@ export async function removeRefsExceptHash(
   return result.changes;
 }
 
+/** Retain one newly published ref, including when importing the same hash again. */
+export async function removeRefsExceptId(
+  params: { refKind: MediaRefKind; refId: string; keepId: string },
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  const result = await db
+    .delete(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.refKind, params.refKind),
+        eq(mediaRefs.refId, params.refId),
+        ne(mediaRefs.id, params.keepId),
+      ),
+    )
+    .run();
+  return result.changes;
+}
+
 /** 删除某引用方名下的全部引用(删会话 / 卸载意识时由业务代码调用)。 */
 export async function removeRefs(
   params: { refKind: MediaRefKind; refId: string },

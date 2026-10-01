@@ -2,7 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { normalizeAppearanceSettings } from '../appearanceSettings';
 
 describe('wallpaper catalog compatibility', () => {
-  it.each(['cindy', 'cindy-portrait', 'aurora', 'sunset', 'paper', 'custom'])(
+  it('accepts only canonical host-owned custom artwork and never legacy paths or CSS', () => {
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.webp`;
+    expect(
+      normalizeAppearanceSettings({ wallpaperId: 'custom', customWallpaperUrl: url }),
+    ).toMatchObject({ wallpaperId: 'custom', customWallpaperUrl: url });
+    for (const value of [
+      'file:///private.png',
+      'https://example.com/image.webp',
+      'data:image/png;base64,abc',
+      `${url}"),url(https://example.com)`,
+      1,
+    ]) {
+      expect(normalizeAppearanceSettings({ customWallpaperUrl: value }).customWallpaperUrl).toBe(
+        '',
+      );
+    }
+  });
+  it.each(['cindy', 'cindy-portrait', 'aurora', 'sunset', 'paper'])(
     'disables retired %s without resetting other appearance preferences',
     (wallpaperId) => {
       const settings = normalizeAppearanceSettings({
@@ -19,6 +36,7 @@ describe('wallpaper catalog compatibility', () => {
       });
       expect(settings).toEqual({
         wallpaperId: 'none',
+        customWallpaperUrl: '',
         wallpaperMotion: 'dynamic',
         wallpaperOverlay: 0.35,
         uiFamily: 'Example Sans',

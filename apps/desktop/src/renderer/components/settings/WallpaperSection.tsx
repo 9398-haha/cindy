@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, ImagePlus } from 'lucide-react';
+import { useState } from 'react';
+import { extractIpcError } from '@/utils/ipcError';
 
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -22,15 +24,48 @@ const WALLPAPER_OPTIONS: Array<{ id: WallpaperId }> = [
 
 export function WallpaperSection() {
   const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const {
     wallpaperId,
     wallpaperOverlay,
     wallpaperMotion,
+    customWallpaperUrl,
     setWallpaper,
     setOverlay,
     setMotion,
     resetWallpaper,
   } = useWallpaperSettings();
+  const chooseImage = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const selected = await window.electronAPI.appearanceSettings.importWallpaper();
+      if (selected) setWallpaper('custom');
+    } catch (error) {
+      setError(
+        t(
+          extractIpcError(error)?.code === 'INVALID_PARAMS'
+            ? 'settings.appearance.wallpaper.customInvalid'
+            : 'settings.appearance.wallpaper.customFailed',
+        ),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeImage = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await window.electronAPI.appearanceSettings.removeWallpaper();
+      if (wallpaperId === 'custom') setWallpaper('none');
+    } catch {
+      setError(t('settings.appearance.wallpaper.customFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div
@@ -56,9 +91,10 @@ export function WallpaperSection() {
           type="button"
           onClick={resetWallpaper}
           disabled={
-            wallpaperId === DEFAULT_APPEARANCE_SETTINGS.wallpaperId &&
-            wallpaperOverlay === DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay &&
-            wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion
+            busy ||
+            (wallpaperId === DEFAULT_APPEARANCE_SETTINGS.wallpaperId &&
+              wallpaperOverlay === DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay &&
+              wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion)
           }
         >
           <RotateCcw size={14} />
@@ -71,9 +107,12 @@ export function WallpaperSection() {
         role="radiogroup"
         aria-label={t('settings.appearance.wallpaper.aria')}
       >
-        {WALLPAPER_OPTIONS.map((option) => {
+        {[...WALLPAPER_OPTIONS, { id: 'custom' as const }].map((option) => {
           const selected = wallpaperId === option.id;
-          const background = getBuiltinWallpaperBackground(option.id);
+          const background =
+            option.id === 'custom' && customWallpaperUrl
+              ? `url("${customWallpaperUrl}")`
+              : getBuiltinWallpaperBackground(option.id);
           return (
             <button
               key={option.id}
@@ -81,7 +120,12 @@ export function WallpaperSection() {
               role="radio"
               aria-checked={selected}
               aria-label={t('settings.appearance.wallpaper.options.' + option.id)}
-              onClick={() => setWallpaper(option.id)}
+              disabled={busy}
+              onClick={() =>
+                option.id === 'custom' && !customWallpaperUrl
+                  ? void chooseImage()
+                  : setWallpaper(option.id)
+              }
               className={cn(
                 'flex min-w-0 flex-col gap-2 rounded-xl text-left transition-colors',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--settings-theme-icon-active)]',
@@ -101,6 +145,11 @@ export function WallpaperSection() {
                   backgroundSize: 'cover',
                 }}
               >
+                {option.id === 'custom' && !customWallpaperUrl ? (
+                  <span className="absolute inset-0 flex items-center justify-center text-[var(--settings-section-sublabel)]">
+                    <ImagePlus size={22} aria-hidden="true" />
+                  </span>
+                ) : null}
                 {option.id === 'none' ? (
                   <span className="absolute inset-0 flex items-center justify-center text-12 text-[var(--settings-section-sublabel)]">
                     {t('settings.appearance.wallpaper.nonePreview')}
@@ -121,6 +170,38 @@ export function WallpaperSection() {
           );
         })}
       </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          type="button"
+          disabled={busy}
+          onClick={() => void chooseImage()}
+        >
+          <ImagePlus size={14} aria-hidden="true" />
+          {t(
+            `settings.appearance.wallpaper.${busy ? 'customBusy' : customWallpaperUrl ? 'customReplace' : 'customChoose'}`,
+          )}
+        </Button>
+        {customWallpaperUrl && (
+          <Button
+            variant="secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => void removeImage()}
+          >
+            {t('settings.appearance.wallpaper.customRemove')}
+          </Button>
+        )}
+        <p className="text-12 text-[var(--settings-section-sublabel)]">
+          {t('settings.appearance.wallpaper.customHint')}
+        </p>
+      </div>
+      {error && (
+        <p role="alert" className="text-12 text-[var(--text-primary)]">
+          {error}
+        </p>
+      )}
 
       <div className="h-px bg-[var(--settings-input-border)]" />
 

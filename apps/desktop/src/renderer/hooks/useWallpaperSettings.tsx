@@ -17,6 +17,7 @@ import {
   type AppearanceSettings,
   type WallpaperId,
   type WallpaperMotion,
+  normalizeCustomWallpaperUrl,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -27,6 +28,7 @@ export interface WallpaperSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperMotion: WallpaperMotion;
+  customWallpaperUrl?: string;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -56,6 +58,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperMotion: settings.wallpaperMotion,
+    customWallpaperUrl: settings.customWallpaperUrl,
   };
 }
 
@@ -66,13 +69,17 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   // app windows, without changing the layout tree or stacking order of its panes.
   useLayoutEffect(() => {
     const root = document.documentElement;
-    const active = settings.wallpaperId !== 'none';
+    const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
+    const background =
+      settings.wallpaperId === 'custom'
+        ? customUrl
+          ? `url("${customUrl}")`
+          : undefined
+        : getBuiltinWallpaperBackground(settings.wallpaperId);
+    const active = Boolean(background);
     if (active) {
       root.dataset.wallpaperActive = 'true';
-      root.style.setProperty(
-        '--app-wallpaper-image',
-        getBuiltinWallpaperBackground(settings.wallpaperId)!,
-      );
+      root.style.setProperty('--app-wallpaper-image', background!);
       // One cover-fitted canvas; theme-derived veil keeps messages readable.
       const veil = (isDark ? 65 : 55) + settings.wallpaperOverlay * 40;
       root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
@@ -92,7 +99,9 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   useEffect(() => {
     const bridge = getBridge();
     if (!bridge?.onChanged) return;
-    return bridge.onChanged((next) => {
+    let disposed = false;
+    let revision = 0;
+    const apply = (next: AppearanceSettings) => {
       const confirmed = pickWallpaperSettings(normalizeAppearanceSettings(next));
       confirmedRef.current = confirmed;
       const optimistic = pendingRef.current.reduce(
@@ -101,7 +110,39 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       );
       settingsRef.current = optimistic;
       setSettings(optimistic);
+    };
+    const unsubscribe = bridge.onChanged((next) => {
+      revision++;
+      apply(next);
     });
+    const refresh = () => {
+      const request = ++revision;
+      void bridge
+        .get?.()
+        .then((state) => {
+          if (
+            !disposed &&
+            revision === request &&
+            state &&
+            typeof state === 'object' &&
+            'value' in state
+          ) {
+            apply(normalizeAppearanceSettings(state.value));
+          }
+        })
+        .catch(() => undefined);
+    };
+    const unsubscribeAuth = window.electronAPI?.onAuthStateChange?.(() => {
+      // Clear private artwork immediately; do not show an outgoing owner's image.
+      apply({ ...DEFAULT_APPEARANCE_SETTINGS, ...settingsRef.current, customWallpaperUrl: '' });
+      refresh();
+    });
+    refresh();
+    return () => {
+      disposed = true;
+      unsubscribe();
+      unsubscribeAuth?.();
+    };
   }, []);
 
   const patch = useCallback((next: Partial<WallpaperSettings>) => {

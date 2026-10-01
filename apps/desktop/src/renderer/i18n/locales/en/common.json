@@ -878,7 +878,7 @@
       },
       "wallpaper": {
         "title": "Wallpaper",
-        "description": "Choose a Cindy scene for the whole app, with static or dynamic display.",
+        "description": "Choose a Cindy scene or your own image for the whole app, independently of the theme.",
         "reset": "Reset",
         "aria": "Wallpaper selection",
         "nonePreview": "None",
@@ -886,14 +886,22 @@
           "none": "None",
           "cindy-window": "Cindy · Window Companion",
           "cindy-studio": "Cindy · Future Atelier",
-          "cindy-dream": "Cindy · Dream Voyage"
+          "cindy-dream": "Cindy · Dream Voyage",
+          "custom": "Custom wallpaper"
         },
         "overlayLabel": "Overlay",
         "overlayAria": "Wallpaper overlay strength",
         "motionLabel": "Display",
         "motionHint": "Still by default. Motion pauses when hidden and follows your reduced-motion preference.",
         "motionStatic": "Static",
-        "motionDynamic": "Dynamic"
+        "motionDynamic": "Dynamic",
+        "customChoose": "Choose image",
+        "customReplace": "Replace image",
+        "customRemove": "Remove image",
+        "customBusy": "Working…",
+        "customHint": "PNG, JPEG or WebP, up to 20 MB. Stored on this device, displayed as a still image.",
+        "customInvalid": "Choose a valid PNG, JPEG or WebP image (up to 20 MB and 40 megapixels).",
+        "customFailed": "Could not save the wallpaper. Please try again."
       },
       "layout": {
         "label": "Panel layout",

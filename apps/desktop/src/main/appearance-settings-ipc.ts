@@ -1,4 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron';
+import { extractIpcError } from '../shared/ipcError.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from './appSessionState.js';
 
 import {
   APPEARANCE_LIMITS,
@@ -32,6 +34,17 @@ export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed'
 
 let registered = false;
 
+function captureWallpaperOwner(): () => void {
+  const owner = activeOwnerScopeKey();
+  const assertValid = () => {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) {
+      throwIpcError('INTERNAL', 'Wallpaper owner changed');
+    }
+  };
+  assertValid();
+  return assertValid;
+}
+
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
   registered = true;
@@ -46,7 +59,47 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:get', (event) => {
     assertTrustedAppRendererEvent(event);
-    return readAppearanceSettingsState();
+    const state = readAppearanceSettingsState();
+    broadcast(state.value);
+    return state;
+  });
+
+  // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
+  ipcMain.handle('appearance-settings:import-wallpaper', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throwIpcError('INVALID_PARAMS', 'Wallpaper picker requires an application window');
+    const assertOwner = captureWallpaperOwner();
+    try {
+      const { importCustomWallpaper } = await import('./custom-wallpaper.js');
+      assertOwner();
+      if (!(await importCustomWallpaper(parent))) return null;
+      assertOwner();
+      const settings = readAppearanceSettings();
+      broadcast(settings);
+      return settings;
+    } catch (error) {
+      throwIpcError(
+        extractIpcError(error)?.code === 'INVALID_PARAMS' ? 'INVALID_PARAMS' : 'INTERNAL',
+        'Unable to import wallpaper image',
+      );
+    }
+  });
+
+  ipcMain.handle('appearance-settings:remove-wallpaper', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const assertOwner = captureWallpaperOwner();
+    try {
+      const { removeCustomWallpaper } = await import('./custom-wallpaper.js');
+      assertOwner();
+      await removeCustomWallpaper();
+      assertOwner();
+      const settings = readAppearanceSettings();
+      broadcast(settings);
+      return settings;
+    } catch {
+      throwIpcError('INTERNAL', 'Unable to remove wallpaper image');
+    }
   });
 
   ipcMain.handle('appearance-settings:set-patch', async (event, rawPatch: unknown) => {

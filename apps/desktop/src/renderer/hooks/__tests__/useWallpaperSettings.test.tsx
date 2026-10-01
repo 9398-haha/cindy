@@ -31,6 +31,59 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  it('restores custom artwork from the current owner after the synchronous bootstrap and clears it on sign-out', async () => {
+    const url = `cindy-media://blobs/${'b'.repeat(64)}.webp`;
+    let authChanged: () => void = () => {};
+    const get = vi
+      .fn()
+      .mockResolvedValue({
+        value: { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: url },
+      });
+    vi.stubGlobal('electronAPI', {
+      onAuthStateChange: (fn: () => void) => {
+        authChanged = fn;
+        return () => {};
+      },
+      appearanceSettings: {
+        getSync: () => DEFAULT_APPEARANCE_SETTINGS,
+        get,
+        onChanged: () => () => {},
+      },
+    });
+    render(
+      <WallpaperSettingsProvider>
+        <Controls />
+      </WallpaperSettingsProvider>,
+    );
+    await waitFor(() =>
+      expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(
+        url,
+      ),
+    );
+    expect(document.querySelector('video')).toBeNull();
+    get.mockResolvedValue({ value: DEFAULT_APPEARANCE_SETTINGS });
+    act(() => authChanged());
+    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  });
+  it('does not enable transparent surfaces for a missing custom image', () => {
+    vi.stubGlobal('electronAPI', {
+      appearanceSettings: {
+        getSync: () => ({
+          ...DEFAULT_APPEARANCE_SETTINGS,
+          wallpaperId: 'custom',
+          customWallpaperUrl: 'file:///private.png',
+        }),
+        onChanged: () => () => {},
+      },
+    });
+    render(
+      <WallpaperSettingsProvider>
+        <Controls />
+      </WallpaperSettingsProvider>,
+    );
+    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+  });
   it.each(['cindy-window', 'cindy-studio', 'cindy-dream'] as const)(
     'keeps %s as one full-window scene across pane and theme changes',
     async (wallpaperId) => {

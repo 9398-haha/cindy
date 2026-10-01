@@ -64,6 +64,25 @@ async function seedSession(id: string, status: 'active' | 'archived' | 'deleted'
 }
 
 describe('recordBlob(幂等入账)', () => {
+  it('retains the newly published wallpaper pin and unrelated owners when deduplicating refs', async () => {
+    await seedBlob(HASH_A);
+    await seedBlob(HASH_B);
+    const owner = { refKind: 'import' as const, refId: 'desktop-custom-wallpaper' };
+    await ledger.addRef({ ...owner, hash: HASH_A, id: 'older' }, db);
+    await ledger.addRef({ ...owner, hash: HASH_B, id: 'duplicate' }, db);
+    await ledger.addRef({ ...owner, hash: HASH_B, id: 'keep' }, db);
+    await ledger.addRef({ ...owner, refId: 'unrelated', hash: HASH_A, id: 'other' }, db);
+    expect(await ledger.removeRefsExceptId({ ...owner, keepId: 'keep' }, db)).toBe(2);
+    expect(
+      db
+        .select()
+        .from(schema.mediaRefs)
+        .all()
+        .map((row) => row.id)
+        .sort(),
+    ).toEqual(['keep', 'other']);
+    expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(2);
+  });
   it('首次入账写全量字段,重复入账不炸只刷 lastAccess', async () => {
     await seedBlob(HASH_A);
     await expect(seedBlob(HASH_A)).resolves.toBeUndefined();

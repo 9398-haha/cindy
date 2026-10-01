@@ -5,6 +5,7 @@ export default {
   id: 'AppearanceSection',
   order: 30,
   entries: [
+    { id: 'settings.appearance.wallpaper.customChoose', fallbackTargetId: 'settings-search-target-general-appearance', tab: 'general', targetId: 'settings-search-settings-appearance-wallpaper', titleKey: 'settings.appearance.wallpaper.options.custom', sectionKey: 'settings.sections.appearance', descriptionKey: 'settings.appearance.wallpaper.customHint' },
     { id: 'settings.appearance.modeLabel', fallbackTargetId: 'settings-search-target-general-appearance', tab: 'general', targetId: 'settings-search-settings-appearance-modeLabel', titleKey: 'settings.appearance.modeLabel', sectionKey: 'settings.sections.appearance' },
     { id: 'settings.appearance.themeLabel', fallbackTargetId: 'settings-search-target-general-appearance', tab: 'general', targetId: 'settings-search-settings-appearance-themeLabel', titleKey: 'settings.appearance.themeLabel', sectionKey: 'settings.sections.appearance' },
     { id: 'settings.appearance.wallpaper.title', fallbackTargetId: 'settings-search-target-general-appearance', tab: 'general', targetId: 'settings-search-settings-appearance-wallpaper', titleKey: 'settings.appearance.wallpaper.title', sectionKey: 'settings.sections.appearance', descriptionKey: 'settings.appearance.wallpaper.description' },

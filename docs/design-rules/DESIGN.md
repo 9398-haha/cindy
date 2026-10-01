@@ -76,9 +76,16 @@ align with the same wallpaper instead of introducing an opaque footer rectangle.
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
-The wallpaper catalog contains only Window Companion, Future Atelier and Dream
+The built-in wallpaper catalog contains only Window Companion, Future Atelier and Dream
 Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
-Remove the previous arrow, standalone portrait, gradient, paper and custom-image
+Custom wallpaper is available through Choose image, Replace image and Remove image
+in the same section (user addition, 2026-10-01). Accept local PNG/JPEG/WebP up to
+20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
+in the managed media store, and keep the reference private to the active owner.
+Cancellation and import failures retain the existing image. Switching to a built-in
+or None keeps the imported image available; Remove image forgets it. Custom imagery
+shares the continuous cover-fit canvas and readability veil; no dynamic toggle.
+Remove the previous arrow, standalone portrait, gradient and paper
 options and assets. Retired saved selections normalize to None; unrelated theme
 and font preferences remain unchanged. All three scenes use the same cover fit,
 so do not expose a fit selector that cannot affect them.
