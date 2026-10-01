@@ -95,6 +95,34 @@ describe('portable plugin results', () => {
     expect(files(source)).toEqual([]);
     expect(files(JSON.stringify({ text: source }))).toEqual([]);
   });
+  it('keeps adjacent quoted prose references separate while filtering source arrays', () => {
+    const first = "xdt-file:///tmp/O'Brien.pdf";
+    const second = 'xdt-file:///tmp/second.pdf';
+    const list = "'" + first + "','" + second + "'";
+    expect(files('Saved ' + list)).toEqual([
+      { url: first, title: "O'Brien.pdf" }, { url: second, title: 'second.pdf' },
+    ]);
+    expect(files('const urls = [' + list + '];')).toEqual([]);
+  });
+  it.each([
+    "xdt-file:///tmp/O'Brien.pdf",
+    "xdt-file:///C:/reports/O'Brien.pdf",
+    "xdt-file://open?path=/tmp/O'Brien.pdf",
+    'xdt-file://open?path=%2Ftmp%2FO%27Brien.pdf',
+  ])('preserves apostrophes inside file names: %s', (url) => {
+    const expected = [{ url, title: "O'Brien.pdf" }];
+    expect(files('[report](' + url + ')')).toEqual(expected);
+    expect(files('Saved ' + url)).toEqual(expected);
+    expect(files(JSON.stringify({ note: 'Saved ' + url }))).toEqual(expected);
+    expect(files(JSON.stringify([url]))).toEqual(expected);
+    for (const quote of ["'", '"', String.fromCharCode(96)]) {
+      expect(files('Saved ' + quote + url + quote)).toEqual(expected);
+      expect(files('Saved ' + quote + url + quote + ', done')).toEqual(expected);
+    }
+    const source = 'const urls = ["' + url + '", "xdt-file:///tmp/fixture.pdf"];';
+    expect(files(source)).toEqual([]);
+    expect(files(JSON.stringify({ text: source }))).toEqual([]);
+  });
   it.each(["'", '"', String.fromCharCode(96)])('keeps prose links quoted with %s without reviving source literals', (quote) => {
     const url = 'xdt-file:///tmp/report.pdf';
     const prose = 'Saved ' + quote + url + quote;
