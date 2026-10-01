@@ -12,7 +12,8 @@ function messages(content: unknown): RemoteMessage[] {
 }
 describe('plugin results are visible outside collapsed tool details', () => {
   it.each([true, false])('does not render source fixtures as delivered files (streaming=%s)', (isSessionStreaming) => {
-    const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];";
+    const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
+      + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined";
     for (const content of [source, { text: source }]) {
       const rows = messages(content);
       rows[0].content = { toolName: 'Read', toolUseId: 'u', input: { file_path: '/tmp/source.ts' } };
@@ -30,6 +31,16 @@ describe('plugin results are visible outside collapsed tool details', () => {
       { url: file, title: "O'Brien;[final]}.pdf" },
     ]);
     expect(buildMobileMessageRenderItems(rows, { isSessionStreaming: false }).some((row) => row.type === 'tool_media')).toBe(true);
+  });
+  it('retains all adjacent quoted file references in the mobile render model', () => {
+    const first = 'xdt-file:///tmp/first.pdf';
+    const second = 'xdt-file:///tmp/second.pdf';
+    for (const quote of ['"', String.fromCharCode(96)]) {
+      const rows = messages({ note: 'Saved ' + quote + first + quote + ', ' + quote + second + quote });
+      expect(normalizeRemoteMessages(rows).find((row) => row.kind === 'tool')?.files).toEqual([
+        { url: first, title: 'first.pdf' }, { url: second, title: 'second.pdf' },
+      ]);
+    }
   });
   it.each([true, false])('keeps partner authorization and delivered assets as independent visible rows (streaming=%s)', (isSessionStreaming) => {
     const rows = messages({ ok: true, result: { xdt_image_url: url, xdt_card_id: 'card', _xdt_model_files: [{ url: url.replace('.png', '.glb') }] } });

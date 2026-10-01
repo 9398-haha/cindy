@@ -117,6 +117,35 @@ describe('portable plugin results', () => {
     ]);
     expect(files('const urls = [' + list + '];')).toEqual([]);
   });
+  it.each(["'", '"', String.fromCharCode(96)])('distinguishes conditional source literals from prose quoted with %s', (quote) => {
+    const url = 'xdt-file:///tmp/fixture.pdf';
+    const literal = quote + url + quote;
+    for (const source of [
+      'const path = enabled ? ' + literal + ' : undefined',
+      'const path = enabled ? undefined : ' + literal,
+      'return enabled ? ' + literal + ' : ' + literal,
+      'const path = enabled\n  ? undefined\n  : ' + literal,
+    ]) {
+      expect(files(source)).toEqual([]);
+      expect(files(JSON.stringify({ text: source }))).toEqual([]);
+      expect(files(source + '\nFile: ' + literal)).toEqual([{ url, title: 'fixture.pdf' }]);
+    }
+  });
+  it('retains adjacent prose references for every quote style without reviving source arrays', () => {
+    const a = 'xdt-file:///tmp/first.pdf';
+    const b = 'xdt-file:///tmp/second.pdf';
+    for (const left of ["'", '"', String.fromCharCode(96)]) {
+      for (const right of ["'", '"', String.fromCharCode(96)]) {
+        for (const separator of [',', ', ']) {
+          const list = left + a + left + separator + right + b + right;
+          const expected = [{ url: a, title: 'first.pdf' }, { url: b, title: 'second.pdf' }];
+          expect(files('Saved ' + list), list).toEqual(expected);
+          expect(files(JSON.stringify({ note: 'Saved ' + list })), list).toEqual(expected);
+          expect(files('const paths = [' + list + '];'), list).toEqual([]);
+        }
+      }
+    }
+  });
   it.each([
     "xdt-file:///tmp/O'Brien.pdf",
     "xdt-file:///C:/reports/O'Brien.pdf",

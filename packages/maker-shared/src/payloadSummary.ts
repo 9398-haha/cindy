@@ -487,9 +487,12 @@ function looksLikeQuotedSourceLiteral(text: string, index: number, end: number):
   const after = text[end];
   if (before !== '`' && before !== '\'' && before !== '"') return false;
   // Quotes alone also occur in prose and inline Markdown. Require source syntax
-  // around the literal (assignment, collection entry, argument or return).
+  // around the literal (assignment, collection entry, argument or conditional).
   const prefix = text.slice(0, index - 1).trimEnd();
-  return /(?:[=\[(,]|\breturn)$/.test(prefix)
+  return /(?:[=\[(,?]|\breturn)$/.test(prefix)
+    // A colon alone is also a prose label ("File:"). Require a preceding
+    // conditional, allowing indented continuation lines but not new prose.
+    || (prefix.endsWith(':') && /\?(?:[^;\r\n]|\r?\n[ \t])*:$/.test(prefix))
     || /[{,]\s*(?:[\w$]+|["'][^"']+["'])\s*:$/.test(prefix)
     || (after === before && /^\s*;/.test(text.slice(end + 1)));
 }
@@ -533,11 +536,11 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
         // only when it matches the opening wrapper around this reference.
         const quote = value[start - 1];
         const closingQuote = quote === "'" || quote === '`'
-          ? new RegExp(quote + '(?=[,.;:!?\\]}]*(?:' + quote + 'xdt-file://|$))').exec(match[0])
+          ? new RegExp(quote + '(?=[,.;:!?\\]}]*(?:["\'`]xdt-file://|$))').exec(match[0])
           : null;
         const url = closingQuote ? match[0].slice(0, closingQuote.index) : match[0];
         urlPattern.lastIndex = start + url.length;
-        const source = previous && /^(['`])\s*,\s*\1$/.test(value.slice(previous.end, start))
+        const source = previous && /^["'`]\s*,\s*["'`]$/.test(value.slice(previous.end, start))
           ? previous.source
           : looksLikeQuotedSourceLiteral(value, start, start + url.length);
         if (!source) add(url);
