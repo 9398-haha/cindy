@@ -108,6 +108,22 @@ describe('cross-machine project snapshots', () => {
     expect(await git(linked, 'diff', '--cached')).toBe(staged);
     expect(await fs.readFile(path.join(source, 'tracked'), 'utf8')).toBe('base\n');
   }, 30_000);
+  it("leaves other tasks' managed worktrees behind", async () => {
+    await fs.writeFile(path.join(source, 'draft'), 'mine\n');
+    for (const name of ['.cindy-worktrees', '.xdt-worktrees']) {
+      await fs.mkdir(path.join(source, name, 'other-task'), { recursive: true });
+      // Nested Git metadata would otherwise make the whole snapshot non-portable.
+      await fs.writeFile(path.join(source, name, 'other-task', '.git'), 'gitdir: elsewhere\n');
+      await fs.writeFile(path.join(source, name, 'other-task', 'file'), 'not mine\n');
+    }
+    const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());
+    expect(Object.keys(snapshot.archive.files)).toEqual(['draft']);
+    await restoreWorkspace(snapshot, artifacts, target);
+    expect(await fs.readdir(target)).toEqual(['draft']);
+    expect(
+      await fs.readFile(path.join(source, '.cindy-worktrees', 'other-task', 'file'), 'utf8'),
+    ).toBe('not mine\n');
+  });
   it('refuses to overwrite a destination directory', async () => {
     await fs.writeFile(path.join(source, 'source'), 'copy');
     const snapshot = await snapshotWorkspace(source, artifacts, randomUUID());

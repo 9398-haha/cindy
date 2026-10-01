@@ -45,7 +45,8 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "대상 컴퓨터에 이 작업 엔진에서 사용할 수 있는 모델이 없습니다. 먼저 제공자를 연결하세요.",
       "MIGRATION_UNSUPPORTED": "두 컴퓨터 모두 작업 복사을 지원하는 버전으로 업데이트하세요.",
       "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
-      "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요."
+      "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요.",
+      "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요."
     },
     "successTitle": "복사 완료",
     "successDescription": "{{name}}에 복사했습니다.",
@@ -60,7 +61,9 @@
     "estimating": "파일 수와 크기 계산 중…",
     "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
     "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
-    "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요."
+    "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요.",
+    "estimateTimeout": "집계 시간이 초과되었습니다. 프로젝트 파일이 너무 많아 원본 컴퓨터가 제한 시간 내에 집계하지 못했습니다. 파일이 더 적은 프로젝트를 복사해 보세요.",
+    "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
   "sharedTask": {
     "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",

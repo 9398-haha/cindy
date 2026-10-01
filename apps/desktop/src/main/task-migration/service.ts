@@ -5,6 +5,8 @@ import { app, ipcMain } from 'electron';
 import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_LOCAL_CHANNEL,
+  TASK_MIGRATION_MAX_FILES,
+  DeviceLinkError,
   parseTaskMigrationRequest,
   buildAttachmentOssRef,
   parsePeerAttachmentRef,
@@ -53,6 +55,7 @@ import {
   snapshotWorkspace,
   restoreWorkspace,
   estimateWorkspace,
+  isExcludedFromWorkspace,
   type PortableWorkspace,
 } from './workspace';
 
@@ -127,9 +130,17 @@ async function invoke(
   scope: Scope,
 ): Promise<TaskMigrationView> {
   scope.assertCurrent();
-  const response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
-    preSend: scope.assertCurrent,
-  });
+  let response: Awaited<ReturnType<typeof remoteInvoke>>;
+  try {
+    response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
+      preSend: scope.assertCurrent,
+    });
+  } catch (error) {
+    // The source may still be working; tell the user it was slow, not that it is offline.
+    if (error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT')
+      throw new Error('MIGRATION_TIMEOUT');
+    throw error;
+  }
   scope.assertCurrent();
   if (!response.ok)
     throw new Error(
@@ -300,7 +311,8 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
             sourceKeys.some(
               (sourceKey) =>
                 key === sourceKey ||
-                key.startsWith(sourceKey + path.sep) ||
+                (key.startsWith(sourceKey + path.sep) &&
+                  !isExcludedFromWorkspace(sourceKey, key)) ||
                 sourceKey.startsWith(key + path.sep),
             )
           )
@@ -909,7 +921,11 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     );
     const estimate = { fileCount: 0, bytes: 0 };
     for (const root of roots) {
-      const next = await estimateWorkspace(root, scope.assertCurrent);
+      const next = await estimateWorkspace(
+        root,
+        scope.assertCurrent,
+        TASK_MIGRATION_MAX_FILES - estimate.fileCount,
+      );
       estimate.fileCount += next.fileCount;
       estimate.bytes += next.bytes;
     }

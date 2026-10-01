@@ -45,7 +45,8 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "目标电脑没有可用于此任务引擎的模型，请先在目标电脑连接供应商。",
       "MIGRATION_UNSUPPORTED": "请将两台电脑更新至支持任务复制的版本。",
       "MIGRATION_TASK_QUEUED": "此任务有排队中的消息，请先完成或移除这些消息再复制。",
-      "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。"
+      "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。",
+      "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。"
     },
     "successTitle": "复制成功",
     "successDescription": "已复制到{{name}}。",
@@ -60,7 +61,9 @@
     "estimating": "正在统计文件数量和大小…",
     "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
     "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",
-    "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。"
+    "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。",
+    "estimateTimeout": "统计超时：项目文件过多，任务所在电脑未能在时限内完成统计。可以改为复制文件更少的项目。",
+    "estimateTooManyFiles": "项目文件超过 {{limit, number}} 个，无法复制。请改为复制文件更少的项目。"
   },
   "sharedTask": {
     "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
