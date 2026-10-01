@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WallpaperVideo } from '../WallpaperVideo';
 import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
 
-const state = vi.hoisted(() => ({ reduced: false, tier: 'standard' }));
+const state = vi.hoisted(() => ({ reduced: false, tier: 'standard', cdn: true }));
 const ensureVideo = vi.fn();
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => state.reduced }));
 vi.mock('@/hooks/useWallpaperVideoTier', () => ({ useWallpaperVideoTier: () => state.tier }));
 vi.mock('@/lib/wallpaper', () => ({
+  usesCdnWallpaperVideo: () => state.cdn,
   getWallpaperVideo: (id: string, tier = 'standard') =>
     (id.startsWith('cindy-') ? `/${id}${tier === 'hd' ? '-hd' : ''}.mp4` : undefined),
 }));
@@ -18,6 +19,7 @@ describe('dynamic wallpaper lifecycle', () => {
   beforeEach(() => {
     state.reduced = false;
     state.tier = 'standard';
+    state.cdn = true;
     ensureVideo.mockReset().mockResolvedValue('/cindy-window-hd.mp4');
     vi.stubGlobal('electronAPI', { appearanceSettings: { ensureWallpaperVideo: ensureVideo } });
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
@@ -31,6 +33,7 @@ describe('dynamic wallpaper lifecycle', () => {
     vi.unstubAllGlobals();
   });
   it('does not create a decoder for static, reduced motion or unsupported artwork', () => {
+    state.cdn = false;
     const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
     expect(document.querySelector('video')).toBeNull();
     rerender(<WallpaperVideo wallpaperId="none" motion="dynamic" />);
@@ -41,6 +44,7 @@ describe('dynamic wallpaper lifecycle', () => {
     expect(ensureVideo).not.toHaveBeenCalled();
   });
   it('shows only decoded frames, pauses with the shared hidden gate, and releases on static', async () => {
+    state.cdn = false;
     const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
     const video = document.querySelector('video')!;
     expect(video.muted && video.loop).toBe(true);
@@ -58,12 +62,14 @@ describe('dynamic wallpaper lifecycle', () => {
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
   });
   it('keeps the still fallback when decode or playback fails', async () => {
+    state.cdn = false;
     vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(new Error('decode failed'));
     render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
     await waitFor(() => expect(document.querySelector('video')).toBeNull());
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
   });
   it('switches scenes without retaining a second decoder', () => {
+    state.cdn = false;
     const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
     const old = document.querySelector('video')!;
     fireEvent.playing(old);
@@ -90,6 +96,16 @@ describe('dynamic wallpaper lifecycle', () => {
     rerender(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
     expect(hd.getAttribute('src')).toBeNull();
     expect(document.querySelector('video')!.src).not.toContain('-hd');
+  });
+  it.each(['cindy-window', 'cindy-studio', 'cindy-dream'] as const)('plays bundled %s without requesting CDN or reloading on resize', async id => {
+    state.cdn = false;
+    const { rerender } = render(<WallpaperVideo wallpaperId={id} motion="dynamic" />);
+    const original = document.querySelector('video');
+    state.tier = 'hd';
+    rerender(<WallpaperVideo wallpaperId={id} motion="dynamic" />);
+    await act(async () => {});
+    expect(document.querySelector('video')).toBe(original);
+    expect(ensureVideo).not.toHaveBeenCalled();
   });
   it.each(['error', 'rejection'])('falls back from HD once on %s, then to a still if standard fails', async (failure) => {
     state.tier = 'hd';

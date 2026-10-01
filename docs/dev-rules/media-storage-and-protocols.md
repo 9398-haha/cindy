@@ -45,12 +45,14 @@
   不可再生用户内容，必须沿用现有 pin／引用流程转为不可按缓存回收。
 - 零引用入仓只适用于已有草稿或生成结果提交链路。新增零引用窗口时，必须证明内容在消息
   落库前不会被回收，并用测试覆盖成功、失败、取消和重试。
-- 内置高清壁纸视频用 `integration-cache` 引用登记可再生 CDN 缓存，按主机内置清单
-  核验字节数与 SHA-256 后入仓；缓存缺失、被回收或下载失败都回退随包标准视频。
-  静态高清 WebP 随包，高清 MP4 不进入安装包。发布命令为
+- 三款官方壁纸的高清 WebP 与 2304×1440 MP4 均随包，清单标记 `delivery: bundled`，
+  不访问 OSS/CDN，不重复打包低清视频。未来显式标记 `delivery: cdn` 的条目才启用
+  `integration-cache` 引用与 CDN 下载，按清单字节数与 SHA-256 校验后入仓；失败回退随包视频。
+  发布脚本只上传 CDN 条目，始终跳过 bundled 条目。发布命令为
   `node --env-file=<发布配置> scripts/publish-wallpaper-videos.mjs --directory=<视频目录> --region=global`；
   中国大陆版显式用 `--region=cn`，发布两区时分别执行。可加 `--verify-only` 离线核验。
-  视频文件名为 `<壁纸编号>-hd.mp4`，清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
+  CDN 文件名为 `<壁纸编号>-hd.mp4`；`--verify-only` 同时校验仓内内置视频。
+  清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
 - 可再生 HTML 临时快照缓存是独立副本的例外：仅在快照已物化自己的文件、HTTP 服务不依赖
   媒体仓 blob、且该缓存不作为持久附件提交时，使用 `isCache: true` 和空引用入仓。
   必须验证媒体仓缓存不可用时快照仍可读取，以及重复打开、失败、取消和重试不新增业务引用；

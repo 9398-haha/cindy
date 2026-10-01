@@ -104,11 +104,11 @@ contrast. Validate real long messages, not only empty chat views.
 The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
 Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
 camera, preserving the same composition and full-window crop. Built-in static artwork
-uses 3584×2240 WebP. Keep the standard videos bundled; request the reviewed 2304×1440
-version from the configured CDN only when cover-fit demand exceeds 1920 physical
-pixels (window size × DPR), returning to standard below 1680 to avoid resize churn.
-Play standard immediately while downloading or if the CDN is missing/offline; cache
-verified HD bytes in the managed media store. HD playback failure falls back to standard.
+uses 3584×2240 WebP. All three official 2304×1440 videos are bundled, fully offline,
+with no duplicate low-resolution assets or resolution switching on window resize.
+The CDN mechanism remains opt-in for future catalog entries marked as CDN-delivered;
+those entries can use a bundled fallback while downloading verified HD bytes into
+the managed media store. Official scenes never request CDN resources.
 Decode one local video
 per window, suspend playback while hidden/minimized, and use the original still for
 reduced motion or playback failure. Switching back to Static releases the video.

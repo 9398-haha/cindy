@@ -4,7 +4,7 @@ import type { WallpaperId, WallpaperMotion } from '@/../shared/appearanceSetting
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useWallpaperVideoTier } from '@/hooks/useWallpaperVideoTier';
 import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
-import { getWallpaperVideo } from '@/lib/wallpaper';
+import { getWallpaperVideo, usesCdnWallpaperVideo } from '@/lib/wallpaper';
 
 /** One decoder and one viewport canvas. Static mode does not fetch any video. */
 export function WallpaperVideo({
@@ -15,9 +15,11 @@ export function WallpaperVideo({
   motion: WallpaperMotion;
 }) {
   const reducedMotion = useReducedMotion();
-  return motion === 'dynamic' && !reducedMotion && getWallpaperVideo(wallpaperId)
+  const src = getWallpaperVideo(wallpaperId);
+  if (motion !== 'dynamic' || reducedMotion || !src) return null;
+  return usesCdnWallpaperVideo(wallpaperId)
     ? <AdaptiveWallpaper key={wallpaperId} wallpaperId={wallpaperId} />
-    : null;
+    : <PlayingWallpaper key={src} src={src} />;
 }
 
 function AdaptiveWallpaper({ wallpaperId }: { wallpaperId: WallpaperId }) {

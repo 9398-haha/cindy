@@ -1,4 +1,5 @@
 import type { WallpaperId } from '@/../shared/appearanceSettings';
+import videoManifest from '@/../shared/wallpaper-video-manifest.json';
 import cindyWindow from '@/assets/wallpapers/cindy-window.webp';
 import cindyStudio from '@/assets/wallpapers/cindy-studio.webp';
 import cindyDream from '@/assets/wallpapers/cindy-dream.webp';
@@ -14,6 +15,12 @@ const SCENE_VIDEOS: Partial<Record<WallpaperId, string>> = {
 
 export function getWallpaperVideo(id: WallpaperId): string | undefined {
   return SCENE_VIDEOS[id];
+}
+
+/** Official scenes are fully offline; CDN delivery is opt-in for future catalog entries. */
+export function usesCdnWallpaperVideo(id: WallpaperId): boolean {
+  return Object.hasOwn(videoManifest, id) &&
+    videoManifest[id as keyof typeof videoManifest].delivery === 'cdn';
 }
 
 export function isSceneWallpaper(id: WallpaperId): boolean {

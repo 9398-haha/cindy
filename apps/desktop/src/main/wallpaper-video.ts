@@ -63,6 +63,8 @@ async function download(asset: Asset, assertValid: () => void): Promise<Buffer> 
 /** Optional enhancement: failure never prevents the bundled video from playing. */
 export async function ensureWallpaperVideo(id: unknown): Promise<string | null> {
   if (!isWallpaperVideoScene(id)) throwIpcError('INVALID_PARAMS', 'Unsupported wallpaper video');
+  // Bundled official scenes must never contact OSS, even through a direct IPC call.
+  if (manifest[id].delivery !== 'cdn') return null;
   const snapshot = getCurrentDbClientSnapshot();
   if (!snapshot || isAppSessionBoundaryPending()) return null;
   let state = states.get(snapshot);

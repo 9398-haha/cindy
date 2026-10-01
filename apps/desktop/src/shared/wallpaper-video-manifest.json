@@ -1,5 +1,6 @@
 {
   "cindy-window": {
+    "delivery": "bundled",
     "sha256": "76844014468e15fe766bf4dd7033eda1e057cf57138e1de1970fcbad2c758701",
     "bytes": 1816940,
     "width": 2304,
@@ -8,6 +9,7 @@
     "duration": 6
   },
   "cindy-studio": {
+    "delivery": "bundled",
     "sha256": "12e828824bf0362e6f8a16c49d8e8f3b45165d47a5e3aa1d295cbb232b86799e",
     "bytes": 2661916,
     "width": 2304,
@@ -16,6 +18,7 @@
     "duration": 6
   },
   "cindy-dream": {
+    "delivery": "bundled",
     "sha256": "c3e7fea58c8e3feaf06421e95a2f5326c8609813e321c064f70362e491257a39",
     "bytes": 2383299,
     "width": 2304,

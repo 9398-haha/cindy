@@ -7,7 +7,8 @@ const m = vi.hoisted(() => ({
   fetch: vi.fn(), release: vi.fn(), assert: vi.fn(),
 }));
 vi.mock('../../shared/wallpaper-video-manifest.json', () => ({ default: {
-  'cindy-window': { bytes: 3, sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
+  'cindy-window': { delivery: 'cdn', bytes: 3, sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
+  'cindy-studio': { delivery: 'bundled', bytes: 3, sha256: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
 } }));
 vi.mock('../appSessionState.js', () => ({ activeOwnerScopeKey: () => m.owner, isAppSessionBoundaryPending: () => m.boundary }));
 vi.mock('../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => m.snapshot }));
@@ -32,6 +33,11 @@ beforeEach(() => {
 });
 
 describe('optional CDN wallpaper video', () => {
+  it('never accesses the cache or network for bundled official scenes', async () => {
+    expect(await ensureWallpaperVideo('cindy-studio')).toBeNull();
+    expect(m.cached).not.toHaveBeenCalled();
+    expect(m.fetch).not.toHaveBeenCalled();
+  });
   it('rejects arbitrary URLs, paths and prototype keys without network access', async () => {
     for (const id of ['https://example/a.mp4', '../secret', 'constructor', 'none', null])
       await expect(ensureWallpaperVideo(id)).rejects.toThrow('Unsupported');
