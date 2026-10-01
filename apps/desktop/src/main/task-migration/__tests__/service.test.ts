@@ -11,6 +11,7 @@ import {
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   TASK_MIGRATION_LOCAL_CHANNEL,
   TASK_MIGRATION_MAX_FILES,
+  TASK_MIGRATION_MAX_TRANSCRIPTS,
 } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
@@ -44,7 +45,30 @@ const state = vi.hoisted(() => ({
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
   exclusions: [] as string[],
+  migrationWarn: vi.fn(),
+  /** Native transcript the export streams beside the package when the target supports it. */
+  transcript: '' as string,
+  transcriptCount: 1,
+  exportOversize: null as null | {
+    totalBytes: number;
+    limitBytes: number;
+    transcriptBytes: number;
+    transcriptFileBytes?: number[];
+  },
+  /** Target without the `externalTranscripts` capability. */
+  oldTarget: false,
+  importedTranscripts: [] as Array<{ path: string; content: string }>,
 }));
+vi.mock('../../logger', async (original) => {
+  const actual = await original<typeof import('../../logger')>();
+  return {
+    ...actual,
+    createLogger: (scope: string) =>
+      scope === 'task-migration'
+        ? { ...actual.createLogger(scope), warn: state.migrationWarn }
+        : actual.createLogger(scope),
+  };
+});
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
 }));
@@ -104,6 +128,7 @@ vi.mock('../../device-link', () => ({
     const result = await state.context.run({ device: target, peer }, () =>
       requestTaskMigration(args[0]),
     );
+    if (state.oldTarget && args[0].action === 'caps') delete result.externalTranscripts;
     if (state.loseReply === args[0].action) {
       state.loseReply = '';
       throw new Error('connection lost after commit');
@@ -155,10 +180,33 @@ vi.mock('../../worktree/resourceLock', async (original) => ({
   withWorktreeResourceLocks: (_cwds: string[], fn: () => unknown) => fn(),
 }));
 vi.mock('../../session-share/sessionShareExport', () => ({
-  exportSessionShare: async ({ targetPath }: { targetPath: string }) => {
-    state.exported();
-    await fs.writeFile(targetPath, 'conversation');
-    return { status: 'ok', fidelity: 'full', ...state.exportMedia };
+  exportSessionShare: async (opts: {
+    targetPath: string;
+    externalTranscripts?: { dir: string; minBytes: number };
+  }) => {
+    state.exported(opts);
+    if (state.exportOversize) return { status: 'oversize', mediaBytes: 0, ...state.exportOversize };
+    await fs.writeFile(opts.targetPath, 'conversation');
+    const external = opts.externalTranscripts;
+    const staged =
+      external && state.transcript
+        ? Array.from({ length: state.transcriptCount }, (_, index) => ({
+            path: index
+              ? `transcripts/codex/rollout-${index}.jsonl`
+              : 'transcripts/codex/rollout.jsonl',
+            file: `transcript-${index}-0a1b2c3d.jsonl`,
+            bytes: Buffer.byteLength(state.transcript),
+            sha256: createHash('sha256').update(state.transcript).digest('hex'),
+          }))
+        : [];
+    for (const transcript of staged)
+      await fs.writeFile(path.join(external!.dir, transcript.file), state.transcript);
+    return {
+      status: 'ok',
+      fidelity: 'full',
+      ...state.exportMedia,
+      ...(external ? { externalTranscripts: staged } : {}),
+    };
   },
 }));
 vi.mock('../../session-share/sessionShareImport', () => ({
@@ -175,10 +223,16 @@ vi.mock('../../session-share/sessionShareImport', () => ({
         sessionId: string;
         workingDir: string;
         workers?: Array<{ sessionId: string; sourceSessionId: string; workingDir: string }>;
+        externalTranscripts?: ReadonlyMap<string, string>;
       };
     },
   ) => {
     state.imports();
+    for (const [transcriptPath, file] of scope.migration.externalTranscripts ?? [])
+      state.importedTranscripts.push({
+        path: transcriptPath,
+        content: await fs.readFile(file, 'utf8'),
+      });
     const { sessionId, workingDir } = scope.migration;
     state.rows.get(device())!.set(sessionId, {
       id: sessionId,
@@ -210,6 +264,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
 vi.mock('../workspace', async (original) => ({
   isExcludedFromWorkspace: (await original<typeof import('../workspace')>())
     .isExcludedFromWorkspace,
+  MigrationPathError: (await original<typeof import('../workspace')>()).MigrationPathError,
   managedWorktreeExclusions: async () => state.exclusions,
   estimateWorkspace: async (_root: string, check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
@@ -275,6 +330,12 @@ describe('resumable cross-computer copy', () => {
     state.estimateLimits = [];
     state.timeoutAction = '';
     state.exclusions = [];
+    state.transcript = '';
+    state.transcriptCount = 1;
+    state.exportOversize = null;
+    state.oldTarget = false;
+    state.importedTranscripts = [];
+    state.migrationWarn.mockClear();
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -625,9 +686,15 @@ describe('resumable cross-computer copy', () => {
     const status = await settled();
     expect(status.stage).toBe('preparing');
     expect(status.error).toBe('MIGRATION_NO_SPACE');
+    expect(state.migrationWarn).toHaveBeenCalledWith(
+      'task copy failed',
+      expect.objectContaining({ copyId: status.targetSessionId, code: 'MIGRATION_NO_SPACE' }),
+    );
     expect(state.files.size).toBe(0);
     expect(state.imports).not.toHaveBeenCalled();
-    await requestTaskMigration({ action: 'cancel', sessionId: 'fork' });
+    // Closing the failure dialog cancels the copy; the code must survive as the only trace.
+    const cancelled = await requestTaskMigration({ action: 'cancel', sessionId: 'fork' });
+    expect(cancelled).toMatchObject({ stage: 'cancelled', error: 'MIGRATION_NO_SPACE' });
     expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
   });
   it('keeps cancellation retryable when staging cleanup fails', async () => {
@@ -934,6 +1001,110 @@ describe('resumable cross-computer copy', () => {
     expect(state.files.size).toBe(0);
     await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
     expect((await settled()).stage).toBe('complete');
+  });
+  it('reports which project entry blocked packing until a retry succeeds', async () => {
+    const { MigrationPathError } = await import('../workspace');
+    state.snapshot.mockImplementationOnce(() => {
+      throw new MigrationPathError('MIGRATION_NONPORTABLE_PATH', 'apps/desktop/C:');
+    });
+    await start();
+    expect(await settled()).toMatchObject({
+      stage: 'preparing',
+      error: 'MIGRATION_NONPORTABLE_PATH',
+      errorPath: 'apps/desktop/C:',
+    });
+    expect(state.migrationWarn).toHaveBeenCalledWith(
+      'task copy failed',
+      expect.objectContaining({
+        code: 'MIGRATION_NONPORTABLE_PATH',
+        error: expect.stringContaining('apps/desktop/C:'),
+      }),
+    );
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    const done = await settled();
+    expect(done.stage).toBe('complete');
+    expect(done.error).toBeUndefined();
+    expect(done.errorPath).toBeUndefined();
+  });
+  it('sends a large native transcript beside the package and restores it', async () => {
+    state.transcript = '{"type":"session_meta"}\n'.repeat(4);
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.exported.mock.calls[0][0].externalTranscripts).toMatchObject({
+      minBytes: 32 * 1024 * 1024,
+    });
+    expect(state.importedTranscripts).toEqual([
+      { path: 'transcripts/codex/rollout.jsonl', content: state.transcript },
+    ]);
+    // Its upload is tracked with the others, so completing the copy deletes it too.
+    const transcriptKey = [...state.files].find(([, file]) => file.includes('transcript-0-'))![0];
+    expect(state.remove.mock.calls.map(([key]) => key)).toContain(transcriptKey);
+  });
+  it('stops before uploading more transcripts than the target accepts', async () => {
+    state.transcript = 'native history';
+    state.transcriptCount = TASK_MIGRATION_MAX_TRANSCRIPTS + 1;
+    await start();
+    expect(await settled()).toMatchObject({ stage: 'preparing', error: 'MIGRATION_NO_MEMORY' });
+    expect(state.files.size).toBe(0);
+  });
+  it('keeps transcripts inside the package for a target without the capability', async () => {
+    state.transcript = 'native history';
+    state.oldTarget = true;
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.exported.mock.calls[0][0].externalTranscripts).toBeUndefined();
+    expect(state.importedTranscripts).toEqual([]);
+  });
+  it('explains a package that exceeds the memory budget until a retry succeeds', async () => {
+    state.exportOversize = { totalBytes: 900, limitBytes: 100, transcriptBytes: 0 };
+    await start();
+    expect(await settled()).toMatchObject({
+      stage: 'preparing',
+      error: 'MIGRATION_NO_MEMORY',
+      errorSize: { needed: 900, limit: 100 },
+    });
+    expect(state.migrationWarn).toHaveBeenCalledWith(
+      'task copy package exceeds the memory budget',
+      expect.objectContaining({
+        totalBytes: 900,
+        limitBytes: 100,
+        budget: expect.objectContaining({ budget: expect.any(Number) }),
+      }),
+    );
+    state.exportOversize = null;
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    const done = await settled();
+    expect(done.stage).toBe('complete');
+    expect(done.errorSize).toBeUndefined();
+  });
+  it('asks to update an older target only when moving large transcripts would fit', async () => {
+    const MB = 1024 ** 2;
+    state.oldTarget = true;
+    state.exportOversize = {
+      totalBytes: 900 * MB,
+      limitBytes: 100 * MB,
+      transcriptBytes: 850 * MB,
+      transcriptFileBytes: [850 * MB],
+    };
+    await start();
+    expect(await settled()).toMatchObject({ error: 'MIGRATION_UNSUPPORTED' });
+    expect((await settled()).errorSize).toBeUndefined();
+  });
+  it('reports the size when an updated target would still keep small transcripts inside', async () => {
+    const MB = 1024 ** 2;
+    state.oldTarget = true;
+    // Thirty 28 MB transcripts stay in the package even on an updated target.
+    state.exportOversize = {
+      totalBytes: 900 * MB,
+      limitBytes: 100 * MB,
+      transcriptBytes: 840 * MB,
+      transcriptFileBytes: Array.from({ length: 30 }, () => 28 * MB),
+    };
+    await start();
+    expect(await settled()).toMatchObject({
+      error: 'MIGRATION_NO_MEMORY',
+      errorSize: { needed: 900 * MB, limit: 100 * MB },
+    });
   });
   it('serializes admission even without process-local route locks', async () => {
     const results = await Promise.allSettled([start(), start()]);

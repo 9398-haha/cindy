@@ -266,8 +266,12 @@ export async function addBotWorkbenchDirectory(
 }
 
 export async function removeBotWorkbenchDirectory(userDataDir: string, botId: string, dirPath: string): Promise<void> {
+  // 与 add 同口径归一:add 存的是 path.resolve 后的路径, remove 若按原始串比较,
+  // 等价但写法不同的路径(尾分隔符、./、../ 段)会静默漏删, 且广播后 UI 里项目
+  // 仍在。resolve 后比较。
+  const resolved = path.resolve(dirPath);
   await mutate(userDataDir, botId, (stored) => ({
-    next: { ...stored, directories: stored.directories.filter((dir) => dir.path !== dirPath) },
+    next: { ...stored, directories: stored.directories.filter((dir) => dir.path !== resolved) },
     result: undefined,
   }));
 }
