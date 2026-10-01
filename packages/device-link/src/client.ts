@@ -1342,13 +1342,23 @@ export class DeviceLinkClient {
   }
 
   /** 控制端:远程 invoke,等待 invoke-result */
-  async invoke(dst: string, payload: InvokePayload, timeoutMs?: number): Promise<InvokeResultPayload> {
+  async invoke(
+    dst: string,
+    payload: InvokePayload,
+    timeoutMs?: number,
+    options?: { preSend?: () => void },
+  ): Promise<InvokeResultPayload> {
     if (this.status !== 'online') throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
-    const send = () => this.request(
-      { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(payload) },
-      'invoke-result',
-      timeoutMs,
-    );
+    const send = () => {
+      // Admission may wait: validate caller ownership/cancellation after dequeue,
+      // synchronously before creating the request or retaining a transport frame.
+      options?.preSend?.();
+      return this.request(
+        { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(payload) },
+        'invoke-result',
+        timeoutMs,
+      );
+    };
     const env = await (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
       dst, isBackgroundInvoke(payload.channel), Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send,
     ));

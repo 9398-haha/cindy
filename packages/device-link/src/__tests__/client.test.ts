@@ -126,6 +126,52 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('outbound invoke admission', () => {
+  it('rechecks a queued write before dispatch and releases its slot when the caller cancels', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      for (let i = 0; i < 12; i++) calls.push(h.client.invoke('a', {
+        channel: 'maker:send', args: [i],
+      }).catch(e => e));
+      let current = true;
+      const cancelled = new Error('owner changed while queued');
+      const preSend = vi.fn(() => { if (!current) throw cancelled; });
+      const stale = h.client.invoke('a', { channel: 'maker:send', args: ['stale'] }, undefined, { preSend }).catch(e => e);
+      calls.push(stale);
+      calls.push(h.client.invoke('a', { channel: 'maker:send', args: ['fresh'] }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      expect(sent()).toHaveLength(12);
+      expect(preSend).not.toHaveBeenCalled();
+      current = false;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: sent()[0].id,
+        payload: { ok: true, result: null } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await stale).toBe(cancelled);
+      expect(preSend).toHaveBeenCalledTimes(1);
+      expect(sent()).toHaveLength(13);
+      expect(sent().at(-1)?.payload).toMatchObject({ channel: 'maker:send', args: ['fresh'] });
+      expect(sent().some(e => (e.payload as { args: unknown[] }).args[0] === 'stale')).toBe(false);
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+
+  it.each(['maker:send', 'device-link:subscribe'])(
+    'honors the send guard for immediately admitted %s calls', async (channel) => {
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+      try {
+        h.client.start(); await tick(); h.current().ack();
+        const cancelled = new Error('cancelled');
+        await expect(h.client.invoke('a', { channel, args: [] }, undefined, {
+          preSend: () => { throw cancelled; },
+        })).rejects.toBe(cancelled);
+        expect(h.current().sent.filter(e => e.kind === 'invoke')).toHaveLength(0);
+      } finally { h.client.stop(); }
+    },
+  );
+
   it('sends initial session lists and recovery probes while all background slots are occupied', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
