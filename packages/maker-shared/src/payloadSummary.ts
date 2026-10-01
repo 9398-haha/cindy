@@ -466,7 +466,7 @@ export function extractPayloadToolCardIds(text: string): string[] {
 
 export interface PayloadToolFile { url: string; title: string }
 
-const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"'<>\\)`\]},;]+/g;
+const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"'<>\\)`},;]+/g;
 
 function absoluteToolFilePath(url: string): string | null {
   try {
@@ -483,10 +483,13 @@ function absoluteToolFilePath(url: string): string | null {
 function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
   const before = text[index - 1];
   const after = text[end];
-  // Tool output often contains source files and test fixtures. A protocol URL
-  // surrounded by a string/template delimiter is source text, not a produced file.
-  return before === '`' || before === '\'' || before === '"'
-    || after === '`' || after === '\'' || after === '"';
+  if (before !== '`' && before !== '\'' && before !== '"') return false;
+  // Quotes alone also occur in prose and inline Markdown. Require source syntax
+  // around the literal (assignment, collection entry, argument or return).
+  const prefix = text.slice(0, index - 1).trimEnd();
+  return /(?:[=\[(,]|\breturn)$/.test(prefix)
+    || /[{,]\s*(?:[\w$]+|["'][^"']+["'])\s*:$/.test(prefix)
+    || (after === before && /^\s*;/.test(text.slice(end + 1)));
 }
 
 /** Existing 3D attachments and managed file references retain a usable file entry on Mobile. */
@@ -508,10 +511,15 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
     for (const raw of parsed._xdt_model_files) { const file = readPayloadRecord(raw); add(file?.url, file?.name); }
   }
   if (Array.isArray(parsed?.xdt_media_produced)) for (const url of parsed.xdt_media_produced) add(url);
-  // Scan decoded JSON values, not serialized JSON: its quotes are structural,
-  // while quotes inside a value can identify source/test literals. Use a stack
-  // so deeply nested tool output cannot overflow the call stack.
-  const pending: unknown[] = [parsed ?? text];
+  // Decode arrays and scalar strings as well as the object/envelope above.
+  // JSON delimiters must not be mistaken for source literals. Keep declaration
+  // handling tied to the documented object envelope, as before.
+  let content: unknown = parsed ?? text;
+  if (!parsed) {
+    try { content = JSON.parse(text); } catch { /* Plain-text tool output. */ }
+  }
+  // Use a stack so deeply nested tool output cannot overflow the call stack.
+  const pending: unknown[] = [content];
   while (pending.length) {
     const value = pending.pop();
     if (typeof value === 'string') {

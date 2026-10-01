@@ -74,6 +74,37 @@ describe('portable plugin results', () => {
     } }))).toEqual([{ url, title: 'Report' }]);
   });
   it.each([
+    'xdt-file:///tmp/report[final].pdf',
+    'xdt-file://open?path=/tmp/report[final].pdf',
+  ])('preserves square brackets in file names: %s', (url) => {
+    expect(files('[报告](' + url + ')')).toEqual([{ url, title: 'report[final].pdf' }]);
+    expect(files(JSON.stringify({ note: 'Saved ' + url }))).toEqual([{ url, title: 'report[final].pdf' }]);
+  });
+  it.each(["'", '"', String.fromCharCode(96)])('keeps prose links quoted with %s without reviving source literals', (quote) => {
+    const url = 'xdt-file:///tmp/report.pdf';
+    const prose = 'Saved ' + quote + url + quote;
+    expect(files(prose)).toEqual([{ url, title: 'report.pdf' }]);
+    expect(files('File: ' + quote + url + quote)).toEqual([{ url, title: 'report.pdf' }]);
+    expect(files(JSON.stringify({ note: prose }))).toEqual([{ url, title: 'report.pdf' }]);
+    for (const source of [
+      'const file = ' + quote + url + quote + ';',
+      'const urls = [\n  ' + quote + url + quote + ',\n];',
+      'open(' + quote + url + quote + ');',
+      'const fixture = { url: ' + quote + url + quote + ' };',
+      'const fixture = { "url": ' + quote + url + quote + ' };',
+      'return ' + quote + url + quote,
+    ]) expect(files(source)).toEqual([]);
+  });
+  it('decodes top-level JSON arrays before identifying source literals', () => {
+    const a = 'xdt-file:///tmp/a.pdf';
+    const b = 'xdt-file://open?path=%2Ftmp%2Fb.pdf';
+    expect(files(JSON.stringify(a))).toEqual([{ url: a, title: 'a.pdf' }]);
+    expect(files(JSON.stringify([a, { text: b }, [a]]))).toEqual([
+      { url: a, title: 'a.pdf' }, { url: b, title: 'b.pdf' },
+    ]);
+    expect(files(JSON.stringify(['const file = "' + a + '";']))).toEqual([]);
+  });
+  it.each([
     'xdt-file://report.pdf',
     'xdt-file://open?path=relative%2Freport.pdf',
     'xdt-file://open?path=${encodeURIComponent(absPath)}',
