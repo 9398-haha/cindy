@@ -162,6 +162,28 @@ describe('portable plugin results', () => {
       }
     }
   });
+  it.each(['&&', '||', '??'])('ignores logical-expression source literals after %s', (operator) => {
+    const url = 'xdt-file:///tmp/logical.pdf';
+    for (const quote of ["'", '"', String.fromCharCode(96)]) {
+      const source = 'const path = candidate ' + operator + ' ' + quote + url + quote;
+      expect(files(source)).toEqual([]);
+      expect(files(JSON.stringify({ text: source }))).toEqual([]);
+      expect(files(source + '\nSaved ' + quote + url + quote)).toEqual([{ url, title: 'logical.pdf' }]);
+      expect(files('const path = candidate ' + operator + ' /* fallback */ ' + quote + url + quote)).toEqual([]);
+    }
+  });
+  it.each(['/* next file */', '// next file\n', '/* multi\nline "comment" */'])('filters source arrays across comments: %s', (comment) => {
+    const a = 'xdt-file:///tmp/first.pdf';
+    const b = 'xdt-file:///tmp/second.pdf';
+    for (const quote of ["'", '"', String.fromCharCode(96)]) {
+      const list = quote + a + quote + ', ' + comment + ' ' + quote + b + quote;
+      const source = 'const paths = [ ' + comment + ' ' + list + ' ]';
+      expect(files(source)).toEqual([]);
+      expect(files(JSON.stringify({ text: source }))).toEqual([]);
+      expect(files(source + '\nSaved "' + b + '"')).toEqual([{ url: b, title: 'second.pdf' }]);
+      expect(files('Saved ' + list)).toEqual([{ url: a, title: 'first.pdf' }, { url: b, title: 'second.pdf' }]);
+    }
+  });
   it.each([
     "xdt-file:///tmp/O'Brien.pdf",
     "xdt-file:///C:/reports/O'Brien.pdf",

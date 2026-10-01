@@ -488,14 +488,23 @@ function absoluteToolFilePath(url: string): string | null {
   }
 }
 
+function withoutSourceComments(text: string): string {
+  // Skip complete string literals before recognizing comments, so URL schemes
+  // and comment-like file names inside strings remain part of the context.
+  return text.replace(
+    /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|(?<![:/])\/\/[^\r\n]*/g,
+    (token) => token.startsWith('/') ? token.replace(/[^\r\n]/g, ' ') : token,
+  );
+}
+
 function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
   const before = text[index - 1];
   const after = text[end];
   if (before !== '`' && before !== '\'' && before !== '"') return false;
   // Quotes alone also occur in prose and inline Markdown. Require source syntax
   // around the literal (assignment, collection entry, argument or conditional).
-  const prefix = text.slice(0, index - 1).trimEnd();
-  return /(?:[=\[(,?]|\breturn)$/.test(prefix)
+  const prefix = withoutSourceComments(text.slice(0, index - 1)).trimEnd();
+  return /(?:[=\[(,?]|&&|\|\||\breturn)$/.test(prefix)
     // A colon alone is also a prose label ("File:"). Require a preceding
     // conditional, allowing indented continuation lines but not new prose.
     || (prefix.endsWith(':') && /\?(?:[^;\r\n]|\r?\n[ \t])*:$/.test(prefix))
@@ -546,7 +555,10 @@ export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
           : null;
         const url = closingQuote ? match[0].slice(0, closingQuote.index) : match[0];
         urlPattern.lastIndex = start + url.length;
-        const source = previous && /^["'`]\s*,\s*["'`]$/.test(value.slice(previous.end, start))
+        const continuesList = previous && /^["'`]$/.test(value[previous.end])
+          && /^["'`]$/.test(quote)
+          && withoutSourceComments(value.slice(previous.end + 1, start - 1)).trim() === ',';
+        const source = previous && continuesList
           ? previous.source
           : looksLikeQuotedSourceLiteral(value, start, start + url.length);
         if (!source) add(url);

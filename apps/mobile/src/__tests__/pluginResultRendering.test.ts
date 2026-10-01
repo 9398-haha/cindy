@@ -13,7 +13,9 @@ function messages(content: unknown): RemoteMessage[] {
 describe('plugin results are visible outside collapsed tool details', () => {
   it.each([true, false])('does not render source fixtures as delivered files (streaming=%s)', (isSessionStreaming) => {
     const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
-      + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined";
+      + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
+      + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
+      + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']";
     for (const content of [source, { text: source }]) {
       const rows = messages(content);
       rows[0].content = { toolName: 'Read', toolUseId: 'u', input: { file_path: '/tmp/source.ts' } };

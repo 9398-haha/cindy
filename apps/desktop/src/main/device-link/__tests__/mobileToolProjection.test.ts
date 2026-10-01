@@ -17,6 +17,8 @@ describe('mobile tool projection', () => {
   it('keeps large source output as text instead of promoting fixtures to file declarations', () => {
     const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
       + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
+      + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
+      + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']\n"
       + '// source 中文\n'.repeat(1500);
     const row = { ...tool('Read'), role: 'tool_result', content: source };
     const live = projectMobileToolPush('local-db:messages:created', { message: row }) as { message: typeof row };
