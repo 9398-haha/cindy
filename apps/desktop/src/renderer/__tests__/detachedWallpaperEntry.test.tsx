@@ -53,6 +53,12 @@ afterEach(async () => {
     for (const root of h.roots.splice(0)) root.unmount();
   });
   document.body.innerHTML = '';
+  const gateWindow = window as typeof window & {
+    __xdtHiddenAnimationGateDisposer?: () => void;
+    __xdtHiddenAnimationGateLastHidden?: boolean;
+  };
+  gateWindow.__xdtHiddenAnimationGateDisposer?.();
+  delete gateWindow.__xdtHiddenAnimationGateLastHidden;
   document.documentElement.classList.remove('dark');
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -62,13 +68,22 @@ it.each(['sidebar', 'plugin'] as const)(
   'boots %s with a wallpaper using its read-only bridge and follows live changes',
   async (kind) => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
-    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
     document.body.innerHTML = '<div id="root"></div>';
     let changed!: (settings: AppearanceSettings) => void;
+    let hiddenChanged!: (hidden: boolean) => void;
+    // Electron can report visible while a prewarmed native window is hidden.
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
     vi.stubGlobal('electronAPI', {
       platform: 'win32',
+      onWindowHiddenChange: (fn: typeof hiddenChanged) => {
+        hiddenChanged = fn;
+        fn(true);
+        return () => {};
+      },
       appearanceSettings: {
         getSync: () => ({
           ...DEFAULT_APPEARANCE_SETTINGS,
@@ -90,6 +105,22 @@ it.each(['sidebar', 'plugin'] as const)(
     );
     expect(document.documentElement.dataset.wallpaperActive).toBe('true');
     expect(document.querySelectorAll('video')).toHaveLength(1);
+    if (kind === 'sidebar') {
+      expect(play).not.toHaveBeenCalled();
+      expect(pause).toHaveBeenCalled();
+      const video = document.querySelector('video')!;
+      await act(async () => hiddenChanged(false));
+      expect(play).toHaveBeenCalledOnce();
+      video.currentTime = 3;
+      pause.mockClear();
+      await act(async () => hiddenChanged(true));
+      expect(pause).toHaveBeenCalledOnce();
+      expect(play).toHaveBeenCalledOnce();
+      await act(async () => hiddenChanged(false));
+      expect(play).toHaveBeenCalledTimes(2);
+      expect(document.querySelector('video')).toBe(video);
+      expect(video.currentTime).toBe(3);
+    }
     const lightVeil = document.documentElement.style.getPropertyValue('--app-wallpaper-veil');
     await act(async () => {
       document.documentElement.classList.add('dark');

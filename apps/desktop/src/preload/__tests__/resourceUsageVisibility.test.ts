@@ -20,13 +20,14 @@ vi.mock('electron', () => ({
 function emit(hidden: boolean) {
   for (const listener of mocks.listeners.get('window-hidden-change') ?? []) listener({}, hidden);
 }
-let subscribe: (callback: (hidden: boolean) => void) => () => void;
-beforeAll(async () => {
-  await import('../resourceUsagePreload');
-  subscribe = mocks.expose.mock.calls[0][1].onWindowHiddenChange;
-});
-
-describe('prewarmed resource window visibility', () => {
+describe.each(['resource', 'sidebar'])('prewarmed %s window visibility', (kind) => {
+  let subscribe: (callback: (hidden: boolean) => void) => () => void;
+  beforeAll(async () => {
+    mocks.listeners.clear();
+    if (kind === 'resource') await import('../resourceUsagePreload');
+    else await import('../sidebarWindowPreload');
+    subscribe = mocks.expose.mock.calls.at(-1)![1].onWindowHiddenChange;
+  });
   it('starts hidden before the lazy renderer or first broadcast', () => {
     const listener = vi.fn();
     const off = subscribe(listener);

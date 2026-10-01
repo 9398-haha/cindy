@@ -39,6 +39,13 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+// Match the resource window: hidden prewarm must not start decorative playback,
+// and late renderer/HMR subscribers must receive the latest native state.
+let windowHidden = true;
+onPayload<boolean>('window-hidden-change', (hidden) => {
+  windowHidden = hidden;
+});
+
 function onPayloadWithMetadata<T, M>(
   channel: string,
   cb: (payload: T, metadata?: M) => void,
@@ -69,6 +76,11 @@ const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => voi
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
+    const off = onPayload('window-hidden-change', cb);
+    cb(windowHidden);
+    return off;
+  },
   preferredSystemLocale: readPreferredSystemLocale(),
   windowMinimize: (): void => ipcRenderer.send('window-minimize'),
   windowMaximize: (): void => ipcRenderer.send('window-maximize'),
