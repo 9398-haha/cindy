@@ -4,6 +4,25 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each(["'", '"', String.fromCharCode(96)])('recognizes arrow-function source literals quoted with %s', (quote) => {
+    const url = 'xdt-file:///tmp/callback.pdf';
+    for (const content of [url, 'Open ' + url]) {
+      const literal = quote + content + quote;
+      for (const source of [
+        'const paths = names.map(() => ' + literal + ')',
+        'const path = () => ' + literal,
+        'const path = async () => /* example */\n  ' + literal,
+      ]) {
+        expect(files(source), source).toEqual([]);
+        expect(files(JSON.stringify({ text: source })), source).toEqual([]);
+        expect(files(source + '\nSaved "' + url + '"')).toEqual([{ url, title: 'callback.pdf' }]);
+        expect(files(JSON.stringify({ text: source, _xdt_model_files: [{ url, name: 'Callback' }] })))
+          .toEqual([{ url, title: 'Callback' }]);
+      }
+    }
+    // A Markdown quote marker alone is not the arrow operator.
+    expect(files('> ' + quote + url + quote)).toEqual([{ url, title: 'callback.pdf' }]);
+  });
   it.each(["'", '"', String.fromCharCode(96)])('handles long escaped source literals ending in a backslash: %s', (quote) => {
     const source = 'const message = ' + quote + ('\\' + quote).repeat(5000)
       + ' Open xdt-file:///tmp/fixture.pdf' + '\\';

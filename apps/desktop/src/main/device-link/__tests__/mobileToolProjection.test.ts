@@ -31,6 +31,7 @@ describe('mobile tool projection', () => {
     const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
       + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
       + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
+      + "const paths = names.map(() => 'Open xdt-file:///tmp/callback.pdf')\n"
       + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']\n"
       + '// source 中文\n'.repeat(1500);
     const row = { ...tool('Read'), role: 'tool_result', content: source };

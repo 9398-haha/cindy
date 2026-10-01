@@ -544,7 +544,7 @@ function looksLikeQuotedSourceLiteral(text: string, index: number, end: number):
   // Quotes alone also occur in prose and inline Markdown. Require source syntax
   // around the literal (assignment, collection entry, argument or conditional).
   const prefix = text.slice(0, index - 1).trimEnd();
-  return /(?:[=\[(,?]|&&|\|\||\breturn)$/.test(prefix)
+  return /(?:[=\[(,?]|=>|&&|\|\||\breturn)$/.test(prefix)
     // A colon alone is also a prose label ("File:"). Require a preceding
     // conditional, allowing indented continuation lines but not new prose.
     || (prefix.endsWith(':') && /\?(?:[^;\r\n]|\r?\n[ \t])*:$/.test(prefix))
