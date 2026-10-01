@@ -572,7 +572,6 @@
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",
     "noWorkers": "Worker はまだありません",
-    "focused": "フォーカス",
     "manageGroup": "管理",
     "hardLimitHint": "上限 {{limit}} 件に達しました · Worker をアーカイブすると作成できます",
     "softLimitHint": "目安の {{limit}} 件を超えています · Worker が多いとメモリ使用量が増えます",
