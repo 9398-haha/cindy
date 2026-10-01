@@ -45,7 +45,8 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "目標電腦沒有可用於此任務引擎的模型，請先在目標電腦連接供應商。",
       "MIGRATION_UNSUPPORTED": "請將兩台電腦更新至支援任務複製的版本。",
       "MIGRATION_TASK_QUEUED": "此任務有排隊中的訊息，請先完成或移除這些訊息再複製。",
-      "MIGRATION_SOURCE_CHANGED": "準備期間來源任務發生變更，請重試複製。"
+      "MIGRATION_SOURCE_CHANGED": "準備期間來源任務發生變更，請重試複製。",
+      "MIGRATION_TIMEOUT": "任務所在電腦回應逾時，請稍後重試。"
     },
     "successTitle": "複製成功",
     "successDescription": "已複製到{{name}}。",
@@ -60,7 +61,9 @@
     "estimating": "正在統計檔案數量和大小…",
     "fileSummary": "專案檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "複製前估算，含隱藏檔案；不含另行複製的 Git 歷史、任務對話及附件。檔案變化可能影響最終大小。",
-    "estimateFailed": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。"
+    "estimateFailed": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。",
+    "estimateTimeout": "統計逾時：專案檔案過多，任務所在電腦未能在時限內完成統計。可以改為複製檔案較少的專案。",
+    "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。"
   },
   "sharedTask": {
     "selfJoin": "這是你發起的共享任務，無需加入。請從「我發起的」開啟",
