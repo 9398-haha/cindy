@@ -61,12 +61,22 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import {
+  addBotWorkbenchDirectory,
+  broadcastBotWorkbenchChanged,
+  readBotWorkbench,
+  removeBotWorkbenchDirectory,
+} from '../../maker-ipc/botWorkbenchService.js';
+import {
+  listBotWorkbenchCandidatesForOwner,
+  readBotWorkbenchTaskForOwner,
+} from '../../maker-ipc/botWorkbenchTools.js';
+import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
 import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
-import { validateBotTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
+import { validateTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -1522,7 +1532,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   if (JSON.stringify(previous.taskModelOverride ?? null) !== JSON.stringify(normalizedNextConfig.taskModelOverride ?? null)) {
     const taskModel = readBotTaskModelOverride(normalizedNextConfig.taskModelOverride);
-    if (taskModel && !await validateBotTaskModel(taskModel)) {
+    if (taskModel && !await validateTaskModel(taskModel)) {
       throwIpcError('INVALID_PARAMS', '任务模型不可用，请重新选择模型、来源与引擎');
     }
     owner.assertCurrent();
@@ -2086,6 +2096,53 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     return result;
   };
+  ipcMain.handle('local-db:bots:workbench:get', async (event, rawBotId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const owner = captureBotOperationOwner();
+    const workbench = await readBotWorkbench(owner.userDataDir, botId);
+    owner.assertCurrent();
+    return workbench;
+  });
+  ipcMain.handle('local-db:bots:workbench:add-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const dirPath = readText(rawPath, 'path', 4096, true);
+    const owner = captureBotOperationOwner();
+    const result = await addBotWorkbenchDirectory(owner.userDataDir, botId, dirPath);
+    owner.assertCurrent();
+    if (result.ok) broadcastBotWorkbenchChanged(botId);
+    return result;
+  });
+  // 工作台详情视图:只读一件任务的最近内容(有界)。范围限于该伙伴已接手的项目,
+  // 外部会话只读转录尾部,不写库、不导入。
+  ipcMain.handle('local-db:bots:workbench:read-task', async (event, rawBotId: unknown, rawTaskId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const taskId = readText(rawTaskId, 'taskId', 256, true);
+    const owner = captureBotOperationOwner();
+    const result = await readBotWorkbenchTaskForOwner(botId, taskId);
+    owner.assertCurrent();
+    return result;
+  });
+  // 工作台:已接手项目里近期本机会话的 id 与最近活动(只读、按项目过滤、只看近期)。
+  ipcMain.handle('local-db:bots:workbench:candidates', async (event, rawBotId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const owner = captureBotOperationOwner();
+    const result = await listBotWorkbenchCandidatesForOwner(botId);
+    owner.assertCurrent();
+    return result;
+  });
+  ipcMain.handle('local-db:bots:workbench:remove-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const dirPath = readText(rawPath, 'path', 4096, true);
+    const owner = captureBotOperationOwner();
+    await removeBotWorkbenchDirectory(owner.userDataDir, botId, dirPath);
+    owner.assertCurrent();
+    broadcastBotWorkbenchChanged(botId);
+  });
   // Local settings read; remote clients already use settings:<botId>/skills.
   ipcMain.handle('local-db:bots:skills:list', async (event, rawBotId: unknown) => {
     assertTrustedAppRendererEvent(event);
