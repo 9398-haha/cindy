@@ -301,6 +301,7 @@ export interface SchedulerHookScriptService {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface MemoryMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Host captures the source turn before storage; invoked only for a successful write. */
   beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
 

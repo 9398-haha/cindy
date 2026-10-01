@@ -16,20 +16,23 @@ const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
 const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const settingSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'));
+const planSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'), source.indexOf('  ipcMain.handle(MAKER_INVOKE.EXPORT_SESSION_HTML,'));
+const planJs = ts.transpileModule(planSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const settingJs = ts.transpileModule(settingSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function fixture() {
  let identity = 'owner-epoch-install';
  const gate = new PluginWriteAccessGate();
  let cfg: Record<string, unknown> = { permissionMode: 'plan', model: 'old' };
- const history = { input: false, startedAt: null as number | null, endedAt: null as number | null, permissionMode: 'plan' };
+ const history = { input: false, startedAt: null as number | null, endedAt: null as number | null, permissionMode: 'plan', planModeEnabled: false };
  const messages = {id:'message-id',sessionId:'session-id',role:'role'}, sessions = {id:'session-id',activeTurnStartedAt:'started',lastTurnEndedAt:'ended'};
- const select = vi.fn(() => ({from:(table:unknown)=>({where:()=>({limit:async()=>table===messages ? (history.input ? [{id:'manual-input'}] : []) : [{startedAt:history.startedAt,endedAt:history.endedAt,permissionMode:history.permissionMode}]})})}));
+ const select = vi.fn(() => ({from:(table:unknown)=>({where:()=>({limit:async()=>table===messages ? (history.input ? [{id:'manual-input'}] : []) : [{startedAt:history.startedAt,endedAt:history.endedAt,permissionMode:history.permissionMode,planModeEnabled:history.planModeEnabled}]})})}));
  const drain = vi.fn(async()=>{});
  const epoch = { client: { tx: vi.fn(async (_name?: string, args?: {mode: string}) => {if(args) history.permissionMode=args.mode;return { updated: true };}), drizzle: {select} } };
  ownership.current = epoch; let cold = false, runtimeMode = 'plan';
  const task = { taskId: 'task', revision: 1, status: 'active', permissionMode: 'plan' };
  const service = { get: vi.fn(async () => task), listRuns: vi.fn(async () => ({ items: [] })), completeOperation: vi.fn(async <T>(operation: () => Promise<T>) => operation()) };
- const live = { isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async (mode: string) => {runtimeMode=mode;}) };
+ let runtimePlan: boolean | null = false;
+ const live = { get stablePlanModeState() { return runtimePlan === null ? null : {enabled:runtimePlan,generation:0}; }, getPlanMode:()=>runtimePlan, setPlanMode:vi.fn(async(enabled:boolean)=>{runtimePlan=enabled;}), isTurnRunning: () => false, getTurnControlSnapshot: () => ({ pendingInteractionCount: 0 }), setPermissionMode: vi.fn(async (mode: string) => {runtimeMode=mode;}) };
  const queue = { ensureQueueRestored: vi.fn(async (_id: string) => {}), isQueueRestored: vi.fn((_id: string) => true), getQueueControlSnapshot: vi.fn((_id: string) => ({ pendingQueue: [] as string[] })) };
  const slots = new Set<string>();
  const dialog = { showMessageBox: vi.fn(async () => ({ response: 0 })) };
@@ -38,17 +41,21 @@ function fixture() {
  const allDeps = {...deps, pluginWriteAccessGate:gate, pluginWriteAccessIdentity:()=>identity};
  const run = new Function(...Object.keys(allDeps), js)(...Object.values(allDeps));
  let setMode!: (event: unknown, sessionId: string, mode: string) => Promise<unknown>;
+ let setPlan!: (event:unknown, sessionId:string, enabled:boolean)=>Promise<unknown>;
  let remote = false;
  const persistedResults = new WeakSet<object>();
  const settingDeps = {...deps, log:{warn:vi.fn()}, ipcMain:{handle:(_name:unknown,fn:typeof setMode)=>{setMode=fn;}}, MAKER_INVOKE:{SET_PERMISSION_MODE:'permission'}, isDeviceLinkInvoke:()=>remote, assertTrustedAppRendererEvent:()=>{}, assertReviewSettingsUnlocked:async()=>{}, isSessionPermissionMode:()=>true, throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});}, persistPermissionModeWithoutRuntime:async(_id:string,mode:string)=>(await epoch.client.tx('bots.persistSessionPermission',{mode})).updated, markRemoteSettingPersistedInsideHandler:(result:object)=>persistedResults.add(result)};
  new Function(...Object.keys(settingDeps), settingJs)(...Object.values(settingDeps));
+ const planPersist=vi.fn(async(_id:string,patch:{planModeEnabled:boolean})=>{history.planModeEnabled=patch.planModeEnabled;});
+ const planDeps={...settingDeps,persistSessionFields:planPersist,ipcMain:{handle:(_name:unknown,fn:typeof setPlan)=>{setPlan=fn;}},MAKER_INVOKE:{SET_PLAN_MODE:'plan'}};
+ new Function(...Object.keys(planDeps), planJs)(...Object.values(planDeps));
  const setImMode = (mode: PermissionMode) => changeSessionPermissionMode({
   sessionId:'task', mode, modes:[{id:mode,displayName:mode}],
   readPreviousMode:async()=>history.permissionMode as PermissionMode,
   getLiveSession:()=>cold?null:live,
   persist:async next=>{await epoch.client.tx('bots.persistSessionPermission',{mode:next});},
  });
- return {setImMode, setMode:(mode:string)=>setMode({},'task',mode), persistedResults, remote:()=>{remote=true;}, cold:()=>{cold=true;}, runtimeMode:()=>runtimeMode, changeOwner:()=>{ownership.current={};}, run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
+ return {setPlan:(enabled:boolean)=>setPlan({},'task',enabled),planPersist,runtimePlan:()=>runtimePlan,nativePlan:(enabled:boolean|null)=>{runtimePlan=enabled;},setImMode, setMode:(mode:string)=>setMode({},'task',mode), persistedResults, remote:()=>{remote=true;}, cold:()=>{cold=true;}, runtimeMode:()=>runtimeMode, changeOwner:()=>{ownership.current={};}, run: (mode = 'acceptEdits', explicit = false) => run('plugin', { kind: 'requestWriteAccess', taskId: 'task', mode }, explicit), queue, gate, identity: (next: string) => {identity=next;}, service, live, epoch, dialog, slots, write, history, drain, config: () => cfg, change: (next: Record<string, unknown>) => { cfg = next; } };
 }
 describe('plugin write confirmation interleavings', () => {
  it.each(['auto','acceptEdits'].flatMap(mode=>['before','dialog','lastRead'].map(point=>({mode,point}))))('rejects independent Plan Mode at $point for $mode without reporting a grant',async ({point,mode})=>{
@@ -351,4 +358,92 @@ it('lets a real Session policy lease restore through the send fence while a perm
  }finally{releaseLease();await change;await session.close();}
  expect(transport.mock.calls).toEqual([['ask'],['bypassPermissions']]);
  expect(f.history.permissionMode).toBe('bypassPermissions');
+});
+
+
+describe('Plan changes share the complete permission commit',()=>{
+ it.each(['local','remote','cold'])('persists Plan through Host for %s and recovers before a successor',async entry=>{
+  const f=fixture();if(entry==='remote')f.remote();if(entry==='cold')f.cold();
+  f.planPersist.mockRejectedValueOnce(Error('plan db failed'));
+  const first=f.setPlan(true).catch(e=>e.message);const next=f.setPlan(false);
+  expect(await first).toBe('plan db failed');const result=await next;
+  expect(f.history.planModeEnabled).toBe(false);expect(f.planPersist).toHaveBeenCalledTimes(2);
+  if(entry!=='cold')expect(f.live.setPlanMode.mock.calls).toEqual([[true],[false],[false]]);
+  if(entry==='remote')expect(f.persistedResults.has(result as object)).toBe(true);
+ });
+ it('restores a partially changed runtime even when its setter rejects',async()=>{
+  const f=fixture();f.live.setPlanMode.mockImplementationOnce(async()=>{f.nativePlan(true);throw Error('partial runtime');});
+  await expect(f.setPlan(true)).rejects.toThrow('partial runtime');
+  expect(f.runtimePlan()).toBe(false);expect(f.planPersist).not.toHaveBeenCalled();
+ });
+ it('rejects a queued Plan change when its captured account is gone',async()=>{
+  const f=fixture();let release!:()=>void;const prior=withSessionPermissionChange('task',()=>new Promise<void>(r=>{release=r;}));
+  await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+  const pending=f.setPlan(true).then(value=>value,error=>error);
+  f.changeOwner();release();await prior;expect(await pending).toMatchObject({code:'PRECONDITION_FAILED'});expect(f.planPersist).not.toHaveBeenCalled();expect(f.live.setPlanMode).not.toHaveBeenCalled();
+ });
+ it.each([true,null])('rejects runtime Plan %s even with a stale already-granted DB snapshot',async enabled=>{
+  const f=fixture();f.change({permissionMode:'auto'});f.service.get.mockResolvedValue({taskId:'task',revision:1,status:'active',permissionMode:'auto'});f.nativePlan(enabled);
+  await expect(f.run('auto')).rejects.toMatchObject({code:'PERMISSION_DENIED'});expect(f.dialog.showMessageBox).not.toHaveBeenCalled();
+ });
+ it.each(['dialog','lastRead'])('rejects native Plan enabled at %s before its DB mirror',async point=>{
+  const f=fixture();if(point==='dialog')f.dialog.showMessageBox.mockImplementationOnce(async()=>{f.nativePlan(true);return {response:0};});
+  else f.epoch.client.tx.mockImplementationOnce(async()=>{f.nativePlan(true);return {updated:true};});
+  await expect(f.run('auto')).rejects.toMatchObject({code:'PERMISSION_DENIED'});expect(f.write).not.toHaveBeenCalled();
+ });
+ it('keeps the later manual Plan after a plugin grant and DB commit',async()=>{
+  const f=fixture();let release!:()=>void;f.epoch.client.tx.mockImplementationOnce(()=>new Promise(r=>{release=()=>r({updated:true});}));
+  const grant=f.run('auto');await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+  const plan=f.setPlan(true);await Promise.resolve();expect(f.live.setPlanMode).not.toHaveBeenCalled();release();await grant;await plan;
+  expect(f.history.planModeEnabled).toBe(true);expect(f.runtimePlan()).toBe(true);
+ });
+});
+
+
+describe('native Plan mirrors preserve the current binding and armed value',()=>{
+ const emitter=source.slice(source.indexOf('  const emitWiredSessionEvent ='),source.indexOf('  const ownerDb =',source.indexOf('  const emitWiredSessionEvent =')));
+ const code=ts.transpileModule(`${emitter}\nreturn emitWiredSessionEvent;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ it.each(['current','stale-value','unknown','account','replacement'])('handles queued native Plan mirror: %s',async scenario=>{
+  const f=fixture();let release!:()=>void;
+  const before=withSessionPermissionChange('task',()=>new Promise<void>(r=>{release=r;}));
+  await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+  const session={...f.live,id:'task'};let bound:unknown=session;
+  const deps={session,ownerDb:f.epoch,getCurrentDbClientSnapshot:()=>ownership.current,sessionBindings:{getSession:()=>bound},withSessionPermissionChange,persistSessionFields:f.planPersist,handleSessionEvent:vi.fn(),ownerEventDependencies:{},log:{warn:vi.fn()}};
+  const emit=new Function(...Object.keys(deps),code)(...Object.values(deps));
+  f.nativePlan(false);expect(emit({type:'plan_mode_changed',data:{enabled:false}})).toBeUndefined();
+  // The event callback is synchronous even while a permission change is held.
+  expect(f.planPersist).not.toHaveBeenCalled();
+  if(scenario==='stale-value')f.nativePlan(true);
+  if(scenario==='unknown')f.nativePlan(null);
+  if(scenario==='account')f.changeOwner();
+  if(scenario==='replacement')bound={};
+  release();await before;await withSessionPermissionChange('task',async()=>{});
+  if(scenario==='current')expect(f.planPersist).toHaveBeenCalledExactlyOnceWith('task',{planModeEnabled:false});
+  else expect(f.planPersist).not.toHaveBeenCalled();
+ });
+});
+
+
+describe('new user input waits outside execution fences',()=>{
+ const sendStart=source.indexOf('      sendToAgentAccepted: async (sessionId, message, createOpts, sendOpts) => {');
+ const sendText=source.slice(sendStart,source.indexOf('      assertRemoteInputControlBoundary:',sendStart));
+ const sendJs=ts.transpileModule(`return {${sendText}}.sendToAgentAccepted;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ const enqueueStart=source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
+ const enqueueText=source.slice(source.indexOf('      const sid = requireSessionId(sessionId);',enqueueStart),source.indexOf('      if (parsed.durableDelivery)',enqueueStart));
+ const enqueueJs=ts.transpileModule(`return async function(event,sessionId,item){${enqueueText}};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+ it.each(['send','enqueue'].flatMap(entry=>[false,true].map(switchOwner=>({entry,switchOwner}))))('$entry waits for permission and rejects changed owner=$switchOwner',async({entry,switchOwner})=>{
+  const f=fixture();let release!:()=>void;
+  const prior=withSessionPermissionChange('task',()=>new Promise<void>(r=>{release=r;}));
+  await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+  const dispatch=vi.fn(async()=>({}));
+  const deps={withSessionPermissionChange,getCurrentDbClientSnapshot:()=>ownership.current,throwIpcError:(code:string,message:string)=>{throw Object.assign(Error(message),{code});},sendToAgentAccepted:dispatch,isDeviceLinkInvoke:()=>false,attachTrustedDesktopSendContext:(_m:unknown,o:unknown)=>o,requireSessionId:(id:string)=>id,assertReviewExternalInputAllowed:async()=>{},assertTrustedAppRendererEvent:()=>{},prepareSharedTaskInput:dispatch,requireQueuedMessage:(x:unknown)=>x};
+  const run=new Function(...Object.keys(deps),entry==='send'?sendJs:enqueueJs)(...Object.values(deps));
+  const result=(entry==='send'?run('task','hello',{},{}):run({},'task',{})).then((v:unknown)=>v,(e:Error)=>e);
+  await Promise.resolve();await Promise.resolve();expect(dispatch).not.toHaveBeenCalled();
+  // Completion/continuation can use the normal send fence while input waits.
+  await withSendToSessionLock('task',async()=>{});
+  if(switchOwner)f.changeOwner();release();await prior;const value=await result;
+  if(switchOwner){expect(value).toMatchObject({code:'PRECONDITION_FAILED'});expect(dispatch).not.toHaveBeenCalled();}
+  else expect(dispatch).toHaveBeenCalledOnce();
+ });
 });

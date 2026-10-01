@@ -368,6 +368,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_ssh'),
     },
     memory: {
+      withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
       beginWrite: (context) => {
         const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');

@@ -237,25 +237,26 @@ it.each(['codex', 'claude-code', 'pi'] as const)('blocks helper discovery and gu
 });
 
 it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] as const).flatMap(agentKind =>
-  (['cindy_contacts', 'cindy_scheduler', 'cindy_slack'] as const).map(name => ({ sessionId, agentKind, name })))))(
+  (['cindy_contacts', 'cindy_scheduler', 'cindy_slack', 'cindy_memory'] as const).map(name => ({ sessionId, agentKind, name })))))(
   'protects account data from $sessionId through $agentKind $name', async ({ sessionId, agentKind, name }) => {
     const f = fixture();
     const privateData = [{ id: 'private', displayName: 'Synthetic private contact', prompt: 'Synthetic private schedule' }];
     const read = vi.fn(async () => privateData);
-    const manager = vi.fn(() => ({ getStore: () => ({ listContacts: read }) }));
+    const manager = vi.fn(() => ({ isEnabled: () => true, getStore: () => ({ listContacts: read, list: async () => (await read()).map(item => ({ filename: 'private.md', frontmatter: { title: item.displayName } })) }) }));
     const scheduler = vi.fn(() => ({ list: read }));
     const getBridge = vi.fn(() => ({ availability: () => ({ bound: true, connected: true, serverSupportsTools: true }),
       callTool: async () => ({ ok: true, result: await read() }) }));
     const { withAccountDataAccess } = f;
     const providers = createLiziMcpProviders({ enabled: [name],
       contacts: { getManager: manager, withAccountDataAccess },
+      memory: { getManager: manager, withAccountDataAccess, searchSessions: read },
       scheduler: { getScheduler: scheduler, withAccountDataAccess },
       slackHook: { getBridge, withAccountDataAccess },
     } as unknown as Parameters<typeof createLiziMcpProviders>[0]);
     const workingDir = mkdtempSync(join(tmpdir(), 'plugin-account-scope-'));
     let liveId = sessionId;
-    const ctx: LiziMcpSessionContext = { agentKind, workingDir, sessionId,
-      ...(agentKind !== 'claude-code' ? { sessionId: undefined, getSessionContext: () => ({ agentKind, workingDir, sessionId: liveId }) } : {}) };
+    const ctx: LiziMcpSessionContext = { agentKind, workingDir, memoryScopeKey: 'fixture', sessionId,
+      ...(agentKind !== 'claude-code' ? { sessionId: undefined, getSessionContext: () => ({ agentKind, workingDir, memoryScopeKey: 'fixture', sessionId: liveId }) } : {}) };
     const config = await providers[0]!.toClaudeSdkConfig(ctx);
     const server = (config as { instance: ReturnType<typeof createXdtHelperMcpServer> }).instance;
     const client = new Client({ name: 'plugin-account-scope', version: '1' });
@@ -263,9 +264,10 @@ it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] 
     await Promise.all([client.connect(ct), server.connect(st)]);
     const call = (spill = false) => client.callTool(name === 'cindy_slack'
       ? { name: 'slack_call_tool', arguments: { name: 'search', ...(spill ? { out_file: 'private.json' } : {}) } }
-      : { name: 'call_tool', arguments: { name: name === 'cindy_contacts' ? 'contacts_list' : 'schedule_list', args: {} } });
+      : { name: 'call_tool', arguments: { name: name === 'cindy_contacts' ? 'contacts_list' : name === 'cindy_memory' ? 'memory_list' : 'schedule_list', args: {} } });
     const denied = (result: unknown) => {
       expect(result).toMatchObject({ isError: true });
+      expect(JSON.parse((result as {content:Array<{text:string}>}).content[0]!.text)).toMatchObject({ok:false,errorCode:'CAPABILITY_NOT_AVAILABLE'});
       expect(JSON.stringify(result)).not.toContain('Synthetic private');
     };
     try {
@@ -274,6 +276,7 @@ it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] 
       if (name === 'cindy_slack') denied(await client.callTool({ name: 'slack_status', arguments: {} }));
       else for (const tool of name === 'cindy_contacts'
         ? ['contacts_get', 'contacts_resolve', 'contacts_search', 'contacts_export_vcf', 'contacts_import_system', 'contacts_export_system', 'contacts_delete', 'contacts_create']
+        : name === 'cindy_memory' ? ['memory_read', 'memory_search', 'memory_write', 'memory_delete', 'memory_consolidate', 'memory_review', 'session_search']
         : ['schedule_get', 'schedule_list_runs', 'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now']) {
         denied(await client.callTool({ name: 'call_tool', arguments: { name: tool, args: { id: 'private' } } }));
       }
