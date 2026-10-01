@@ -12,6 +12,10 @@ export interface MigrationHandoff {
   workers?: Array<{ sessionId: string; targetSessionId: string; workingDir: string }>;
   stage: MigrationStage;
   error?: string;
+  /** Project-relative entry that caused `error`, when one entry is to blame. */
+  errorPath?: string;
+  /** Bytes needed vs the limit, when `error` is a size failure. */
+  errorSize?: { needed: number; limit: number };
 }
 export interface HandoffDependencies {
   save(record: MigrationHandoff): Promise<void>;
@@ -28,7 +32,7 @@ export async function advanceHandoff(
 ): Promise<void> {
   const transition = async (stage: MigrationStage) => {
     deps.assertCurrent();
-    const next = { ...record, stage, error: undefined };
+    const next = { ...record, stage, error: undefined, errorPath: undefined, errorSize: undefined };
     await deps.save(next);
     Object.assign(record, next);
     deps.assertCurrent();
