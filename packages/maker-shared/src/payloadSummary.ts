@@ -488,15 +488,53 @@ function absoluteToolFilePath(url: string): string | null {
   }
 }
 
-const SOURCE_CONTEXT_TOKEN_RE = /"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)|\/\*[\s\S]*?\*\/|(?<![:/])\/\/[^\r\n]*/g;
+function* sourceContextTokens(text: string): Generator<{
+  start: number; end: number; comment: boolean; closed: boolean;
+}> {
+  // Always advance past a token, including unterminated strings/comments.
+  // An unanchored regex can retry every escaped quote or /* in a long result.
+  let index = 0;
+  while (index < text.length) {
+    const start = index;
+    const quote = text[index];
+    if (quote === '"' || quote === "'" || quote === '`') {
+      index++;
+      let closed = false;
+      while (index < text.length) {
+        if (text[index] === '\\') {
+          index = Math.min(index + 2, text.length);
+        } else if (text[index++] === quote) {
+          closed = true;
+          break;
+        }
+      }
+      yield { start, end: index, comment: false, closed };
+    } else if (text.startsWith('/*', index)) {
+      const closing = text.indexOf('*/', index + 2);
+      index = closing < 0 ? text.length : closing + 2;
+      yield { start, end: index, comment: true, closed: closing >= 0 };
+    } else if (text.startsWith('//', index) && text[index - 1] !== ':' && text[index - 1] !== '/') {
+      index += 2;
+      while (index < text.length && text[index] !== '\r' && text[index] !== '\n') index++;
+      yield { start, end: index, comment: true, closed: true };
+    } else {
+      index++;
+    }
+  }
+}
 
 function withoutSourceComments(text: string): string {
   // Skip string literals before recognizing comments, so URL schemes
   // and comment-like file names inside strings remain part of the context.
-  return text.replace(
-    SOURCE_CONTEXT_TOKEN_RE,
-    (token) => token.startsWith('/') ? token.replace(/[^\r\n]/g, ' ') : token,
-  );
+  const parts: string[] = [];
+  let end = 0;
+  for (const token of sourceContextTokens(text)) {
+    if (!token.comment) continue;
+    parts.push(text.slice(end, token.start), text.slice(token.start, token.end).replace(/[^\r\n]/g, ' '));
+    end = token.end;
+  }
+  parts.push(text.slice(end));
+  return parts.join('');
 }
 
 function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
@@ -518,12 +556,11 @@ function* quotedSourceRanges(text: string): Generator<{ start: number; end: numb
   // Classify the whole literal, not only URLs touching its opening quote.
   // Comments and escaped quotes use the same token boundaries as source context.
   let previous: { end: number; source: boolean } | undefined;
-  for (const match of text.matchAll(SOURCE_CONTEXT_TOKEN_RE)) {
-    if (match[0].startsWith('/')) continue;
-    const start = match.index;
+  for (const token of sourceContextTokens(text)) {
+    if (token.comment) continue;
+    const start = token.start;
     // Tool output may end mid-literal after the Host applies its byte budget.
-    const closed = match[0].length > 1 && match[0].endsWith(match[0][0]);
-    const end = start + match[0].length - (closed ? 1 : 0);
+    const end = token.end - (token.closed ? 1 : 0);
     const continuesList = previous
       && withoutSourceComments(text.slice(previous.end + 1, start)).trim() === ',';
     const source: boolean = previous && continuesList

@@ -4,6 +4,17 @@ import { hasVisibleHistoryResult } from '../historyViewProjection.js';
 const blob = (ext: string) => `cindy-media://blobs/${'a'.repeat(64)}.${ext}`;
 
 describe('portable plugin results', () => {
+  it.each(["'", '"', String.fromCharCode(96)])('handles long escaped source literals ending in a backslash: %s', (quote) => {
+    const source = 'const message = ' + quote + ('\\' + quote).repeat(5000)
+      + ' Open xdt-file:///tmp/fixture.pdf' + '\\';
+    expect(files(source)).toEqual([]);
+    expect(files(JSON.stringify({ text: source }))).toEqual([]);
+  });
+  it('handles repeated unterminated block-comment openers without hiding earlier real files', () => {
+    const url = 'xdt-file:///tmp/report.pdf';
+    const source = 'Saved [report](' + url + ')\n/*' + 'a/*'.repeat(5000);
+    expect(files(source)).toEqual([{ url, title: 'report.pdf' }]);
+  });
   it.each(["'", '"', String.fromCharCode(96)])('ignores URLs anywhere inside source literals quoted with %s', (quote) => {
     const url = 'xdt-file:///tmp/fixture.pdf';
     const body = 'Open ' + url + ' or [report](xdt-file://open?path=%2Ftmp%2Fother.pdf)';
