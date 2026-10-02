@@ -80,6 +80,10 @@ import {
   type BotSkillCallbacks,
 } from './xdt-helper/bot_skills.js';
 import {
+  registerBotWorkbenchTools,
+  type BotWorkbenchCallbacks,
+} from './xdt-helper/bot_workbench.js';
+import {
   registerBotCapabilityTools,
   withCindyGatedBotToolDescriptions,
   type BotCapabilityCallbacks,
@@ -90,6 +94,7 @@ import type { SessionControlDeps } from './xdt-helper/session_control.js';
 import type { ControlResult, LiziMcpLogger } from './types.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
+import { withToolCallAuthority, type ToolCallAuthorizer } from './tool-call-authority.js';
 import { errorPayload, okPayload } from './xdt-helper/_payload.js';
 import {
   registerCreateTeammateTool,
@@ -219,6 +224,8 @@ interface HelperSurfaceAllow {
   categories: ReadonlySet<string> | null;
   /** Named tools visible even when their category stays closed. */
   extraTools: ReadonlySet<string>;
+  /** Bot callers: each call is also judged by the host's per-turn authority. */
+  gated?: boolean;
 }
 
 function toolAllowed(
@@ -318,6 +325,7 @@ function registerCallToolEntry(
   telemetry: {
     logger?: LiziMcpLogger;
     getSessionId: () => string | undefined;
+    authorizeCall?: ToolCallAuthorizer;
   },
   allowedSurface: () => Promise<HelperSurfaceAllow>,
 ): void {
@@ -335,7 +343,11 @@ function registerCallToolEntry(
         );
       }
       const result = definition
-        ? await registry.call(name, args)
+        ? await withToolCallAuthority(
+          allowed.gated ? telemetry.authorizeCall : undefined,
+          { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args },
+          () => registry.call(name, args),
+        )
         : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
             available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
           });
@@ -725,10 +737,16 @@ export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
   appUpdate?: AppUpdateCallbacks;
   grokLogin?: GrokLoginCallbacks;
-  /** Host-owned runtime classification used to keep Bot tasks on a narrow surface. */
+  /**
+   * Host-owned runtime classification. `bot-main` is a local Bot's main task: it sees
+   * the ordinary task surface plus Bot tools, and every call is judged by `authorizeCall`.
+   * `bot` keeps the narrow Bot surface (group lanes, history, remote Bots).
+   */
   resolveSurface?: (input: {
     sessionId: string;
-  }) => Promise<'default' | 'bot' | 'restricted'>;
+  }) => Promise<'default' | 'bot' | 'bot-main' | 'restricted'>;
+  /** Live per-call check for Bot tasks; the tool list itself never changes mid-session. */
+  authorizeCall?: ToolCallAuthorizer;
   /**
    * 历史聊天数据查询的回调集合(读本地 SQLite 的 sessions / messages 表)。host
    * 注入后, history 类工具(list_workdirs / list_sessions / get_chat_history /
@@ -772,6 +790,11 @@ export interface XdtHelperMcpDeps {
    * the caller Session.
    */
   botSkills?: BotSkillCallbacks;
+  /**
+   * Bot workbench: read the projects the owner handed to the Bot and continue / stop tasks
+   * inside them. Host resolves the Bot from the caller Session and authorizes every target.
+   */
+  botWorkbench?: BotWorkbenchCallbacks;
   botCapabilities?: BotCapabilityCallbacks;
   /**
    * 官方反馈 issue 提交回调(弹确认卡片 → 用户确认 → POST server)。host 注入后,
@@ -834,10 +857,16 @@ export function createXdtHelperMcpServer(
     if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
     if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth']) : defaultCategories);
     const surface = await deps.resolveSurface({ sessionId }).catch(() => 'restricted' as const);
-    // Bots keep bots/cindy/auth. Project tools are named exceptions so a Bot can
-    // register and organize projects without stop/steer/archive/history access.
-    // handoff/feedback/skills stay out of the Bot's discovery loop.
-    if (surface === 'bot') {
+    // A local Bot main task works like an ordinary task: the full surface plus Bot
+    // tools. What a given turn may actually do (owner / arranged / other) is
+    // decided per call by the host, so the tool list stays stable across turns.
+    if (surface === 'bot-main' && !context.remoteHostId) {
+      return { categories: new Set([...defaultCategories, 'bots']), extraTools: new Set(), gated: true };
+    }
+    // Other Bot sessions (group lanes, history, remote Bots) keep their unchanged
+    // narrow surface: bots/cindy/auth, with project tools as named exceptions so a
+    // Bot can register and organize projects without stop/steer/archive/history access.
+    if (surface === 'bot' || surface === 'bot-main') {
       // Project tools run only on the local host. A remote Bot must keep its
       // own tooling without being offered calls that always return unsupported.
       return {
@@ -972,6 +1001,12 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botSkills,
     });
   }
+  if (deps.botWorkbench) {
+    registerBotWorkbenchTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botWorkbench,
+    });
+  }
 
   if (deps.botCapabilities) {
     registerBotCapabilityTools(registry, {
@@ -1000,6 +1035,7 @@ export function createXdtHelperMcpServer(
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
     // tool-call 阶段由 AsyncLocalStorage 恢复,所以 sessionId 必须调用时再取。
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+    ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
@@ -1015,7 +1051,12 @@ export function createXdtHelperMcpServer(
         if (!allowed.categories?.has('bots')) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
         }
-        const result = await registry.call(definition.name, args);
+        const sessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+        const result = await withToolCallAuthority(
+          allowed.gated ? deps.authorizeCall : undefined,
+          { sessionId, server: 'cindy_helper', tool: definition.name, args },
+          () => registry.call(definition.name, args),
+        );
         logToolResultErrorCode({
           logger: deps.logger, server: 'cindy_helper', tool: definition.name, result,
           sessionId: resolveLiziMcpSessionContext(sessionCtx).sessionId,
