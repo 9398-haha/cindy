@@ -1061,6 +1061,63 @@ describe("remote desktop viewport", () => {
       true,
     );
   });
+  it("aims a touch-mode two-finger scroll at the fingers before scrolling", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush();
+    v.ack();
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 230);
+    v.pointer("pointermove", 2, 200, 230);
+    v.frame();
+    v.flush();
+    const [move, scroll] = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind !== "release");
+    // A 1920x1080 desktop fits 400x225 inside the 600px-tall stage.
+    expect(move).toEqual({
+      kind: "move",
+      x: expect.closeTo(0.375),
+      y: expect.closeTo((250 - 187.5) / 225),
+    });
+    expect(scroll).toEqual({ kind: "scroll", dx: 0, dy: 20 });
+  });
+  it("keeps the pointer-mode cursor where it is for two-finger scrolls", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 230);
+    v.pointer("pointermove", 2, 200, 230);
+    v.frame();
+    v.flush();
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "scroll", dx: 0, dy: 20 },
+    ]);
+  });
+  it("carries sub-pixel two-finger scroll distance instead of dropping it", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.pointer("pointerdown", 1, 100, 250);
+    v.pointer("pointerdown", 2, 200, 250);
+    v.pointer("pointermove", 1, 100, 240);
+    v.pointer("pointermove", 2, 200, 240);
+    v.frame();
+    for (let i = 1; i <= 6; i++) {
+      v.pointer("pointermove", 1, 100, 240 - i * 0.5);
+      v.pointer("pointermove", 2, 200, 240 - i * 0.5);
+      v.frame();
+    }
+    v.flush();
+    const dys = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind === "scroll")
+      .map((e) => (e as unknown as { dy: number }).dy);
+    expect(dys.every(Number.isInteger)).toBe(true);
+    expect(dys.reduce((sum, dy) => sum + dy, 0)).toBe(13);
+  });
   it("applies the last pinch position before lifting a finger without clicking", () => {
     const v = viewer();
     v.send({ type: "control", enabled: true });

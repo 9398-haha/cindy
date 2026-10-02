@@ -1195,7 +1195,20 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         }
       } else {
         multi.candidate = null;
-        if (!multi.kind && travel > 8 && travel > span) multi.kind = "scroll";
+        if (!multi.kind && travel > 8 && travel > span) {
+          multi.kind = "scroll";
+          multi.restX = 0;
+          multi.restY = 0;
+          // Hosts scroll whatever is under the desktop cursor. Touch mode has
+          // no visible pointer, so aim the wheel at the fingers first.
+          const origin = { x: multi.x, y: multi.y };
+          if (control && mode === "touch" && insideDesktop(origin)) {
+            const p = point(origin);
+            cx = p.x;
+            cy = p.y;
+            queue({ kind: "move", x: cx, y: cy });
+          }
+        }
       }
     }
     if (multi.kind === "pinch") {
@@ -1226,13 +1239,21 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     } else if (multi.kind === "scroll") {
       const dx = next.x - multi.lastX,
         dy = next.y - multi.lastY;
-      if (control && mode !== "pan")
-        queue({
-          kind: "scroll",
-          dx: Math.max(-2000, Math.min(2000, -dx)),
-          dy: Math.max(-2000, Math.min(2000, -dy)),
-        });
-      else pan(dx, dy);
+      if (control && mode !== "pan") {
+        // Hosts inject whole pixels; carry fractions so slow drags still scroll.
+        const sx = multi.restX - dx,
+          sy = multi.restY - dy,
+          wx = Math.trunc(sx),
+          wy = Math.trunc(sy);
+        multi.restX = sx - wx;
+        multi.restY = sy - wy;
+        if (wx || wy)
+          queue({
+            kind: "scroll",
+            dx: Math.max(-2000, Math.min(2000, wx)),
+            dy: Math.max(-2000, Math.min(2000, wy)),
+          });
+      } else pan(dx, dy);
     }
     if (multi.kind) {
       multi.lastX = next.x;
