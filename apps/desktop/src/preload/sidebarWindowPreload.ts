@@ -17,7 +17,7 @@ import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '..
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
-import type { AppearanceSettings } from '../shared/appearanceSettings';
+import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import { DEVICE_LINK_INVOKE, DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
@@ -67,9 +67,7 @@ function readPreferredSystemLocale(): ApplicationMenuLocale {
   }
 }
 
-const appearanceSettings = ipcRenderer.sendSync(
-  'appearance-settings:get-sync',
-) as AppearanceSettings | null;
+const appearanceSnapshot = createAppearanceSnapshotBridge();
 
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
   onPayload('fullscreen-change', cb);
@@ -92,11 +90,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): void => ipcRenderer.send('renderer:log', level, scope, msg),
   onLocaleChanged: (cb: (locale: SupportedLocale) => void): (() => void) =>
     onPayload(RSB_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
-  appearanceSettings: {
-    getSync: (): AppearanceSettings | null => appearanceSettings,
-    onChanged: (cb: (settings: AppearanceSettings) => void): (() => void) =>
-      onPayload('appearance-settings:changed', cb),
-  },
+  appearanceSettings: appearanceSnapshot,
   localThemes: {
     listSync: (): LocalThemesResult => {
       try {
