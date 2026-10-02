@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
-  it('restores custom artwork from the current owner after the synchronous bootstrap and clears it on sign-out', async () => {
+  it('restores shared artwork and keeps it visible throughout an account switch', async () => {
     const url = `cindy-media://blobs/${'b'.repeat(64)}.webp`;
     let authChanged: () => void = () => {};
     const get = vi
@@ -61,10 +61,10 @@ describe('application wallpaper lifecycle', () => {
       ),
     );
     expect(document.querySelector('video')).toBeNull();
-    get.mockResolvedValue({ value: DEFAULT_APPEARANCE_SETTINGS });
     act(() => authChanged());
-    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url);
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url);
   });
   it('does not enable transparent surfaces for a missing custom image', () => {
     vi.stubGlobal('electronAPI', {

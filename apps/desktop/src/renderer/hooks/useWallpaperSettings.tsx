@@ -133,8 +133,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
         .catch(() => undefined);
     };
     const unsubscribeAuth = window.electronAPI?.onAuthStateChange?.(() => {
-      // Clear private artwork immediately; do not show an outgoing owner's image.
-      apply({ ...DEFAULT_APPEARANCE_SETTINGS, ...settingsRef.current, customWallpaperUrl: '' });
+      // Wallpaper is a profile-wide preference, like the theme. Keep it visible.
       refresh();
     });
     refresh();

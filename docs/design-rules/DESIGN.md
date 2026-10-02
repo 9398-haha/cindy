@@ -81,7 +81,13 @@ Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
 Custom wallpaper is available through Choose image, Replace image and Remove image
 in the same section (user addition, 2026-10-01). Accept local PNG/JPEG/WebP up to
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
-in the managed media store, and keep the reference private to the active owner.
+in the managed media store. Wallpaper selection and the custom image reference
+are shared within the Desktop profile, just like theme preferences (user decision,
+2026-10-02). Switching accounts keeps the same wallpaper. Media cleanup by any
+account must protect the shared image. Font-only utility renderers never receive
+custom media URLs.
+Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
+embedded plugin webviews retain their own surfaces and permission boundary.
 Cancellation and import failures retain the existing image. Switching to a built-in
 or None keeps the imported image available; Remove image forgets it. Custom imagery
 shares the continuous cover-fit canvas and readability veil; no dynamic toggle.

@@ -6,7 +6,6 @@ const h = vi.hoisted(() => ({
   read: vi.fn(),
   ingest: vi.fn(),
   write: vi.fn(),
-  reset: vi.fn(),
   remove: vi.fn(),
   removeId: vi.fn(),
   keep: vi.fn(),
@@ -31,7 +30,7 @@ vi.mock('../cindy-media/ledger.js', () => ({
   removeRefsExceptId: h.keep,
 }));
 vi.mock('../custom-wallpaper-settings.js', () => ({
-  customWallpaperStore: { writePatchAtomic: h.write, resetAtomic: h.reset },
+  customWallpaperStore: { writePatchAtomic: h.write },
 }));
 import {
   importCustomWallpaper,
@@ -53,7 +52,7 @@ beforeEach(async () => {
 });
 
 describe('custom wallpaper import', () => {
-  it('lets another owner remove their image while the old owner picker remains open', async () => {
+  it('lets another owner remove the shared image while the old owner picker remains open', async () => {
     let closePicker!: (value: { canceled: boolean; filePaths: string[] }) => void;
     h.picker.mockReturnValueOnce(new Promise(resolve => { closePicker = resolve; }));
     const oldImport = importCustomWallpaper({} as never);
@@ -62,7 +61,7 @@ describe('custom wallpaper import', () => {
     h.snapshot = { client: { drizzle: {} }, userId: 'other', clientEpoch: 2 };
     const removal = removeCustomWallpaper();
     try {
-      await vi.waitFor(() => expect(h.reset).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(h.write).toHaveBeenCalledOnce());
     } finally {
       closePicker({ canceled: true, filePaths: [] });
       await rejected;
@@ -79,11 +78,11 @@ describe('custom wallpaper import', () => {
     await vi.waitFor(() => expect(h.picker).toHaveBeenCalledOnce());
     const removal = removeCustomWallpaper();
     await Promise.resolve();
-    expect(h.reset).not.toHaveBeenCalled();
+    expect(h.write).not.toHaveBeenCalled();
     closePicker({ canceled: true, filePaths: [] });
     await importing;
     await removal;
-    expect(h.reset).toHaveBeenCalledOnce();
+    expect(h.write).toHaveBeenCalledOnce();
   });
   it('decodes and pins the image before publishing, then removes only older wallpaper refs', async () => {
     expect(await importCustomWallpaper({} as never)).toBe(true);
@@ -149,8 +148,9 @@ describe('custom wallpaper import', () => {
   });
   it('forgets the preference before removing its references', async () => {
     await removeCustomWallpaper();
-    expect(h.reset.mock.invocationCallOrder[0]).toBeLessThan(h.remove.mock.invocationCallOrder[0]);
-    h.reset.mockRejectedValue(new Error('disk'));
+    expect(h.write).toHaveBeenCalledWith({ url: '' }, { preserveDefaults: true });
+    expect(h.write.mock.invocationCallOrder[0]).toBeLessThan(h.remove.mock.invocationCallOrder[0]);
+    h.write.mockRejectedValue(new Error('disk'));
     h.remove.mockClear();
     await expect(removeCustomWallpaper()).rejects.toThrow('disk');
     expect(h.remove).not.toHaveBeenCalled();

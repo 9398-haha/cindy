@@ -128,7 +128,7 @@ export async function removeCustomWallpaper(): Promise<void> {
   return serialize(async () => {
     scope.assertValid();
     // Forget the preference before unpinning; never delete shared media bytes here.
-    await customWallpaperStore.resetAtomic();
+    await customWallpaperStore.writePatchAtomic({ url: '' }, { preserveDefaults: true });
     try {
       await removeRefs(REF, scope.db);
     } catch {

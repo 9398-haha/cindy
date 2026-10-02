@@ -20,6 +20,7 @@
  */
 
 import { createLogger } from '../logger';
+import { readCustomWallpaperUrl } from '../custom-wallpaper-settings';
 import { throwIpcError } from '../utils/ipcValidate';
 import * as blobStore from './blobStore';
 import * as ledger from './ledger';
@@ -135,7 +136,8 @@ const EMPTY_CACHE: recycler.CacheScan = {
 async function collectLive(deps: StorageIpcDeps, draftUrls: string[]): Promise<Set<string>> {
   const sources: LiveHashSources = {
     // 发起窗口随参带的 + 全窗口登记表的并集(多窗口草稿全豁免)。
-    draftUrls: [...draftUrls, ...(deps.getRegisteredDraftUrls?.() ?? [])],
+    // The profile-wide wallpaper may be pinned only in a different owner's ledger.
+    draftUrls: [...draftUrls, ...(deps.getRegisteredDraftUrls?.() ?? []), readCustomWallpaperUrl()],
     inMemoryQueueTexts: deps.getQueueScanTexts,
     snapshotPayloads: deps.loadSnapshotPayloads,
   };
