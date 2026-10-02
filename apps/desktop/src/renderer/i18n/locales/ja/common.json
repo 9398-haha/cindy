@@ -59,6 +59,18 @@
     },
     "successTitle": "コピー完了",
     "successDescription": "{{name}}にコピーしました。",
+    "skippedTitle_one": "次の {{count}} 件のファイルまたはフォルダーはコピーされませんでした。その他はすべてコピーしました：",
+    "skippedTitle_other": "次の {{count}} 件のファイルまたはフォルダーはコピーされませんでした。その他はすべてコピーしました：",
+    "skippedMore_one": "ほか {{count}} 件は表示していません。",
+    "skippedMore_other": "ほか {{count}} 件は表示していません。",
+    "completeWithSkipped_one": "コピー完了（{{count}} 件はコピーされず）",
+    "completeWithSkipped_other": "コピー完了（{{count}} 件はコピーされず）",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "プロジェクトフォルダー外を指すリンク",
+      "MIGRATION_NONPORTABLE_PATH": "ほかのシステムで使用できない名前",
+      "MIGRATION_PATH_COLLISION": "別のファイルと大文字・小文字だけが異なる",
+      "MIGRATION_UNSUPPORTED_ENTRY": "コピーできない特殊ファイル（ソケット、パイプなど）"
+    },
     "copyingTitle": "{{name}}にコピー中",
     "keepOpen": "{{name}}にコピーしています。このウィンドウを閉じてもコピーは続行され、元のタスク上部で進捗を確認できます。",
     "runInBackground": "バックグラウンドで続行",

@@ -59,6 +59,18 @@
     },
     "successTitle": "复制成功",
     "successDescription": "已复制到{{name}}。",
+    "skippedTitle_one": "以下 {{count}} 个文件或文件夹没有复制，其余内容已完整复制：",
+    "skippedTitle_other": "以下 {{count}} 个文件或文件夹没有复制，其余内容已完整复制：",
+    "skippedMore_one": "另有 {{count}} 项未列出。",
+    "skippedMore_other": "另有 {{count}} 项未列出。",
+    "completeWithSkipped_one": "复制成功，{{count}} 项未复制",
+    "completeWithSkipped_other": "复制成功，{{count}} 项未复制",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "链接指向项目目录外部",
+      "MIGRATION_NONPORTABLE_PATH": "文件名在其他系统上无法使用",
+      "MIGRATION_PATH_COLLISION": "与另一个文件仅大小写不同",
+      "MIGRATION_UNSUPPORTED_ENTRY": "特殊文件（如套接字、管道），无法复制"
+    },
     "copyingTitle": "正在复制到{{name}}",
     "keepOpen": "正在复制到{{name}}。关闭窗口不会中断复制，可在原任务顶部查看进度。",
     "runInBackground": "后台继续",

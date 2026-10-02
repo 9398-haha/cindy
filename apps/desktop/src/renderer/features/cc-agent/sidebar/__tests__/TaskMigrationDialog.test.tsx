@@ -162,6 +162,34 @@ it('loads the completed task from the target computer before navigation and dism
   expect(state.merge).toHaveBeenCalledWith('B', 'B', [{ id: 'migrated', status: 'active' }]);
 });
 
+it('lists what a finished copy left behind, with the count of unlisted entries', async () => {
+  state.request.mockImplementation(async (device: string | null, command: { action: string }) => ({
+    supported: true,
+    deviceId: device ?? 'local',
+    ...(command.action === 'status'
+      ? {
+          stage: 'complete',
+          running: false,
+          targetDeviceId: 'B',
+          targetSessionId: 'migrated',
+          skipped: {
+            total: 3,
+            entries: [
+              { path: 'Pods/out.h', code: 'MIGRATION_EXTERNAL_LINK' },
+              { path: 'dev.sock', code: 'MIGRATION_UNSUPPORTED_ENTRY' },
+            ],
+          },
+        }
+      : {}),
+  }));
+  mount();
+  await screen.findByText('taskMigration.skippedTitle');
+  expect(screen.getByText('Pods/out.h')).toBeTruthy();
+  expect(screen.getByText('dev.sock')).toBeTruthy();
+  expect(screen.getByText('taskMigration.skippedMore')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'taskMigration.openTarget' })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 it('confirms the project selected in the menu without asking for a second selection', async () => {
   render(
     <MemoryRouter>

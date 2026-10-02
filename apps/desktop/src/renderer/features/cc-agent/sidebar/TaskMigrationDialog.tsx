@@ -335,6 +335,29 @@ export function TaskMigrationDialog({
                   ? t('taskMigration.failureDescription')
                   : t('taskMigration.description', { name: computerName })}
           </Dialog.Description>
+          {complete && status?.skipped && (
+            <div className="mt-3 text-sm text-[var(--confirm-desc)]">
+              <p>{t('taskMigration.skippedTitle', { count: status.skipped.total })}</p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                {status.skipped.entries.map((entry) => (
+                  <li key={entry.path} className="break-all">
+                    <span className="text-[var(--confirm-title)]">{entry.path}</span>
+                    {' · '}
+                    {t(`taskMigration.skippedReasons.${entry.code}`, {
+                      defaultValue: entry.code,
+                    })}
+                  </li>
+                ))}
+              </ul>
+              {status.skipped.total > status.skipped.entries.length && (
+                <p className="mt-1">
+                  {t('taskMigration.skippedMore', {
+                    count: status.skipped.total - status.skipped.entries.length,
+                  })}
+                </p>
+              )}
+            </div>
+          )}
           {confirming && (
             <p className="mt-2 text-sm text-[var(--confirm-desc)]">
               {t('taskMigration.bindingsNotice')}

@@ -45,6 +45,8 @@ const state = vi.hoisted(() => ({
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
   exclusions: [] as string[],
+  /** Entries each snapshot reports it left behind. */
+  skipped: [] as Array<{ path: string; code: string }>,
   migrationWarn: vi.fn(),
   /** Native transcript the export streams beside the package when the target supports it. */
   transcript: '' as string,
@@ -275,7 +277,11 @@ vi.mock('../workspace', async (original) => ({
     state.snapshot();
     await fs.mkdir(directory, { recursive: true });
     await fs.copyFile(path.join(source, 'draft'), path.join(directory, 'a.tar.gz.enc'));
-    return { unpackedBytes: 8, archive: { file: 'a.tar.gz.enc', files: {} } };
+    return {
+      unpackedBytes: 8,
+      archive: { file: 'a.tar.gz.enc', files: {} },
+      skipped: state.skipped,
+    };
   },
   restoreWorkspace: async (_manifest: unknown, directory: string, target: string) => {
     await fs.copyFile(path.join(directory, 'a.tar.gz.enc'), path.join(target, 'draft'));
@@ -317,6 +323,7 @@ describe('resumable cross-computer copy', () => {
     state.imports.mockClear();
     state.created.mockReset();
     state.snapshot.mockClear();
+    state.skipped = [];
     state.close.mockClear();
     state.remove.mockReset();
     state.loseReply = '';
@@ -860,6 +867,19 @@ describe('resumable cross-computer copy', () => {
     );
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
+  });
+  it('finishes despite skipped entries and reports them until the next copy', async () => {
+    state.skipped = [{ path: 'Pods/out.h', code: 'MIGRATION_EXTERNAL_LINK' }];
+    await start();
+    const first = await settled();
+    expect(first.stage).toBe('complete');
+    expect(first.error).toBeUndefined();
+    expect(first.skipped).toEqual({ total: 1, entries: state.skipped });
+    state.skipped = [];
+    await start();
+    const second = await settled();
+    expect(second.stage).toBe('complete');
+    expect(second.skipped).toBeUndefined();
   });
   it('allows another independent copy after completion', async () => {
     await start();

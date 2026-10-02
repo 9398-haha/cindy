@@ -59,6 +59,18 @@
     },
     "successTitle": "複製成功",
     "successDescription": "已複製到{{name}}。",
+    "skippedTitle_one": "以下 {{count}} 個檔案或資料夾未複製，其餘內容已完整複製：",
+    "skippedTitle_other": "以下 {{count}} 個檔案或資料夾未複製，其餘內容已完整複製：",
+    "skippedMore_one": "另有 {{count}} 項未列出。",
+    "skippedMore_other": "另有 {{count}} 項未列出。",
+    "completeWithSkipped_one": "複製成功，{{count}} 項未複製",
+    "completeWithSkipped_other": "複製成功，{{count}} 項未複製",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "連結指向專案目錄外部",
+      "MIGRATION_NONPORTABLE_PATH": "檔案名稱在其他系統上無法使用",
+      "MIGRATION_PATH_COLLISION": "與另一個檔案僅大小寫不同",
+      "MIGRATION_UNSUPPORTED_ENTRY": "特殊檔案（如通訊端、管道），無法複製"
+    },
     "copyingTitle": "正在複製到{{name}}",
     "keepOpen": "正在複製到{{name}}。關閉視窗不會中斷複製，可在原任務頂部查看進度。",
     "runInBackground": "背景繼續",

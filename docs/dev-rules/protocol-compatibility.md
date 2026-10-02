@@ -68,6 +68,8 @@ warn/warning 状态检查项、等待或处理中的检查项和 warning issue
 `receive.files.additionalWorkspaces` 沿用同一文件描述，manifest 记录成员到目录的映射。
 双方必须支持复制通道；收到整组能力声明才发送团队，不尝试部分导入。
 运行中取消由源端状态的可选 `cancellable` / `cancelling` 声明，旧源端缺省时控制端不提供取消。
+源端状态的可选 `skipped: { total, entries[{ path, code }] }` 列出本次复制跳过的条目，旧源端缺省、旧控制端忽略；
+新源端会发送项目内链接链与断开链接，旧目标仍按旧规则拒收（`MIGRATION_EXTERNAL_LINK`），需更新目标。
 范围、恢复与源目录保护见 [同机移动与跨电脑复制任务](../product-rules/task-device-migration.md)。
 
 设备互联生成文件沿用远端文件服务的 stat 与修改时间，控制端按被控端消息时间窗校验命令产物；

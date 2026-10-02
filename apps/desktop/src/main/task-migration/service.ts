@@ -73,10 +73,13 @@ import {
   MigrationSizeError,
 } from './resources';
 import { sendParts, receiveParts } from './transferParts';
+import type { SkippedEntry } from './portableEntries';
 
 const log = createLogger('task-migration');
 /** Native transcripts this large travel as separate streamed files, not inside the package. */
 const EXTERNAL_TRANSCRIPT_MIN_BYTES = 32 * 1024 * 1024;
+/** The finished copy lists this many left-behind entries; the count covers the rest. */
+const MAX_REPORTED_SKIPPED = 100;
 
 type MoveProject = (
   sessionId: string,
@@ -208,6 +211,7 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
                 targetSessionId: record.targetSessionId,
                 ...(record.error ? { error: record.error } : {}),
                 ...(record.error && record.errorPath ? { errorPath: record.errorPath } : {}),
+                ...(record.skipped ? { skipped: record.skipped } : {}),
                 ...(record.error &&
                 record.errorSize &&
                 Number.isSafeInteger(record.errorSize.needed) &&
@@ -418,10 +422,26 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       if ((result.externalTranscripts?.length ?? 0) > TASK_MIGRATION_MAX_TRANSCRIPTS)
         throw new Error('MIGRATION_NO_MEMORY');
       const snapshots: PortableWorkspace[] = [];
-      for (const [index, dir] of sourceKeys.entries())
-        snapshots.push(
-          await snapshotWorkspace(dir, workspaceDirectory(directory, index), record.id),
+      const skipped: SkippedEntry[] = [];
+      for (const [index, dir] of sourceKeys.entries()) {
+        const { skipped: left, ...snapshot } = await snapshotWorkspace(
+          dir,
+          workspaceDirectory(directory, index),
+          record.id,
         );
+        snapshots.push(snapshot);
+        // Other members' worktrees are named by folder; the task's own paths stay project-relative.
+        for (const entry of left)
+          skipped.push(index ? { ...entry, path: `${path.basename(dir)}/${entry.path}` } : entry);
+      }
+      if (skipped.length)
+        log.warn('task copy leaves entries behind', {
+          copyId: record.id,
+          count: skipped.length,
+        });
+      record.skipped = skipped.length
+        ? { total: skipped.length, entries: skipped.slice(0, MAX_REPORTED_SKIPPED) }
+        : undefined;
       // Copy does not freeze input. Discard preparation if the task or team changed
       // while capturing conversation and files, including a turn that already finished.
       await sourceBoundary!.drain();

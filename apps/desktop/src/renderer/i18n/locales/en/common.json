@@ -59,6 +59,18 @@
     },
     "successTitle": "Copy successful",
     "successDescription": "Copied to {{name}}.",
+    "skippedTitle_one": "{{count}} file or folder was not copied. Everything else was copied in full:",
+    "skippedTitle_other": "{{count}} files or folders were not copied. Everything else was copied in full:",
+    "skippedMore_one": "{{count}} more not listed.",
+    "skippedMore_other": "{{count}} more not listed.",
+    "completeWithSkipped_one": "Copied, {{count}} item skipped",
+    "completeWithSkipped_other": "Copied, {{count}} items skipped",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "Link points outside the project folder",
+      "MIGRATION_NONPORTABLE_PATH": "Name is not usable on other systems",
+      "MIGRATION_PATH_COLLISION": "Differs from another file only in letter case",
+      "MIGRATION_UNSUPPORTED_ENTRY": "Special file (such as a socket or pipe) that cannot be copied"
+    },
     "copyingTitle": "Copying to {{name}}",
     "keepOpen": "Copying to {{name}}. Closing this window won't stop the copy; check progress at the top of the original task.",
     "runInBackground": "Continue in background",
