@@ -60,6 +60,7 @@ import {
   Lock,
   Pin,
   RefreshCw,
+  SquarePen,
   UsersRound,
   X,
 } from 'lucide-react-native';
@@ -391,8 +392,9 @@ export interface MobileHomeProps {
   /** The same Home surface, constrained by its host rather than the screen width. */
   width?: number;
   currentSessionId?: string;
-  onDismiss?: () => void;
   newSessionInSystemBar?: boolean;
+  /** Temporary drawers put New task in their own header instead of floating over the short list. */
+  newSessionInHeader?: boolean;
   onSelectSession?: (item: RemoteSessionListItem) => void;
   runNavigation?: (action: () => void) => void;
   newSessionActionRef?: MutableRefObject<(() => void) | null>;
@@ -414,7 +416,7 @@ export function MobileHome(props: MobileHomeProps) {
   </RemoteSessionStoreSubscriptionGate>;
 }
 
-function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newSessionInSystemBar = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
+function HomeScreenContent({ active = true, onModeChange, width, newSessionInSystemBar = false, newSessionInHeader = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
   const ownedSharedTasks = useSharedTasks();
   const [sharedCollapsed, setSharedCollapsed] = useState(false);
   // The retained page and its visible sidebar must never release each other's subscriptions.
@@ -2056,6 +2058,10 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     candidateMode: taskSuggestionsCandidateMode,
     syncing: taskSuggestionsSyncing,
   });
+  // 无可控电脑时不提供入口;完整空态已有主按钮,避免重复显示新建 CTA。
+  const newSessionEntryVisible = !showRemoteGuide && !taskSuggestionsPending && taskSuggestionsMode !== 'empty';
+  // 临时任务列表抽屉的新建放在顶栏,不浮动遮挡短列表。
+  const headerNewSession = newSessionInHeader && newSessionEntryVisible;
   const selectedDeviceLabel = useMemo(() => {
     if (!selectedDeviceId) return t('devices.list.allConversations');
     // 设备列表尚未同步回来时,用偏好里存的设备名兜底,避免冷启动表头闪占位文案。
@@ -2742,7 +2748,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         contentContainerStyle={[
           styles.listContent,
           {
-            paddingBottom: (newSessionInSystemBar ? spacing.sm : LEGACY_HOME_LIST_BOTTOM_RESERVE) + insets.bottom,
+            paddingBottom: (newSessionInSystemBar || newSessionInHeader ? spacing.sm : LEGACY_HOME_LIST_BOTTOM_RESERVE) + insets.bottom,
             paddingTop: residentList.enabled ? 0 : chromeHeight,
           },
         ]}
@@ -2860,8 +2866,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         />
       ) : null}
 
-      {newSessionInSystemBar || showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (
-        // 无可控电脑时不提供入口;完整空态已有主按钮,避免重复显示新建 CTA。
+      {newSessionInSystemBar || newSessionInHeader || !newSessionEntryVisible ? null : (
         // iOS: the circle stretches into the new task's composer pill (origin → morph handoff).
         <HomeNewTaskButton bottomInset={insets.bottom} disabled={newSessionDisabled} morph
           onPress={(origin) => openNewSession(undefined, undefined, undefined, origin)} />
@@ -2909,12 +2914,13 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         {nativeHomeHeader ? null : (
         <View onLayout={(e) => setHomeHeaderWidth(e.nativeEvent.layout.width)} style={styles.homeHeader}>
         <View style={styles.headerLeadingActions}>
+        {/* 临时任务列表抽屉同样放系统菜单:关闭走遮罩、左滑和系统返回。 */}
         <HomeHeaderGlassButton
-          accessibilityLabel={onDismiss ? t('home.drawer.closeA11y') : t('devices.list.a11y.openMenu')}
-          onPress={onDismiss ?? openChromeMenu}
+          accessibilityLabel={t('devices.list.a11y.openMenu')}
+          onPress={openChromeMenu}
           testID="home.chromeMenu"
         >
-          <>{onDismiss ? <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} /> : <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />}</>
+          <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
         </HomeHeaderGlassButton>
         </View>
         {showRemoteGuide ? (
@@ -2957,7 +2963,13 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         {showRemoteGuide ? (
           <View style={styles.headerActions} />
         ) : (
-          <View style={[styles.headerActions, showHeaderRemoteDesktop && styles.headerActionsWide]}>
+          <View style={[styles.headerActions, (showHeaderRemoteDesktop || headerNewSession) && styles.headerActionsWide]}>
+            {headerNewSession ? (
+              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.newRemoteConversation')} disabled={newSessionDisabled}
+                onPress={() => openNewSession()} testID="home.headerNewSessionButton">
+                <SquarePen color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            ) : null}
             {showHeaderRemoteDesktop ? (
               <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
