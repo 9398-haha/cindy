@@ -1625,7 +1625,7 @@ describe("remote desktop controls", () => {
               supported: true,
               busy,
               modesSupported: false,
-              settings: { fps: 30, bitrate: 0, audio: false },
+              settings: { fps: 30, quality: "auto", audio: false },
               onChange,
               readModes: async () => [],
               onResolution: async () => {},
@@ -1672,7 +1672,7 @@ describe("remote desktop controls", () => {
               modesSupported: false,
               viewerDisplaySupported: supported,
               onFitDisplay,
-              settings: { fps: 30, bitrate: 0, audio: false },
+              settings: { fps: 30, quality: "auto", audio: false },
               onChange: vi.fn(),
               readModes: async () => [],
               onResolution: async () => {},
@@ -2014,8 +2014,7 @@ describe("remote desktop controls", () => {
       expect(changes()).toHaveLength(1);
       await select("quality", 1);
       await select("quality", 2);
-      await select("quality", 3);
-      expect(button("original").getAttribute("aria-selected")).toBe("true");
+      expect(button("hd").getAttribute("aria-selected")).toBe("true");
       expect(changes()).toHaveLength(1);
       expect(fixture.playback).not.toHaveBeenCalled();
       await message({ type: terminal });
@@ -2025,7 +2024,7 @@ describe("remote desktop controls", () => {
         requests()
           .filter((r) => r.op === "offer")
           .at(-1).settings,
-      ).toMatchObject({ fps: 60, bitrate: 20000000 });
+      ).toMatchObject({ fps: 60, quality: "hd", bitrate: 20000000 });
       await message({ type: "streaming" });
       expect(changes()).toHaveLength(2);
       await select("quality", 1);
@@ -2059,7 +2058,7 @@ describe("remote desktop controls", () => {
     await message({ type: "streaming" });
     act(() => button("operations").click());
     act(() => button("displaySettings").click());
-    await act(async () => button("original").click());
+    await act(async () => button("hd").click());
     await message({ type: "fallback" });
     expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(0);
     await act(async () => finish({ sdp: "answer" }));
@@ -2076,7 +2075,7 @@ describe("remote desktop controls", () => {
           '[data-testid="remoteDesktop.frameRateControl"] button',
         )[1]
         .click();
-      button("original").click();
+      button("hd").click();
     });
     expect(
       host
@@ -2085,7 +2084,7 @@ describe("remote desktop controls", () => {
         )[1]
         .getAttribute("aria-selected"),
     ).toBe("true");
-    expect(button("original").getAttribute("aria-selected")).toBe("true");
+    expect(button("hd").getAttribute("aria-selected")).toBe("true");
   });
   it("cancels the PiP timeout when queued quality changes exit PiP", async () => {
     fixture.systemAudio = true;
@@ -2110,7 +2109,7 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     await act(async () => button("smallWindow").click());
     act(() => button("displaySettings").click());
-    await act(async () => button("original").click());
+    await act(async () => button("hd").click());
     await act(async () => finish({}));
     expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(1);
     await message({ type: "streaming" });

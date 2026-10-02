@@ -72,8 +72,10 @@ function setup() {
       expect(this.remoteReady).toBe(true);
       return [this.audio];
     }
-    async setRemoteDescription() {
+    remote: { sdp?: string } | undefined;
+    async setRemoteDescription(description?: { sdp?: string }) {
       this.remoteReady = true;
+      this.remote = description;
     }
     async setLocalDescription() {}
     async createAnswer() {
@@ -94,18 +96,36 @@ function setup() {
     reply,
   };
   disposers.push(startDesktopCaptureHost(api as any));
-  const offer = (audio = true, overlay = true, nativeAudio = false) =>
+  const offer = (
+    audio = true,
+    overlay = true,
+    nativeAudio = false,
+    quality?: 'auto' | 'saver' | 'hd',
+    fps: 30 | 60 = 30,
+    sdp = 'offer',
+  ) =>
     command({
       id: 'offer',
       op: 'offer',
       lease: 'lease',
-      sdp: 'offer',
+      sdp,
       attemptId: 'attempt',
       sourceId: 'screen:1',
       nativeCapture: true,
       nativeAudio,
       cursorOverlay: overlay,
-      settings: { audio, fps: 30 },
+      settings: { audio, fps, ...(quality ? { quality } : {}) },
+    });
+  const offerWithoutSettings = (sdp: string) =>
+    command({
+      id: 'offer',
+      op: 'offer',
+      lease: 'lease',
+      sdp,
+      attemptId: 'attempt',
+      sourceId: 'screen:1',
+      nativeCapture: true,
+      cursorOverlay: true,
     });
   return {
     api,
@@ -115,6 +135,7 @@ function setup() {
     capture,
     reply,
     offer,
+    offerWithoutSettings,
     reset: (resume = false) =>
       command({ op: 'capture-reset', lease: 'lease', nativeAudio: resume }),
     stop: () => command({ op: 'stop' }),
@@ -137,16 +158,64 @@ function nativeSound() {
   return { sound, close };
 }
 
-it('allows congestion-driven resolution and frame-rate reduction without restarting capture', async () => {
+it.each([
+  [undefined, 60, 'maintain-framerate', 60, 20_000_000, ''],
+  ['auto', 60, 'maintain-framerate', 60, 20_000_000, ''],
+  ['saver', 60, 'maintain-framerate', 30, 2_000_000, ''],
+  ['hd', 60, 'maintain-resolution', 60, 20_000_000, 'text'],
+  ['hd', 30, 'maintain-resolution', 30, 20_000_000, 'text'],
+] as const)(
+  'applies the %s tier at %i fps as sender ceilings without restarting capture',
+  async (quality, fps, degradationPreference, maxFramerate, maxBitrate, contentHint) => {
+    const h = setup();
+    h.offer(false, true, false, quality, fps);
+    await flush();
+    expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
+      degradationPreference,
+      encodings: [{ maxFramerate, maxBitrate }],
+    });
+    expect(vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[4]).toBe(maxFramerate);
+    expect((h.video.video as { contentHint?: string }).contentHint).toBe(contentHint);
+    expect(h.peers).toHaveLength(1);
+    expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+    expect(h.nativeStop).not.toHaveBeenCalled();
+  },
+);
+
+it('keeps full resolution while the screen is still only for tiers that ask for it', async () => {
   const h = setup();
-  h.offer(false);
+  h.offer(false, true, false, 'auto');
   await flush();
-  expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
-    degradationPreference: 'balanced', encodings: [{ maxFramerate: 30 }],
-  });
-  expect(h.peers).toHaveLength(1);
-  expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
-  expect(h.nativeStop).not.toHaveBeenCalled();
+  const onMotion = vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5];
+  expect(onMotion).toBeTypeOf('function');
+  const video = h.peers[0].video.setParameters;
+  onMotion!(false);
+  await flush();
+  expect(video).toHaveBeenLastCalledWith(
+    expect.objectContaining({ degradationPreference: 'maintain-resolution' }),
+  );
+  onMotion!(true);
+  await flush();
+  expect(video).toHaveBeenLastCalledWith(
+    expect.objectContaining({ degradationPreference: 'maintain-framerate' }),
+  );
+
+  const hd = setup();
+  hd.offer(false, true, false, 'hd');
+  await flush();
+  expect(vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5]).toBeUndefined();
+});
+
+it('passes the tier bandwidth floor to the viewer offer, leaving legacy offers untouched', async () => {
+  const sdp = 'v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 100\r\na=rtpmap:100 VP8/90000\r\n';
+  const h = setup();
+  h.offer(false, true, false, 'saver', 30, sdp);
+  await flush();
+  expect(h.peers[0].remote?.sdp).toContain('a=fmtp:100 x-google-start-bitrate=1500;');
+  const legacy = setup();
+  legacy.offerWithoutSettings(sdp);
+  await flush();
+  expect(legacy.peers.at(-1)?.remote?.sdp).toBe(sdp);
 });
 
 it('clears locked audio and restores its existing sender after unlock without Chromium capture', async () => {

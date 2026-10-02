@@ -1062,7 +1062,7 @@ it.each([true, false])(
     const pending = h.deps.offer(
       { lease: h.lease, display: { id: '1' } },
       'sdp',
-      { audio: true, fps: 30, bitrate: 0 },
+      { audio: true, fps: 30, quality: 'auto' },
       true,
       'attempt',
     );
@@ -1108,7 +1108,7 @@ it('revokes audio recovery with the lease and never grants it to an audio-off re
   const pending = h.deps.offer(
     { lease: h.lease, display: { id: '1' } },
     'sdp',
-    { audio: true, fps: 30, bitrate: 0 },
+    { audio: true, fps: 30, quality: 'auto' },
     true,
     'attempt',
   );
