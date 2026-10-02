@@ -62,7 +62,7 @@ export const WALLPAPER_IDS = [
 export type WallpaperId = (typeof WALLPAPER_IDS)[number];
 
 export function normalizeCustomWallpaperUrl(value: unknown): string {
-  return typeof value === 'string' && /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.webp$/.test(value)
+  return typeof value === 'string' && /^cindy-media:\/\/client-wallpaper\/[0-9a-f]{64}\.webp$/.test(value)
     ? value
     : '';
 }

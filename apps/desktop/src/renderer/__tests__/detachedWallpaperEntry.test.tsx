@@ -128,7 +128,7 @@ it.each(['sidebar', 'plugin'] as const)(
     expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).not.toBe(
       lightVeil,
     );
-    const url = 'cindy-media://blobs/' + 'a'.repeat(64) + '.webp';
+    const url = 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp';
     await act(async () =>
       changed({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: url }),
     );

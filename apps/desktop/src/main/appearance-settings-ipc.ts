@@ -1,6 +1,5 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { extractIpcError } from '../shared/ipcError.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from './appSessionState.js';
 
 import {
   APPEARANCE_LIMITS,
@@ -34,17 +33,6 @@ export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed'
 
 let registered = false;
 
-function captureWallpaperOwner(): () => void {
-  const owner = activeOwnerScopeKey();
-  const assertValid = () => {
-    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) {
-      throwIpcError('INTERNAL', 'Wallpaper owner changed');
-    }
-  };
-  assertValid();
-  return assertValid;
-}
-
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
   registered = true;
@@ -67,11 +55,8 @@ export function registerAppearanceSettingsIpc(): void {
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
   ipcMain.handle('appearance-settings:ensure-wallpaper-video', async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const assertOwner = captureWallpaperOwner();
     const { ensureWallpaperVideo } = await import('./wallpaper-video.js');
-    assertOwner();
     const result = await ensureWallpaperVideo(id);
-    assertOwner();
     return result;
   });
 
@@ -79,12 +64,9 @@ export function registerAppearanceSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     const parent = BrowserWindow.fromWebContents(event.sender);
     if (!parent) throwIpcError('INVALID_PARAMS', 'Wallpaper picker requires an application window');
-    const assertOwner = captureWallpaperOwner();
     try {
       const { importCustomWallpaper } = await import('./custom-wallpaper.js');
-      assertOwner();
       if (!(await importCustomWallpaper(parent))) return null;
-      assertOwner();
       const settings = readAppearanceSettings();
       broadcast(settings);
       return settings;
@@ -98,12 +80,9 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:remove-wallpaper', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const assertOwner = captureWallpaperOwner();
     try {
       const { removeCustomWallpaper } = await import('./custom-wallpaper.js');
-      assertOwner();
       await removeCustomWallpaper();
-      assertOwner();
       const settings = readAppearanceSettings();
       broadcast(settings);
       return settings;
@@ -157,7 +136,7 @@ export async function updatePersistedWindowZoom(delta: number | null): Promise<A
   return settings;
 }
 
-// A font/theme reader is not a grant to the owner's private media capability.
+// A font/theme reader is not a grant to the client's custom media capability.
 function appearanceForWindow(settings: AppearanceSettings, win: BrowserWindow | null): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
   const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;

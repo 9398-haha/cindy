@@ -3,7 +3,7 @@ import { normalizeAppearanceSettings } from '../appearanceSettings';
 
 describe('wallpaper catalog compatibility', () => {
   it('accepts only canonical host-owned custom artwork and never legacy paths or CSS', () => {
-    const url = `cindy-media://blobs/${'a'.repeat(64)}.webp`;
+    const url = `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`;
     expect(
       normalizeAppearanceSettings({ wallpaperId: 'custom', customWallpaperUrl: url }),
     ).toMatchObject({ wallpaperId: 'custom', customWallpaperUrl: url });

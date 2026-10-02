@@ -65,13 +65,13 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
-  it('authorizes the CDN video request and rechecks owner after download', async () => {
+  it('authorizes the CDN request and keeps it valid across account switches', async () => {
     const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:ensure-wallpaper-video')?.[1];
     mocks.ensureVideo.mockResolvedValueOnce(null);
     expect(await handler({}, 'cindy-window')).toBeNull();
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
-    mocks.ensureVideo.mockImplementationOnce(async () => { mocks.owner = 'owner-b:2'; return 'old-owner-url'; });
-    await expect(handler({}, 'cindy-window')).rejects.toThrow('Wallpaper owner changed');
+    mocks.ensureVideo.mockImplementationOnce(async () => { mocks.owner = 'owner-b:2'; return 'client-video-url'; });
+    expect(await handler({}, 'cindy-window')).toBe('client-video-url');
   });
   it('rejects an untrusted CDN request before starting a download', async () => {
     mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted'); });
@@ -80,31 +80,29 @@ describe('appearance settings IPC authorization', () => {
     expect(mocks.ensureVideo).not.toHaveBeenCalled();
   });
   it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
-    'rejects %s when the owner changes during module loading',
+    'allows %s when the account changes during module loading',
     async (channel) => {
       const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === channel)?.[1];
       const pending = handler({ sender: {} });
       mocks.owner = 'owner-b:2';
-      await expect(pending).rejects.toThrow('Unable to');
-      expect(mocks.importWallpaper).not.toHaveBeenCalled();
-      expect(mocks.removeWallpaper).not.toHaveBeenCalled();
+      await expect(pending).resolves.not.toBeUndefined();
+      expect(channel.endsWith('import-wallpaper') ? mocks.importWallpaper : mocks.removeWallpaper).toHaveBeenCalledOnce();
     },
   );
   it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
-    'rejects %s while the owner boundary is pending',
+    'allows %s while account teardown is pending',
     async (channel) => {
       const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === channel)?.[1];
       const pending = handler({ sender: {} });
       mocks.boundaryPending = true;
-      await expect(pending).rejects.toThrow('Unable to');
-      expect(mocks.importWallpaper).not.toHaveBeenCalled();
-      expect(mocks.removeWallpaper).not.toHaveBeenCalled();
+      await expect(pending).resolves.not.toBeUndefined();
+      expect(channel.endsWith('import-wallpaper') ? mocks.importWallpaper : mocks.removeWallpaper).toHaveBeenCalledOnce();
     },
   );
   it('does not let a renderer inject a path or media URL through the generic preference channel', () => {
     expect(__testing.parsePatch({ wallpaperId: 'custom' })).toEqual({ wallpaperId: 'custom' });
     expect(() =>
-      __testing.parsePatch({ customWallpaperUrl: `cindy-media://blobs/${'a'.repeat(64)}.webp` }),
+      __testing.parsePatch({ customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp` }),
     ).toThrow('unknown appearance field');
     expect(() => __testing.parsePatch({ wallpaperPath: '/private.png' })).toThrow(
       'unknown appearance field',
@@ -195,7 +193,7 @@ describe('appearance settings IPC authorization', () => {
   it('withholds private media from utility bootstrap and broadcasts, while retaining it for app content', async () => {
     const settings = normalizeAppearanceSettings({
       wallpaperId: 'custom',
-      customWallpaperUrl: `cindy-media://blobs/${'a'.repeat(64)}.webp`,
+      customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`,
     });
     const utility = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn() } };
     const content = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn(), setZoomFactor: vi.fn() } };

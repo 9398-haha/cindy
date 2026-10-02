@@ -1,158 +1,175 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
 
-const h = vi.hoisted(() => ({
-  picker: vi.fn(),
-  read: vi.fn(),
-  ingest: vi.fn(),
-  write: vi.fn(),
-  remove: vi.fn(),
-  removeId: vi.fn(),
-  keep: vi.fn(),
-  valid: vi.fn(),
-  snapshot: { client: { drizzle: {} }, userId: 'test', clientEpoch: 1 },
+const h = vi.hoisted(() => ({ dir: '', picker: vi.fn(), account: 'a', db: vi.fn() }));
+vi.mock('electron', () => ({
+  app: { getPath: () => h.dir },
+  dialog: { showOpenDialog: h.picker },
 }));
-vi.mock('electron', () => ({ dialog: { showOpenDialog: h.picker } }));
-vi.mock('../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
-vi.mock('../utils/readBoundedFile.js', () => ({ readBoundedFileNoFollow: h.read }));
-vi.mock('../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => h.snapshot }));
-vi.mock('../appSessionState.js', () => ({ ownerScopedUserDataPath: () => `test-lock-${h.snapshot.userId}` }));
-vi.mock('../device-link/crossProcessLock.js', () => ({
-  withCrossProcessLock: (_p: string, _o: unknown, fn: Function) => fn({ held: true }),
+vi.mock('../localDb/client/current.js', () => ({
+  getDbClient: h.db,
+  getCurrentDbClientSnapshot: h.db,
 }));
-vi.mock('../cindy-media/refCompensationJournal.js', () => ({
-  captureMediaRefCompensationScope: () => ({ assertStillValid: h.valid }),
-}));
-vi.mock('../cindy-media/ingest.js', () => ({ ingestMedia: h.ingest }));
-vi.mock('../cindy-media/ledger.js', () => ({
-  removeRefById: h.removeId,
-  removeRefs: h.remove,
-  removeRefsExceptId: h.keep,
-}));
-vi.mock('../custom-wallpaper-settings.js', () => ({
-  customWallpaperStore: { writePatchAtomic: h.write },
+vi.mock('../appSessionState.js', () => ({
+  getActiveAppSession: () => {
+    throw new Error('Wallpaper must not read the account');
+  },
+  activeOwnerScopeKey: () => {
+    throw new Error('Wallpaper must not read the account');
+  },
 }));
 import {
   importCustomWallpaper,
-  prepareWallpaperImage,
   removeCustomWallpaper,
+  prepareWallpaperImage,
 } from '../custom-wallpaper';
+import { customWallpaperStore, readCustomWallpaperUrl } from '../custom-wallpaper-settings';
+import {
+  writeBlob,
+  readFile,
+  readClientWallpaperFile,
+  listBlobFiles,
+} from '../cindy-media/blobStore';
+import * as recycler from '../cindy-media/recycler';
 
-const url = `cindy-media://blobs/${'a'.repeat(64)}.webp`;
-beforeEach(async () => {
-  vi.resetAllMocks();
-  h.snapshot = { client: { drizzle: {} }, userId: 'test', clientEpoch: 1 };
-  h.picker.mockResolvedValue({ canceled: false, filePaths: ['chosen-image'] });
-  h.read.mockResolvedValue(
-    await sharp({ create: { width: 8, height: 4, channels: 3, background: 'blue' } })
-      .png()
-      .toBuffer(),
-  );
-  h.ingest.mockResolvedValue({ url, hash: 'a'.repeat(64), refIds: ['new-ref'] });
+beforeEach(() => {
+  h.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'client-wallpaper-test-'));
+  h.account = 'a';
+  h.db.mockImplementation(() => {
+    throw new Error('No account database');
+  });
+  h.picker.mockReset();
+});
+afterEach(() => {
+  expect(h.db).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+  fs.rmSync(h.dir, { recursive: true, force: true });
 });
 
-describe('custom wallpaper import', () => {
-  it('lets another owner remove the shared image while the old owner picker remains open', async () => {
-    let closePicker!: (value: { canceled: boolean; filePaths: string[] }) => void;
-    h.picker.mockReturnValueOnce(new Promise(resolve => { closePicker = resolve; }));
-    const oldImport = importCustomWallpaper({} as never);
-    const rejected = expect(oldImport).rejects.toThrow('Wallpaper owner changed');
-    await vi.waitFor(() => expect(h.picker).toHaveBeenCalledOnce());
-    h.snapshot = { client: { drizzle: {} }, userId: 'other', clientEpoch: 2 };
-    const removal = removeCustomWallpaper();
-    try {
-      await vi.waitFor(() => expect(h.write).toHaveBeenCalledOnce());
-    } finally {
-      closePicker({ canceled: true, filePaths: [] });
-      await rejected;
-      await removal;
-    }
-    expect(h.ingest).not.toHaveBeenCalled();
-    expect(h.remove).toHaveBeenCalledWith(expect.anything(), h.snapshot.client.drizzle);
+async function selectImage(color = 'blue') {
+  const bytes = await sharp({ create: { width: 8, height: 4, channels: 3, background: color } })
+    .png()
+    .toBuffer();
+  const file = path.join(h.dir, color + '.png');
+  fs.writeFileSync(file, bytes);
+  h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+  return bytes;
+}
+const parent = {} as never;
+
+describe('client-owned custom wallpaper lifecycle', () => {
+  it('imports without a database, then replaces and removes across account switches without touching identical chat bytes', async () => {
+    const original = await selectImage();
+    const chat = await writeBlob({
+      buffer: await prepareWallpaperImage(original),
+      mimeType: 'image/webp',
+    });
+    expect(await importCustomWallpaper(parent)).toBe(true);
+    const first = readCustomWallpaperUrl();
+    expect(first).toContain('cindy-media://client-wallpaper/');
+    expect((await readClientWallpaperFile(first)).buffer).toEqual(
+      (await readFile(chat.url)).buffer,
+    );
+    h.account = 'b';
+    await selectImage('red');
+    await importCustomWallpaper(parent);
+    await expect(readClientWallpaperFile(first)).rejects.toThrow();
+    const second = readCustomWallpaperUrl();
+    expect(second).not.toBe(first);
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
+    h.account = ''; // Signed out: removing the client preference still works.
+    await removeCustomWallpaper();
+    expect(readCustomWallpaperUrl()).toBe('');
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+    expect((await readFile(chat.url)).buffer).toEqual(await prepareWallpaperImage(original));
+    await removeCustomWallpaper(); // Idempotent, with no owner reference to release.
   });
 
-  it('serializes operations for the same owner until their picker closes', async () => {
-    let closePicker!: (value: { canceled: boolean; filePaths: string[] }) => void;
-    h.picker.mockReturnValueOnce(new Promise(resolve => { closePicker = resolve; }));
-    const importing = importCustomWallpaper({} as never);
-    await vi.waitFor(() => expect(h.picker).toHaveBeenCalledOnce());
-    const removal = removeCustomWallpaper();
-    await Promise.resolve();
-    expect(h.write).not.toHaveBeenCalled();
-    closePicker({ canceled: true, filePaths: [] });
-    await importing;
-    await removal;
-    expect(h.write).toHaveBeenCalledOnce();
-  });
-  it('decodes and pins the image before publishing, then removes only older wallpaper refs', async () => {
-    expect(await importCustomWallpaper({} as never)).toBe(true);
-    expect(h.ingest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mimeType: 'image/webp',
-        isCache: false,
-        refs: [{ refKind: 'import', refId: 'desktop-custom-wallpaper', originKind: 'user' }],
-        assertStillValid: expect.any(Function),
+  it('allows remove while a picker is open and publishes the later choice even after switching accounts', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    await selectImage('red');
+    const file = path.join(h.dir, 'red.png');
+    let close!: (value: unknown) => void;
+    h.picker.mockReturnValueOnce(
+      new Promise((resolve) => {
+        close = resolve;
       }),
-      h.snapshot.client.drizzle,
     );
-    const metadata = await sharp(h.ingest.mock.calls[0][0].buffer).metadata();
-    expect(metadata).toMatchObject({ format: 'webp', width: 8, height: 4 });
-    expect(metadata.exif).toBeUndefined();
-    expect(h.write).toHaveBeenCalledWith({ url });
-    expect(h.keep).toHaveBeenCalledWith(
-      { refKind: 'import', refId: 'desktop-custom-wallpaper', keepId: 'new-ref' },
-      h.snapshot.client.drizzle,
-    );
-    expect(h.ingest.mock.invocationCallOrder[0]).toBeLessThan(h.write.mock.invocationCallOrder[0]);
-    expect(h.write.mock.invocationCallOrder[0]).toBeLessThan(h.keep.mock.invocationCallOrder[0]);
-  });
-  it('cancels without changing the preference or media', async () => {
-    h.picker.mockResolvedValue({ canceled: true, filePaths: [] });
-    expect(await importCustomWallpaper({} as never)).toBe(false);
-    expect(h.read).not.toHaveBeenCalled();
-    expect(h.write).not.toHaveBeenCalled();
-  });
-  it('rejects invalid or unsupported files without publishing', async () => {
-    h.read.mockResolvedValue(
-      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"></svg>'),
-    );
-    await expect(importCustomWallpaper({} as never)).rejects.toThrow('INVALID_PARAMS');
-    expect(h.ingest).not.toHaveBeenCalled();
-    await expect(prepareWallpaperImage(Buffer.from('not an image'))).rejects.toThrow(
-      'INVALID_PARAMS',
-    );
-    h.read.mockResolvedValue(null);
-    await expect(importCustomWallpaper({} as never)).rejects.toThrow('INVALID_PARAMS');
-  });
-  it('compensates only the new reference when saving fails', async () => {
-    h.write.mockRejectedValue(new Error('disk'));
-    await expect(importCustomWallpaper({} as never)).rejects.toThrow('disk');
-    expect(h.removeId).toHaveBeenCalledWith('new-ref', h.snapshot.client.drizzle);
-    expect(h.keep).not.toHaveBeenCalled();
-  });
-  it('does not clear a successfully published image if old-reference cleanup fails', async () => {
-    h.keep.mockRejectedValue(new Error('db'));
-    expect(await importCustomWallpaper({} as never)).toBe(true);
-    expect(h.removeId).not.toHaveBeenCalled();
-  });
-  it('rejects an owner switch while the picker is open', async () => {
-    h.picker.mockImplementation(async () => {
-      h.valid.mockImplementation(() => {
-        throw new Error('owner changed');
-      });
-      return { canceled: false, filePaths: ['chosen-image'] };
-    });
-    await expect(importCustomWallpaper({} as never)).rejects.toThrow('owner changed');
-    expect(h.read).not.toHaveBeenCalled();
-    expect(h.ingest).not.toHaveBeenCalled();
-  });
-  it('forgets the preference before removing its references', async () => {
+    const pending = importCustomWallpaper(parent);
+    h.account = 'b';
     await removeCustomWallpaper();
-    expect(h.write).toHaveBeenCalledWith({ url: '' }, { preserveDefaults: true });
-    expect(h.write.mock.invocationCallOrder[0]).toBeLessThan(h.remove.mock.invocationCallOrder[0]);
-    h.write.mockRejectedValue(new Error('disk'));
-    h.remove.mockClear();
+    expect(readCustomWallpaperUrl()).toBe('');
+    close({ canceled: false, filePaths: [file] });
+    expect(await pending).toBe(true);
+    expect(readCustomWallpaperUrl()).not.toBe('');
+  });
+
+  it('serializes concurrent publications and retains only the final client reference', async () => {
+    await selectImage();
+    const a = path.join(h.dir, 'blue.png');
+    await selectImage('red');
+    const b = path.join(h.dir, 'red.png');
+    h.picker.mockResolvedValueOnce({ canceled: false, filePaths: [a] });
+    h.picker.mockResolvedValueOnce({ canceled: false, filePaths: [b] });
+    await Promise.all([importCustomWallpaper(parent), importCustomWallpaper(parent)]);
+    const current = readCustomWallpaperUrl();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(1);
+    expect((await readClientWallpaperFile(current)).buffer.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the published image after save failure and collects the unused bytes on the next successful operation', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const first = readCustomWallpaperUrl();
+    await selectImage('red');
+    vi.spyOn(customWallpaperStore, 'writePatchAtomic').mockRejectedValueOnce(new Error('disk'));
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('disk');
+    expect(readCustomWallpaperUrl()).toBe(first);
+    await expect(readClientWallpaperFile(first)).resolves.toBeDefined();
+    await removeCustomWallpaper();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+  });
+
+  it('does not recycle files when settings cannot be parsed or removal cannot be saved', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const first = readCustomWallpaperUrl();
+    fs.writeFileSync(path.join(h.dir, 'custom-wallpaper.json'), '{broken');
+    await selectImage('red');
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('unreadable');
+    await expect(readClientWallpaperFile(first)).resolves.toBeDefined();
+    vi.spyOn(customWallpaperStore, 'resetAtomic').mockRejectedValueOnce(new Error('disk'));
     await expect(removeCustomWallpaper()).rejects.toThrow('disk');
-    expect(h.remove).not.toHaveBeenCalled();
+    await expect(readClientWallpaperFile(first)).resolves.toBeDefined();
+    await removeCustomWallpaper();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+  });
+
+  it('retains a successful publication when recycling fails and retries on the next removal', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    await selectImage('red');
+    vi.spyOn(recycler, 'recycleClientWallpapers').mockRejectedValueOnce(new Error('busy'));
+    await importCustomWallpaper(parent);
+    await expect(readClientWallpaperFile(readCustomWallpaperUrl())).resolves.toBeDefined();
+    await removeCustomWallpaper();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+  });
+
+  it('cancels and rejects invalid input without changing the current image', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const original = readCustomWallpaperUrl();
+    h.picker.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    expect(await importCustomWallpaper(parent)).toBe(false);
+    fs.writeFileSync(path.join(h.dir, 'blue.png'), 'invalid');
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('INVALID_PARAMS');
+    expect(readCustomWallpaperUrl()).toBe(original);
+    await expect(prepareWallpaperImage(Buffer.from('<svg/>'))).rejects.toThrow('INVALID_PARAMS');
+    await expect(prepareWallpaperImage(Buffer.alloc(0))).rejects.toThrow('INVALID_PARAMS');
   });
 });

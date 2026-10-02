@@ -3,54 +3,14 @@ import sharp from 'sharp';
 
 import { readBoundedFileNoFollow } from './utils/readBoundedFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
-import { getCurrentDbClientSnapshot } from './localDb/client/current.js';
-import { captureMediaRefCompensationScope } from './cindy-media/refCompensationJournal.js';
-import { ingestMedia } from './cindy-media/ingest.js';
-import { removeRefById, removeRefs, removeRefsExceptId } from './cindy-media/ledger.js';
-import { customWallpaperStore } from './custom-wallpaper-settings.js';
+import { ingestClientWallpaper } from './cindy-media/ingest.js';
+import { recycleClientWallpapers } from './cindy-media/recycler.js';
+import { withClientWallpaperLock } from './cindy-media/clientWallpaperLock.js';
+import { customWallpaperStore, readCustomWallpaperUrl } from './custom-wallpaper-settings.js';
 import { createLogger } from './logger.js';
-import { ownerScopedUserDataPath } from './appSessionState.js';
-import { withCrossProcessLock } from './device-link/crossProcessLock.js';
 
 const log = createLogger('custom-wallpaper');
-const REF = { refKind: 'import' as const, refId: 'desktop-custom-wallpaper' };
 const MAX_BYTES = 20 * 1024 * 1024;
-const queues = new Map<string, Promise<unknown>>();
-
-function captureScope() {
-  const snapshot = getCurrentDbClientSnapshot();
-  if (!snapshot) throwIpcError('INTERNAL', 'Wallpaper storage is not ready');
-  const compensation = captureMediaRefCompensationScope();
-  const assertValid = () => {
-    compensation.assertStillValid();
-    if (getCurrentDbClientSnapshot() !== snapshot)
-      throwIpcError('INTERNAL', 'Wallpaper owner changed');
-  };
-  return { db: snapshot.client.drizzle, compensation, assertValid };
-}
-
-function serialize<T>(action: () => Promise<T>): Promise<T> {
-  const lockPath = ownerScopedUserDataPath('custom-wallpaper-operation.lock');
-  const result = (queues.get(lockPath) ?? Promise.resolve())
-    .catch(() => undefined)
-    .then(() =>
-      withCrossProcessLock(
-        lockPath,
-        { label: 'custom-wallpaper', waitMs: 12_000 },
-        async (status) => {
-          if (!status.held)
-            throwIpcError('INTERNAL', 'Wallpaper is being changed in another window');
-          return action();
-        },
-      ),
-    );
-  queues.set(lockPath, result);
-  const release = () => {
-    if (queues.get(lockPath) === result) queues.delete(lockPath);
-  };
-  void result.then(release, release);
-  return result;
-}
 
 /** Decode real raster bytes, apply orientation, strip metadata and retain a static 4K preview. */
 export async function prepareWallpaperImage(bytes: Buffer): Promise<Buffer> {
@@ -73,67 +33,44 @@ export async function prepareWallpaperImage(bytes: Buffer): Promise<Buffer> {
 
 /** Paths come only from this native picker, never from the renderer or remote peers. */
 export async function importCustomWallpaper(parent: BrowserWindow): Promise<boolean> {
-  const scope = captureScope();
-  return serialize(async () => {
-    scope.assertValid();
-    const selected = await dialog.showOpenDialog(parent, {
-      properties: ['openFile'],
-      filters: [{ name: 'PNG / JPEG / WebP', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+  const selected = await dialog.showOpenDialog(parent, {
+    properties: ['openFile'],
+    filters: [{ name: 'PNG / JPEG / WebP', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+  });
+  if (selected.canceled || !selected.filePaths[0]) return false;
+  let bytes: Buffer;
+  try {
+    const read = await readBoundedFileNoFollow(selected.filePaths[0], MAX_BYTES, {
+      nonBlocking: true,
     });
-    scope.assertValid();
-    if (selected.canceled || !selected.filePaths[0]) return false;
-    let bytes: Buffer;
-    try {
-      const read = await readBoundedFileNoFollow(selected.filePaths[0], MAX_BYTES, {
-        nonBlocking: true,
-      });
-      if (!read) throw new Error('Unreadable image');
-      bytes = read;
-    } catch {
-      throwIpcError('INVALID_PARAMS', 'Cannot read image; choose a local image up to 20 MB');
-    }
-    const buffer = await prepareWallpaperImage(bytes);
-    scope.assertValid();
-    const media = await ingestMedia(
-      {
-        buffer,
-        mimeType: 'image/webp',
-        isCache: false,
-        refs: [{ ...REF, originKind: 'user' }],
-        assertStillValid: scope.assertValid,
-        refCompensationScope: scope.compensation,
-      },
-      scope.db,
-    );
-    try {
-      scope.assertValid();
-      await customWallpaperStore.writePatchAtomic({ url: media.url });
-    } catch (error) {
-      await Promise.allSettled(media.refIds.map((id) => removeRefById(id, scope.db)));
-      throw error;
-    }
-    // Publication succeeded. Cleanup failure must retain the new selection and its pin.
-    try {
-      await removeRefsExceptId({ ...REF, keepId: media.refIds[0] }, scope.db);
-    } catch {
-      log.warn('Previous wallpaper reference cleanup deferred');
-    }
-    scope.assertValid();
+    if (!read) throw new Error('Unreadable image');
+    bytes = read;
+  } catch {
+    throwIpcError('INVALID_PARAMS', 'Cannot read image; choose a local image up to 20 MB');
+  }
+  const buffer = await prepareWallpaperImage(bytes);
+  return withClientWallpaperLock(async () => {
+    const media = await ingestClientWallpaper({ buffer, mimeType: 'image/webp' });
+    await customWallpaperStore.writePatchAtomic({ url: media.url });
+    // Recycle only after successful publication. Unreadable settings or a failed
+    // write must not delete the previous image; a later successful operation also
+    // collects bytes left by interrupted/failed imports.
+    await recycleUnusedImages();
     return true;
   });
 }
 
 export async function removeCustomWallpaper(): Promise<void> {
-  const scope = captureScope();
-  return serialize(async () => {
-    scope.assertValid();
-    // Forget the preference before unpinning; never delete shared media bytes here.
-    await customWallpaperStore.writePatchAtomic({ url: '' }, { preserveDefaults: true });
-    try {
-      await removeRefs(REF, scope.db);
-    } catch {
-      log.warn('Removed wallpaper reference cleanup deferred');
-    }
-    scope.assertValid();
+  return withClientWallpaperLock(async () => {
+    await customWallpaperStore.resetAtomic();
+    await recycleUnusedImages();
   });
+}
+
+async function recycleUnusedImages(): Promise<void> {
+  try {
+    await recycleClientWallpapers([readCustomWallpaperUrl()], '.webp');
+  } catch {
+    log.warn('Unused client wallpaper cleanup deferred');
+  }
 }

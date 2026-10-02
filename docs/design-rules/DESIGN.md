@@ -83,8 +83,10 @@ in the same section (user addition, 2026-10-01). Accept local PNG/JPEG/WebP up t
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
 in the managed media store. Wallpaper selection and the custom image reference
 are shared within the Desktop profile, just like theme preferences (user decision,
-2026-10-02). Switching accounts keeps the same wallpaper. Media cleanup by any
-account must protect the shared image. Font-only utility renderers never receive
+2026-10-02). Import, replacement, removal and recycling are client-wide as well:
+no account database, account-bound operation guard or pre-release owner migration.
+The media store's client wallpaper scope isolates its bytes from chat attachments;
+switching accounts (or signing out) keeps the same wallpaper. Font-only utility renderers never receive
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
 embedded plugin webviews retain their own surfaces and permission boundary.

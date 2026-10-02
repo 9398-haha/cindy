@@ -25,19 +25,14 @@ import {
   writeAppearanceSettingsPatch,
 } from '../appearance-settings-store';
 
-const urlA = `cindy-media://blobs/${'a'.repeat(64)}.webp`;
-const urlB = `cindy-media://blobs/${'b'.repeat(64)}.webp`;
+const urlA = `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`;
+const urlB = `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`;
 beforeEach(() => {
   h.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wallpaper-shared-'));
   h.owner = 'a';
   h.pending = false;
 });
 afterEach(() => fs.rmSync(h.dir, { recursive: true, force: true }));
-
-function seedLegacy(owner: string, url: string) {
-  fs.mkdirSync(path.join(h.dir, owner), { recursive: true });
-  fs.writeFileSync(path.join(h.dir, owner, 'custom-wallpaper.json'), JSON.stringify({ url }));
-}
 
 describe('profile-wide wallpaper preference', () => {
   it('shares selection, replacement and reset across accounts, including sign-out', async () => {
@@ -70,34 +65,7 @@ describe('profile-wide wallpaper preference', () => {
     expect(readAppearanceSettings().wallpaperId).toBe('cindy-dream');
   });
 
-  it('adopts the active preview image once, and never resurrects removed images from another account', async () => {
-    seedLegacy('a', urlA);
-    seedLegacy('b', urlB);
-    await writeAppearanceSettingsPatch({ wallpaperId: 'custom' });
-    expect(readAppearanceSettings()).toMatchObject({
-      wallpaperId: 'custom',
-      customWallpaperUrl: urlA,
-    });
-    h.owner = 'b';
-    expect(readCustomWallpaperUrl()).toBe(urlA);
-    await customWallpaperStore.writePatchAtomic({ url: '' }, { preserveDefaults: true });
-    h.owner = 'a';
-    expect(readAppearanceSettings()).toMatchObject({ wallpaperId: 'none', customWallpaperUrl: '' });
-    expect(JSON.parse(fs.readFileSync(path.join(h.dir, 'custom-wallpaper.json'), 'utf8'))).toEqual({
-      url: '',
-    });
-  });
-
-  it('waits for a settled active account before adopting a preview image', () => {
-    seedLegacy('a', urlA);
-    h.pending = true;
-    expect(readCustomWallpaperUrl()).toBe('');
-    h.pending = false;
-    expect(readCustomWallpaperUrl()).toBe(urlA);
-  });
-
-  it('preserves unreadable shared settings instead of replacing them with a legacy image', async () => {
-    seedLegacy('a', urlA);
+  it('preserves unreadable shared settings until an explicit reset', async () => {
     const target = path.join(h.dir, 'custom-wallpaper.json');
     fs.writeFileSync(target, '{broken');
     expect(readCustomWallpaperUrl()).toBe('');

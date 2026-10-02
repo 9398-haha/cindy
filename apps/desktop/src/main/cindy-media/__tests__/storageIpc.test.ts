@@ -55,7 +55,6 @@ afterAll(() => {
 
 beforeEach(() => {
   db = freshDb();
-  fs.writeFileSync(path.join(tmpUserData, 'custom-wallpaper.json'), JSON.stringify({ url: '' }));
   fs.rmSync(path.join(tmpUserData, 'cindy-media'), { recursive: true, force: true });
   legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-storage-legacy-'));
 });
@@ -192,32 +191,6 @@ describe('scan(清理预检:三个暂存区保护贯通)', () => {
 });
 
 describe('cleanup(执行:全类别 + 执行时重新取证)', () => {
-  it.each([false, true])('protects the shared wallpaper without any owner-local ref (cache=%s)', async (isCache) => {
-    const image = await seedBlob('shared-wallpaper', { aged: true, isCache, mimeType: 'image/webp' });
-    const handlers = makeHandlers();
-    // Another account selected this blob after the cleanup preview. Its pin is
-    // absent from this account's ledger; the host preference must protect it.
-    await handlers.scan({ draftUrls: [] });
-    fs.writeFileSync(path.join(tmpUserData, 'custom-wallpaper.json'), JSON.stringify({ url: image.url }));
-    const result = await handlers.cleanup({
-      draftUrls: [], zeroRefHashes: [image.hash], evictCacheHashes: [image.hash],
-      deadDirNames: [], cleanTmpFiles: false,
-    });
-    expect(result.freedBytes).toBe(0);
-    const scan = await handlers.scan({ draftUrls: [] });
-    expect(scan.zeroRef.hashes).not.toContain(image.hash);
-    expect(scan.cache.evictable.map((item) => item.hash)).not.toContain(image.hash);
-    expect((await handlers.stats()).blobs.totalCount).toBe(1);
-    // Verify the bytes as well as the ledger, then explicitly forget the image.
-    expect(fs.existsSync(blobStore.resolveSafe(image.url).absPath)).toBe(true);
-    fs.writeFileSync(path.join(tmpUserData, 'custom-wallpaper.json'), JSON.stringify({ url: '' }));
-    const removed = await handlers.cleanup({
-      draftUrls: [], zeroRefHashes: [image.hash], evictCacheHashes: [image.hash],
-      deadDirNames: [], cleanTmpFiles: false,
-    });
-    expect(removed.freedBytes).toBe(image.bytes);
-  });
-
   it('零引用/缓存逐出/死目录/tmp 一次执行,汇总释放量', async () => {
     const doomed = await seedBlob('clean-doomed', { aged: true });
     const cacheBlob = await seedBlob('clean-cache', { isCache: true });

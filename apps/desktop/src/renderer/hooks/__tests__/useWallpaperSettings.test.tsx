@@ -31,19 +31,16 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
-  it('restores shared artwork and keeps it visible throughout an account switch', async () => {
-    const url = `cindy-media://blobs/${'b'.repeat(64)}.webp`;
-    let authChanged: () => void = () => {};
+  it('loads client artwork without subscribing to account changes', async () => {
+    const url = `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`;
+    const subscribeAuth = vi.fn();
     const get = vi
       .fn()
       .mockResolvedValue({
         value: { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: url },
       });
     vi.stubGlobal('electronAPI', {
-      onAuthStateChange: (fn: () => void) => {
-        authChanged = fn;
-        return () => {};
-      },
+      onAuthStateChange: subscribeAuth,
       appearanceSettings: {
         getSync: () => DEFAULT_APPEARANCE_SETTINGS,
         get,
@@ -61,9 +58,9 @@ describe('application wallpaper lifecycle', () => {
       ),
     );
     expect(document.querySelector('video')).toBeNull();
-    act(() => authChanged());
     expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url);
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(subscribeAuth).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledOnce();
     expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toContain(url);
   });
   it('does not enable transparent surfaces for a missing custom image', () => {
