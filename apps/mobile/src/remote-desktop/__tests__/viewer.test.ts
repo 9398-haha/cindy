@@ -1080,9 +1080,41 @@ describe("remote desktop viewport", () => {
     expect(move).toEqual({
       kind: "move",
       x: expect.closeTo(0.375),
-      y: expect.closeTo((250 - 187.5) / 225),
+      y: expect.closeTo((230 - 187.5) / 225),
     });
     expect(scroll).toEqual({ kind: "scroll", dx: 0, dy: 20 });
+  });
+  it("aims a touch-mode scroll that starts in the letterbox once it reaches the desktop", () => {
+    const v = viewer();
+    v.send({ type: "control", enabled: true });
+    v.send({ type: "mode", mode: "touch" });
+    v.flush();
+    v.ack();
+    // The desktop picture spans y 187.5..412.5; start above it.
+    v.pointer("pointerdown", 1, 100, 150);
+    v.pointer("pointerdown", 2, 200, 150);
+    v.pointer("pointermove", 1, 100, 170);
+    v.pointer("pointermove", 2, 200, 170);
+    v.frame();
+    v.flush();
+    expect(v.messages.flatMap((m) => m.events ?? [])).toEqual([
+      { kind: "release" },
+    ]);
+    v.pointer("pointermove", 1, 100, 200);
+    v.pointer("pointermove", 2, 200, 200);
+    v.frame();
+    v.flush();
+    const events = v.messages
+      .flatMap((m) => m.events ?? [])
+      .filter((e) => e.kind !== "release");
+    expect(events).toEqual([
+      {
+        kind: "move",
+        x: expect.closeTo(0.375),
+        y: expect.closeTo((200 - 187.5) / 225),
+      },
+      { kind: "scroll", dx: 0, dy: -30 },
+    ]);
   });
   it("keeps the pointer-mode cursor where it is for two-finger scrolls", () => {
     const v = viewer();

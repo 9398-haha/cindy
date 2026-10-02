@@ -1199,15 +1199,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           multi.kind = "scroll";
           multi.restX = 0;
           multi.restY = 0;
-          // Hosts scroll whatever is under the desktop cursor. Touch mode has
-          // no visible pointer, so aim the wheel at the fingers first.
-          const origin = { x: multi.x, y: multi.y };
-          if (control && mode === "touch" && insideDesktop(origin)) {
-            const p = point(origin);
-            cx = p.x;
-            cy = p.y;
-            queue({ kind: "move", x: cx, y: cy });
-          }
+          multi.aimed = mode !== "touch";
         }
       }
     }
@@ -1240,6 +1232,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       const dx = next.x - multi.lastX,
         dy = next.y - multi.lastY;
       if (control && mode !== "pan") {
+        // Hosts scroll whatever is under the desktop cursor. Touch mode has no
+        // visible pointer, so aim it at the fingers once they are over the
+        // desktop; like taps, scrolling over the letterbox does nothing.
+        if (!multi.aimed && insideDesktop(next)) {
+          const p = point(next);
+          cx = p.x;
+          cy = p.y;
+          queue({ kind: "move", x: cx, y: cy });
+          multi.aimed = true;
+        }
         // Hosts inject whole pixels; carry fractions so slow drags still scroll.
         const sx = multi.restX - dx,
           sy = multi.restY - dy,
@@ -1247,7 +1249,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           wy = Math.trunc(sy);
         multi.restX = sx - wx;
         multi.restY = sy - wy;
-        if (wx || wy)
+        if (multi.aimed && (wx || wy))
           queue({
             kind: "scroll",
             dx: Math.max(-2000, Math.min(2000, wx)),
