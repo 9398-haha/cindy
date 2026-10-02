@@ -185,6 +185,41 @@ describe('bot workbench judgments', () => {
   });
 });
 
+describe('bot workbench write-chain failure hygiene', () => {
+  it('absorbs the cleanup promise rejection when a write fails and keeps the chain usable', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const proj = path.join(root, 'proj');
+    await mkdir(proj);
+    await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T01:00:00.000Z'));
+
+    // 把 workbench.json 换成目录 → 下一次 mutate 的 rename 失败。
+    const file = path.join(botProfileDir(root, 'bot-1'), 'workbench.json');
+    await rm(file);
+    await mkdir(file);
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      // 第二次添加走同一条写链:run 本身按预期 reject(调用方拿到失败)。
+      await expect(
+        addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T02:00:00.000Z')),
+      ).rejects.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+      // finally 派生的 cleanup promise 不得产生进程级 unhandledRejection。
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    // 写链未被失败污染:恢复文件后同一 bot 的下一次写入正常。
+    await rm(file, { recursive: true });
+    expect(await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T03:00:00.000Z'))).toEqual({ ok: true });
+    const state = await readBotWorkbenchState(root, 'bot-1');
+    expect(state.directories[0]).toBe(path.resolve(proj));
+  });
+});
+
 describe('bot workbench directory removal normalization', () => {
   it('removes a handed-over project addressed by an equivalent, differently-spelled path', async () => {
     // 回归:add 存 path.resolve 后的路径, remove 曾按原始串比较 —— 尾分隔符、

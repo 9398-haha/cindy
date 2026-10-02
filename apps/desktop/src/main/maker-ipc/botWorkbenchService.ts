@@ -159,9 +159,12 @@ function mutate<T>(
       return result;
     });
   writeChains.set(key, run);
+  // finally 派生的 promise 会继承 run 的 rejection 且无人接住 —— 磁盘错误/
+  // 写入中途 bot home 被删时升级为进程级 unhandledRejection。cleanup 照跑,
+  // rejection 在此吸收(调用方已拿到原始 run 的失败)。
   void run.finally(() => {
     if (writeChains.get(key) === run) writeChains.delete(key);
-  });
+  }).catch(() => undefined);
   return run;
 }
 
