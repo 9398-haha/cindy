@@ -6371,6 +6371,10 @@ assertRouteCurrent();
         // Install while the thread is created/resumed: a later switch to Auto
         // changes the turn reviewer without rebuilding this thread config.
         ...nativeContinuationConfig,
+        // Cindy owns goal dispatch, budgets and pause/resume. A native goal
+        // starts a second continuation loop whose turns bypass Session.send
+        // and lose the Host origin after the first terminal event.
+        'features.goals': false,
         // Keep companion memory in its own Home. Native delegation uses the
         // same feature settings and permissions as an ordinary task.
         ...(opts.botRuntimeProfile ? {
@@ -6412,7 +6416,6 @@ assertRouteCurrent();
               } : {}),
               web_search: 'disabled',
               'features.apps': false,
-              'features.goals': false,
               'features.hooks': false,
               'features.multi_agent': false,
               'features.remote_plugin': false,
