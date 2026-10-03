@@ -19,6 +19,15 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 
+// Same action-button treatment as the shared confirm dialog: this dialog paints the
+// confirmation surface, where the default button palette has almost no contrast.
+const actionButton = {
+  size: 'lg',
+  palette: 'confirmation',
+  className:
+    'h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5',
+} as const;
+
 export function TaskMigrationDialog({
   session,
   onDismiss,
@@ -495,30 +504,36 @@ export function TaskMigrationDialog({
               )}
             </p>
           )}
-          <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <div className="mt-6 flex flex-wrap justify-end gap-2.5">
             {copying ? (
               <>
                 {status?.cancellable && (
-                  <Button variant="secondary" disabled={busy} onClick={cancelCopy}>
+                  <Button
+                    {...actionButton}
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={cancelCopy}
+                  >
                     {t('taskMigration.cancelCopy')}
                   </Button>
                 )}
-                <Button variant="secondary" disabled={busy} onClick={dismiss}>
+                <Button {...actionButton} variant="secondary" disabled={busy} onClick={dismiss}>
                   {t('taskMigration.runInBackground')}
                 </Button>
               </>
             ) : (
-              <Button variant="secondary" disabled={busy} onClick={dismiss}>
+              <Button {...actionButton} variant="secondary" disabled={busy} onClick={dismiss}>
                 {t(confirming ? 'taskMigration.cancel' : 'taskMigration.close')}
               </Button>
             )}
             {complete && status?.targetSessionId && (
-              <Button disabled={busy} onClick={() => void openTarget()}>
+              <Button {...actionButton} disabled={busy} onClick={() => void openTarget()}>
                 {t('taskMigration.openTarget')}
               </Button>
             )}
             {confirming && (
               <Button
+                {...actionButton}
                 disabled={!status || !estimate || busy || readyTarget !== target || !target}
                 onClick={() =>
                   void act({
