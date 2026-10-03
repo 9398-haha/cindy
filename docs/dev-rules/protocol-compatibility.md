@@ -635,3 +635,17 @@ Mobile 原生 fingerprint 输入，服务端无需改动。
 桌面能力页新增仅限可信本地 renderer 的 `local-db:bots:skills:list` 读取伙伴自有技能；
 远程端继续使用已有 `settings:<botId>/skills` 资源，不扩 IPC allowlist。
 SSH 继续沿用现有伙伴远端技能限制，不读取控制端本机资料；设备互联由执行宿主保存与复盘。
+
+## 模型目录分段读取
+
+`maker:provider:list` 通过请求的 `capabilities: ['provider-catalog-pages-v1']` 协商分段响应。
+主机先完成原有授权、路由凭证剥离和模型投影，再将完整 JSON 按至多 256 Ki 个 UTF-16
+码元分段；`provider-catalog-page-v1` 携带 `revision`（完整投影的 SHA-256）、`offset`、
+`total` 与 `data`。后续请求的可选 `catalogPage: { offset, revision }` 必须匹配当前目录，
+每次仍执行授权与投影，目录改变则明确失败，不拼接不同快照。控制端仅在完整重组后发布目录，
+限制重组至 64 Mi 个码元；单段即使全部需要 JSON 转义也低于既有 2 MiB 帧限制。
+
+共享 DeviceLinkClient 为手机和远程桌面统一协商与重组，保留模型、顺序、偏好和能力字段。
+旧主机忽略能力声明并返回原格式；旧控制端不声明能力，新主机也返回原格式。共享任务仍要求
+`history.read`，游标不增加权限。服务端、relay、传输帧限制和 Mobile 原生指纹均不改变；
+超大目录的完整修复需要执行主机及控制端均升级，单端回退保留原有大小限制。

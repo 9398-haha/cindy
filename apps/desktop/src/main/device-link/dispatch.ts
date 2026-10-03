@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
@@ -5,6 +6,7 @@ import {
   TASK_MIGRATION_CHANNEL,
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
+  encodeProviderCatalogPage,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -630,11 +632,11 @@ function projectInvokeResultForTunnel(
           .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
       )
     : undefined;
-  return {
+  return encodeProviderCatalogPage(args, {
     providers,
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
-  };
+  }, json => createHash('sha256').update(json).digest('hex'));
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
