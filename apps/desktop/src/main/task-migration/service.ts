@@ -22,6 +22,9 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
+import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
@@ -230,6 +233,7 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
 interface SourceSession {
   id: string;
   workingDir: string;
+  workspaceKind: string;
   remoteHostId: string | null;
   status: string;
   source: string;
@@ -243,7 +247,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -306,6 +310,80 @@ interface WorkspaceBundle extends PortableWorkspace {
    * transcript ref they stand for, `file` the staged name in the outgoing directory.
    */
   transcripts?: Array<{ path: string; file: string; bytes: number }>;
+  /**
+   * Where a copy lands when no target project is chosen: the dialogue workspace, or a new project
+   * at the source folder's path under the home directory. Older sources omit it.
+   */
+  destination?: { kind: 'dialogue' } | { kind: 'project'; path: string[] };
+}
+function copyDestination(lead: SourceSession): NonNullable<WorkspaceBundle['destination']> {
+  if (lead.workspaceKind === 'dialogue') return { kind: 'dialogue' };
+  const relative = path.relative(app.getPath('home'), lead.workingDir);
+  const segments = relative ? relative.split(path.sep) : [];
+  return {
+    kind: 'project',
+    path:
+      segments.length && segments[0] !== '..' && !path.isAbsolute(relative)
+        ? segments
+        : [path.basename(lead.workingDir)],
+  };
+}
+const folderName = (name: unknown): name is string =>
+  typeof name === 'string' &&
+  name.length > 0 &&
+  name.length <= 255 &&
+  name !== '.' &&
+  name !== '..' &&
+  !/[\\/\0]/.test(name) &&
+  (process.platform !== 'win32' || !/[<>:"|?*\x00-\x1f]|[. ]$/.test(name));
+/**
+ * Parent folder and name for a copy without a chosen project. A new project mirrors the source
+ * path under home; names this computer cannot create fall back to the source folder name alone.
+ */
+async function defaultDestination(
+  scope: Scope,
+  id: string,
+  destination: WorkspaceBundle['destination'],
+): Promise<{ parent: string; name: string; project?: true }> {
+  if (destination?.kind === 'dialogue') {
+    const { directory, isCustomized } = readDialogueWorkspaceSettings();
+    const parent = path.join(directory, dialogueWorkspaceDayKey(Date.now()));
+    // A custom root is never recreated: an unmounted volume may leave a writable mount point.
+    await fs
+      .mkdir(parent, { recursive: !isCustomized })
+      .catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST' || !(await fs.stat(parent)).isDirectory()) throw error;
+      });
+    return { parent, name: id };
+  }
+  if (destination?.kind === 'project' && Array.isArray(destination.path)) {
+    const segments = destination.path;
+    const valid =
+      segments.length <= 32 && segments.every(folderName)
+        ? segments
+        : segments.slice(-1).filter(folderName);
+    if (valid.length) {
+      const parent = path.join(app.getPath('home'), ...valid.slice(0, -1));
+      await fs.mkdir(parent, { recursive: true });
+      return { parent, name: valid[valid.length - 1], project: true };
+    }
+  }
+  // Older sources: an app-managed folder, as before.
+  const parent = path.join(scope.root, 'projects');
+  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  return { parent, name: `cindy-${id.slice(0, 8)}-${randomUUID()}` };
+}
+/** Never reuses an existing entry: `name`, then `name 2`, `name 3`… */
+async function unusedPath(parent: string, name: string): Promise<string> {
+  for (let n = 1; n <= 100; n++) {
+    const candidate = path.join(parent, n === 1 ? name : `${name} ${n}`);
+    const taken = await fs.lstat(candidate).then(
+      () => true,
+      () => false,
+    );
+    if (!taken) return candidate;
+  }
+  throw new Error('MIGRATION_TARGET_UNKNOWN');
 }
 const workspaces = (workspace: WorkspaceBundle) => [
   workspace,
@@ -451,6 +529,7 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
         throw new Error('MIGRATION_SOURCE_CHANGED');
       const workspace: WorkspaceBundle = {
         ...snapshots[0],
+        destination: copyDestination(members[0]),
         ...(result.externalTranscripts?.length
           ? {
               transcripts: result.externalTranscripts.map(({ path: ref, file, bytes }) => ({
@@ -607,6 +686,7 @@ async function preflight(
 async function checkTargetResources(
   scope: Scope,
   targetProject: string | null,
+  destination: string,
   resources: MigrationResources,
 ) {
   if (targetProject && !(await projects(scope)).includes(targetProject))
@@ -616,7 +696,7 @@ async function checkTargetResources(
   await assertDiskCapacity([
     { path: scope.root, bytes: resources.transferBytes * 2 + resources.contextBytes * 2 },
     {
-      path: targetProject ?? scope.root,
+      path: destination,
       bytes: resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
     },
     {
@@ -893,34 +973,11 @@ async function receive(
       const knownProjects = await projects(scope);
       if (request.targetProject && !knownProjects.includes(request.targetProject))
         throw new Error('MIGRATION_TARGET_UNKNOWN');
-      const parent = request.targetProject ?? path.join(scope.root, 'projects');
-      if (request.targetProject) {
-        if (!(await fs.stat(parent)).isDirectory()) throw new Error('MIGRATION_TARGET_UNKNOWN');
-      } else await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+      if (request.targetProject && !(await fs.stat(request.targetProject)).isDirectory())
+        throw new Error('MIGRATION_TARGET_UNKNOWN');
       scope.assertCurrent();
-      // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
-      const workingDir = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
-      const retainedWorkingDirs = record
-        ? [
-            ...new Set([
-              ...(record.retainedWorkingDirs ?? []),
-              record.workingDir,
-              ...(record.workers ?? []).map((worker) => worker.workingDir),
-            ]),
-          ]
-        : [];
-      record = {
-        kind: 'incoming',
-        id: request.id,
-        sessionId: request.id,
-        sourceDeviceId: peer,
-        sourceSessionId: request.sourceSessionId,
-        stage: 'receiving',
-        workingDir,
-        ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
-      };
-      scope.save(record);
-      await fs.mkdir(workingDir);
+      const previous = record;
+      let newProject = false;
       try {
         await fs.mkdir(directory, { recursive: true, mode: 0o700 });
         assertMemoryCapacity(request.files.manifest.size);
@@ -989,7 +1046,14 @@ async function receive(
           )
         )
           throw new Error('MIGRATION_INVALID_MANIFEST');
-        await checkTargetResources(scope, request.targetProject, {
+        const target = request.targetProject
+          ? {
+              parent: request.targetProject,
+              name: `cindy-${request.id.slice(0, 8)}-${randomUUID()}`,
+            }
+          : await defaultDestination(scope, request.id, workspace.destination);
+        scope.assertCurrent();
+        await checkTargetResources(scope, request.targetProject, target.parent, {
           ...(transcriptFiles.length
             ? { transcriptBytes: transcriptFiles.reduce((sum, file) => sum + file.size, 0) }
             : {}),
@@ -1009,17 +1073,54 @@ async function receive(
             0,
           ),
         });
+        // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
+        // A retry reuses this copy's own still-empty folder rather than leaving `name 2` behind.
+        const reusable =
+          previous?.workingDir !== undefined &&
+          path.dirname(previous.workingDir) === target.parent &&
+          (await fs.readdir(previous.workingDir).then(
+            (entries) => entries.length === 0,
+            () => false,
+          ));
+        const workingDir = reusable
+          ? previous.workingDir
+          : await unusedPath(target.parent, target.name);
+        const retainedWorkingDirs = previous
+          ? [
+              ...new Set([
+                ...(previous.retainedWorkingDirs ?? []),
+                previous.workingDir,
+                ...(previous.workers ?? []).map((worker) => worker.workingDir),
+              ]),
+            ].filter((dir) => dir !== workingDir)
+          : [];
+        record = {
+          kind: 'incoming',
+          id: request.id,
+          sessionId: request.id,
+          sourceDeviceId: peer,
+          sourceSessionId: request.sourceSessionId,
+          stage: 'receiving',
+          workingDir,
+          ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
+        };
+        scope.save(record);
+        if (!reusable) await fs.mkdir(workingDir);
+        newProject = target.project === true;
         const targetDirs = [workingDir];
+        // Worker folders stay app-managed unless the user chose a project for the copy.
+        const workerParent = request.targetProject ?? path.join(scope.root, 'projects');
+        if (snapshots.length > 1) await fs.mkdir(workerParent, { recursive: true, mode: 0o700 });
         for (let index = 1; index < snapshots.length; index++) {
-          const target = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
+          const dir = path.join(workerParent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
           // Persist intent before allocation: even a process exit cannot orphan a directory.
           record = {
             ...record,
-            retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), target],
+            retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), dir],
           };
           scope.save(record);
-          await fs.mkdir(target);
-          targetDirs.push(target);
+          await fs.mkdir(dir);
+          targetDirs.push(dir);
         }
         record = {
           ...record,
@@ -1128,6 +1229,8 @@ async function receive(
       scope.assertCurrent();
       record = { ...record, stage: 'active' } as IncomingMigration;
       scope.save(record);
+      // A new project joins the recent projects, like a task started in a chosen folder.
+      if (newProject) await upsertRecentWorkdir(record.workingDir, Date.now(), undefined, scope.db);
       for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
         emitSessionCreated(id);
       return view(scope, record);
@@ -1182,9 +1285,12 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     return { ...view(scope, null), estimate };
   }
   if (request.action === 'preflight') {
-    await checkTargetResources(scope, request.targetProject, request.resources).catch(
-      logTargetFailure('preflight', null),
-    );
+    await checkTargetResources(
+      scope,
+      request.targetProject,
+      request.targetProject ?? scope.root,
+      request.resources,
+    ).catch(logTargetFailure('preflight', null));
     return view(scope, null);
   }
   if (request.action === 'caps') {

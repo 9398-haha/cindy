@@ -62,6 +62,8 @@ const state = vi.hoisted(() => ({
   /** Target without the `externalTranscripts` capability. */
   oldTarget: false,
   importedTranscripts: [] as Array<{ path: string; content: string }>,
+  recentProjects: [] as string[],
+  archiveDownloadFails: false,
 }));
 vi.mock('../../logger', async (original) => {
   const actual = await original<typeof import('../../logger')>();
@@ -77,6 +79,15 @@ vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, ipcMain: { handle: vi.fn() } }));
+vi.mock('../../dialogue-workspace-settings', () => ({
+  readDialogueWorkspaceSettings: () => ({
+    directory: path.join(state.root, 'dialogues'),
+    isCustomized: false,
+  }),
+}));
+vi.mock('../../localDb/ipc/recentWorkdirs', () => ({
+  upsertRecentWorkdir: (dir: string) => state.recentProjects.push(dir),
+}));
 vi.mock('../resources', async (original) => {
   const actual = await original<typeof import('../resources')>();
   return {
@@ -164,8 +175,13 @@ vi.mock('../../device-link/mediaTransfer', () => ({
 }));
 vi.mock('../../device-link/remoteAttachment', () => ({
   parseRemoteAttachmentRef: (ref: string) => parseAttachmentOssRef(ref),
-  materializeRemoteAttachment: (ref: { ossKey: string }, destination: string) =>
-    fs.copyFile(state.files.get(ref.ossKey)!, destination),
+  materializeRemoteAttachment: async (ref: { ossKey: string }, destination: string) => {
+    if (state.archiveDownloadFails && destination.endsWith('.tar.gz.enc')) {
+      state.archiveDownloadFails = false;
+      throw new Error('download interrupted');
+    }
+    await fs.copyFile(state.files.get(ref.ossKey)!, destination);
+  },
 }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent() {} }));
 vi.mock('../../cindy-media/refCompensationJournal', () => ({
@@ -354,6 +370,8 @@ describe('resumable cross-computer copy', () => {
     state.exportOversize = null;
     state.oldTarget = false;
     state.importedTranscripts = [];
+    state.recentProjects = [];
+    state.archiveDownloadFails = false;
     state.migrationWarn.mockClear();
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
@@ -857,6 +875,49 @@ describe('resumable cross-computer copy', () => {
     expect(state.close).not.toHaveBeenCalled();
     expect(db.queryOne.mock.calls.some(([sql]) => sql.includes('schedules'))).toBe(false);
     expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+  });
+  it('copies a project task into a new project at the same home-relative path without overwriting', async () => {
+    await start();
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    const receipt = state.context.run({ device: 'B' }, () =>
+      migrationScope().readIncoming(result.targetSessionId!)!,
+    );
+    // Both test computers share one home, where the source folder already exists.
+    expect(receipt.workingDir).toBe(path.join(state.root, 'shared 2'));
+    expect(state.recentProjects).toEqual([receipt.workingDir]);
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+  });
+  it('reuses its own empty folder on retry instead of leaving a numbered copy behind', async () => {
+    state.archiveDownloadFails = true;
+    await start();
+    expect((await settled()).stage).toBe('transferring');
+    expect(await fs.readdir(path.join(state.root, 'shared 2'))).toEqual([]);
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    const receipt = state.context.run({ device: 'B' }, () =>
+      migrationScope().readIncoming(result.targetSessionId!)!,
+    );
+    expect(receipt.workingDir).toBe(path.join(state.root, 'shared 2'));
+    expect(receipt.retainedWorkingDirs ?? []).toEqual([]);
+    await expect(fs.stat(path.join(state.root, 'shared 3'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+  it('copies a chat task into the dialogue workspace without adding a project', async () => {
+    state.rows.get('A')!.get('fork')!.workspaceKind = 'dialogue';
+    await start();
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    const receipt = state.context.run({ device: 'B' }, () =>
+      migrationScope().readIncoming(result.targetSessionId!)!,
+    );
+    const day = path.dirname(receipt.workingDir);
+    expect(path.dirname(day)).toBe(path.join(state.root, 'dialogues'));
+    expect(path.basename(day)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(path.basename(receipt.workingDir)).toBe(result.targetSessionId);
+    expect(state.recentProjects).toEqual([]);
   });
   it('copies the complete team and keeps independent target directories', async () => {
     const separate = await team();

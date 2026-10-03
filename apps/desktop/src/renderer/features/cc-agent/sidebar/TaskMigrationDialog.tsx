@@ -8,7 +8,7 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
-import type { TaskMoveDestination } from './TaskMoveSubmenu';
+import { copyDefaultLabelKey, type TaskMoveDestination } from './TaskMoveSubmenu';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Select } from '@/components/ui/select';
@@ -375,7 +375,7 @@ export function TaskMigrationDialog({
             <div className="mt-4 space-y-2 text-sm text-[var(--confirm-title)]">
               <p className="break-all">
                 {t('taskMigration.project')}:{' '}
-                {destination.project ?? t('taskMigration.defaultFolder')}
+                {destination.project ?? t(copyDefaultLabelKey(session))}
               </p>
               <p className="text-[var(--confirm-desc)]">{t('taskMigration.newFolder')}</p>
             </div>
@@ -412,7 +412,7 @@ export function TaskMigrationDialog({
                     value={project || '__default__'}
                     disabled={busy || !target || readyTarget !== target}
                     options={[
-                      { value: '__default__', label: t('taskMigration.defaultFolder') },
+                      { value: '__default__', label: t(copyDefaultLabelKey(session)) },
                       ...projects.map((p) => ({ value: p, label: p })),
                     ]}
                     onValueChange={(value) => setProject(value === '__default__' ? '' : value)}
