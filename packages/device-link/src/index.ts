@@ -41,7 +41,6 @@ export * from "./sharedTaskInvitation.js";
 export * from "./sharedTaskProbe.js";
 export * from "./modelFavorites.js";
 export * from "./sessionListTransport.js";
-export * from './providerCatalogTransport.js';
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
