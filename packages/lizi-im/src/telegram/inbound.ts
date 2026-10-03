@@ -293,6 +293,12 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
 
   return {
     channelName: 'telegram',
+    interactionSource: {
+      chatName: m.chat.title ?? (m.chat.type === 'private' ? displayNameOf(m.from) : chatId),
+      senderName: displayNameOf(m.from),
+      ...(laneThreadIdOf(m) ? { threadName: laneThreadIdOf(m) } : {}),
+      ...(chatId.startsWith('-100') ? { messageUrl: `https://t.me/c/${chatId.slice(4)}/${m.message_id}` } : {}),
+    },
     senderId: ctx.laneUserId ?? String(m.from?.id ?? ''),
     chatId,
     contextId: ctx.contextId,

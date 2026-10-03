@@ -128,6 +128,32 @@ function directMessage(overrides: Record<string, unknown> = {}) {
 }
 
 describe("DingTalkIM", () => {
+  it("clears the text waiter after a Desktop decision so the next message is ordinary input", async () => {
+    const { host } = makeHost();
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    client.emit(directMessage());
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    let decide!: (value: string) => void;
+    const shared = {
+      result: new Promise<string>((resolve) => { decide = resolve; }),
+      decide: vi.fn(() => true),
+    };
+    const reply = im.requestTextReply("owner-1", "confirm", (text) => text, 1000, shared);
+    decide("accepted on Desktop");
+    await expect(reply).resolves.toBe("accepted on Desktop");
+    client.emit(directMessage({ msgId: "next", text: { content: "拒绝" } }), "next-callback");
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received[1].text).toBe("拒绝");
+    expect(shared.decide).not.toHaveBeenCalled();
+  });
+
   it("uploads remote Markdown images and sends native image messages", async () => {
     const { host } = makeHost();
     const fetchRemoteImage = vi.fn(async () => ({

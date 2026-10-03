@@ -237,6 +237,9 @@ describe('feishu group thread routing', () => {
     // 新话题是空的, 群历史前缀仍按触发时所在的群主流拉取。
     expect(events[0].groupContextLane).toEqual({ chatId: 'oc_chat1', threadId: '' });
     expect(events[0].text).toBe('开个新话题');
+    // Events have stable IDs but no display names; the host uses chatId fallback.
+    expect(events[0].interactionSource).toBeUndefined();
+    expect(events[0].chatId).toBe('oc_chat1');
   });
 
   /**
@@ -759,6 +762,8 @@ describe('feishu group thread routing', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]?.senderId).toBe('g/oc_chat1/omt_bot_recovered_committed');
+    expect(events[0]?.interactionSource).toBeUndefined();
+    expect(events[0]?.chatId).toBe('oc_chat1');
 
     await mocks.eventHandlers['im.message.receive_v1'](topic);
 

@@ -48,6 +48,7 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
+| 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
 | 模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。 |
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
 | 群历史**检索实现** | `im/shared/groupHistorySearch.ts` | 真正执行查询的就是这一份：FTS（`hook_group_messages_fts` 的 MATCH）+ 中文 LIKE 兜底，**lane 条件写在 SQL 里**（MATCH 与 LIKE 用完全相同的 lane 条件，调用方没法先全局搜再事后过滤），加上结果映射（snippet / score / source）与上限（默认 8 条、最多 20 条、query 256 字）。两侧共用 |
@@ -144,6 +145,13 @@ Hook 与本地 IM 共享消息级来源及上下文快照结构。本地所有�
 快照作为可选元数据保存，旧消息沿用已有 prompt 投影，旧客户端可忽略新增字段。
 
 ## 三、有意不同（已裁决，不要"统一"）
+
+2026-10-03：普通工具权限确认已统一经过客户端 `interactionRouter` 与
+`SharedPermission`，同时呈现在 IM 和 Cindy，第一次有效决定生效。个人富卡确认后保留
+来源与原消息摘要；官方客户端通过既有 `interaction.cancel` 携带来源与决定，服务端
+排版仍由原渲染器负责。群名、话题名/ID、发起人和原消息链接按可用元数据展示。
+适用于其它 IM 的共享合同与新增渠道接入见 [IM 权限确认](im-permission-confirmation.md)。
+两侧的 owner 权限、超时来源、提问与计划审阅差异不因此统一。
 
 | 差异 | 官方 | 个人 | 裁决与理由 |
 |---|---|---|---|
