@@ -6,6 +6,7 @@
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
+    "modelHiddenReselect": "{{model}} is turned off. Choose an enabled model before sending.",
     "cancel": "Cancel",
     "dismissRecommendation": "Dismiss recommendation",
     "delete": "Delete",
