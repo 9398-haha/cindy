@@ -25,6 +25,7 @@ import { getDbClient, tryGetDbClient } from '../localDb/client/current';
 import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
+import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
@@ -318,14 +319,16 @@ interface WorkspaceBundle extends PortableWorkspace {
 }
 function copyDestination(lead: SourceSession): NonNullable<WorkspaceBundle['destination']> {
   if (lead.workspaceKind === 'dialogue') return { kind: 'dialogue' };
-  const relative = path.relative(app.getPath('home'), lead.workingDir);
+  // A task in a worktree belongs to the project the sidebar groups it under.
+  const project = collapseWorktreeDirForGrouping(lead.workingDir);
+  const relative = path.relative(app.getPath('home'), project);
   const segments = relative ? relative.split(path.sep) : [];
   return {
     kind: 'project',
     path:
       segments.length && segments[0] !== '..' && !path.isAbsolute(relative)
         ? segments
-        : [path.basename(lead.workingDir)],
+        : [path.basename(project)],
   };
 }
 const folderName = (name: unknown): name is string =>
@@ -338,7 +341,8 @@ const folderName = (name: unknown): name is string =>
   (process.platform !== 'win32' || !/[<>:"|?*\x00-\x1f]|[. ]$/.test(name));
 /**
  * Parent folder and name for a copy without a chosen project. A new project mirrors the source
- * path under home; names this computer cannot create fall back to the source folder name alone.
+ * path under home; a path this computer cannot create falls back to the source folder name alone,
+ * then to an app-managed folder.
  */
 async function defaultDestination(
   scope: Scope,
@@ -358,17 +362,20 @@ async function defaultDestination(
   }
   if (destination?.kind === 'project' && Array.isArray(destination.path)) {
     const segments = destination.path;
-    const valid =
-      segments.length <= 32 && segments.every(folderName)
-        ? segments
-        : segments.slice(-1).filter(folderName);
-    if (valid.length) {
-      const parent = path.join(app.getPath('home'), ...valid.slice(0, -1));
-      await fs.mkdir(parent, { recursive: true });
-      return { parent, name: valid[valid.length - 1], project: true };
+    const candidates = [segments.length <= 32 ? segments : [], segments.slice(-1)].filter(
+      (candidate) => candidate.length && candidate.every(folderName),
+    );
+    for (const candidate of candidates) {
+      const parent = path.join(app.getPath('home'), ...candidate.slice(0, -1));
+      // E.g. a parent that is a file here, or a name this file system rejects.
+      const created = await fs.mkdir(parent, { recursive: true }).then(
+        () => true,
+        () => false,
+      );
+      if (created) return { parent, name: candidate[candidate.length - 1], project: true };
     }
   }
-  // Older sources: an app-managed folder, as before.
+  // Older sources, or no creatable project path: an app-managed folder, as before.
   const parent = path.join(scope.root, 'projects');
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   return { parent, name: `cindy-${id.slice(0, 8)}-${randomUUID()}` };
@@ -964,11 +971,7 @@ async function receive(
           );
           if (row?.workingDir !== worker.workingDir) throw new Error('MIGRATION_ID_CONFLICT');
         }
-        record = { ...record, stage: 'active' } as IncomingMigration;
-        scope.save(record);
-        for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
-          emitSessionCreated(id);
-        return view(scope, record);
+        return activate(scope, record);
       }
       const knownProjects = await projects(scope);
       if (request.targetProject && !knownProjects.includes(request.targetProject))
@@ -977,7 +980,6 @@ async function receive(
         throw new Error('MIGRATION_TARGET_UNKNOWN');
       scope.assertCurrent();
       const previous = record;
-      let newProject = false;
       try {
         await fs.mkdir(directory, { recursive: true, mode: 0o700 });
         assertMemoryCapacity(request.files.manifest.size);
@@ -1102,11 +1104,11 @@ async function receive(
           sourceSessionId: request.sourceSessionId,
           stage: 'receiving',
           workingDir,
+          ...(target.project ? { newProject: true } : {}),
           ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
         };
         scope.save(record);
         if (!reusable) await fs.mkdir(workingDir);
-        newProject = target.project === true;
         const targetDirs = [workingDir];
         // Worker folders stay app-managed unless the user chose a project for the copy.
         const workerParent = request.targetProject ?? path.join(scope.root, 'projects');
@@ -1227,15 +1229,21 @@ async function receive(
         await fs.rm(directory, { recursive: true, force: true });
       }
       scope.assertCurrent();
-      record = { ...record, stage: 'active' } as IncomingMigration;
-      scope.save(record);
-      // A new project joins the recent projects, like a task started in a chosen folder.
-      if (newProject) await upsertRecentWorkdir(record.workingDir, Date.now(), undefined, scope.db);
-      for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
-        emitSessionCreated(id);
-      return view(scope, record);
+      return activate(scope, record);
     },
   );
+}
+/** Publishes an imported copy, including one adopted after its acknowledgement was lost. */
+async function activate(scope: Scope, record: IncomingMigration) {
+  // A new project joins the recent projects, like a task started in a chosen folder.
+  if (record.newProject)
+    await upsertRecentWorkdir(record.workingDir, Date.now(), undefined, scope.db);
+  scope.assertCurrent();
+  const active: IncomingMigration = { ...record, stage: 'active' };
+  scope.save(active);
+  for (const id of [active.sessionId, ...(active.workers ?? []).map((w) => w.sessionId)])
+    emitSessionCreated(id);
+  return view(scope, active);
 }
 
 export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationView> {

@@ -856,9 +856,12 @@ describe('resumable cross-computer copy', () => {
     state.importsFail = true;
     await start();
     expect((await settled()).stage).toBe('transferring');
+    expect(state.recentProjects).toEqual([]);
     await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
+    // The adopted copy still joins the recent projects.
+    expect(state.recentProjects).toEqual([path.join(state.root, 'shared 2')]);
   });
 
   it('copies tasks with automation bindings without modifying the source', async () => {
@@ -904,6 +907,44 @@ describe('resumable cross-computer copy', () => {
     await expect(fs.stat(path.join(state.root, 'shared 3'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+  async function moveSource(...segments: string[]) {
+    const cwd = path.join(state.root, ...segments);
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(cwd, 'draft'), 'original');
+    state.rows.get('A')!.get('fork')!.workingDir = cwd;
+  }
+  const copiedDir = async () => {
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    return state.context.run(
+      { device: 'B' },
+      () => migrationScope().readIncoming(result.targetSessionId!)!.workingDir,
+    );
+  };
+  it('names a worktree task copy after the project it belongs to', async () => {
+    await moveSource('app', '.cindy-worktrees', 'feature');
+    await start();
+    expect(await copiedDir()).toBe(path.join(state.root, 'app 2'));
+  });
+  it('falls back to the project folder name when the mirrored parent cannot be created', async () => {
+    await moveSource('Code', 'app');
+    const blocked = path.join(state.root, 'Code');
+    const mkdir = fs.mkdir.bind(fs);
+    const spy = vi
+      .spyOn(fs, 'mkdir')
+      .mockImplementation(((dir, options) =>
+        dir === blocked
+          ? Promise.reject(Object.assign(new Error('not a directory'), { code: 'ENOTDIR' }))
+          : mkdir(dir, options)) as typeof fs.mkdir);
+    try {
+      await start();
+      const dir = await copiedDir();
+      expect(dir).toBe(path.join(state.root, 'app'));
+      expect(state.recentProjects).toEqual([dir]);
+    } finally {
+      spy.mockRestore();
+    }
   });
   it('copies a chat task into the dialogue workspace without adding a project', async () => {
     state.rows.get('A')!.get('fork')!.workspaceKind = 'dialogue';
