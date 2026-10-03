@@ -409,7 +409,8 @@ async function createWorkingDir(places: Placement[]): Promise<{ dir: string; pla
   for (const place of places) {
     try {
       await place.prepare();
-      for (let n = 1; n <= 100; n++) {
+      // Each EEXIST is another existing entry, so numbering ends within the folder's entries.
+      for (let n = 1; ; n++) {
         const dir = path.join(place.parent, n === 1 ? place.name : `${place.name} ${n}`);
         try {
           await fs.mkdir(dir);
@@ -418,7 +419,6 @@ async function createWorkingDir(places: Placement[]): Promise<{ dir: string; pla
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
         }
       }
-      throw new Error('MIGRATION_TARGET_UNKNOWN');
     } catch (error) {
       failure = error;
     }
