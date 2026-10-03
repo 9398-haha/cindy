@@ -405,8 +405,9 @@ export function BotGroupComposer({
             role="listbox"
             aria-label={t('bots.groupChat.mention.label')}
             {...menuPanelAttrs}
-            // Shared menu panel (DESIGN §4): Board border, menu surface and registered shadow.
-            className="absolute bottom-full left-0 z-20 mb-2 flex w-64 max-w-full flex-col gap-0.5 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5 shadow-[shadow:var(--shadow-menu)]"
+            // Shared menu panel (DESIGN §4): Board border and menu surface; no shadow, per the
+            // zero-shadow Bot surfaces (botDesignContract.test.ts).
+            className="absolute bottom-full left-0 z-20 mb-2 flex w-64 max-w-full flex-col gap-0.5 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
           >
             <MenuHighlightLayer />
             {options.map((option, index) => (
