@@ -927,25 +927,32 @@ describe('resumable cross-computer copy', () => {
     await start();
     expect(await copiedDir()).toBe(path.join(state.root, 'app 2'));
   });
-  it('falls back to the project folder name when the mirrored parent cannot be created', async () => {
-    await moveSource('Code', 'app');
-    const blocked = path.join(state.root, 'Code');
-    const mkdir = fs.mkdir.bind(fs);
-    const spy = vi
-      .spyOn(fs, 'mkdir')
-      .mockImplementation(((dir, options) =>
-        dir === blocked
-          ? Promise.reject(Object.assign(new Error('not a directory'), { code: 'ENOTDIR' }))
-          : mkdir(dir, options)) as typeof fs.mkdir);
-    try {
-      await start();
-      const dir = await copiedDir();
-      expect(dir).toBe(path.join(state.root, 'app'));
-      expect(state.recentProjects).toEqual([dir]);
-    } finally {
-      spy.mockRestore();
-    }
-  });
+  it.each([
+    ['parent', ['Code']],
+    // E.g. a Windows reserved name such as CON: the parent exists, the folder itself is refused.
+    ['folder', ['Code', 'app 2']],
+  ])(
+    'falls back to the project folder name when the mirrored %s cannot be created',
+    async (_kind, blockedPath) => {
+      await moveSource('Code', 'app');
+      const blocked = path.join(state.root, ...blockedPath);
+      const mkdir = fs.mkdir.bind(fs);
+      const spy = vi
+        .spyOn(fs, 'mkdir')
+        .mockImplementation(((dir, options) =>
+          dir === blocked
+            ? Promise.reject(Object.assign(new Error('refused'), { code: 'EINVAL' }))
+            : mkdir(dir, options)) as typeof fs.mkdir);
+      try {
+        await start();
+        const dir = await copiedDir();
+        expect(dir).toBe(path.join(state.root, 'app'));
+        expect(state.recentProjects).toEqual([dir]);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
   it('copies a chat task into the dialogue workspace without adding a project', async () => {
     state.rows.get('A')!.get('fork')!.workspaceKind = 'dialogue';
     await start();

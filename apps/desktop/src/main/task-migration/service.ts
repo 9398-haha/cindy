@@ -339,58 +339,91 @@ const folderName = (name: unknown): name is string =>
   name !== '..' &&
   !/[\\/\0]/.test(name) &&
   (process.platform !== 'win32' || !/[<>:"|?*\x00-\x1f]|[. ]$/.test(name));
+interface Placement {
+  parent: string;
+  name: string;
+  project?: true;
+  /** Makes `parent` usable; rejects when this place cannot hold the copy. */
+  prepare(): Promise<unknown>;
+}
 /**
- * Parent folder and name for a copy without a chosen project. A new project mirrors the source
- * path under home; a path this computer cannot create falls back to the source folder name alone,
- * then to an app-managed folder.
+ * Places a copy may land, in order. A chosen project or the dialogue workspace is the only place.
+ * A new project mirrors the source path under home, then tries the source folder name alone,
+ * then an app-managed folder, which is also where copies from older sources land.
  */
-async function defaultDestination(
+function placements(
   scope: Scope,
-  id: string,
+  request: { id: string; targetProject: string | null },
   destination: WorkspaceBundle['destination'],
-): Promise<{ parent: string; name: string; project?: true }> {
+): Placement[] {
+  const managedName = `cindy-${request.id.slice(0, 8)}-${randomUUID()}`;
+  if (request.targetProject)
+    return [{ parent: request.targetProject, name: managedName, prepare: async () => {} }];
   if (destination?.kind === 'dialogue') {
     const { directory, isCustomized } = readDialogueWorkspaceSettings();
     const parent = path.join(directory, dialogueWorkspaceDayKey(Date.now()));
-    // A custom root is never recreated: an unmounted volume may leave a writable mount point.
-    await fs
-      .mkdir(parent, { recursive: !isCustomized })
-      .catch(async (error: NodeJS.ErrnoException) => {
-        if (error.code !== 'EEXIST' || !(await fs.stat(parent)).isDirectory()) throw error;
-      });
-    return { parent, name: id };
+    return [
+      {
+        parent,
+        name: request.id,
+        // A custom root is never recreated: an unmounted volume may leave a writable mount point.
+        prepare: () =>
+          fs
+            .mkdir(parent, { recursive: !isCustomized })
+            .catch(async (error: NodeJS.ErrnoException) => {
+              if (error.code !== 'EEXIST' || !(await fs.stat(parent)).isDirectory()) throw error;
+            }),
+      },
+    ];
   }
-  if (destination?.kind === 'project' && Array.isArray(destination.path)) {
-    const segments = destination.path;
-    const candidates = [segments.length <= 32 ? segments : [], segments.slice(-1)].filter(
-      (candidate) => candidate.length && candidate.every(folderName),
-    );
-    for (const candidate of candidates) {
-      const parent = path.join(app.getPath('home'), ...candidate.slice(0, -1));
-      // E.g. a parent that is a file here, or a name this file system rejects.
-      const created = await fs.mkdir(parent, { recursive: true }).then(
-        () => true,
-        () => false,
-      );
-      if (created) return { parent, name: candidate[candidate.length - 1], project: true };
+  const managed = path.join(scope.root, 'projects');
+  const fallback: Placement = {
+    parent: managed,
+    name: managedName,
+    prepare: () => fs.mkdir(managed, { recursive: true, mode: 0o700 }),
+  };
+  if (destination?.kind !== 'project' || !Array.isArray(destination.path)) return [fallback];
+  const segments = destination.path;
+  return [
+    ...[segments.length <= 32 ? segments : [], segments.slice(-1)]
+      .filter((candidate) => candidate.length && candidate.every(folderName))
+      .map((candidate): Placement => {
+        const parent = path.join(app.getPath('home'), ...candidate.slice(0, -1));
+        return {
+          parent,
+          name: candidate[candidate.length - 1],
+          project: true,
+          prepare: () => fs.mkdir(parent, { recursive: true }),
+        };
+      }),
+    fallback,
+  ];
+}
+/**
+ * Creates the copy folder at the first place that accepts it. `mkdir` is the reservation: an
+ * existing entry is never reused (`name`, then `name 2`…), so concurrent copies cannot share one.
+ * Any other failure, such as a parent that is a file or a name the file system rejects, moves on.
+ */
+async function createWorkingDir(places: Placement[]): Promise<{ dir: string; place: Placement }> {
+  let failure: unknown = new Error('MIGRATION_TARGET_UNKNOWN');
+  for (const place of places) {
+    try {
+      await place.prepare();
+      for (let n = 1; n <= 100; n++) {
+        const dir = path.join(place.parent, n === 1 ? place.name : `${place.name} ${n}`);
+        try {
+          await fs.mkdir(dir);
+          return { dir, place };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+      throw new Error('MIGRATION_TARGET_UNKNOWN');
+    } catch (error) {
+      failure = error;
     }
   }
-  // Older sources, or no creatable project path: an app-managed folder, as before.
-  const parent = path.join(scope.root, 'projects');
-  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
-  return { parent, name: `cindy-${id.slice(0, 8)}-${randomUUID()}` };
-}
-/** Never reuses an existing entry: `name`, then `name 2`, `name 3`… */
-async function unusedPath(parent: string, name: string): Promise<string> {
-  for (let n = 1; n <= 100; n++) {
-    const candidate = path.join(parent, n === 1 ? name : `${name} ${n}`);
-    const taken = await fs.lstat(candidate).then(
-      () => true,
-      () => false,
-    );
-    if (!taken) return candidate;
-  }
-  throw new Error('MIGRATION_TARGET_UNKNOWN');
+  throw failure;
 }
 const workspaces = (workspace: WorkspaceBundle) => [
   workspace,
@@ -693,7 +726,8 @@ async function preflight(
 async function checkTargetResources(
   scope: Scope,
   targetProject: string | null,
-  destination: string,
+  /** Where the files land; null before the target knows (the receive step checks it again). */
+  destination: string | null,
   resources: MigrationResources,
 ) {
   if (targetProject && !(await projects(scope)).includes(targetProject))
@@ -702,10 +736,15 @@ async function checkTargetResources(
   await fs.mkdir(scope.root, { recursive: true });
   await assertDiskCapacity([
     { path: scope.root, bytes: resources.transferBytes * 2 + resources.contextBytes * 2 },
-    {
-      path: destination,
-      bytes: resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
-    },
+    ...(destination
+      ? [
+          {
+            path: destination,
+            bytes:
+              resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
+          },
+        ]
+      : []),
     {
       path: app.getPath('temp'),
       bytes: Math.min(resources.transferBytes, FILE_PEER_MAX_BYTES) * 2,
@@ -1048,14 +1087,47 @@ async function receive(
           )
         )
           throw new Error('MIGRATION_INVALID_MANIFEST');
-        const target = request.targetProject
-          ? {
-              parent: request.targetProject,
-              name: `cindy-${request.id.slice(0, 8)}-${randomUUID()}`,
-            }
-          : await defaultDestination(scope, request.id, workspace.destination);
+        // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
+        // The record names a folder only after this copy created it, so a retry may reuse its own
+        // still-empty folder rather than leaving `name 2` behind. (A process exit between creating
+        // and recording leaves at most one empty folder.)
+        const places = placements(scope, request, workspace.destination);
+        const own = previous
+          ? places.find((place) => place.parent === path.dirname(previous.workingDir))
+          : undefined;
+        const reused =
+          own &&
+          previous &&
+          (await fs.readdir(previous.workingDir).then(
+            (entries) => entries.length === 0,
+            () => false,
+          ))
+            ? { dir: previous.workingDir, place: own }
+            : null;
+        const { dir: workingDir, place } = reused ?? (await createWorkingDir(places));
         scope.assertCurrent();
-        await checkTargetResources(scope, request.targetProject, target.parent, {
+        const retainedWorkingDirs = previous
+          ? [
+              ...new Set([
+                ...(previous.retainedWorkingDirs ?? []),
+                previous.workingDir,
+                ...(previous.workers ?? []).map((worker) => worker.workingDir),
+              ]),
+            ].filter((dir) => dir !== workingDir)
+          : [];
+        record = {
+          kind: 'incoming',
+          id: request.id,
+          sessionId: request.id,
+          sourceDeviceId: peer,
+          sourceSessionId: request.sourceSessionId,
+          stage: 'receiving',
+          workingDir,
+          ...(place.project ? { newProject: true } : {}),
+          ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
+        };
+        scope.save(record);
+        await checkTargetResources(scope, request.targetProject, path.dirname(workingDir), {
           ...(transcriptFiles.length
             ? { transcriptBytes: transcriptFiles.reduce((sum, file) => sum + file.size, 0) }
             : {}),
@@ -1075,40 +1147,6 @@ async function receive(
             0,
           ),
         });
-        // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
-        // A retry reuses this copy's own still-empty folder rather than leaving `name 2` behind.
-        const reusable =
-          previous?.workingDir !== undefined &&
-          path.dirname(previous.workingDir) === target.parent &&
-          (await fs.readdir(previous.workingDir).then(
-            (entries) => entries.length === 0,
-            () => false,
-          ));
-        const workingDir = reusable
-          ? previous.workingDir
-          : await unusedPath(target.parent, target.name);
-        const retainedWorkingDirs = previous
-          ? [
-              ...new Set([
-                ...(previous.retainedWorkingDirs ?? []),
-                previous.workingDir,
-                ...(previous.workers ?? []).map((worker) => worker.workingDir),
-              ]),
-            ].filter((dir) => dir !== workingDir)
-          : [];
-        record = {
-          kind: 'incoming',
-          id: request.id,
-          sessionId: request.id,
-          sourceDeviceId: peer,
-          sourceSessionId: request.sourceSessionId,
-          stage: 'receiving',
-          workingDir,
-          ...(target.project ? { newProject: true } : {}),
-          ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
-        };
-        scope.save(record);
-        if (!reusable) await fs.mkdir(workingDir);
         const targetDirs = [workingDir];
         // Worker folders stay app-managed unless the user chose a project for the copy.
         const workerParent = request.targetProject ?? path.join(scope.root, 'projects');
@@ -1296,7 +1334,8 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     await checkTargetResources(
       scope,
       request.targetProject,
-      request.targetProject ?? scope.root,
+      // Without a chosen project the landing folder depends on the task the manifest describes.
+      request.targetProject,
       request.resources,
     ).catch(logTargetFailure('preflight', null));
     return view(scope, null);
