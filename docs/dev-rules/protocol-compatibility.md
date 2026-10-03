@@ -144,6 +144,22 @@ hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增
 百 kbps 级、分辨率被锁在低档。这些是 libwebrtc 对发送端生效的本地提示，不改变协商出的编解码；
 不识别它们的控制端不受影响，旧控制端（无 `settings`）的 offer 原样使用。
 
+## 远程桌面控制请求走媒体数据通道
+
+被控端以可选能力 `channelRequests` 声明：媒体连接的 `input-v1` 数据通道还接受
+`{ type: "request", id, request }`，并以 `{ type: "reply", id, ok, result | error }` 回复。
+可走通道的请求限于 `REMOTE_DESKTOP_CHANNEL_OPS`（`control`、`presentation`、`hostMute`、
+`privacyScreen`、`windowAction`（不含 `list`）、`displayModes`、`clipboardSync`、
+`clipboardVersion`），单条不超过 32 KB，id 为 1–64 位 `[A-Za-z0-9_-]`。
+
+旧被控端收到不认识的通道数据会结束会话，因此控制端只在能力为真、视频已在播放、请求
+lease 与当前 lease 一致时才走通道，否则照旧走 relay。被控端主进程对通道请求做与 relay
+相同的发送方、lease 与撤权校验；不在白名单内或并发超限时回错误码而不结束会话，控制端
+改走 relay；回复超过上限时只有 `displayModes`、`clipboardVersion` 改走 relay。请求送达后
+其余失败不自动改走 relay 重试，超时按结果未知处理。
+旧控制端不发通道请求，新被控端行为不变。此扩展不修改 relay、服务端或 device-link 帧格式；
+iOS 原生接收器新增 `sendRequest`，属于冷更新。
+
 ## 手机首页会话活动快照
 
 ### 可见历史优先读取
