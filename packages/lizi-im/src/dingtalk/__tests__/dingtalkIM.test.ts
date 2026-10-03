@@ -322,6 +322,48 @@ describe("DingTalkIM", () => {
     });
   });
 
+  it("keeps a bare group @-mention as a summon instead of an empty message", async () => {
+    const { host } = makeHost();
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    client.emit(directMessage());
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    // 钉钉回调的 text.content 已剥掉 @机器人, 纯 @ 只剩空白。
+    client.emit(
+      directMessage({
+        conversationId: "group/a",
+        conversationType: "2",
+        msgId: "group-bare-mention",
+        senderStaffId: "guest-1",
+        senderNick: "Guest",
+        isInAtList: true,
+        text: { content: " " },
+      }),
+      "callback-2",
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received[1]).toMatchObject({
+      senderId: "g/group%2Fa",
+      text: "@",
+      speaker: { id: "guest-1", isOwner: false },
+    });
+
+    // 私聊的空消息不受影响(仍是空文本, 由业务层照旧过滤)。
+    client.emit(
+      directMessage({ msgId: "dm-empty", text: { content: " " } }),
+      "callback-3",
+    );
+    await vi.waitFor(() => expect(received).toHaveLength(3));
+    expect(received[2].text).toBe("");
+  });
+
   it("downloads inbound images through the host SSRF guard", async () => {
     const { host, secrets } = makeHost();
     secrets.set("dingtalk-bot-owner-user-id", "owner-1");
