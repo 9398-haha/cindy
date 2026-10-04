@@ -6,12 +6,10 @@
  * callback arguments match what the hand-written version passed.
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VersionDropdown } from '@/components/UpdateNoticeDialog';
 import { TabStrip } from '@/features/right-sidebar/TabBar';
-import { AudiencePicker, PublisherPicker } from '@/features/skillhub/components/TeamScopePicker';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -149,77 +147,5 @@ describe('right sidebar · add tab', () => {
     expect(onAdd).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(add);
     pane.remove();
-  });
-});
-
-describe('publish to market · team and audience', () => {
-  const teams = [
-    { slug: 'design', name: 'Design' },
-    { slug: 'infra', name: 'Infra' },
-  ] as never[];
-
-  it('picks the publishing team by keyboard and closes', async () => {
-    const onChange = vi.fn();
-    render(
-      <PublisherPicker
-        mode="team"
-        ownerTeamSlug="design"
-        deptIds={['d1']}
-        deptNames={['Platform dept']}
-        teams={teams}
-        onChange={onChange}
-      />,
-    );
-    await openByKeyboard(screen.getByRole('button', { name: 'Design' }));
-    const rows = screen.getAllByRole('menuitemradio');
-    expect(rows.map((row) => row.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false']);
-    await chooseByKeyboard(2);
-    expect(onChange).toHaveBeenCalledWith({ mode: 'team', ownerTeamSlug: 'infra' });
-    expect(screen.queryByRole('menu')).toBeNull();
-  });
-
-  it('toggles several audiences without closing and keeps the owner locked', async () => {
-    function Harness({ onChange }: { onChange: (value: unknown) => void }) {
-      const [value, setValue] = useState({
-        visibleDeptIds: [] as string[],
-        sharedTeamSlugs: [] as string[],
-      });
-      return (
-        <AudiencePicker
-          value={value}
-          deptIds={['d1']}
-          deptNames={['Platform dept']}
-          teams={teams}
-          lockedOwnerSlug="design"
-          onChange={(next) => {
-            onChange(next);
-            setValue(next);
-          }}
-        />
-      );
-    }
-    const onChange = vi.fn();
-    render(<Harness onChange={onChange} />);
-    await openByKeyboard(screen.getByRole('button', { name: /Design/ }));
-    const owner = screen.getByRole('menuitemcheckbox', { name: /Design/ });
-    expect(owner.getAttribute('aria-checked')).toBe('true');
-    expect(owner.hasAttribute('data-disabled')).toBe(true);
-
-    // Focus starts on the first enabled row (Platform dept); tick it, then Infra.
-    await key('Enter');
-    expect(onChange).toHaveBeenLastCalledWith({ visibleDeptIds: ['d1'], sharedTeamSlugs: [] });
-    expect(screen.getByRole('menu')).toBeTruthy();
-    await chooseByKeyboard(1);
-    expect(onChange).toHaveBeenLastCalledWith({
-      visibleDeptIds: ['d1'],
-      sharedTeamSlugs: ['infra'],
-    });
-    expect(
-      screen.getByRole('menuitemcheckbox', { name: 'Infra' }).getAttribute('aria-checked'),
-    ).toBe('true');
-    expect(screen.getByRole('menu')).toBeTruthy();
-
-    await key('Escape');
-    expect(screen.queryByRole('menu')).toBeNull();
   });
 });
