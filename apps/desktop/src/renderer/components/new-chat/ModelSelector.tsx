@@ -2315,12 +2315,13 @@ function ModelSelectorContentView({
                 onClick={() => available && handleEditEffort(e)}
                 role="option"
                 aria-selected={selected}
-                // Shared menu row (DESIGN §4 Composer dropdown rows): glide highlight, the
-                // chosen effort is the check and 500.
+                // Shared menu row (DESIGN §4 Composer dropdown rows): glide highlight. Model
+                // menu exception: the chosen effort keeps its whole-row fill and the check.
                 {...menuRowAttrs({ checked: selected, disabled: !available })}
                 className={cn(
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between px-3 py-2 text-left',
+                  selected && 'bg-sidebar-item-hover',
                   !available && 'cursor-not-allowed opacity-45',
                 )}
               >
@@ -2595,6 +2596,8 @@ function ModelSelectorContentView({
             className={cn(
               COMPOSER_MENU_ROW,
               'group/row flex w-full cursor-pointer items-center justify-between px-3 py-2',
+              // Model menu exception (DESIGN §4): the chosen row keeps its whole-row fill.
+              isSelected && 'bg-sidebar-item-hover',
               constrainedListMaxHeight !== undefined && 'min-h-9',
               (disabled || paymentRequired) && 'opacity-50',
             )}
@@ -3132,6 +3135,7 @@ function ModelSelectorContentView({
               COMPOSER_MENU_ROW,
               'flex w-full items-center justify-between px-3 py-2',
               'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
+              followSession.active && 'bg-sidebar-item-hover',
             )}
           >
             {withMenuLabels(<span>{followSession.label}</span>)}

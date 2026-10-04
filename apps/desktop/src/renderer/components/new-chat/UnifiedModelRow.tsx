@@ -1,6 +1,6 @@
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName } from '@/lib/modelDisplayNames';
-import { Check, Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
+import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 
@@ -111,7 +111,7 @@ export function UnifiedModelRow({
     'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
-    // Shared menu row: the panel's glide highlight, chosen row = check, config open = open.
+    // Shared menu row: the panel's glide highlight; the chosen row keeps its static fill (below).
     ...menuRowAttrs(),
     'data-state': active ? 'open' : selected ? 'checked' : undefined,
     'data-unified-anchor': anchorKey(anchor),
@@ -223,8 +223,10 @@ export function UnifiedModelRow({
       className={cn(
         // DESIGN §4 Composer dropdown rows: shared row text and motion; the list's glide
         // highlight marks the pointer / keyboard-focused row and the row whose config is open.
+        // The model panel is the one exception on the chosen row: whole-row fill, no check.
         COMPOSER_MENU_ROW,
         '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col px-3 py-2',
+        selected && 'bg-sidebar-item-hover',
         (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -292,14 +294,9 @@ export function UnifiedModelRow({
           {paymentRequiredUnlock}
           {paymentRequiredBadge}
         </span>
-        {/* 选中标记:悬停 / 键盘改为整面板一块滑动高亮后,选中行不再有静态底色,改用勾
-            (与权限 / + / 引擎菜单一致;2026-08-13「已有底色不加勾」随底色撤销而失效)。
-            未选中也占位,列宽不随选中变化,宽度 sizer 量到的就是终宽。 */}
-        <Check
-          size={15}
-          aria-hidden="true"
-          className={cn('shrink-0 text-[var(--model-item-check)]', !selected && 'invisible')}
-        />
+        {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
+            还平白吃掉一列宽度);选中态语义由 aria-selected 承载。模型面板是输入框菜单
+            「选中 = 勾 + 500」约定的唯一例外,2026-10-04 用户再次确认保留整行底色、不加勾。 */}
       </div>
       {sourceLabel && entry.providerId !== 'xd' ? (
         <ModelSourceDetails

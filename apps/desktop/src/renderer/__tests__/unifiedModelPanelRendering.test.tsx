@@ -608,6 +608,20 @@ describe('统一面板 · 会话内形态', () => {
     expect(list.querySelector('[data-group-provider="xd"]')).not.toBeNull();
   });
 
+  it('选中的模型行保持整行底色、不加勾，名字保持 500(输入框菜单约定里模型面板的例外)', () => {
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    const list = screen.getByRole('listbox');
+    const selected = list.querySelector<HTMLElement>('[data-model-selected="true"]');
+    expect(selected).not.toBeNull();
+    expect(selected!.className).toContain('bg-sidebar-item-hover');
+    expect(selected!.querySelector('svg.lucide-check')).toBeNull();
+    expect(selected!.querySelector('span[title].font-medium')).not.toBeNull();
+    const other = Array.from(list.querySelectorAll<HTMLElement>('[data-unified-anchor]')).find(
+      (row) => row !== selected,
+    );
+    expect(other?.className).not.toContain('bg-sidebar-item-hover');
+  });
+
   it('收藏置顶但不选中，推荐当前值优先并移除下方空供应商组', () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
     renderPanel({ actualRoute: true, sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5', selectedFavoriteUid: uid });
