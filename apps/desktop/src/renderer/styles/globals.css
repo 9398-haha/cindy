@@ -2167,8 +2167,9 @@ mark.doc-search-mark [class] {
 
 /* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
    高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
-   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。 */
-[data-menu-row] svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。
+   data-menu-row="skip" 是面板里的非选项块(开关、价格卡,menu-row.tsx menuSkipAttrs),不变细。 */
+[data-menu-row]:not([data-menu-row='skip']) svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
   stroke-width: 1.5;
   transition: stroke-width var(--motion-instant) var(--motion-ease-out);
 }

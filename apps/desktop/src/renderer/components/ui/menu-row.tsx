@@ -62,9 +62,10 @@ export function menuRowAttrs({
 
 /**
  * Non-option blocks inside a glide panel (a toggle, a header card): the pointer over them
- * takes the highlight away instead of lighting the nearest option row.
+ * takes the highlight away instead of lighting the nearest option row. `data-menu-row="skip"`
+ * keeps their icons out of the row icon-stroke rule (globals.css).
  */
-export const menuSkipAttrs = { [MENU_ROW_ATTR]: '', [MENU_OWN_HIGHLIGHT_ATTR]: '' } as const;
+export const menuSkipAttrs = { [MENU_ROW_ATTR]: 'skip', [MENU_OWN_HIGHLIGHT_ATTR]: '' } as const;
 
 // Row text is wrapped so its width is reserved at 500: an invisible, zero-height
 // ::after copy (generated content, so textContent, typeahead and the accessible name

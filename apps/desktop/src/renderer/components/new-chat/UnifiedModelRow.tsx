@@ -226,7 +226,8 @@ export function UnifiedModelRow({
         // The model panel is the one exception on the chosen row: whole-row fill, no check.
         COMPOSER_MENU_ROW,
         '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col px-3 py-2',
-        selected && 'bg-sidebar-item-hover',
+        // The glide layer covers the hovered row, so the static fill steps aside there.
+        selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
         (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
       )}
     >

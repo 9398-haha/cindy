@@ -88,7 +88,7 @@ describe('update notice · version jump', () => {
 });
 
 describe('right sidebar · add tab', () => {
-  function renderStrip(onAdd = vi.fn()) {
+  function renderStrip(onAdd = vi.fn(), container?: HTMLElement) {
     render(
       <TabStrip
         tabs={[{ id: 't1', kind: 'file-browser', title: '', state: {} } as never]}
@@ -98,6 +98,7 @@ describe('right sidebar · add tab', () => {
         onReorder={vi.fn()}
         onAdd={onAdd}
       />,
+      container ? { container: container.appendChild(document.createElement('div')) } : undefined,
     );
     const add = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
     // jsdom has no layout; the menu closes itself when its anchor has no size.
@@ -122,12 +123,32 @@ describe('right sidebar · add tab', () => {
     expect(document.activeElement).toBe(add);
   });
 
-  it('closes on Escape without adding a tab', async () => {
+  it('closes on Escape without adding a tab and returns focus to "+"', async () => {
     const { add, onAdd } = renderStrip();
     await openByKeyboard(add);
     await key('Escape');
     expect(screen.queryByRole('menu')).toBeNull();
     expect(onAdd).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(add);
+  });
+
+  it('closes when the host pane collapses and leaves focus off the hidden "+"', async () => {
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0));
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id));
+    const pane = document.createElement('div');
+    pane.setAttribute('data-panel-drag-root', 'right-tabs');
+    document.body.append(pane);
+    const { add, onAdd } = renderStrip(vi.fn(), pane);
+    await openByKeyboard(add);
+    expect(screen.getByRole('menu')).toBeTruthy();
+    await act(async () => {
+      pane.setAttribute('data-pane-collapsed', '');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(add);
+    pane.remove();
   });
 });
 

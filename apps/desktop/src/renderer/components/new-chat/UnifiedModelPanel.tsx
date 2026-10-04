@@ -1035,6 +1035,8 @@ export function UnifiedModelPanel({
                 className={cn(
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between px-3 py-2',
+                  // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
+                  followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
                   interactionDisabled && 'cursor-not-allowed opacity-50',
                 )}
               >
@@ -1167,7 +1169,7 @@ export function UnifiedModelPanel({
             {widthSizerSections.map((section) => (
               <div key={section.key}>
                 {/* 组头也要量:供应商名可能比它组里最长的行还宽。 */}
-                <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-11">
+                <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33]">
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {

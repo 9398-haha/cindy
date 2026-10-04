@@ -2300,7 +2300,7 @@ function ModelSelectorContentView({
       {editHasEfforts && (
         <>
           <div className="px-2 pb-0.5 pt-1">
-            <span className="text-11 font-medium text-[var(--text-tertiary)]">
+            <span className="text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
               {t('newChat.modelSelector.effortLabel')}
             </span>
           </div>
@@ -2321,7 +2321,7 @@ function ModelSelectorContentView({
                 className={cn(
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between px-3 py-2 text-left',
-                  selected && 'bg-sidebar-item-hover',
+                  selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
                   !available && 'cursor-not-allowed opacity-45',
                 )}
               >
@@ -2597,7 +2597,7 @@ function ModelSelectorContentView({
               COMPOSER_MENU_ROW,
               'group/row flex w-full cursor-pointer items-center justify-between px-3 py-2',
               // Model menu exception (DESIGN §4): the chosen row keeps its whole-row fill.
-              isSelected && 'bg-sidebar-item-hover',
+              isSelected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
               constrainedListMaxHeight !== undefined && 'min-h-9',
               (disabled || paymentRequired) && 'opacity-50',
             )}
