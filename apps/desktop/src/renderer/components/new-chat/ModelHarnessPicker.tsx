@@ -65,8 +65,10 @@ export function ModelHarnessPicker({
           <div
             key={engine}
             className={cn(
-              // 8px 行高亮档;悬停与共享菜单同一灰,选中只用勾 + 500,不铺底(DESIGN §4 / §5)。
+              // 8px 行高亮档;悬停与共享菜单同一灰。模型菜单是「选中 = 勾 + 500」的例外:
+              // 选中行保留整行底色和勾(DESIGN §4 Composer dropdown rows)。
               'relative flex min-h-7 items-center gap-1 rounded-lg pr-1',
+              active && 'bg-sidebar-item-hover',
               interactive && 'hover:bg-sidebar-item-hover',
             )}
           >
@@ -98,9 +100,7 @@ export function ModelHarnessPicker({
               >
                 <option.Mark size={12} />
               </span>
-              <span className={cn('min-w-0 text-12 leading-4', active ? 'font-medium' : 'font-normal')}>
-                {labelOf(engine)}
-              </span>
+              <span className="min-w-0 text-12 leading-4">{labelOf(engine)}</span>
             </button>
             {mode === 'compatibility' && (
               <span className="relative z-10 text-10 leading-4">
