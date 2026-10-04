@@ -22,6 +22,7 @@ import {
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import {
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
@@ -496,7 +497,9 @@ export function normalizeRemoteMessages(
     }
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
-    const body = hookSource?.userText ?? rawBody;
+    // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
+    const body = hookSource?.userText
+      ?? (message.role === 'assistant' ? stripGoalVerdictBlock(rawBody) : rawBody);
     const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
