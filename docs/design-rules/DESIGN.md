@@ -934,6 +934,7 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 - **zh-TW**: likewise has no Title Case; use Traditional Chinese characters and punctuation, while keeping English terms as-is in mixed text. No full stop at the end of toasts / labels.
 - **ja / ko**: likewise no Title Case; follow each language's particle / politeness conventions, and verify terminology when unsure (per `docs/dev-rules/engineering-conventions.md` §5: no improvised ja/ko).
 - **Numbers / units**: Arabic numerals + half-width in all five languages; number-to-unit spacing per language convention.
+- **Task elapsed time**: promote long durations to hours/minutes at one hour and days/hours/minutes at one day. Always retain the minute field, including zero (for example, `1h 0m` or `2d 0h 5m`). Apply this to work summaries, thinking, live counters, task cards and usage details on Desktop and Mobile. Keep existing sub-hour precision; live counters may retain a zero-padded remainder. Stored durations and rate calculations keep their original precision.
 
 ### 11.3 Self-Check (when touching copy)
 

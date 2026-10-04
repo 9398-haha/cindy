@@ -6716,6 +6716,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
     "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "durationHoursMinutes": "{{hours}} 小時 {{minutes}} 分",
+    "durationDaysHoursMinutes": "{{days}} 天 {{hours}} 小時 {{minutes}} 分",
     "performanceLine": "速度 {{rate}} tokens/秒 · 耗時 {{duration}}",
     "performanceRateLine": "速度 {{rate}} tokens/秒",
     "timeLine": "耗時 {{duration}}",
@@ -8226,7 +8228,8 @@
       "duration": {
         "seconds": "{{n}} 秒",
         "minutes": "{{n}} 分鐘",
-        "hoursMinutes": "{{h}} 小時 {{m}} 分"
+        "hoursMinutes": "{{h}} 小時 {{m}} 分",
+        "daysHoursMinutes": "{{d}} 天 {{h}} 小時 {{m}} 分"
       },
       "viewResult": "查看結果",
       "noWrittenResult": "沒有文字結果。"
@@ -9634,6 +9637,10 @@
       "feedbackLabel": "反饋：",
       "noFeedback": "(未提供反饋)",
       "cancelled": "已取消"
+    },
+    "thinking": {
+      "completed": "思考 {{duration}}",
+      "aborted": "思考 {{duration}}（已終止）"
     },
     "workGroup": {
       "working": "正在工作…",

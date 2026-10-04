@@ -6716,6 +6716,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
     "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "durationHoursMinutes": "{{hours}}時間{{minutes}}分",
+    "durationDaysHoursMinutes": "{{days}}日{{hours}}時間{{minutes}}分",
     "performanceLine": "速度 {{rate}} トークン/秒 · 時間 {{duration}}",
     "performanceRateLine": "速度 {{rate}} トークン/秒",
     "timeLine": "時間 {{duration}}",
@@ -8226,7 +8228,8 @@
       "duration": {
         "seconds": "{{n}} 秒",
         "minutes": "{{n}} 分",
-        "hoursMinutes": "{{h}} 時間 {{m}} 分"
+        "hoursMinutes": "{{h}} 時間 {{m}} 分",
+        "daysHoursMinutes": "{{d}}日{{h}}時間{{m}}分"
       },
       "viewResult": "結果を見る",
       "noWrittenResult": "テキストの結果はありません。"
@@ -9635,6 +9638,10 @@
       "feedbackLabel": "フィードバック:",
       "noFeedback": "(フィードバックなし)",
       "cancelled": "キャンセル済み"
+    },
+    "thinking": {
+      "completed": "思考 {{duration}}",
+      "aborted": "思考 {{duration}}（中止）"
     },
     "workGroup": {
       "working": "作業中…",

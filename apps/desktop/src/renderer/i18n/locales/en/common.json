@@ -6718,6 +6718,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}s",
     "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "durationHoursMinutes": "{{hours}}h {{minutes}}m",
+    "durationDaysHoursMinutes": "{{days}}d {{hours}}h {{minutes}}m",
     "performanceLine": "TPS {{rate}} · Time {{duration}}",
     "performanceRateLine": "TPS {{rate}}",
     "timeLine": "Time {{duration}}",
@@ -8239,7 +8241,8 @@
       "duration": {
         "seconds": "{{n}}s",
         "minutes": "{{n}} min",
-        "hoursMinutes": "{{h}} h {{m}} min"
+        "hoursMinutes": "{{h}} h {{m}} min",
+        "daysHoursMinutes": "{{d}}d {{h}}h {{m}}m"
       },
       "viewResult": "View Result",
       "noWrittenResult": "No written result."
@@ -9648,6 +9651,10 @@
       "feedbackLabel": "Feedback:",
       "noFeedback": "(no feedback provided)",
       "cancelled": "Cancelled"
+    },
+    "thinking": {
+      "completed": "Thought for {{duration}}",
+      "aborted": "Thought for {{duration}} (aborted)"
     },
     "workGroup": {
       "working": "Working…",

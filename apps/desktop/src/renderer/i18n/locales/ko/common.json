@@ -6716,6 +6716,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}초",
     "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "durationHoursMinutes": "{{hours}}시간 {{minutes}}분",
+    "durationDaysHoursMinutes": "{{days}}일 {{hours}}시간 {{minutes}}분",
     "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
     "performanceRateLine": "속도 {{rate}} 토큰/초",
     "timeLine": "시간 {{duration}}",
@@ -8226,7 +8228,8 @@
       "duration": {
         "seconds": "{{n}}초",
         "minutes": "{{n}}분",
-        "hoursMinutes": "{{h}}시간 {{m}}분"
+        "hoursMinutes": "{{h}}시간 {{m}}분",
+        "daysHoursMinutes": "{{d}}일 {{h}}시간 {{m}}분"
       },
       "viewResult": "결과 보기",
       "noWrittenResult": "텍스트 결과가 없습니다."
@@ -9635,6 +9638,10 @@
       "feedbackLabel": "피드백:",
       "noFeedback": "(피드백 없음)",
       "cancelled": "취소됨"
+    },
+    "thinking": {
+      "completed": "생각 {{duration}}",
+      "aborted": "생각 {{duration}} (중단됨)"
     },
     "workGroup": {
       "working": "작업 중…",
