@@ -727,6 +727,8 @@ interface CodexUsageSnapshot {
 
 interface CCAgentStreamEvent {
   sessionId: string;
+  /** Host-owned per-turn source, independent of the session's original channel. */
+  turnOrigin?: import('@cindy/maker-core').SendOrigin;
   type:
     | 'text'
     | 'tool_use'
