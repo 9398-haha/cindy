@@ -777,7 +777,9 @@ describe('ResourceUsageWindowController', () => {
   it('still cancels a cold open on native hide when pauseWhenHidden is false', () => {
     const windows: FakeWindow[] = [];
     const mainSender = { id: 100 } as WebContents;
+    const onActivityChanged = vi.fn();
     const controller = new ResourceUsageWindowController({
+      onActivityChanged,
       createWindow: () => {
         const win = fakeWindow(windows.length + 1);
         windows.push(win);
@@ -788,11 +790,14 @@ describe('ResourceUsageWindowController', () => {
       openTimeoutMs: 1000,
     });
     controller.open(mainSender);
+    onActivityChanged.mockClear();
     windows[0]?.emitWindow('hide');
     controller.markPresentationReady(windows[0]!.webContents);
     vi.advanceTimersByTime(1000);
     expect(windows[0]?.show).not.toHaveBeenCalled();
     expect(windows[0]?.focus).not.toHaveBeenCalled();
+    // The live session survives; only the reopening is cancelled.
+    expect(onActivityChanged).not.toHaveBeenCalledWith(expect.anything(), false);
   });
 
   it('shows a loading fallback only after the renderer shell has mounted', () => {

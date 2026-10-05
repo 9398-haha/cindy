@@ -142,7 +142,9 @@ export class ResourceUsageWindowController {
       this.showAndFocus(win);
       return true;
     }
-    if (!this.visible && !this.pendingOpen) this.setSamplingActive(win, false);
+    // 隐藏不暂停的窗口（远程桌面）在隐藏后才就绪时保留会话，只是不再显示。
+    if (!this.visible && !this.pendingOpen && this.deps.pauseWhenHidden !== false)
+      this.setSamplingActive(win, false);
     return true;
   }
 

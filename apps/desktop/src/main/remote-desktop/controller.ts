@@ -110,8 +110,8 @@ export interface DesktopControllerDeps {
   stopPrivacyScreen?(): void;
   hostMute?(enabled: boolean): Promise<void>;
   stopHostMute?(): Promise<void>;
-  /** Pauses or resumes sending the lease's current video stream. */
-  viewerHidden?(lease: string, hidden: boolean): void;
+  /** Pauses or resumes sending the lease's current video stream; rejects if not applied. */
+  viewerHidden?(lease: string, hidden: boolean): Promise<void>;
   changed(): void;
   now?: () => number;
 }
@@ -664,7 +664,7 @@ export class RemoteDesktopController {
       }
       case 'viewerHidden': {
         if (!this.deps.viewerHidden) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
-        this.deps.viewerHidden(active.lease, request.hidden);
+        await this.deps.viewerHidden(active.lease, request.hidden);
         return { hidden: request.hidden };
       }
       case 'clipboardVersion': {

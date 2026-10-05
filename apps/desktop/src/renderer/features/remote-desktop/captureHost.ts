@@ -59,19 +59,25 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
   let viewerHidden = false;
   // setParameters rejects stale parameters, so every sender update is queued.
   let senderUpdates = Promise.resolve();
-  const updateVideoSenders = (update: (parameters: RTCRtpSendParameters) => boolean) => {
+  /** Resolves false when an encoder update was rejected. */
+  const updateVideoSenders = (
+    update: (parameters: RTCRtpSendParameters) => boolean,
+  ): Promise<boolean> => {
     const rtc = peer,
       current = generation;
-    senderUpdates = senderUpdates
-      .then(async () => {
-        for (const sender of rtc?.getSenders() ?? []) {
-          if (current !== generation || sender.track?.kind !== 'video') continue;
-          const parameters = sender.getParameters();
-          if (parameters.encodings?.length && update(parameters))
-            await sender.setParameters(parameters);
-        }
-      })
-      .catch(() => {});
+    const run = senderUpdates.then(async () => {
+      for (const sender of rtc?.getSenders() ?? []) {
+        if (current !== generation || sender.track?.kind !== 'video') continue;
+        const parameters = sender.getParameters();
+        if (parameters.encodings?.length && update(parameters))
+          await sender.setParameters(parameters);
+      }
+    });
+    senderUpdates = run.catch(() => {});
+    return run.then(
+      () => true,
+      () => false,
+    );
   };
   const applyViewerHidden = () =>
     updateVideoSenders((parameters) => {
@@ -194,9 +200,12 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
       return;
     }
     if (command.op === 'viewer-hidden') {
-      if (command.lease !== activeLease || typeof command.hidden !== 'boolean') return;
+      if (command.lease !== activeLease || typeof command.hidden !== 'boolean') {
+        void api.reply(command.id, false).catch(() => {});
+        return;
+      }
       viewerHidden = command.hidden;
-      applyViewerHidden();
+      void applyViewerHidden().then((applied) => api.reply(command.id, applied).catch(() => {}));
       return;
     }
     stop();
@@ -225,7 +234,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
         const onMotion = (next: boolean) => {
           moving = next;
           if (!tuned || current !== generation) return;
-          updateVideoSenders((parameters) => {
+          void updateVideoSenders((parameters) => {
             if (parameters.degradationPreference === degradation()) return false;
             parameters.degradationPreference = degradation();
             return true;
@@ -591,7 +600,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           await sender.setParameters(parameters);
         }
         // A pause that arrived while this peer was still being set up applies now.
-        if (viewerHidden) applyViewerHidden();
+        if (viewerHidden) void applyViewerHidden();
         if (!command.attemptId)
           await new Promise<void>((resolve) => {
             finishGathering = resolve;

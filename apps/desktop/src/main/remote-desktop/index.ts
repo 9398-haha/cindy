@@ -215,7 +215,7 @@ let preparingOffer = false;
 let videoAttempt: string | undefined;
 let pending: {
   id: string;
-  op: 'offer' | 'ice' | 'frame' | 'display-swap';
+  op: 'offer' | 'ice' | 'frame' | 'display-swap' | 'viewer-hidden';
   resolve(result: DesktopHostReply): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
@@ -254,15 +254,12 @@ async function resumeVideo(display: RemoteDesktopDisplay): Promise<boolean> {
     return false;
   }
 }
-/** The viewer is hidden: the capture page stops sending the current stream until shown. */
-function setViewerHidden(lease: string, hidden: boolean): void {
-  if (lease !== videoLease || !host || host.isDestroyed()) return;
-  host.send(DESKTOP_LOCAL.COMMAND, {
-    id: randomUUID(),
-    op: 'viewer-hidden',
-    lease,
-    hidden,
-  } satisfies DesktopHostCommand);
+/** The viewer is hidden: the capture page stops sending the current stream until shown.
+ * Resolves only once the encoder applied it, so a failed resume reaches the viewer. */
+async function setViewerHidden(lease: string, hidden: boolean): Promise<void> {
+  if (lease !== videoLease) throw new Error('DESKTOP_VIDEO_STOPPED');
+  const applied = await requestHost({ id: randomUUID(), op: 'viewer-hidden', lease, hidden }, 2000);
+  if (applied !== true || lease !== videoLease) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
 }
 function stopVideo(): void {
   videoPaused = false;
@@ -449,7 +446,9 @@ async function offer(
 
 /** One bounded command to the existing capture owner; never reset the shared device link. */
 function requestHost(
-  command: DesktopHostCommand & { op: 'offer' | 'ice' | 'frame' | 'display-swap' },
+  command: DesktopHostCommand & {
+    op: 'offer' | 'ice' | 'frame' | 'display-swap' | 'viewer-hidden';
+  },
   timeoutMs: number,
 ): Promise<DesktopHostReply> {
   const currentHost = host;
@@ -1158,7 +1157,11 @@ export function registerRemoteDesktopIpc(
             /^[A-Za-z0-9+/]+={0,2}$/.test(sdp)))
       )
         request.resolve(sdp);
-      else if (request.op === 'display-swap' && typeof sdp === 'boolean') request.resolve(sdp);
+      else if (
+        (request.op === 'display-swap' || request.op === 'viewer-hidden') &&
+        typeof sdp === 'boolean'
+      )
+        request.resolve(sdp);
       else if (request.op === 'ice') {
         const result = parseDesktopIceReply(sdp);
         if (result.attemptId !== videoAttempt) throw new Error('DESKTOP_VIDEO_STOPPED');

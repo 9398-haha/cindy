@@ -67,7 +67,8 @@ export interface DesktopLocalState {
 }
 export type DesktopHostReply =
   | string
-  /** display-swap: true only when native capture kept a live stream. */
+  /** display-swap: true only when native capture kept a live stream;
+   * viewer-hidden: true once the video encoder applied the change. */
   | boolean
   | RemoteDesktopIceReply
   | {

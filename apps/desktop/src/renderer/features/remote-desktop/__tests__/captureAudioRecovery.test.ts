@@ -619,9 +619,11 @@ it('pauses and resumes the video encoder in place while the viewer is hidden', a
   h.hide(true, 'other-lease');
   await flush();
   expect(setParameters).not.toHaveBeenCalled();
+  expect(h.reply).toHaveBeenLastCalledWith('hide', false);
   h.hide(true);
   await flush();
   expect(current.encodings).toEqual([{ active: false }]);
+  expect(h.reply).toHaveBeenLastCalledWith('hide', true);
   // Motion updates keep the pause instead of overwriting it.
   vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5]?.(false);
   await flush();
@@ -650,4 +652,23 @@ it('applies a pause that arrives while the new peer is still being set up', asyn
   expect(peer.video.setParameters).toHaveBeenLastCalledWith(
     expect.objectContaining({ encodings: [expect.objectContaining({ active: false })] }),
   );
+});
+
+it('reports a rejected encoder resume so the viewer rebuilds the video', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto');
+  await flush();
+  const [peer] = h.peers;
+  peer.video.setParameters = vi.fn(async () => {
+    throw new Error('InvalidModificationError');
+  });
+  h.hide(false);
+  await flush();
+  expect(h.reply).toHaveBeenLastCalledWith('hide', false);
+  // A rejected update does not block later ones.
+  peer.video.setParameters = vi.fn(async (_parameters: unknown) => {});
+  h.hide(true);
+  await flush();
+  expect(h.reply).toHaveBeenLastCalledWith('hide', true);
+  expect(peer.close).not.toHaveBeenCalled();
 });
