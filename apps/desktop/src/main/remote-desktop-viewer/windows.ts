@@ -166,6 +166,9 @@ export class RemoteDesktopViewerWindows {
       isOpenSender: this.isOpenSender,
       // Independent top-level windows do not follow main-window minimize/hide.
       prewarmWork: false,
+      // A live session survives minimize, Space switches and fullscreen transitions;
+      // only closing the viewer disconnects.
+      pauseWhenHidden: false,
       activityChannel: REMOTE_VIEWER.ACTIVE,
       activityPayload: () => connection.snapshot(),
       localeChannel: REMOTE_VIEWER.LOCALE,

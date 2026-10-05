@@ -741,6 +741,39 @@ describe('ResourceUsageWindowController', () => {
     );
   });
 
+  it('keeps work active across native hide events when pauseWhenHidden is false', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const onActivityChanged = vi.fn();
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      pauseWhenHidden: false,
+      onActivityChanged,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    controller.open(mainSender);
+    onActivityChanged.mockClear();
+
+    // macOS reports Space switches and fullscreen transitions as hide/show.
+    for (const event of ['hide', 'show', 'minimize', 'restore'] as const) {
+      windows[0]?.emitWindow(event);
+    }
+    expect(onActivityChanged).not.toHaveBeenCalled();
+
+    controller.close(windows[0]!.webContents);
+    expect(onActivityChanged).toHaveBeenLastCalledWith(windows[0], false);
+    onActivityChanged.mockClear();
+    windows[0]?.emitWindow('show');
+    expect(onActivityChanged).not.toHaveBeenCalled();
+  });
+
   it('shows a loading fallback only after the renderer shell has mounted', () => {
     const { controller, windows, mainSender } = makeHarness(2500);
     controller.open(mainSender);
