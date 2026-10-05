@@ -211,6 +211,12 @@ export interface RuntimeState {
   toolResultBatchSeq: number;
   usageSegmentSeq: number;
   generation: ClaudeGenerationState;
+  /**
+   * 最近一条 status=rejected 的 `rate_limit_event` 给出的重置时刻(unix ms);
+   * 之后任一 allowed 事件清空。会话级而非 turn 级:CLI 已知被拒后会本地短路后续
+   * 请求,那些 turn 直接报限额错误、不再重发事件,仍要能带上同一个重置时刻。
+   */
+  rateLimitRejectedResetAtMs: number | null;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -236,6 +242,7 @@ export function newRuntimeState(): RuntimeState {
     toolResultBatchSeq: 0,
     usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
+    rateLimitRejectedResetAtMs: null,
   };
 }
 
@@ -928,6 +935,27 @@ export function translateSdkMessage(
 
     case 'result': {
       handleResult(msg, queue, ctx);
+      return;
+    }
+
+    case 'rate_limit_event': {
+      // 订阅额度快照另由 index.ts 旁路转给 host;这里只记被拒窗口的重置时刻,
+      // 供限额错误带给下游(目标模式据此到点自动续跑)。
+      const info = (rawMsg as {
+        rate_limit_info?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown };
+      }).rate_limit_info;
+      if (info?.status === 'rejected') {
+        const resetsAt = typeof info.resetsAt === 'number' && info.resetsAt > 0 ? info.resetsAt : null;
+        // resetsAt 是 epoch 秒;误给毫秒时不再放大。
+        ctx.rt.rateLimitRejectedResetAtMs =
+          resetsAt == null ? null : resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
+        ctx.log.info('SDK ▷ rate limit rejected', {
+          rateLimitType: info.rateLimitType,
+          resetAtMs: ctx.rt.rateLimitRejectedResetAtMs,
+        });
+      } else if (typeof info?.status === 'string') {
+        ctx.rt.rateLimitRejectedResetAtMs = null;
+      }
       return;
     }
 
@@ -2356,6 +2384,10 @@ function handleResult(
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
+    const rejectedResetAt = ctx.rt.rateLimitRejectedResetAtMs;
+    const usageReset = rejectedResetAt != null && rejectedResetAt > Date.now()
+      ? { usageResetAt: rejectedResetAt }
+      : {};
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
@@ -2391,6 +2423,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...(pendingApiError.retryAttempt !== undefined
               ? { retryAttempt: pendingApiError.retryAttempt }
               : {}),
@@ -2406,6 +2439,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...modelAccessError,
           }
         // reason 是稳定 key, renderer 按它走 i18n(规则 18); message 仅作非

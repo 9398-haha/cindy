@@ -392,6 +392,30 @@ describe('Claude Code translator is_error result guard', () => {
     expect(JSON.stringify(events)).not.toContain('secret-token');
   });
 
+  it('attaches the rejected rate-limit reset time to limit errors until an allowed event arrives', async () => {
+    const ctx = createCtx(new UsageTracker(), 'anthropic');
+    const resetsAtSec = Math.floor(Date.now() / 1000) + 3600;
+    const limitTurn = async (): Promise<AgentEvent | undefined> => {
+      const queue = createAsyncQueue<AgentEvent>();
+      translateSdkMessage({ type: 'assistant', error: 'rate_limit',
+        message: { content: [{ type: 'text', text: "You've hit your session limit · resets 1:20am" }] } }, queue, ctx);
+      translateSdkMessage({ type: 'result', is_error: true, result: "You've hit your session limit · resets 1:20am" }, queue, ctx);
+      return (await drain(queue)).find((event) => event.type === 'error');
+    };
+
+    translateSdkMessage({ type: 'rate_limit_event',
+      rate_limit_info: { status: 'rejected', resetsAt: resetsAtSec, rateLimitType: 'five_hour' } },
+    createAsyncQueue<AgentEvent>(), ctx);
+    expect((await limitTurn())?.data).toMatchObject({ sdkError: 'rate_limit', usageResetAt: resetsAtSec * 1000 });
+    // CLI 已知被拒后本地短路的下一轮不再发事件,仍带同一重置时刻。
+    expect((await limitTurn())?.data).toMatchObject({ usageResetAt: resetsAtSec * 1000 });
+
+    translateSdkMessage({ type: 'rate_limit_event',
+      rate_limit_info: { status: 'allowed', resetsAt: resetsAtSec, rateLimitType: 'five_hour' } },
+    createAsyncQueue<AgentEvent>(), ctx);
+    expect((await limitTurn())?.data).not.toHaveProperty('usageResetAt');
+  });
+
   it('falls back to reason=turn-failed when is_error carries no result text', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();

@@ -27,6 +27,7 @@ import {
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
+  readTurnUsageResetAt,
 } from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
 import {
@@ -1969,11 +1970,17 @@ export class GoalController {
     let lastReason = decision.lastReason;
     let shouldFire = decision.shouldFire;
     let usageResetAt: number | null = null;
+    const reportedResetAt =
+      outcome.errorKind === 'usage_limit' ? readTurnUsageResetAt(event.data) : null;
     // 过载改判:上游没容量与账号限流是两种恢复时机。这里用固定短窗口,不去查
     // getAccountLimit——账号并没有被限流,那个接口不会给出可用的 resetAt,查了只会
     // 让目标停在 usageLimited 等人手动 resume。
     if (status === 'usageLimited' && outcome.errorKind === 'overload') {
       usageResetAt = this.now() + OVERLOAD_RESUME_DELAY_MS;
+      shouldFire = false;
+    } else if (status === 'usageLimited' && reportedResetAt != null) {
+      // 错误自带重置时刻(Claude 订阅):比账号快照准,直接用。
+      usageResetAt = reportedResetAt;
       shouldFire = false;
     } else if (status === 'usageLimited' || shouldFire) {
       const limit = this.deps.getAccountLimit

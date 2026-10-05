@@ -4064,6 +4064,18 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1); // 无续轮
   });
 
+  it('reactive: prefers the reset time carried by the error over the account snapshot', async () => {
+    // Claude 订阅:账号快照(LiteLLM 预算)读不到 5h 窗口,只有错误带的重置时刻可用。
+    h.setAccountLimit(null);
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: "You've hit your session limit", usageResetAt: 7_201_000 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(7_201_000);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
   it('proactive: a would-be-continue turn flips to usageLimited when the account is limited', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
     await startGoal(h);
