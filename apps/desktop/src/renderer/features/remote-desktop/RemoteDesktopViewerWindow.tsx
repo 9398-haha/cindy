@@ -121,7 +121,13 @@ export function RemoteDesktopViewerWindow() {
         .inputFocus(generation.current, (event.target as HTMLElement)?.id === 'keyboard-input')
         .catch(() => {});
     };
+    // Programmatic blur (Ctrl+Alt+Esc, control loss) has no focusin; release shortcuts here too.
+    const focusOut = (event: FocusEvent) => {
+      if ((event.target as HTMLElement)?.id !== 'keyboard-input') return;
+      void api.inputFocus(generation.current, false).catch(() => {});
+    };
     document.addEventListener('focusin', focus);
+    document.addEventListener('focusout', focusOut);
     window.addEventListener('blur', blur);
     void api
       .state()
@@ -140,6 +146,7 @@ export function RemoteDesktopViewerWindow() {
       closeRequested();
       hidden?.();
       document.removeEventListener('focusin', focus);
+      document.removeEventListener('focusout', focusOut);
       window.removeEventListener('blur', blur);
       controller.current?.dispose();
       controller.current = null;

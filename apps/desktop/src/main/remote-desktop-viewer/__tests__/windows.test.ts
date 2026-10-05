@@ -155,6 +155,65 @@ it('routes native close and the close shortcut to confirmation without ending th
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(true);
   expect(win.isVisible()).toBe(true);
 });
+it('lets the focused remote keyboard own Cmd/Ctrl+W until focus is released', () => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  const press = () => {
+    const preventDefault = vi.fn();
+    win.webContents.emit(
+      'before-input-event',
+      { preventDefault },
+      { type: 'keyDown', code: 'KeyW', meta: true },
+    );
+    return preventDefault;
+  };
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, generation, true);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
+  expect(press()).not.toHaveBeenCalled();
+  expect(win.webContents.send).not.toHaveBeenCalledWith(REMOTE_VIEWER.CLOSE_REQUESTED, generation);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, generation, false);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  expect(press()).toHaveBeenCalledOnce();
+  expect(win.webContents.send).toHaveBeenCalledWith(REMOTE_VIEWER.CLOSE_REQUESTED, generation);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, generation, true);
+  win.emit('blur');
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  expect(press()).toHaveBeenCalledOnce();
+});
+it.each([
+  [
+    'a renderer crash',
+    (win: any) => win.webContents.emit('render-process-gone', {}, { reason: 'crashed' }),
+  ],
+  [
+    'a main-frame navigation',
+    (win: any) => win.webContents.emit('did-start-navigation', {}, 'about:blank', false, true),
+  ],
+])('restores the local close shortcut after %s retires a captured viewer', (_name, retire) => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, call(REMOTE_VIEWER.STATE, win).generation, true);
+  retire(win);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  const preventDefault = vi.fn();
+  win.webContents.emit(
+    'before-input-event',
+    { preventDefault },
+    { type: 'keyDown', code: 'KeyW', meta: true },
+  );
+  expect(preventDefault).toHaveBeenCalledOnce();
+});
 it('prewarms without network or focus, reuses the target window and cleans only its lease', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);

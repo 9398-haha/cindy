@@ -401,3 +401,27 @@ it('reveals the fullscreen toolbar from the top edge and keeps it while macOS co
   move(200);
   expect(toolbar.hasAttribute('data-revealed')).toBe(false);
 });
+it('releases shortcut capture when the picture input loses focus programmatically', async () => {
+  const inputFocus = vi.fn(async () => {});
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus,
+      },
+    },
+  });
+  const view = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const input = view.container.querySelector<HTMLTextAreaElement>('#keyboard-input')!;
+  act(() => input.focus());
+  expect(inputFocus).toHaveBeenLastCalledWith(1, true);
+  // Ctrl+Alt+Esc and control loss blur the input without focusing another element.
+  act(() => input.blur());
+  expect(inputFocus).toHaveBeenLastCalledWith(1, false);
+});

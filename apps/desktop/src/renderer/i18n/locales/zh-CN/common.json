@@ -312,7 +312,7 @@
       "resolution": "电脑分辨率",
       "clipboardFailed": "剪贴板内容传输失败，请检查控制权限后重试。",
       "settingsFailed": "设置未能保存，请重试。",
-      "inputHint": "点击画面即可输入。Ctrl+Alt+Esc 释放键盘焦点；Cmd/Ctrl+W 关闭这个窗口。",
+      "inputHint": "点击画面即可输入，快捷键（包括 Cmd/Ctrl+W）会发送到远端电脑。按 Ctrl+Alt+Esc 释放键盘焦点后，Cmd/Ctrl+W 关闭这个窗口。",
       "controlPending": "正在取得控制权…",
       "controlRequired": "当前仅查看。接管后可操作远端电脑。",
       "confirmDisconnect": "断开与这台电脑的连接？",

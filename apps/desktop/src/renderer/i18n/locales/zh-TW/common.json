@@ -312,7 +312,7 @@
       "resolution": "電腦解析度",
       "clipboardFailed": "剪貼簿內容傳輸失敗，請檢查控制權限後重試。",
       "settingsFailed": "設定未能儲存，請重試。",
-      "inputHint": "點擊畫面即可輸入。Ctrl+Alt+Esc 釋放鍵盤焦點；Cmd/Ctrl+W 關閉這個視窗。",
+      "inputHint": "點擊畫面即可輸入，快捷鍵（包括 Cmd/Ctrl+W）會傳送到遠端電腦。按 Ctrl+Alt+Esc 釋放鍵盤焦點後，Cmd/Ctrl+W 關閉這個視窗。",
       "controlPending": "正在取得控制權…",
       "controlRequired": "目前僅供檢視。取得控制權後可操作遠端電腦。",
       "confirmDisconnect": "中斷與這台電腦的連線？",
