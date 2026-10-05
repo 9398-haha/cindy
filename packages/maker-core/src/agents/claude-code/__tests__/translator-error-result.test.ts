@@ -433,11 +433,13 @@ describe('Claude Code translator is_error result guard', () => {
       expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: (nowSec + 86_400) * 1000 });
     });
 
-    it('still reports a reset time that already passed so the goal resumes immediately', async () => {
+    it('reports a reset time that already passed once, then drops it to avoid an immediate-retry loop', async () => {
       const ctx = createCtx(new UsageTracker(), 'anthropic');
       const pastSec = Math.floor(Date.now() / 1000) - 60;
       rateLimitEvent(ctx, 'rejected', 'five_hour', pastSec);
       expect((await limitTurn(ctx))?.data).toMatchObject({ usageResetAt: pastSec * 1000 });
+      // 到点后仍被本地短路拒绝、没有新事件:不再带同一个过期时刻。
+      expect((await limitTurn(ctx))?.data).not.toHaveProperty('usageResetAt');
     });
   });
 

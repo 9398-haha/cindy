@@ -2385,11 +2385,16 @@ function handleResult(
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
     // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
-    // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。
+    // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
+    // 仍被本地短路拒绝时不会有新事件,反复带同一个过期时刻会让下游无限立即重试。
     const rejectedResets = [...ctx.rt.rateLimitRejectedResetAtMs.values()];
     const usageReset = rejectedResets.length > 0
       ? { usageResetAt: Math.max(...rejectedResets) }
       : {};
+    const nowMs = Date.now();
+    for (const [windowKey, resetAtMs] of ctx.rt.rateLimitRejectedResetAtMs) {
+      if (resetAtMs <= nowMs) ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+    }
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
