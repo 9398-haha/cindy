@@ -111,6 +111,7 @@ export function RemoteDesktopViewerWindow() {
     const closeRequested = api.onCloseRequested((value) => {
       if (value === generation.current) requestClose();
     });
+    const hidden = api.onHidden?.((value) => controller.current?.setHidden(value));
     const blur = () => {
       controller.current?.releaseInput();
       void api.inputFocus(generation.current, false).catch(() => {});
@@ -137,6 +138,7 @@ export function RemoteDesktopViewerWindow() {
       off();
       locale();
       closeRequested();
+      hidden?.();
       document.removeEventListener('focusin', focus);
       window.removeEventListener('blur', blur);
       controller.current?.dispose();
