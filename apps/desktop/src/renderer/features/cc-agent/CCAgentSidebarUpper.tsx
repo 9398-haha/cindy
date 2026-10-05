@@ -1096,7 +1096,9 @@ function ExpandedView({
       if (session && isOrcaWorkerSession(session)) return;
       if (session) {
         const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
-        sendSessionEventNotification(sessionId, title, kind);
+        sendSessionEventNotification(sessionId, title, kind, {
+          remoteDevice: !!session.deviceLinkDeviceId,
+        });
         return;
       }
       void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
