@@ -74,6 +74,7 @@ import {
 import { readLinuxCursorSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
+import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
@@ -167,8 +168,16 @@ const linuxMute = new LinuxDesktopMute();
 const linuxWindows = new LinuxWindowActions();
 const nativeWayland = () => wayland() && supportsHyprlandCapture();
 const portalWayland = () => wayland() && !nativeWayland();
+// Privacy masks and the controlled-desktop overlay share one capture filter.
+let privacyExcluded: number[] = [];
+let overlayExcluded: number[] = [];
+const applyExcludedWindows = () =>
+  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
 const privacyScreen = new PrivacyScreen(
-  (ids) => nativeCapture.setExcludedWindows(ids),
+  (ids) => {
+    privacyExcluded = ids;
+    applyExcludedWindows();
+  },
   () => {
     return remoteDesktop
       .stopPrivacyByUser()
@@ -185,6 +194,41 @@ const supportsPrivacyScreen =
     typeof process.getSystemVersion === 'function' &&
     Number(process.getSystemVersion().split('.')[0]) >= 14) ||
   (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
+// Windows honours content protection in capture; modern macOS capture needs the
+// explicit filter. Same platform floor as the privacy masks.
+const controlledOverlay = new ControlledOverlay(
+  (ids) => {
+    if (process.platform !== 'darwin') return;
+    overlayExcluded = ids;
+    applyExcludedWindows();
+  },
+  async (peer) => {
+    if (!controllerDirectory) throw new Error('controller directory unavailable');
+    await controllerDirectory.revoke(peer);
+  },
+);
+/** Device-link owns names and revocation; injected at registration (no import cycle). */
+export interface RemoteDesktopControllerDirectory {
+  name(peer: string): string | undefined;
+  revoke(peer: string): Promise<void>;
+}
+let controllerDirectory: RemoteDesktopControllerDirectory | null = null;
+// The privacy masks replace the overlay for as long as they are requested.
+let privacyRequested = false;
+function syncControlledOverlay(): void {
+  const state = remoteDesktop.state;
+  const displayId = remoteDesktop.displayId;
+  controlledOverlay.update(
+    supportsPrivacyScreen && state && displayId && !privacyRequested
+      ? {
+          displayId,
+          controlling: state.controlling,
+          peer: state.peer,
+          name: controllerDirectory?.name(state.peer),
+        }
+      : null,
+  );
+}
 let displayAwake: number | null = null;
 let nativeDisplay: string | null = null;
 let windowsAvailable = false;
@@ -551,6 +595,33 @@ export async function requestRemoteDesktop(peer: string, value: unknown): Promis
     : remoteDesktop.request(peer, value);
 }
 
+async function setPrivacyScreen(enabled: boolean, current: () => boolean): Promise<void> {
+  if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
+    nativeOverlay = true;
+    await privacyScreen.set(true, current);
+    try {
+      await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
+    } catch (error) {
+      if (current()) privacyScreen.stop();
+      throw error;
+    }
+    if (!current()) {
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    }
+    return;
+  }
+  await privacyScreen.set(enabled, current);
+  if (!enabled || process.platform === 'win32') return;
+  const deadline = Date.now() + 4500;
+  while (current() && !nativeCapture.privacyReady && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  if (!nativeCapture.privacyReady) {
+    privacyScreen.stop();
+    throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  }
+}
+
 export const remoteDesktop: RemoteDesktopController = new RemoteDesktopController({
   prepare: async (current) => {
     if (nativeWayland() && (await supportsLinuxPrivacy())) {
@@ -703,34 +774,32 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   privacyScreen: async (enabled, current) => {
     if (process.platform === 'linux') return linuxPrivacy.set(enabled, current);
     if (!supportsPrivacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
-    if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
-      nativeOverlay = true;
-      await privacyScreen.set(true, current);
-      try {
-        await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
-      } catch (error) {
-        if (current()) privacyScreen.stop();
-        throw error;
-      }
-      if (!current()) {
-        throw new Error('DESKTOP_LEASE_EXPIRED');
-      }
-      return;
+    // The masks replace the overlay: remove it before they appear, restore it
+    // after they are gone, so the privacy filter only ever covers masks.
+    if (enabled) {
+      privacyRequested = true;
+      syncControlledOverlay();
     }
-    await privacyScreen.set(enabled, current);
-    if (!enabled || process.platform === 'win32') return;
-    const deadline = Date.now() + 4500;
-    while (current() && !nativeCapture.privacyReady && Date.now() < deadline)
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
-    if (!nativeCapture.privacyReady) {
-      privacyScreen.stop();
-      throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    let restoreOverlay = !enabled;
+    try {
+      await setPrivacyScreen(enabled, current);
+    } catch (error) {
+      restoreOverlay = true;
+      throw error;
+    } finally {
+      // A newer privacy request or the lease teardown owns the flag otherwise.
+      if (restoreOverlay && current()) {
+        privacyRequested = false;
+        syncControlledOverlay();
+      }
     }
   },
   stopPrivacyScreen: () => {
     privacyScreen.stop();
     linuxPrivacy.stop();
+    privacyRequested = false;
+    // Called from inside lease teardown; read controller state afterwards.
+    queueMicrotask(syncControlledOverlay);
   },
   windowAction: (action, id, display, current) => {
     if (!nativeWayland()) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
@@ -820,14 +889,21 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       powerSaveBlocker.stop(displayAwake);
       displayAwake = null;
     }
+    syncControlledOverlay();
   },
 });
 
 export function registerRemoteDesktopIpc(
   isVoiceInputOwner?: Parameters<typeof denyAppDesktopCapture>[1],
+  controllers?: RemoteDesktopControllerDirectory,
 ): void {
+  controllerDirectory = controllers ?? null;
   denyAppDesktopCapture(session.defaultSession, isVoiceInputOwner);
-  const timer = setInterval(() => remoteDesktop.tick(), 1000);
+  const timer = setInterval(() => {
+    remoteDesktop.tick();
+    // Device names can arrive after the lease starts (presence refresh).
+    syncControlledOverlay();
+  }, 1000);
   timer.unref();
   onQuit('remote-desktop-clipboard', stopLinuxClipboardWriter);
   onQuit('remote-desktop-stop', () => {

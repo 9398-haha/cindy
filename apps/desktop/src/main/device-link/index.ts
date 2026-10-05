@@ -94,6 +94,7 @@ import {
   setControllerDisplayName,
   setControllerFallbackDisplayName,
   clearControllerDisplayNames,
+  getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
 } from './dispatch';
 import {
@@ -1435,6 +1436,11 @@ export async function setKeepAwakeEnabled(enabled: boolean): Promise<void> {
   keepAwakeController.apply(enabled);
   appliedKeepAwake = enabled; // 同步基线,避免随后轮询把自己的改写当成外部变更重复应用
   log.info(`keep-awake ${enabled ? 'enabled' : 'disabled'}`);
+}
+
+/** 被控端:控制端展示名(链路/presence 优先,其次本机缓存);都没有时返回 undefined。 */
+export function getControllerName(deviceId: string): string | undefined {
+  return getControllerDisplayName(deviceId) ?? readLastKnownDeviceNames()[deviceId];
 }
 
 /** 被控端:一键断开当前所有控制链路(WS 与开关保持) */

@@ -240,6 +240,8 @@
     "controlUnavailable": "The remote computer cannot accept input. Check its control permissions and connection, then reconnect.",
     "beingControlled": "Your desktop is being controlled",
     "beingViewed": "Your desktop is being viewed",
+    "controlledByDevice": "{{name}} is controlling your desktop",
+    "viewedByDevice": "{{name}} is viewing your desktop",
     "disconnect": "Disconnect",
     "back": "Back",
     "connect": "Connect",

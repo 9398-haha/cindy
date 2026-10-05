@@ -240,6 +240,8 @@
     "controlUnavailable": "リモートコンピューターで操作を受け付けられません。操作権限と接続を確認して再接続してください。",
     "beingControlled": "デスクトップが操作されています",
     "beingViewed": "デスクトップが表示されています",
+    "controlledByDevice": "{{name}} がデスクトップを操作しています",
+    "viewedByDevice": "{{name}} がデスクトップを表示しています",
     "disconnect": "切断",
     "back": "戻る",
     "connect": "接続",

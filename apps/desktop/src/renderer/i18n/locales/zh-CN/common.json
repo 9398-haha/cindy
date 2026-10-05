@@ -240,6 +240,8 @@
     "controlUnavailable": "远端电脑暂时无法接受操作，请检查远端控制权限和连接，然后重新连接。",
     "beingControlled": "桌面正在被远程控制",
     "beingViewed": "桌面正在被远程查看",
+    "controlledByDevice": "{{name}} 正在远程控制桌面",
+    "viewedByDevice": "{{name}} 正在远程查看桌面",
     "disconnect": "断开连接",
     "back": "返回",
     "connect": "连接",
