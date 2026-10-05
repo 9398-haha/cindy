@@ -9874,7 +9874,9 @@
       "stopAll": "全部停止",
       "stopAllTitle": "關閉該任務的後臺處理程序，停止全部後臺作業（任務可繼續使用）",
       "stopBashTitle": "停止該任務仍在執行的後臺作業（不關閉會話處理程序）",
-      "stopping": "停止中…"
+      "stopping": "停止中…",
+      "remoteStopUnsupported": "遠端電腦上的 {{appName}} 版本過舊，暫不支援在這裡停止後臺任務，請升級後重試",
+      "remoteStopUnreachable": "遠端電腦暫時無法回應，後臺任務沒有停止，請稍後重試"
     },
     "interruptedBanner": {
       "text": "任務執行到一半時應用退出，已被中斷。",

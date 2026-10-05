@@ -402,6 +402,21 @@ schema，服务端无需改动。
 记录里同名可选字段，旧记录缺省。旧源端不下发，控制端只显示错误提示；旧控制端忽略该字段。
 不新增 channel、relay 类型或持久化 schema，服务端无需改动。
 
+## 远程任务的后台任务状态与停止
+
+Desktop 控制端在远程任务的输入框状态栏显示后台任务提示：进入任务、前台 turn 结束、设备重连或
+窗口重新可见时，读取已登记的只读 `maker:session-background-activity` 与
+`maker:session-background-tasks:list`（两者登记为后台 invoke，让位于用户操作），之后在「在线 + 可见 +
+无前台 turn」期间每 15 秒复查；
+不依赖镜像事件，断连或停读时清空提示。读取失败（含旧被控端）按无后台任务处理。
+
+同账号 invoke allowlist 新增写通道 `maker:agent-task:stop`（单个后台任务）与
+`maker:session-background-tasks:stop`（全部停止，关闭被控端会话进程），入参与本机 IPC 相同，
+handler 无 sender 依赖；不加入共享任务访客白名单，不进入自动重试。任务卡、后台任务面板与状态栏
+的停止按归属粘滞路由到被控端，不回退本机。旧被控端回 `CHANNEL_NOT_ALLOWED` 时提示升级远程电脑；
+旧控制端行为不变。Mobile 未接入，服务端无需改动。实现见 `makerTransport.ts` 与
+`useRemoteSessionBackgroundTasks.ts`。
+
 ## 事实来源
 
 | 内容                     | 权威来源                                                                                                                                                                                   |
