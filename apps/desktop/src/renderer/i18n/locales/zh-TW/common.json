@@ -5767,7 +5767,7 @@
         "configurationTitle": "配置",
         "sidebarEntryTitle": "側邊欄入口",
         "showInSidebar": "顯示在側邊欄",
-        "sidebarEntryDescription": "開啟後，側邊欄會顯示「{{title}}」。隱藏入口不會停用插件。",
+        "sidebarEntryDescription": "開啟後，「{{title}}」會出現在側邊欄，顯示在最外層還是收進「更多」，可在「更多 → 自訂」中調整。隱藏入口不會停用插件。",
         "iosSimulatorAutoOpenTitle": "自動開啟內建模擬器面板",
         "iosSimulatorAutoOpenDescription": "啟動模擬器或開啟 App 後，自動在右側顯示模擬器畫面。關閉後仍可手動開啟，其他功能不受影響。",
         "openTool": "檢視 Tool {{name}} 的詳情",
@@ -7838,6 +7838,17 @@
       "plugins": "插件",
       "issues": "Issue",
       "bots": "夥伴"
+    },
+    "navigation": {
+      "more": "更多",
+      "new": "新",
+      "customize": {
+        "title": "自訂",
+        "done": "完成",
+        "reset": "恢復預設",
+        "reorder": "調整{{name}}順序，按上下方向鍵"
+      },
+      "items": { "automations": "自動化", "plugins": "插件", "bots": "夥伴", "search": "搜尋" }
     },
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",

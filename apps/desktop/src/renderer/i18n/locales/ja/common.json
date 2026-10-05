@@ -5767,7 +5767,7 @@
         "configurationTitle": "設定",
         "sidebarEntryTitle": "サイドバー項目",
         "showInSidebar": "サイドバーに表示",
-        "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
+        "sidebarEntryDescription": "オンにすると、「{{title}}」がサイドバーに表示されます。最上部に置くか「その他」にまとめるかは「その他 → カスタマイズ」で変更できます。非表示にしてもプラグインは無効になりません。",
         "iosSimulatorAutoOpenTitle": "内蔵シミュレータパネルを自動的に開く",
         "iosSimulatorAutoOpenDescription": "シミュレータの起動時または App の起動後に、右側へシミュレータ画面を自動表示します。オフでも手動で開くことができ、ほかの機能には影響しません。",
         "openTool": "Tool {{name}} の詳細を表示",
@@ -7838,6 +7838,22 @@
       "plugins": "プラグイン",
       "issues": "問題",
       "bots": "仲間"
+    },
+    "navigation": {
+      "more": "その他",
+      "new": "新着",
+      "customize": {
+        "title": "カスタマイズ",
+        "done": "完了",
+        "reset": "初期設定に戻す",
+        "reorder": "上下矢印キーで{{name}}の順序を変更"
+      },
+      "items": {
+        "automations": "自動化",
+        "plugins": "プラグイン",
+        "bots": "仲間",
+        "search": "検索"
+      }
     },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
