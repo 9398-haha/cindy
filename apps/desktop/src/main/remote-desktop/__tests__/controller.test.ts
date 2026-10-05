@@ -1409,3 +1409,22 @@ describe('live display switch', () => {
     expect(h.controller.state).toBeNull();
   });
 });
+it('forwards viewerHidden for the bound lease without needing control', async () => {
+  const h = harness(),
+    { lease } = await h.start();
+  await expect(
+    h.controller.request('phone', { op: 'viewerHidden', lease, hidden: true }),
+  ).rejects.toThrow('DESKTOP_VIDEO_UNAVAILABLE');
+  h.deps.viewerHidden = vi.fn();
+  await expect(
+    h.controller.request('phone', { op: 'viewerHidden', lease, hidden: true }),
+  ).resolves.toEqual({ hidden: true });
+  await h.controller.request('phone', { op: 'viewerHidden', lease, hidden: false });
+  expect(h.deps.viewerHidden).toHaveBeenNthCalledWith(1, lease, true);
+  expect(h.deps.viewerHidden).toHaveBeenNthCalledWith(2, lease, false);
+  await expect(
+    h.controller.request('phone', { op: 'viewerHidden', lease: 'stale', hidden: true }),
+  ).rejects.toThrow();
+  expect(h.deps.viewerHidden).toHaveBeenCalledTimes(2);
+  expect(h.controller.state?.controlling).toBe(false);
+});

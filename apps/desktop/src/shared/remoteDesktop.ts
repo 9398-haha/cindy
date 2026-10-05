@@ -37,6 +37,7 @@ export interface DesktopHostCommand {
     | 'capture-reset'
     | 'display-hold'
     | 'display-swap'
+    | 'viewer-hidden'
     | 'ice'
     | 'prepare'
     | 'frame';
@@ -51,6 +52,8 @@ export interface DesktopHostCommand {
   /** Local-only output monitor, enabled only by the main process audio grant. */
   nativeAudio?: boolean;
   cursorOverlay?: boolean;
+  /** viewer-hidden: stop sending video while the viewer is hidden. */
+  hidden?: boolean;
   lease?: string;
   sourceId?: string;
   sdp?: string;

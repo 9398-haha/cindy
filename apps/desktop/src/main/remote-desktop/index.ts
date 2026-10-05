@@ -254,6 +254,16 @@ async function resumeVideo(display: RemoteDesktopDisplay): Promise<boolean> {
     return false;
   }
 }
+/** The viewer is hidden: the capture page stops sending the current stream until shown. */
+function setViewerHidden(lease: string, hidden: boolean): void {
+  if (lease !== videoLease || !host || host.isDestroyed()) return;
+  host.send(DESKTOP_LOCAL.COMMAND, {
+    id: randomUUID(),
+    op: 'viewer-hidden',
+    lease,
+    hidden,
+  } satisfies DesktopHostCommand);
+}
 function stopVideo(): void {
   videoPaused = false;
   offerGeneration++;
@@ -591,6 +601,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
       channelRequests: true,
+      viewerHidden: true,
       // Native canvas capture can follow a display change without a new offer.
       liveDisplaySwitch:
         process.platform === 'darwin' ||
@@ -724,6 +735,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     process.platform === 'linux'
       ? linuxMute.set(false)
       : systemAudioMuteGuard.restore('remote-desktop'),
+  viewerHidden: setViewerHidden,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {

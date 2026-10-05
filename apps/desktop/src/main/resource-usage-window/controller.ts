@@ -452,8 +452,7 @@ export class ResourceUsageWindowController {
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     this.visible = visible;
-    if (this.deps.pauseWhenHidden === false) return;
-    this.setSamplingActive(win, visible);
+    if (this.deps.pauseWhenHidden !== false) this.setSamplingActive(win, visible);
     if (!visible && this.pendingOpen) {
       this.pendingOpen = false;
       this.clearOpenTimeout();

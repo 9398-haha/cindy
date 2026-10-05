@@ -774,6 +774,27 @@ describe('ResourceUsageWindowController', () => {
     expect(onActivityChanged).not.toHaveBeenCalled();
   });
 
+  it('still cancels a cold open on native hide when pauseWhenHidden is false', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      pauseWhenHidden: false,
+      openTimeoutMs: 1000,
+    });
+    controller.open(mainSender);
+    windows[0]?.emitWindow('hide');
+    controller.markPresentationReady(windows[0]!.webContents);
+    vi.advanceTimersByTime(1000);
+    expect(windows[0]?.show).not.toHaveBeenCalled();
+    expect(windows[0]?.focus).not.toHaveBeenCalled();
+  });
+
   it('shows a loading fallback only after the renderer shell has mounted', () => {
     const { controller, windows, mainSender } = makeHarness(2500);
     controller.open(mainSender);

@@ -252,7 +252,7 @@ it('waits for fullscreen exit and rejects delayed resize after a session replace
   expect(win.setBounds).not.toHaveBeenCalled();
 });
 
-it('keeps the session through native hide/minimize and ends it only on close', async () => {
+it('keeps the session through native hide/minimize, forwards visibility, and ends only on close', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);
   manager.register();
@@ -263,8 +263,20 @@ it('keeps the session through native hide/minimize and ends it only on close', a
   const state = call(REMOTE_VIEWER.STATE, win);
   await call(REMOTE_VIEWER.REQUEST, win, state.generation, { op: 'start', displayId: 'screen' });
   // macOS reports Space switches and native fullscreen transitions as hide/show.
+  win.webContents.send.mockClear();
   for (const name of ['hide', 'show', 'minimize', 'restore']) win.emit(name);
   await Promise.resolve();
+  // The page pauses the host's video instead; the lease is untouched.
+  expect(
+    win.webContents.send.mock.calls.filter(
+      ([channel]: [string]) => channel === REMOTE_VIEWER.HIDDEN,
+    ),
+  ).toEqual([
+    [REMOTE_VIEWER.HIDDEN, true],
+    [REMOTE_VIEWER.HIDDEN, false],
+    [REMOTE_VIEWER.HIDDEN, true],
+    [REMOTE_VIEWER.HIDDEN, false],
+  ]);
   expect(call(REMOTE_VIEWER.STATE, win)).toMatchObject({
     active: true,
     generation: state.generation,

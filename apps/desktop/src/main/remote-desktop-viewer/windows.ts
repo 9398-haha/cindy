@@ -195,6 +195,15 @@ export class RemoteDesktopViewerWindows {
         win.on('blur', () => {
           void connection.focusChanged();
         });
+        // The session survives hiding; the page pauses the host's video instead.
+        const hidden = (value: boolean) => () => {
+          if (!win.isDestroyed() && !win.webContents.isDestroyed())
+            win.webContents.send(REMOTE_VIEWER.HIDDEN, value);
+        };
+        win.on('hide', hidden(true));
+        win.on('minimize', hidden(true));
+        win.on('show', hidden(false));
+        win.on('restore', hidden(false));
         // Local navigation/reloads/crashes immediately retire authority, including in-flight starts.
         win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
           if (isMainFrame && !isInPlace) connection.deactivate();

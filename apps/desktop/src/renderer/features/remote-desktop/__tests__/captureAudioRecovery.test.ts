@@ -144,6 +144,8 @@ function setup() {
     resume,
     pause: (lease = 'lease') => command({ id: 'hold', op: 'display-hold', lease }),
     swap: (lease = 'lease') => command({ id: 'swap', op: 'display-swap', lease }),
+    hide: (hidden: boolean, lease = 'lease') =>
+      command({ id: 'hide', op: 'viewer-hidden', lease, hidden }),
     peers,
     capture,
     reply,
@@ -600,4 +602,52 @@ it('reports a native stream that already ended as not kept', async () => {
   h.swap();
   await flush();
   expect(h.reply).toHaveBeenLastCalledWith('swap', false);
+});
+
+it('pauses and resumes the video encoder in place while the viewer is hidden', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto');
+  await flush();
+  const [peer] = h.peers;
+  let current: RTCRtpSendParameters = { encodings: [{}] } as RTCRtpSendParameters;
+  peer.video.getParameters = () => structuredClone(current) as any;
+  const setParameters = vi.fn(async (next: any) => {
+    current = structuredClone(next);
+  });
+  peer.video.setParameters = setParameters;
+
+  h.hide(true, 'other-lease');
+  await flush();
+  expect(setParameters).not.toHaveBeenCalled();
+  h.hide(true);
+  await flush();
+  expect(current.encodings).toEqual([{ active: false }]);
+  // Motion updates keep the pause instead of overwriting it.
+  vi.mocked(nativeCaptureStream).mock.calls.at(-1)?.[5]?.(false);
+  await flush();
+  expect(current).toMatchObject({
+    encodings: [{ active: false }],
+    degradationPreference: 'maintain-resolution',
+  });
+  h.hide(true);
+  await flush();
+  expect(setParameters).toHaveBeenCalledTimes(2);
+  h.hide(false);
+  await flush();
+  expect(current.encodings).toEqual([{ active: true }]);
+  expect(h.peers).toHaveLength(1);
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(h.nativeStop).not.toHaveBeenCalled();
+  expect(h.api.stop).not.toHaveBeenCalled();
+});
+
+it('applies a pause that arrives while the new peer is still being set up', async () => {
+  const h = setup();
+  h.offer(false, true, false, 'auto');
+  h.hide(true);
+  await flush();
+  const [peer] = h.peers;
+  expect(peer.video.setParameters).toHaveBeenLastCalledWith(
+    expect.objectContaining({ encodings: [expect.objectContaining({ active: false })] }),
+  );
 });
