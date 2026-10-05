@@ -112,6 +112,8 @@ function presetRuntimeBaseUrl(
   for (const [sourceAgent, endpoint] of Object.entries(edited)) {
     const source = preset.runtimes[sourceAgent as AgentKind];
     if (!source || !endpoint) continue;
+    // 默认地址相同的运行时指向同一服务(如本机 llama.cpp 的 Codex / Pi),未单独编辑时跟随已编辑的那个。
+    if (source.baseUrl === runtime.baseUrl) return endpoint.trim();
     const bindings = providerEndpointBindings(source.baseUrl, endpoint.trim());
     if (bindings && source.baseUrl.includes('{')) {
       return bindProviderEndpoint(runtime.baseUrl, bindings, endpoint.trim());
@@ -563,7 +565,8 @@ export function AddProviderWizard({
   const filteredLocalAdvanced = q
     ? localAdvancedPresets.filter((p) => p.name.toLowerCase().includes(q))
     : localAdvancedPresets;
-  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced].filter(p => p.id !== 'llamacpp');
+  // 目录里的 llamacpp 预设是「连接已有服务」(默认 8080);Cindy 托管的 llama.cpp 走下方单独卡片,两者互不影响。
+  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced];
 
   const ollamaAlreadyAdded = providers.some((p) => p.id === MANAGED_OLLAMA_PROVIDER_ID);
   const oauthChoiceIds = new Set(oauthChoices.map((p) => p.id));
@@ -669,10 +672,6 @@ export function AddProviderWizard({
 
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
-      if (preset.id === 'llamacpp') {
-        void connectLlamaCpp();
-        return;
-      }
       const oauth = providerPresetOAuth(preset.id);
       if (oauth && !useApiKey) {
         pickOauth({ ...buildUserProvider({
@@ -700,7 +699,7 @@ export function AddProviderWizard({
       setPresetBaseUrls({});
       setStep(2);
     },
-    [i18n.language, onDone, providers, pickOauth, connectLlamaCpp],
+    [i18n.language, onDone, providers, pickOauth],
   );
 
   const connectOllama = useCallback(async () => {
