@@ -320,6 +320,7 @@
       "disconnectFailed": "無法中斷連線，請重試。",
       "clipboardShortcutHint": "在畫面內使用 {{modifier}}+C / {{modifier}}+V 複製貼上。支援的內容取決於遠端電腦，暫不傳輸檔案。",
       "fitViewerDisplay": "依目前畫面比例調整",
+      "restoreViewerDisplay": "恢復原始比例",
       "fitViewerDisplayHint": "暫時調整電腦桌面比例，保留目前桌面內容。離開連線後恢復原解析度。",
       "resolutionHint": "解析度修改會影響遠端的實際顯示器。"
     },

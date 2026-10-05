@@ -103,6 +103,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     credential: null,
     credentialBusy: false,
     credentialNotice: null,
+    fittedDisplay: null,
   };
   for (const status of ['connecting', 'reconnecting']) {
     act(() => lifecycle.update?.({ ...connected, ready: false, status }));
@@ -184,6 +185,7 @@ it('hides view-only controls and enables desktop actions only after control is c
     credential: null,
     credentialBusy: false,
     credentialNotice: null,
+    fittedDisplay: null,
     target: { deviceId: 'host', name: 'Windows' },
     ready: true,
     controlling: false,
@@ -316,6 +318,7 @@ it.each([
       credential: null,
       credentialBusy: false,
       credentialNotice: null,
+      fittedDisplay: null,
       target: null,
       ready: true,
       controlling: true,
@@ -364,6 +367,7 @@ it('marks an active privacy screen in the toolbar and for screen readers without
       credential: null,
       credentialBusy: false,
       credentialNotice: null,
+      fittedDisplay: null,
       target: null,
       ready: true,
       controlling: true,

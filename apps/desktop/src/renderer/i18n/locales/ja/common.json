@@ -320,6 +320,7 @@
       "disconnectFailed": "切断できませんでした。もう一度お試しください。",
       "clipboardShortcutHint": "画面内で {{modifier}}+C / {{modifier}}+V を使ってコピー・貼り付けできます。対応する内容は接続先のパソコンによって異なります。ファイルは転送されません。",
       "fitViewerDisplay": "現在の画面比率に合わせる",
+      "restoreViewerDisplay": "元の縦横比に戻す",
       "fitViewerDisplayHint": "デスクトップの内容を保ったまま、パソコンの画面比率を一時的に変更します。切断すると元の解像度に戻ります。",
       "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
     },

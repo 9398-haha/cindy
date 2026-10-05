@@ -156,7 +156,7 @@ export function RemoteDesktopViewerWindow() {
     const owner = generation.current;
     setModesStatus('loading');
     void controller.current
-      ?.displayModes()
+      ?.resolutionModes()
       .then((value) => {
         if (owner !== generation.current) return;
         setModes(value);
@@ -169,7 +169,8 @@ export function RemoteDesktopViewerWindow() {
   const openPanel = (panel: 'display' | 'clipboard' | 'security', open: boolean) => {
     controller.current?.releaseInput();
     setSettings((current) => (open ? panel : current === panel ? null : current));
-    if (open && panel === 'display' && state?.caps?.displayModes) loadModes();
+    if (open && panel === 'display' && (state?.caps?.displayModes || state?.fittedDisplay))
+      loadModes();
   };
   const onSelectOpenChange = (open: boolean) => {
     setSelectOpen(open);
@@ -424,7 +425,15 @@ export function RemoteDesktopViewerWindow() {
                       .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')));
                   }}
                 >
-                  {t('remoteDesktop.viewer.fitViewerDisplay')}
+                  {t(
+                    root.current &&
+                      controller.current?.viewerDisplayMatched(
+                        root.current.clientWidth,
+                        root.current.clientHeight,
+                      )
+                      ? 'remoteDesktop.viewer.restoreViewerDisplay'
+                      : 'remoteDesktop.viewer.fitViewerDisplay',
+                  )}
                 </Button>
                 <p>{t('remoteDesktop.viewer.fitViewerDisplayHint')}</p>
               </div>
@@ -456,19 +465,23 @@ export function RemoteDesktopViewerWindow() {
                       value: mode.id,
                       label: `${mode.width} × ${mode.height}${mode.native ? ` · ${t('remoteDesktop.nativeResolution')}` : ''}`,
                     }))}
-                    onValueChange={(value) =>
+                    onValueChange={(value) => {
+                      const mode = modes.find((item) => item.id === value);
+                      if (!mode) return;
                       void controller.current
-                        ?.resolution(value)
+                        ?.resolution(mode)
                         .then(loadModes)
-                        .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')))
-                    }
+                        .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')));
+                    }}
                     onOpenChange={onSelectOpenChange}
                   />
                 )}
               </FormField>
             )}
 
-            {state?.caps?.displayModes && <p>{t('remoteDesktop.viewer.resolutionHint')}</p>}
+            {(state?.caps?.displayModes || state?.fittedDisplay) && (
+              <p>{t('remoteDesktop.viewer.resolutionHint')}</p>
+            )}
             <div className="remote-viewer-panel-section">
               <label className="remote-viewer-toggle-row" htmlFor="viewer-audio">
                 <span>{t('remoteDesktop.viewer.sound')}</span>

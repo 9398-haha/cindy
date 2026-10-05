@@ -120,10 +120,12 @@ network verification requirements below.
 The device detail page opens the real desktop of the selected computer. On the
 computer, enable **Settings → Remote control → Allow remote desktop**, as well
 as device control. Screen recording and accessibility permissions are granted
-in the operating system. The phone automatically requests control on connection
-when the host supports input, using the existing permission and ownership checks.
-**Controls → View only** releases control and preserves that choice when reconnecting
-within this page. The computer always has a **Disconnect**
+in the operating system. The phone takes control on connection when the host
+supports input, using the existing permission and ownership checks; a host that
+advertises `autoControl` grants it with the lease, with no separate request.
+**Controls → View only** is a local switch: the phone stops sending input while
+the computer keeps control, and the choice is preserved when reconnecting within
+this page. The computer always has a **Disconnect**
 button while being viewed or controlled.
 
 The host allows one active remote-desktop viewer at a time. Starting a new

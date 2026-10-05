@@ -320,6 +320,7 @@
       "disconnectFailed": "未能断开连接，请重试。",
       "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V 复制粘贴。支持的内容取决于远程电脑，暂不传输文件。",
       "fitViewerDisplay": "按当前画面比例调整",
+      "restoreViewerDisplay": "恢复原始比例",
       "fitViewerDisplayHint": "临时调整电脑桌面比例，保留当前桌面内容。退出连接后恢复原分辨率。",
       "resolutionHint": "分辨率修改会影响远端的实际显示器。"
     },

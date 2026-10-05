@@ -158,6 +158,9 @@ Mobile 未新增卡片入口。服务端无需改动。
 按原流程拆掉重建。
 旧被控端丢弃不认识的 `keepVideo`，照旧拆掉重建；旧控制端不发 `keepVideo`，新被控端照旧拆掉重建。
 切换失败仍只结束本次远程桌面 lease。不修改 relay、IPC allowlist 或协议版本；先发被控端。
+Mobile 与 Desktop 远程桌面窗口都按上述规则发送 `keepVideo` 并以 `videoKept` 回执为准；两端还按电脑和
+显示器记住上次的系统分辨率或「适配画面」尺寸（各自本地保存，不进协议），下次连接拿到操作权后重新套用，
+选回电脑原分辨率或恢复原始比例时清除。
 实现见 `apps/desktop/src/main/remote-desktop/controller.ts`，回归见同目录 `__tests__/controller.test.ts`
 与 `packages/device-link/src/__tests__/viewerDisplay.test.ts`。
 
@@ -227,6 +230,26 @@ lease 与当前 lease 一致时才走通道，否则照旧走 relay。被控端�
 其余失败不自动改走 relay 重试，超时按结果未知处理。
 旧控制端不发通道请求，新被控端行为不变。此扩展不修改 relay、服务端或 device-link 帧格式；
 iOS 原生接收器新增 `sendRequest`，属于冷更新。
+Desktop 控制端由主进程决定并校验每个请求（lease、操作权记录、剪贴板权限都不变），白名单内的请求交给
+远程桌面窗口经它的媒体数据通道发出，回复再交回主进程（`remote-desktop-viewer:channel-request` /
+`channel-reply`，仅限该窗口）；窗口没有发出（无视频、能力缺失、lease 或代次不符、通道拒收）时主进程照旧
+走 relay，已发出的请求不经 relay 重发，窗口退场时在途请求按结果未知结束。
+
+## 远程桌面随连接自动给操作权
+
+被控端以可选能力 `autoControl` 声明（仅当本机能注入输入，即 `canControl` 为真）：`start`、`viewerDisplay`、
+`restoreViewerDisplay` 与 `resolution { temporary: true }` 接受 `control: true`（只接受布尔值），被控端在同一个
+请求里启动输入并以 `controlling: true` 回复，控制端不再单独发 `control`。启动输入失败（缺权限、输入不可用）
+时租约照常返回且 `controlling: false`，控制端再发 `control` 取得具体错误。操作权仍由被控端持有：它决定输入
+助手的启停，手机画中画后台观看照旧经 `presentation` 收回，回到前台再取回；Agent 让位仍只看实际输入。
+
+控制端仅在能力为真时发送 `control: true`；会话层只在请求过时接受 `controlling: true` 回复。旧被控端丢弃不认识的
+字段并回复 `controlling: false`，控制端按原流程补发 `control`；旧控制端不发该字段，新被控端行为不变。
+Desktop 控制端主进程把带 `control: true` 的回复与 `control` 回复同样记录，用于本机剪贴板判定。
+
+Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭键盘与鼠标按钮，不再向被控端发 `control: false`；
+被控端仍持有操作权。退出仅查看时若被控端已不再给操作权（输入失败、溢出释放、后台观看），才重新请求。
+不修改 relay、服务端或 IPC allowlist；需被控端和控制端都更新才省掉这次往返。
 
 ## 手机首页会话活动快照
 

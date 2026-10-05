@@ -320,6 +320,7 @@
       "disconnectFailed": "Could not disconnect. Try again.",
       "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste. Supported content depends on the remote computer; files are not transferred.",
       "fitViewerDisplay": "Match Current View",
+      "restoreViewerDisplay": "Restore Original Aspect Ratio",
       "fitViewerDisplayHint": "Temporarily adjusts the computer desktop to this view’s aspect ratio, keeping its contents. Disconnect to restore the original resolution.",
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     },
