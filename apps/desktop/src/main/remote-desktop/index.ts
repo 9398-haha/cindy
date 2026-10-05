@@ -261,6 +261,16 @@ async function setViewerHidden(lease: string, hidden: boolean): Promise<void> {
   const applied = await requestHost({ id: randomUUID(), op: 'viewer-hidden', lease, hidden }, 2000);
   if (applied !== true || lease !== videoLease) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
 }
+/** Retunes the live encoder in place; a later offer reads the state from the lease. */
+function setVideoBackground(lease: string, background: boolean): void {
+  if (lease !== videoLease || !host || host.isDestroyed()) return;
+  host.send(DESKTOP_LOCAL.COMMAND, {
+    id: randomUUID(),
+    op: 'background-viewing',
+    lease,
+    background,
+  } satisfies DesktopHostCommand);
+}
 function stopVideo(): void {
   videoPaused = false;
   offerGeneration++;
@@ -335,6 +345,7 @@ async function offer(
           portalCapture: true,
           sdp,
           settings,
+          background: remoteDesktop.isBackgroundViewing(lease.lease),
           attemptId,
           iceServers,
         },
@@ -429,6 +440,7 @@ async function offer(
         lease: lease.lease,
         sdp,
         settings,
+        background: remoteDesktop.isBackgroundViewing(lease.lease),
         attemptId,
         iceServers,
       },
@@ -735,6 +747,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       ? linuxMute.set(false)
       : systemAudioMuteGuard.restore('remote-desktop'),
   viewerHidden: setViewerHidden,
+  videoBackground: setVideoBackground,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {

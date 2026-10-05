@@ -1435,3 +1435,45 @@ it('forwards viewerHidden for the bound lease without needing control', async ()
     h.controller.request('phone', { op: 'viewerHidden', lease, hidden: false }),
   ).rejects.toThrow('DESKTOP_VIDEO_UNAVAILABLE');
 });
+it('reports each background viewing change once, ending it when control returns', async () => {
+  const h = harness(),
+    { lease } = await h.start();
+  h.deps.videoBackground = vi.fn();
+  expect(h.controller.isBackgroundViewing(lease)).toBe(false);
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  expect(h.controller.isBackgroundViewing(lease)).toBe(true);
+  expect(h.controller.isBackgroundViewing('stale')).toBe(false);
+  await h.controller.request('phone', { op: 'control', lease, enabled: true });
+  expect(h.controller.isBackgroundViewing(lease)).toBe(false);
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: false });
+  expect(vi.mocked(h.deps.videoBackground).mock.calls).toEqual([
+    [lease, true],
+    [lease, false],
+    [lease, true],
+    [lease, false],
+  ]);
+});
+it('keeps background viewing when a control request is refused as busy', async () => {
+  const h = harness(),
+    { lease } = await h.start();
+  let started!: () => void;
+  h.deps.startInput = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        started = resolve;
+      }),
+  );
+  h.deps.videoBackground = vi.fn();
+  const starting = h.controller.request('phone', { op: 'control', lease, enabled: true });
+  await Promise.resolve();
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  await expect(
+    h.controller.request('phone', { op: 'control', lease, enabled: true }),
+  ).rejects.toThrow('DESKTOP_INPUT_BUSY');
+  expect(h.controller.isBackgroundViewing(lease)).toBe(true);
+  expect(vi.mocked(h.deps.videoBackground).mock.calls.at(-1)).toEqual([lease, true]);
+  started();
+  await starting.catch(() => {});
+});

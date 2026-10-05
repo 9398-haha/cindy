@@ -802,6 +802,11 @@ first frame, with host authorization completed in parallel during Home entry.
 Entering releases control. A capture-renderer challenge/pong heartbeat renews
 only a view-only lease after host authorization while the viewer reports actual
 system PiP presentation.
+While background viewing is active the host caps the live video sender at the
+saver tier (2 Mbps, 30 fps, frame rate kept while moving) on the same peer, and
+lifts the cap as soon as the viewer returns to fullscreen or regains control; the
+viewer's own quality choice is not changed. A peer negotiated during background
+viewing starts at the same cap. This is host-local and needs no new capability.
 Closing PiP, closing WebRTC, local disconnect, revocation and the ordinary finite
 lease timeout all terminate background viewing. This does not grant indefinite
 background control or extend the lifetime of unrelated device links.

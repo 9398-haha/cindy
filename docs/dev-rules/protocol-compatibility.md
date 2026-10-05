@@ -179,7 +179,9 @@ Mobile 未新增卡片入口。服务端无需改动。
 `offer.settings` 的画质由码率改为档位 `quality: "auto" | "saver" | "hd"`（自动／省流／高清）。
 控制端只表达意图，具体的码率上限、降级取舍（`auto`/`saver` 先降分辨率保帧数，`hd` 锁分辨率
 降帧数）、截屏分辨率与 JPEG 预算由被控端 `apps/desktop/src/shared/remoteDesktopQuality.ts`
-决定，调整数值无需两端同时发版。
+决定，调整数值无需两端同时发版。控制端处于后台观看（`presentation` 已开启，如手机画中画）
+期间，被控端临时按 `saver` 档的码率／帧率上限编码，回到前台即恢复所选档位；这是被控端本地
+行为，控制端发送的档位不变，也不新增协议字段。
 
 新控制端经 `remoteDesktopVideoSettingsWire` 同时发送档位与旧 `bitrate`（auto→0、saver→2M、
 hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增能力声明。新被控端优先读取

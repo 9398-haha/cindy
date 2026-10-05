@@ -112,6 +112,8 @@ export interface DesktopControllerDeps {
   stopHostMute?(): Promise<void>;
   /** Pauses or resumes sending the lease's current video stream; rejects if not applied. */
   viewerHidden?(lease: string, hidden: boolean): Promise<void>;
+  /** The lease entered or left view-only background viewing (phone picture-in-picture). */
+  videoBackground?(lease: string, background: boolean): void;
   changed(): void;
   now?: () => number;
 }
@@ -206,6 +208,17 @@ export class RemoteDesktopController {
   hasLease(lease: string): boolean {
     this.tick();
     return this.active?.lease === lease;
+  }
+  isBackgroundViewing(lease: string): boolean {
+    return this.active?.lease === lease && this.active.backgroundViewing === true;
+  }
+  private setBackgroundViewing(
+    active: NonNullable<RemoteDesktopController['active']>,
+    enabled: boolean,
+  ) {
+    if ((active.backgroundViewing === true) === enabled) return;
+    active.backgroundViewing = enabled;
+    this.deps.videoBackground?.(active.lease, enabled);
   }
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -797,7 +810,7 @@ export class RemoteDesktopController {
         active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
         return { controlling: active.controlling };
       case 'presentation': {
-        active.backgroundViewing = request.enabled;
+        this.setBackgroundViewing(active, request.enabled);
         if (request.enabled) {
           await this.revokeControl();
         } else {
@@ -807,8 +820,8 @@ export class RemoteDesktopController {
       }
       case 'control': {
         if (this.locking) throw new Error('DESKTOP_BUSY');
-        if (request.enabled) active.backgroundViewing = false;
         if (request.enabled && this.inputStarting) throw new Error('DESKTOP_INPUT_BUSY');
+        if (request.enabled) this.setBackgroundViewing(active, false);
         if (!request.enabled) {
           await this.revokeControl();
           return { controlling: active.controlling };
