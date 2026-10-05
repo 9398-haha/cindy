@@ -17203,6 +17203,8 @@ function setSessionRuntime(
     planModeEnabled?: boolean;
     /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */
     remoteHostId?: string | null;
+    /** Seed before hydration so a draft-route first send carries the chosen source in createOpts. */
+    sessionProviderId?: string | null;
     /** Disable automatic first-message renaming for product-owned titled sessions. */
     autoTitleDisabled?: boolean;
   },
@@ -17215,12 +17217,16 @@ function setSessionRuntime(
     const nextRemoteHostId = Object.hasOwn(opts, 'remoteHostId')
       ? (opts.remoteHostId ?? null)
       : s.remoteHostId;
+    const nextSessionProviderId = Object.hasOwn(opts, 'sessionProviderId')
+      ? (opts.sessionProviderId ?? null)
+      : s.sessionProviderId;
     const nextAutoTitleDisabled = opts.autoTitleDisabled ?? s.autoTitleDisabled;
     if (
       s.agentKind === nextAgentKind &&
       s.fastMode === nextFastMode &&
       s.planModeEnabled === nextPlanMode &&
       s.remoteHostId === nextRemoteHostId &&
+      s.sessionProviderId === nextSessionProviderId &&
       s.autoTitleDisabled === nextAutoTitleDisabled
     )
       return s;
@@ -17230,6 +17236,7 @@ function setSessionRuntime(
       fastMode: nextFastMode,
       planModeEnabled: nextPlanMode,
       remoteHostId: nextRemoteHostId,
+      sessionProviderId: nextSessionProviderId,
       autoTitleDisabled: nextAutoTitleDisabled,
       ...(s.planModeEnabled !== nextPlanMode ? { planModeRev: s.planModeRev + 1 } : {}),
     };
