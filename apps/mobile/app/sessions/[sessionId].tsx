@@ -379,6 +379,7 @@ import {
   buildPendingSendItems,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
+import { isSourceDeviceRemoved } from '@/session/messageSourceLabels';
 import {
   appendOptimisticUserMessage,
   confirmedHistoryUserClientIds,
@@ -5851,9 +5852,6 @@ export default function SessionScreen() {
     return collectConversationShareMessages(
       messageListItems,
       isFoldableBlockExpanded,
-      (origin) => origin.scheduleName
-        ? t('message.renderer.automationOriginNamed', { name: origin.scheduleName })
-        : t('message.renderer.automationOrigin'),
     );
   }, [
     i18nInstance.language,
@@ -8804,6 +8802,19 @@ export default function SessionScreen() {
     });
   }, [deviceId, deviceName, router, sessionId]);
 
+  // 「从手机 / 电脑「X」发送」设备标签点击:打开设备详情。设备清单已加载且不含该设备时
+  // 直接提示已移除;清单还没拉到时照常进入详情页,由详情页给出「未找到」。
+  const openSourceDevice = useCallback((sourceDeviceId: string) => {
+    if (isSourceDeviceRemoved(sourceDeviceId, remoteSessionStore.getDeviceIdentity())) {
+      Alert.alert(t('message.renderer.sourceDeviceRemoved'));
+      return;
+    }
+    router.push({
+      pathname: '/devices/manage/[deviceId]',
+      params: { deviceId: sourceDeviceId },
+    });
+  }, [router, t]);
+
   // 正文里会话深链 chip(xdt-maker://session/<id>[?message=<clientId>])点击:
   // 同会话带锚点 → setParams 原地定位(不 push 同页新栈帧);跨会话 → 反查所属
   // 设备后 push,锚点透传给目标屏的 focusClientId 流程。
@@ -9609,6 +9620,9 @@ export default function SessionScreen() {
                     onLoadToolInput={loadToolInput}
                     onOpenForkOrigin={forkOrigin ? openForkOrigin : undefined}
                     onOpenOriginSession={openOriginSession}
+                    // 设备来源标签只标别的设备发来的消息:本机发出的不标。
+                    viewerDeviceId={auth.deviceId}
+                    onOpenSourceDevice={openSourceDevice}
                     onBlockingOverlayChange={handleMessageBlockingOverlayChange}
                     onOpenSessionLink={openSessionLink}
                     onPreviewRewind={isSharedTaskPeer(deviceId) ? undefined : previewRewindAtMessage}

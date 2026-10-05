@@ -22,6 +22,7 @@ import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
+import { promptSafeSourceName } from '@cindy/maker-shared/message-source';
 
 const MAX_CAPTURED_TEXT = 64 * 1024;
 
@@ -411,12 +412,38 @@ export function formatOrcaCommunicationMessage(
   return JSON.stringify({ orcaSource, content });
 }
 
-export function formatAgentMessage(source: 'lead' | 'worker', content: string, workerId?: string): string {
-  const label = source === 'lead' ? '[From Orca Lead]' : '[From Orca Worker]';
-  if (source === 'lead' && workerId) {
-    return `${label}\n${content}\n\n---\n(Bridge note: your worker_id for tool calls is ${workerId}.)`;
+/**
+ * lead 来源的 workerId 是收件 worker(写进 Bridge note 供其调工具);
+ * worker 来源的 workerId / workerRole 是发件 worker,写进前缀让 lead 分清是谁的回报:
+ * `[From Orca Worker <role> (worker_id: <id>)]`。role 来自建 worker 时的入参,
+ * 按不可信展示文本处理(单行、限长、去掉方括号以免提前闭合前缀);两者都缺时
+ * 才退回 `[From Orca Worker]`。
+ */
+export function formatAgentMessage(
+  source: 'lead' | 'worker',
+  content: string,
+  workerId?: string,
+  workerRole?: string,
+): string {
+  if (source === 'lead') {
+    const label = '[From Orca Lead]';
+    if (workerId) {
+      return `${label}\n${content}\n\n---\n(Bridge note: your worker_id for tool calls is ${workerId}.)`;
+    }
+    return `${label}\n${content}`;
   }
-  return `${label}\n${content}`;
+  return `${formatOrcaWorkerLabel(workerId, workerRole)}\n${content}`;
+}
+
+function formatOrcaWorkerLabel(workerId: string | undefined, workerRole: string | undefined): string {
+  // 与其它来源名字同一规则(promptSafeSourceName):方括号/圆括号转全角,角色名既闭合不了
+  // 前缀,也冒充不了 `(worker_id: …)`。
+  const role = promptSafeSourceName(workerRole);
+  const id = workerId?.replace(/[\s()[\]「」]+/g, '').slice(0, 128);
+  const parts = ['From Orca Worker'];
+  if (role) parts.push(role);
+  if (id) parts.push(`(worker_id: ${id})`);
+  return `[${parts.join(' ')}]`;
 }
 
 function captureSessionOutput(
@@ -756,7 +783,9 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
           };
           const dispatchError = await dispatchOrcaToolMessage({
             session: liveEntry.session,
-            message: { type: 'user', content: formatAgentMessage('worker', message) },
+            // 宿主派发路径(dispatchInterAgentMessage)会按 workerId 反查 role 再包前缀;
+            // 这里是无宿主派发时的直发兜底,link 上没有 role,只带 worker_id。
+            message: { type: 'user', content: formatAgentMessage('worker', message, link.workerId) },
             deps,
             rawContent: message,
             source: 'worker',

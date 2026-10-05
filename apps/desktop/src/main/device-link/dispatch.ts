@@ -4048,6 +4048,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
         // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
         controllerPlatform: getControllerPlatform(src),
+        // 来源展示名快照:presence / 目录权威名优先,其次控制帧自报名;只用于归属展示。
+        controllerName: resolveControllerName(src, undefined),
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
