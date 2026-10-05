@@ -533,22 +533,26 @@ export class DesktopViewerController {
       return;
     const stream = this.videoStream;
     this.hiddenBusy = true;
-    let next = false;
+    let failed = false;
     try {
       await this.request({ op: 'viewerHidden', lease: lease.lease, hidden });
-      if (stream === this.videoStream) this.videoHidden = hidden;
-      next = true;
     } catch {
-      next = stream !== this.videoStream;
-      // A failed resume must not leave the picture frozen: a new offer starts unpaused.
-      if (!next && !hidden && this.session.lease === lease) {
-        this.pendingSettings = true;
-        this.applySettings();
-      }
+      failed = true;
     } finally {
       this.hiddenBusy = false;
     }
-    if (next) void this.syncHidden();
+    if (stream === this.videoStream) {
+      // Even an unacknowledged request may have applied, so track it as applied:
+      // showing then always sends a resume. A resume that may not have applied
+      // must not leave the picture frozen: rebuild, since a new offer starts unpaused.
+      this.videoHidden = hidden;
+      if (failed && !hidden && this.session.lease === lease) {
+        this.pendingSettings = true;
+        this.applySettings();
+      }
+    }
+    // Terminates: after any outcome videoHidden equals the requested state.
+    void this.syncHidden();
   }
   actualSize(): void {
     const lease = this.session.lease;

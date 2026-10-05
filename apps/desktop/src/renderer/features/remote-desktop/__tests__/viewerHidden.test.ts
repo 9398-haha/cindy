@@ -22,7 +22,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function setup({ viewerHidden = true, failResume = false } = {}) {
+async function setup({ viewerHidden = true, failResume = false, failPause = false } = {}) {
   vi.useFakeTimers();
   const requests: RemoteDesktopRequest[] = [];
   const api = {
@@ -62,6 +62,8 @@ async function setup({ viewerHidden = true, failResume = false } = {}) {
       if (request.op === 'frame') return { jpeg: 'AAAA' };
       if (request.op === 'viewerHidden' && failResume && !request.hidden)
         throw new Error('DESKTOP_REQUEST_FAILED');
+      if (request.op === 'viewerHidden' && failPause && request.hidden)
+        throw new Error('INVOKE_TIMEOUT');
       return {};
     },
   } satisfies RemoteDesktopViewerApi;
@@ -142,4 +144,38 @@ it('stops screenshot polling while hidden and resumes it when shown', async () =
   h.controller.setHidden(false);
   await vi.advanceTimersByTimeAsync(700);
   expect(frames()).toBeGreaterThan(paused);
+});
+
+it('always resumes on show after a pause whose outcome is unknown', async () => {
+  const h = await setup({ failPause: true });
+  h.receive({ type: 'streaming' });
+  h.controller.setHidden(true);
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(h.hidden()).toEqual([true]);
+  h.controller.setHidden(false);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.hidden()).toEqual([true, false]);
+});
+
+it('resumes when shown while an unacknowledged pause was still in flight', async () => {
+  let fail!: (error: Error) => void;
+  const h = await setup();
+  h.receive({ type: 'streaming' });
+  h.controller.setHidden(true);
+  // Hold the pause in flight, then show before it settles.
+  const original = (h.controller as any).request;
+  (h.controller as any).request = (value: any) =>
+    value.op === 'viewerHidden' && value.hidden
+      ? (h.requests.push(value),
+        new Promise((_, reject) => {
+          fail = reject;
+        }))
+      : original(value);
+  await vi.advanceTimersByTimeAsync(1500);
+  h.controller.setHidden(false);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.hidden()).toEqual([true]);
+  fail(new Error('INVOKE_TIMEOUT'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.hidden()).toEqual([true, false]);
 });
