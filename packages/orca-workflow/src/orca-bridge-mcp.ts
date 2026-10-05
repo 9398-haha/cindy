@@ -461,57 +461,6 @@ function captureSessionOutput(
   }
 }
 
-// B(worker→lead) 仍保留 package 内 pending map: worker 主动 send_to_lead accepted
-// 后会清这里，避免 legacy A 尚在的旧会话或测试环境重复 auto-bridge。
-interface AutoBridgeState {
-  pending: boolean;
-  ready: boolean;
-  inFlight: boolean;
-  version: number;
-  deferred?: {
-    finalText: string;
-    status: 'done' | 'error';
-  };
-}
-
-const workerAutoBridgePending = new Map<string, AutoBridgeState>();
-
-function peekAutoBridgeState(workerId: string): AutoBridgeState | null {
-  return workerAutoBridgePending.get(workerId) ?? null;
-}
-
-function setAutoBridgePending(workerId: string, pending: boolean): void {
-  if (!pending) {
-    workerAutoBridgePending.delete(workerId);
-    return;
-  }
-  let state = peekAutoBridgeState(workerId);
-  if (!state) {
-    state = { pending: false, ready: false, inFlight: false, version: 0 };
-    workerAutoBridgePending.set(workerId, state);
-  }
-  state.pending = pending;
-  state.ready = false;
-  state.inFlight = false;
-  state.deferred = undefined;
-  state.version += 1;
-}
-
-function hasAutoBridgePending(workerId: string): boolean {
-  return peekAutoBridgeState(workerId)?.pending ?? false;
-}
-
-function clearAutoBridgePending(workerId: string): void {
-  workerAutoBridgePending.delete(workerId);
-}
-
-export const __testing = {
-  autoBridgeStateCount: () => workerAutoBridgePending.size,
-  clearAutoBridgeState: clearAutoBridgePending,
-  hasAutoBridgePending,
-  setAutoBridgePending,
-};
-
 function attachSessionCapture(entry: CapturedSessionEntry): void {
   if (!entry.session) return;
   if (entry.captureDispose) return;
@@ -795,7 +744,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             liveEntry.lastEventAt = Date.now();
           };
           // worker 回报被 host 接收(直发 accept 或入队成功)即视为"已回报": 立刻标 done +
-          // 清 autoBridgePending。不能等排队消息 drain 到 lead 才清 —— lead 忙时 worker
+          // Host 负责结清 auto-bridge pending。不能等排队消息 drain 到 lead 才清 —— lead 忙时 worker
           // 自己的 turn 会先结束, turn-end 兜底看到 pending 还在会把它当"忘了回报"再补
           // 一条桥接, lead 收到两条重复报告。幂等守卫同时防住 drain 时 hostOnAccepted
           // 二次触发: 那时 worker 可能已被重新派活(running), 不能再改回 done。
@@ -804,7 +753,6 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             if (workerReportSettled) return;
             workerReportSettled = true;
             updatePersistedWorkerStatus(deps, link.workerId, 'done', log);
-            setAutoBridgePending(link.workerId, false);
           };
           const dispatchError = await dispatchOrcaToolMessage({
             session: liveEntry.session,
@@ -830,7 +778,8 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             },
             getLogState: () => ({
               workerStatus: liveEntry.status,
-              autoBridgePending: hasAutoBridgePending(link.workerId),
+              // 自动回报 pending 由 Host 管理；保留既有诊断字段。
+              autoBridgePending: false,
             }),
             onAccepted: markLeadDispatchAccepted,
             hostOnAccepted: () => {

@@ -12,7 +12,6 @@ import type {
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  __testing,
   authorizeSendToLeadCaller,
   createOrcaWorkerBridgeMcpProvider,
   SEND_TO_LEAD_TOOL_DESCRIPTION,
@@ -208,7 +207,7 @@ function expectStructuredSendWarning(
   expect(entry?.ctx).toHaveProperty('reason');
   expect(entry?.ctx).toHaveProperty('context');
   expect(entry?.ctx).toHaveProperty('workerStatus');
-  expect(entry?.ctx).toHaveProperty('autoBridgePending');
+  expect(entry?.ctx).toHaveProperty('autoBridgePending', false);
   return entry as FakeLogEntry;
 }
 
@@ -357,26 +356,19 @@ describe('orca_worker_bridge MCP helpers', () => {
       worker_id: 'worker-1',
     }))).toMatchObject({ lead_session_id: 'lead-1' });
     const lookupCount = getWorkerLink.mock.calls.length;
-    __testing.setAutoBridgePending('worker-1', true);
-
-    try {
-      expect(expectToolError(await server._registeredTools.send_to_lead.handler({
-        worker_id: 'forged-worker-id',
-        message: 'partial child result',
-      }))).toMatchObject({ code: expectedCode });
-      expect(getWorkerLink).toHaveBeenCalledTimes(lookupCount);
-      expect(dispatchInterAgentMessage).not.toHaveBeenCalled();
-      expect(createSessionCalls).toEqual([]);
-      expect(persisted).toEqual([]);
-      expect(statusUpdates).toEqual([]);
-      expect(lead.sent).toEqual([]);
-      expect(__testing.hasAutoBridgePending('worker-1')).toBe(true);
-      expect(parseToolJson(await server._registeredTools.lead_status.handler({
-        worker_id: 'worker-1',
-      }))).toMatchObject({ lead_session_id: 'lead-1' });
-    } finally {
-      __testing.clearAutoBridgeState('worker-1');
-    }
+    expect(expectToolError(await server._registeredTools.send_to_lead.handler({
+      worker_id: 'forged-worker-id',
+      message: 'partial child result',
+    }))).toMatchObject({ code: expectedCode });
+    expect(getWorkerLink).toHaveBeenCalledTimes(lookupCount);
+    expect(dispatchInterAgentMessage).not.toHaveBeenCalled();
+    expect(createSessionCalls).toEqual([]);
+    expect(persisted).toEqual([]);
+    expect(statusUpdates).toEqual([]);
+    expect(lead.sent).toEqual([]);
+    expect(parseToolJson(await server._registeredTools.lead_status.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({ lead_session_id: 'lead-1' });
   });
 
   it('reads only the owning Lead history without creating or waking the Lead', async () => {
@@ -555,27 +547,25 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(statusUpdates).toEqual([]);
   });
 
-  it('does not retain settled auto-bridge state after send_to_lead succeeds', async () => {
+  it('persists the report and marks the worker done after send_to_lead succeeds', async () => {
     const lead = makeSession('lead-1');
-    const { server } = makeWorkerBridgeLeadHarness(lead);
-    __testing.clearAutoBridgeState('worker-1');
+    const { server, persisted, statusUpdates } = makeWorkerBridgeLeadHarness(lead);
+    const result = await server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: 'completed work',
+    });
 
-    try {
-      const result = await server._registeredTools.send_to_lead.handler({
-        worker_id: 'worker-1',
-        message: 'completed work',
-      });
-
-      expect(parseToolJson(result)).toMatchObject({
-        ok: true,
-        worker_id: 'worker-1',
-        lead_session_id: 'lead-1',
-      });
-      expect(__testing.hasAutoBridgePending('worker-1')).toBe(false);
-      expect(__testing.autoBridgeStateCount()).toBe(0);
-    } finally {
-      __testing.clearAutoBridgeState('worker-1');
-    }
+    expect(parseToolJson(result)).toMatchObject({
+      ok: true,
+      worker_id: 'worker-1',
+      lead_session_id: 'lead-1',
+    });
+    expect(persisted).toEqual([{
+      sessionId: 'lead-1',
+      content: JSON.stringify({ orcaSource: 'worker', content: 'completed work' }),
+    }]);
+    expect(statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    expect(lead.sent).toHaveLength(1);
   });
 
   it('hydrates lead provider route before cold send_to_lead creates the lead session', async () => {
