@@ -29,6 +29,12 @@ import { Switch } from '@/components/ui/switch';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 
+// Fullscreen keeps an 8px toolbar strip visible. Electron drag regions swallow
+// hover and macOS slides its own menu bar over the top edge, so reveal is
+// pointer-driven and only collapses once the pointer moves back into the stage.
+const TOOLBAR_REVEAL_EDGE = 8;
+const TOOLBAR_HIDE_MARGIN = 16;
+
 const QUALITY_LABELS = {
   auto: 'remoteDesktop.viewer.automatic',
   saver: 'remoteDesktop.viewer.saver',
@@ -41,12 +47,14 @@ export function RemoteDesktopViewerWindow() {
   const { isMac, isFullscreen } = useMacFullscreen();
   const api = window.electronAPI.remoteDesktopViewer;
   const root = useRef<HTMLDivElement>(null),
+    toolbar = useRef<HTMLElement>(null),
     controller = useRef<DesktopViewerController | null>(null);
   const [state, setState] = useState<ViewerSnapshot | null>(null);
   const [settings, setSettings] = useState<'display' | 'clipboard' | 'security' | null>(null),
     [selectOpen, setSelectOpen] = useState(false),
     [notice, setNotice] = useState<string | null>(null),
     [closeGeneration, setCloseGeneration] = useState<number | null>(null);
+  const [toolbarRevealed, setToolbarRevealed] = useState(false);
   const [modes, setModes] = useState<RemoteDesktopDisplayMode[]>([]);
   const [modesStatus, setModesStatus] = useState<'idle' | 'loading' | 'failed'>('idle');
   const generation = useRef(-1);
@@ -67,6 +75,17 @@ export function RemoteDesktopViewerWindow() {
     }
     setCloseGeneration(generation.current);
   }, []);
+  useEffect(() => {
+    setToolbarRevealed(false);
+    if (!isFullscreen) return;
+    const move = (event: PointerEvent) => {
+      if (event.clientY <= TOOLBAR_REVEAL_EDGE) setToolbarRevealed(true);
+      else if (event.clientY > (toolbar.current?.offsetHeight ?? 0) + TOOLBAR_HIDE_MARGIN)
+        setToolbarRevealed(false);
+    };
+    window.addEventListener('pointermove', move, true);
+    return () => window.removeEventListener('pointermove', move, true);
+  }, [isFullscreen]);
   useEffect(() => {
     if (!root.current) return;
     controller.current = new DesktopViewerController(api, root.current, (snapshot) => {
@@ -215,7 +234,9 @@ export function RemoteDesktopViewerWindow() {
       }}
     >
       <header
+        ref={toolbar}
         className="remote-viewer-toolbar"
+        data-revealed={toolbarRevealed || undefined}
         data-settings-open={!!settings || undefined}
         data-select-open={selectOpen || undefined}
         style={{ paddingLeft: isMac && !isFullscreen ? 82 : 12 }}
