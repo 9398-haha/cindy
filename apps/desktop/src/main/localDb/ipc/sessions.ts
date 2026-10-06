@@ -1361,6 +1361,14 @@ export function registerSessionIpc(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
     }
+    // Agent 在同账号另一台电脑运行：只接受设备 id 形态的值(与 maker:create-session 同一规则)。
+    if (
+      bodyObj.agentDeviceId !== undefined &&
+      bodyObj.agentDeviceId !== null &&
+      (typeof bodyObj.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(bodyObj.agentDeviceId))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
+    }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =

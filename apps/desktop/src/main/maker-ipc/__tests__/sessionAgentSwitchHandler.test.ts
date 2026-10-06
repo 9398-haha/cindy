@@ -491,6 +491,16 @@ describe('performSessionAgentSwitch', () => {
     expect(onPendingSwitchChanged).not.toHaveBeenCalled();
   });
 
+  it('passes the switched task to the route check so a task whose agent runs elsewhere is judged there', async () => {
+    const assertModelRouteUsable = vi.fn(async () => undefined);
+    const { deps } = makeDeps({ assertModelRouteUsable });
+    await performSessionAgentSwitch(deps, validParams);
+    expect(assertModelRouteUsable).toHaveBeenCalled();
+    for (const call of assertModelRouteUsable.mock.calls as unknown[][]) {
+      expect(call[3]).toBe(validParams.sessionId);
+    }
+  });
+
   it('turn 进行中抛 SESSION_RUNNING,不触碰任何状态', async () => {
     const { deps, calls } = makeDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => true })),

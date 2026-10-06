@@ -377,9 +377,11 @@ describe('ChatInput model source switching wiring', () => {
     // device-link 老被控端 capabilities-only:联合列表的数据源是供应商目录,没有目录
     // 就是一张空列表。判据必须是结构化的 unsupported,不是 providers.length===0
     // (后者在加载中恒成立,会让面板每次打开先闪一下旧布局)。
+    // 目录所在电脑 = 远程任务的被控端,或 Agent 在另一台电脑运行时的那台。
     expect(chatInputSource).toContain(
-      'const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;',
+      'const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;',
     );
+    expect(chatInputSource).toContain('const catalogDeviceId = deviceLinkDeviceId ?? agentDeviceId ?? undefined;');
   });
 
   /**

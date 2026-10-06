@@ -131,6 +131,8 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     agent: 'claude-code' | 'codex' | 'pi',
     model: string,
     providerId: string | null,
+    /** 被切换的任务；Agent 在另一台电脑运行的任务按那台的目录裁决(本机不校验)。 */
+    sessionId?: string,
   ): Promise<string | undefined>;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
@@ -264,6 +266,11 @@ export interface PendingAgentSwitchIntent {
   providerId: string | null | undefined;
   effort?: string;
   fastMode?: boolean;
+  /**
+   * Agent 在另一台电脑运行的任务：点选时按那台的目录确认过的目标上下文窗口。本机目录里没有
+   * 那台的模型，发送时据此做「换小窗口前先交接」。本机任务不设。
+   */
+  confirmedContextWindow?: number;
   /** resume 回落事务失败后的内部恢复载荷；下一次 send 先重试这笔原子事务。 */
   resumeFallbackRecovery?: {
     boundaryClientId: string | null;
@@ -416,6 +423,7 @@ export async function performSessionAgentSwitch(
       targetAgentKind,
       model,
       typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+      sessionId,
     );
     if (reroute && shouldApplyExclusiveProviderRerouteLive(normalizedProviderId)) {
       normalizedProviderId = reroute;
@@ -581,6 +589,7 @@ export async function performSessionAgentSwitch(
         targetAgentKind,
         model,
         typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+        sessionId,
       );
       if (rerouteAtCommit && typeof normalizedProviderId !== 'string') {
         normalizedProviderId = rerouteAtCommit;

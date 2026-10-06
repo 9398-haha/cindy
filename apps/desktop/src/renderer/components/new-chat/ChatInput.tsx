@@ -527,6 +527,12 @@ interface ChatInputProps {
    */
   deviceLinkDeviceId?: string | null;
   /**
+   * 本机任务、但 Agent 在同账号另一台电脑上运行:那台电脑的 deviceId。只决定**模型目录**
+   * (能力、供应商、可用引擎)从哪台读 —— 任务、文件、命令、斜杠命令、附件仍按本机任务处理,
+   * 切换模型也走本机 IPC(由本机转给那台的 Agent)。与 deviceLinkDeviceId 互斥。
+   */
+  agentDeviceId?: string | null;
+  /**
    * device-link「纯显示镜像」记忆 override:非空时优先于本机全局模型预设注入 ModelSelector,
    * 用于远程草稿 / 远程会话——非选中行读被控端镜像、改动经隧道写穿被控端,绝不碰控制端本地记忆
    * (newMakerDraft / providerModelMemory)。由 NewMakerDraftRoute(草稿)/
@@ -1111,6 +1117,7 @@ export function ChatInput({
   initialWorkingDir,
   remoteHostId,
   deviceLinkDeviceId: _deviceLinkDeviceId,
+  agentDeviceId: _agentDeviceId,
   modelMemoryOverride,
   initialModel,
   initialEffort,
@@ -1188,6 +1195,10 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
+  /** Agent 在另一台电脑运行的本机任务(只影响模型目录来源)。 */
+  const agentDeviceId = deviceLinkDeviceId ? null : (_agentDeviceId ?? null);
+  /** 模型目录所在的电脑:远程任务在那台;Agent 在另一台电脑运行时也是那台。 */
+  const catalogDeviceId = deviceLinkDeviceId ?? agentDeviceId ?? undefined;
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1726,9 +1737,9 @@ export function ChatInput({
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link 远程会话:能力(模型 / fast / effort)从被控端读;本地会话 deviceLinkDeviceId undefined → 本地。
-  const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
-  const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
-  const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
+  const ccCaps = useAgentCapabilities('claude-code', catalogDeviceId);
+  const codexCaps = useAgentCapabilities('codex', catalogDeviceId);
+  const piCaps = useAgentCapabilities('pi', catalogDeviceId);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
@@ -1856,8 +1867,8 @@ export function ChatInput({
   const sshCodexHostId = currentModelAgentKind === 'codex' && !deviceLinkDeviceId ? remoteHostId : null;
   const sshCodexProviders = useSshCodexProviders(sshCodexHostId);
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceLinkDeviceId ?? undefined);
-  const providers = deviceLinkDeviceId ? remoteProviders.providers
+  const remoteProviders = useDeviceProviders(catalogDeviceId);
+  const providers = catalogDeviceId ? remoteProviders.providers
     : sshCodexHostId ? sshCodexProviders.providers : localProviders.providers;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
@@ -1873,14 +1884,14 @@ export function ChatInput({
   // provider 目录，且真实读取失败时 fail closed。只有结构化 unsupported 才允许旧端回退。
   const { loading: localProvidersLoading } = useConnectedSource(currentModelAgentKind, activeModel);
   const remoteModelListStatus = resolveRemoteModelListStatus({
-    deviceId: deviceLinkDeviceId ?? undefined,
+    deviceId: catalogDeviceId,
     agentKind: currentModelAgentKind,
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
     providers: remoteProviders,
   });
-  const providersLoading = deviceLinkDeviceId
+  const providersLoading = catalogDeviceId
     ? remoteModelListStatus === 'loading'
     : sshCodexHostId ? sshCodexProviders.status === 'loading' : localProvidersLoading;
   // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
@@ -1892,13 +1903,13 @@ export function ChatInput({
   // 的「已知边界」)。unsupported 是**结构化**判定(isDeviceProvidersUnsupportedError),
   // 不是 providers.length===0:后者在首帧加载中恒成立,拿它当条件会让面板每次打开先闪
   // 一下旧版布局。
-  const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;
+  const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;
   // 联合列表参与哪些引擎 —— 以**运行时注册结果**为准(device-link 取被控端的)。
   // 撤掉新会话工具条的 AgentSelect 后,它的 hiddenVendors 门禁就落到这里:Pi 二进制缺失
   // 时模型目录照样投影 Pi 模型,只看目录会让用户一路选到 requireAgent 的 not-registered。
   // 未加载完成 → 传 undefined(fail-open,不隐藏任何引擎);当前引擎恒在列。
   const { availableVendors: runtimeAvailableVendors, loaded: runtimeAgentsLoaded } =
-    useAvailableAgents(deviceLinkDeviceId);
+    useAvailableAgents(catalogDeviceId);
   const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
     if (!runtimeAgentsLoaded) return undefined;
     const kinds = UNIFIED_AGENT_KINDS.filter(
@@ -1915,9 +1926,9 @@ export function ChatInput({
     !!activeModel && activeModel === (runtimeEffective?.model ?? initialModel) &&
     (activeProviderId ?? null) === (runtimeEffective ? runtimeEffective.providerId ?? null : initialProviderId ?? null) &&
     (!activeProviderId || activeProviderId === 'openai');
-  const enforceConnectedSourceGate = (!sessionId || !deviceLinkDeviceId) && !preserveSshCodexRoute;
+  const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
   const remoteModelListBlocked =
-    (!!deviceLinkDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
+    (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
     (!!sshCodexHostId && sshCodexProviders.status !== 'ready');
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
@@ -1938,7 +1949,7 @@ export function ChatInput({
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
     // provider 镜像误判成权威的「没有已连接来源」。
-    (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
+    (!catalogDeviceId || !remoteProviders.unsupported) &&
     !hasConnectedSendSource;
 
   // 会话显式选中的来源已断开(如外部删除订阅 OAuth 凭证):trigger 显示「已断开」错误态 +
@@ -1949,7 +1960,7 @@ export function ChatInput({
   // providersLoading 期间不判(规则同 noConnectedSource,避免首帧闪断开态)。
   const selectedSourceDisconnected =
     !!sessionId &&
-    !deviceLinkDeviceId &&
+    !catalogDeviceId &&
     !preserveSshCodexRoute &&
     isSelectedSourceDisconnected({
       providers,
@@ -1986,7 +1997,8 @@ export function ChatInput({
     if (sshCodexHostId) return undefined;
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
-    if (deviceLinkDeviceId) return undefined;
+    // 模型目录在另一台电脑时不掺本机记忆(那台的来源 id 与本机的不是一回事)。
+    if (catalogDeviceId) return undefined;
     return {
       getEffort: getProviderModelEffort,
       setEffort: setProviderModelEffort,
@@ -2000,7 +2012,7 @@ export function ChatInput({
       clearEffort: clearProviderModelEffort,
       clearFast: clearProviderModelFast,
     };
-  }, [deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
+  }, [catalogDeviceId, modelMemoryOverride, sshCodexHostId]);
 
   // 把「用户在当前来源下选定的 (model, effort)」记进模型全局预设,供其它非活跃行和之后的
   // 模型切换恢复。agent / 来源缺失(未知模型 / 0 已连接来源)/ device-link 无镜像时静默跳过。
@@ -2011,12 +2023,12 @@ export function ChatInput({
       if (kind && effectiveSourceId && modelId) {
         if (modelMemory?.setChoice) {
           modelMemory.setChoice(kind, effectiveSourceId, modelId, eff);
-        } else if (!deviceLinkDeviceId) {
+        } else if (!catalogDeviceId) {
           setProviderModelChoice(kind, effectiveSourceId, modelId, eff);
         }
       }
     },
-    [currentModelAgentKind, effectiveSourceId, modelMemory, deviceLinkDeviceId, sshCodexHostId],
+    [currentModelAgentKind, effectiveSourceId, modelMemory, catalogDeviceId, sshCodexHostId],
   );
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
@@ -6072,8 +6084,8 @@ export function ChatInput({
       providerId?: string | null,
       targetAgentKind?: AgentKind,
     ): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
-      if (deviceLinkDeviceId) {
-        const m = getModelById(modelId, deviceLinkDeviceId);
+      if (catalogDeviceId) {
+        const m = getModelById(modelId, catalogDeviceId);
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
       }
       const kinds: readonly AgentKind[] = targetAgentKind
@@ -6101,7 +6113,7 @@ export function ChatInput({
       const legacy = getModelById(modelId);
       return { efforts: legacy?.efforts ?? [], defaultEffort: legacy?.defaultEffort ?? null };
     },
-    [deviceLinkDeviceId, currentModelAgentKind, providers],
+    [catalogDeviceId, currentModelAgentKind, providers],
   );
 
   // 解析切到某 (供应商, 模型) 时应恢复的 fast —— 先读 (agent, model) 全局预设,再按目标来源
@@ -6114,7 +6126,7 @@ export function ChatInput({
   const modelFastSupported = useCallback(
     (targetModelId: string, providerId: string | null): boolean =>
       resolveFastSupported({
-        deviceId: deviceLinkDeviceId ?? undefined,
+        deviceId: catalogDeviceId,
         deviceProviders: remoteProviders.providers,
         localProviders: providers,
         capabilities:
@@ -6128,7 +6140,7 @@ export function ChatInput({
         agentKind: currentModelAgentKind,
       }),
     [
-      deviceLinkDeviceId,
+      catalogDeviceId,
       remoteProviders.providers,
       providers,
       currentModelAgentKind,
@@ -6164,7 +6176,8 @@ export function ChatInput({
       } = {},
     ) => {
       const agentKind = opts.agentKind ?? currentModelAgentKind;
-      if (!sessionId || !agentKind || !modelId || sshCodexHostId) return;
+      // Agent 在另一台电脑运行的任务:模型属于那台的目录,不写回本机的新建任务记忆。
+      if (!sessionId || !agentKind || !modelId || sshCodexHostId || agentDeviceId) return;
       const activeProviderId =
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
@@ -6211,7 +6224,7 @@ export function ChatInput({
           log.warn('session draft model preference sync failed:', err);
         });
     },
-    [sessionId, deviceLinkDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
+    [sessionId, deviceLinkDeviceId, agentDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
   );
 
   const persistFastModeChange = useCallback(
@@ -9061,7 +9074,7 @@ export function ChatInput({
                           }
                         : undefined
                     }
-                    deviceId={deviceLinkDeviceId ?? undefined}
+                    deviceId={catalogDeviceId}
                     // SSH 远程会话隐藏订阅直连模型(chatgpt/ / xai/):bridge 只挂在本地 compat-proxy,
                     // 远程模式走 remoteEndpoint 不经翻译,选了必失败。
                     excludeSubscriptionDirect={!!remoteHostId}

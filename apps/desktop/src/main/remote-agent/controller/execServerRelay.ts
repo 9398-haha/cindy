@@ -1,0 +1,240 @@
+/**
+ * Codex exec-server 中继(控制端)。
+ *
+ * 对方电脑上的 Codex 把本机当成一个远程执行环境(Codex 原生的 environment/exec-server 机制)：
+ * 它连到对方本机隧道的 WebSocket，帧经设备互联到达这里，本机为每条连接起一个
+ * `codex exec-server --listen stdio://`，命令、读写文件、补丁都在本机执行。
+ *
+ * 每个请求转给 exec-server 之前先过本机权限上限(与 Claude Code / Pi 同一个闸门)：
+ * 凭证类路径与高危命令只认本机用户批准过的同一操作；不通过就直接回 JSON-RPC 错误。
+ */
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import {
+  REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
+  REMOTE_AGENT_MAX_PUSH_CHARS,
+  REMOTE_AGENT_MAX_PUSH_FRAMES,
+  type RemoteAgentPushFrame,
+  type RemoteAgentStreamItem,
+} from '@cindy/device-link';
+
+import type { ExecutorAction, ExecutorGateDecision } from '../executor/gate';
+
+export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
+/** exec-server 单行(一条 JSON-RPC 消息)上限：大文件读写的 base64 也在这里面。 */
+const MAX_LINE_CHARS = 48 * 1024 * 1024;
+/** 单帧数据上限，留出 JSON 包装余量。 */
+const FRAME_CHARS = REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS - 1024;
+
+export interface ExecServerRelayDeps {
+  codexPath: string;
+  cwd: string;
+  authorize(action: ExecutorAction): ExecutorGateDecision;
+  push(frames: RemoteAgentPushFrame[]): Promise<void>;
+  env?: NodeJS.ProcessEnv;
+  log?: { warn(message: string, meta?: Record<string, unknown>): void };
+}
+
+interface Connection {
+  child: ChildProcessWithoutNullStreams;
+  buffer: string;
+  closed: boolean;
+}
+
+/** `["/bin/zsh","-lc","cmd"]` → `cmd`；其它形态按空格拼接。 */
+export function execServerCommand(argv: unknown): string | null {
+  if (!Array.isArray(argv) || argv.length === 0 || !argv.every((part) => typeof part === 'string')) return null;
+  const parts = argv as string[];
+  if (parts.length >= 3 && /^-l?c$/.test(parts[parts.length - 2]) && /(^|\/)(ba|z|da|k)?sh$/.test(parts[0])) {
+    return parts[parts.length - 1];
+  }
+  return parts.join(' ');
+}
+
+function fromFileUrl(value: unknown, base: string): string | null {
+  if (typeof value !== 'string' || !value) return null;
+  if (value.startsWith('file://')) {
+    try {
+      return fileURLToPath(value);
+    } catch {
+      return null;
+    }
+  }
+  return path.isAbsolute(value) ? value : path.resolve(base, value);
+}
+
+const READ_METHODS = new Set(['fs/readFile', 'fs/readDirectory', 'fs/readDir', 'fs/listDirectory']);
+/** 只看元数据、不读内容的操作不过闸门。 */
+const METADATA_METHODS = new Set(['fs/getMetadata', 'fs/exists', 'fs/stat']);
+
+/** 把一个 exec-server 请求换成要过闸门的操作。 */
+export function execServerActions(method: string, params: unknown, cwd: string): ExecutorAction[] {
+  const record = params && typeof params === 'object' ? params as Record<string, unknown> : {};
+  if (method === 'process/start') {
+    const command = execServerCommand(record.argv);
+    const processCwd = fromFileUrl(record.cwd, cwd) ?? cwd;
+    return command ? [{ kind: 'exec', command, cwd: processCwd }] : [{ kind: 'exec', command: '<unknown>', cwd: processCwd }];
+  }
+  if (!method.startsWith('fs/') || METADATA_METHODS.has(method)) return [];
+  const paths = ['path', 'sourcePath', 'destinationPath', 'source', 'destination', 'from', 'to', 'target']
+    .map((key) => fromFileUrl(record[key], cwd))
+    .filter((value): value is string => !!value);
+  const kind = READ_METHODS.has(method) ? 'read' : 'write';
+  return paths.map((target) => ({ kind, path: target }) as ExecutorAction);
+}
+
+export class ExecServerRelay {
+  private readonly connections = new Map<string, Connection>();
+  private outbox: RemoteAgentPushFrame[] = [];
+  private flushing: Promise<void> | null = null;
+  private closed = false;
+
+  constructor(private readonly deps: ExecServerRelayDeps) {}
+
+  handle(item: Extract<RemoteAgentStreamItem, { t: 'ws' }>): void {
+    if (this.closed) return;
+    switch (item.kind) {
+      case 'open':
+        this.open(item.connId, item.path ?? '/');
+        return;
+      case 'message':
+        if (typeof item.data === 'string') this.forward(item.connId, item.data);
+        return;
+      case 'close':
+        this.dropConnection(item.connId, false);
+        return;
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const connId of [...this.connections.keys()]) this.dropConnection(connId, false);
+  }
+
+  private open(connId: string, wsPath: string): void {
+    if (wsPath.split('?')[0] !== EXEC_SERVER_WS_PATH || this.connections.has(connId)) {
+      this.send({ connId, kind: 'close' });
+      return;
+    }
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(this.deps.codexPath, ['exec-server', '--listen', 'stdio://'], {
+        cwd: this.deps.cwd,
+        env: this.deps.env ?? process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      this.deps.log?.warn('remote agent: exec-server failed to start', { error: String(error) });
+      this.send({ connId, kind: 'close' });
+      return;
+    }
+    const connection: Connection = { child, buffer: '', closed: false };
+    this.connections.set(connId, connection);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      connection.buffer += chunk;
+      for (;;) {
+        const index = connection.buffer.indexOf('\n');
+        if (index < 0) break;
+        const line = connection.buffer.slice(0, index);
+        connection.buffer = connection.buffer.slice(index + 1);
+        if (line.trim()) this.sendMessage(connId, line);
+      }
+      if (connection.buffer.length > MAX_LINE_CHARS) {
+        this.deps.log?.warn('remote agent: exec-server line too long; closing', { connId });
+        this.dropConnection(connId, true);
+      }
+    });
+    child.stderr.resume();
+    child.on('error', () => this.dropConnection(connId, true));
+    child.on('exit', () => this.dropConnection(connId, true));
+  }
+
+  private forward(connId: string, data: string): void {
+    const connection = this.connections.get(connId);
+    if (!connection || connection.closed) return;
+    type JsonRpcMessage = { id?: unknown; method?: unknown; params?: unknown };
+    let message: JsonRpcMessage | null = null;
+    try {
+      const parsed: unknown = JSON.parse(data);
+      message = parsed && typeof parsed === 'object' ? parsed as JsonRpcMessage : null;
+    } catch {
+      message = null;
+    }
+    if (message && typeof message.method === 'string' && message.id !== undefined) {
+      for (const action of execServerActions(message.method, message.params, this.deps.cwd)) {
+        const decision = this.deps.authorize(action);
+        if (!decision.ok) {
+          this.sendMessage(connId, JSON.stringify({
+            id: message.id,
+            error: { code: -32001, message: decision.reason ?? 'Not allowed on this computer.' },
+          }));
+          return;
+        }
+      }
+    }
+    connection.child.stdin.write(`${data}\n`);
+  }
+
+  private dropConnection(connId: string, notifyRemote: boolean): void {
+    const connection = this.connections.get(connId);
+    if (!connection || connection.closed) return;
+    connection.closed = true;
+    this.connections.delete(connId);
+    try {
+      connection.child.stdin.end();
+      connection.child.kill();
+    } catch {
+      // 进程已退出。
+    }
+    if (notifyRemote) this.send({ connId, kind: 'close' });
+  }
+
+  /** 一条消息：超过单帧上限时拆成多段(除最后一段外带 more)。 */
+  private sendMessage(connId: string, data: string): void {
+    for (let offset = 0; offset < data.length; offset += FRAME_CHARS) {
+      const part = data.slice(offset, offset + FRAME_CHARS);
+      const more = offset + FRAME_CHARS < data.length;
+      this.send({ connId, kind: 'message', data: part, ...(more ? { more: true as const } : {}) });
+    }
+  }
+
+  /** 发往对方的帧按顺序成批推送(一次只有一个 push 在途)。 */
+  private send(frame: RemoteAgentPushFrame): void {
+    if (this.closed && frame.kind === 'message') return;
+    this.outbox.push(frame);
+    this.kick();
+  }
+
+  private kick(): void {
+    if (this.flushing) return;
+    this.flushing = this.flush().finally(() => {
+      this.flushing = null;
+      if (this.outbox.length) this.kick();
+    });
+  }
+
+  private async flush(): Promise<void> {
+    await Promise.resolve();
+    while (this.outbox.length) {
+      const batch: RemoteAgentPushFrame[] = [];
+      let size = 0;
+      while (this.outbox.length && batch.length < REMOTE_AGENT_MAX_PUSH_FRAMES) {
+        const next = this.outbox[0];
+        const length = next.data?.length ?? 0;
+        if (batch.length && size + length > REMOTE_AGENT_MAX_PUSH_CHARS) break;
+        batch.push(this.outbox.shift()!);
+        size += length;
+      }
+      try {
+        await this.deps.push(batch);
+      } catch (error) {
+        this.deps.log?.warn('remote agent: exec-server frames could not be delivered', { error: String(error) });
+      }
+    }
+  }
+}

@@ -4688,6 +4688,8 @@ interface ElectronAPI {
         extraDirs?: string[];
         writableDirs?: string[];
         remoteHostId?: string;
+        /** Agent 在同账号另一台电脑上运行(任务与文件在本机)；与 remoteHostId 互斥。 */
+        agentDeviceId?: string;
         providerId?: string | null;
         /** Only the Cindy Make purpose may be requested; Main validates the checkout. */
         source?: 'cindy-make';
