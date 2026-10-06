@@ -2359,7 +2359,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }
       case "init":
         nativeVideoActive = false;
-        image.style.visibility = "visible";
+        // Clear instead of forcing visible: the stylesheet hides an image with
+        // no frame yet, otherwise the browser paints a broken-image box.
+        image.style.visibility = "";
         desktopScale = null;
         reportedScaleMode = null;
         if (config.desktop) {
@@ -2394,7 +2396,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       case "nativeVideo":
         if (!config.nativeMedia || message.epoch !== epoch) break;
         nativeVideoActive = message.active === true;
-        image.style.visibility = nativeVideoActive ? "hidden" : "visible";
+        image.style.visibility = nativeVideoActive ? "hidden" : "";
         clipNetworkStatus();
         paintBackground();
         break;
@@ -2532,7 +2534,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         break;
       case "stop":
         nativeVideoActive = false;
-        image.style.visibility = "visible";
+        image.style.visibility = "";
         showKeyboard(false);
         control = false;
         release();
