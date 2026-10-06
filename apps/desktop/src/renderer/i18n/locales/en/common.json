@@ -931,6 +931,8 @@
         },
         "visibilityLabel": "Wallpaper Visibility",
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
+        "blurLabel": "Wallpaper Blur",
+        "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
         "motionHint": "Still by default. Motion pauses when hidden and follows your reduced-motion preference.",
         "motionStatic": "Static",

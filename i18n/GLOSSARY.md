@@ -569,6 +569,10 @@ Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自�
 
 Desktop appearance setting for an in-app visual background layer.
 
+### Wallpaper Blur
+
+仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。
+
 ### Wallpaper Visibility
 
 壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。

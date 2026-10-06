@@ -524,6 +524,12 @@ describe('Agent Island expanded content height', () => {
 });
 
 describe('AgentIslandService native publishing', () => {
+  beforeEach(async () => {
+    // Load after the outer mock setup, outside the first behavior test's budget.
+    // Cold Vite transforms can otherwise consume its entire 5-second timeout.
+    await import('../service.js');
+  });
+
   it('keeps compact activity broadcasting alive in headless mode', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({

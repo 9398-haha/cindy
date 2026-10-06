@@ -931,6 +931,8 @@
         },
         "visibilityLabel": "壁纸可见度",
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
+        "blurLabel": "壁纸模糊",
+        "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
         "motionHint": "默认静态；动态在窗口隐藏时暂停，并遵循系统减少动效设置。",
         "motionStatic": "静态",

@@ -931,6 +931,8 @@
         },
         "visibilityLabel": "桌布可見度",
         "visibilityHint": "0% 隱藏桌布，100% 完全顯示桌布。",
+        "blurLabel": "桌布模糊",
+        "blurHint": "僅模糊桌布，0 為關閉。動態桌布開啟模糊後會增加顯示卡負載。",
         "motionLabel": "展示方式",
         "motionHint": "預設靜態；動態在視窗隱藏時暫停，並遵循系統減少動態效果設定。",
         "motionStatic": "靜態",
