@@ -676,6 +676,11 @@ export class DesktopViewerController {
     ];
     this.runtime.receive({ type: 'events', events });
   }
+  async workspaceAction(action: 'workspaceLeft' | 'workspaceRight' | 'omarchyMenu'): Promise<void> {
+    const lease = this.session.lease;
+    if (!lease || !this.state.controlling) return;
+    await this.request({ op: 'windowAction', action, lease: lease.lease });
+  }
   async clipboard(action: 'copy' | 'paste'): Promise<void> {
     if (!this.state.controlling) throw new Error('DESKTOP_VIEW_ONLY');
     if (this.clipboardQueued >= 8) throw new Error('CLIPBOARD_BUSY');

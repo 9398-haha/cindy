@@ -295,6 +295,33 @@ it('shows a reconnectable error when host input is busy during control acquisiti
   expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
 });
 
+it('sends workspace actions on the current lease only while controlling', async () => {
+  const f = await fixture();
+  present();
+  const request = vi.spyOn(f.api, 'request');
+  const sent = () =>
+    request.mock.calls.flatMap(([, value]) => (value.op === 'windowAction' ? [value] : []));
+  await controller.workspaceAction('workspaceLeft');
+  await controller.workspaceAction('omarchyMenu');
+  expect(sent()).toEqual([
+    { op: 'windowAction', action: 'workspaceLeft', lease: 'lease' },
+    { op: 'windowAction', action: 'omarchyMenu', lease: 'lease' },
+  ]);
+  request.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DESKTOP_INPUT_UNSUPPORTED'));
+  await expect(controller.workspaceAction('workspaceRight')).rejects.toThrow(
+    'DESKTOP_INPUT_UNSUPPORTED',
+  );
+  controller.dispose();
+
+  // The lease is live but control is still pending: nothing may reach the host.
+  const pending = await fixture(deferred<{ controlling: boolean }>().promise);
+  present();
+  expect(snapshot).toMatchObject({ controlling: false, controlPending: true });
+  const pendingRequest = vi.spyOn(pending.api, 'request');
+  await controller.workspaceAction('workspaceRight');
+  expect(pendingRequest.mock.calls.some(([, value]) => value.op === 'windowAction')).toBe(false);
+});
+
 it('stops input and viewing after input queue overflow', async () => {
   await fixture();
   present();

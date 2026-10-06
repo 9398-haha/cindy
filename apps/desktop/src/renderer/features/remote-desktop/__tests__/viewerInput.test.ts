@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, it, expect, vi } from 'vitest';
 import { mountRemoteDesktopViewer } from '@cindy/maker-shared/remote-desktop-viewer';
 import { DESKTOP_KEY_CODES, REMOTE_DESKTOP_NETWORK } from '@cindy/device-link';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const viewerCss = readFileSync(resolve(__dirname, '..', 'viewerWindow.css'), 'utf8');
 
 let viewer: ReturnType<typeof mountRemoteDesktopViewer>;
 let messages: Record<string, unknown>[];
@@ -78,6 +82,25 @@ function events() {
     m.type === 'input' ? (m.events as Record<string, unknown>[]) : [],
   );
 }
+
+it('keeps a frameless picture hidden by the viewer stylesheet so it never paints a broken image', () => {
+  const style = document.createElement('style');
+  style.textContent = viewerCss;
+  document.head.append(style);
+  document.body.className = 'remote-viewer-content';
+  const image = document.getElementById('image')!;
+  try {
+    expect(getComputedStyle(image).visibility).toBe('hidden');
+    viewer.receive({ type: 'stop' });
+    expect(getComputedStyle(image).visibility).toBe('hidden');
+    viewer.receive({ type: 'init', epoch: 'next', width: 1000, height: 600 });
+    viewer.receive({ type: 'frame', jpeg: 'AA==' });
+    expect(getComputedStyle(image).visibility).toBe('visible');
+  } finally {
+    style.remove();
+    document.body.className = '';
+  }
+});
 
 it('zooms locally within bounds and fit restores scale and position', () => {
   const image = document.getElementById('image')!;

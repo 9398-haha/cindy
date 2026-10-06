@@ -13,6 +13,8 @@ const lifecycle = vi.hoisted(() => ({
   zoom: vi.fn(),
   fit: vi.fn(),
   actualSize: vi.fn(),
+  keys: vi.fn(),
+  workspaceAction: vi.fn(async () => {}),
   update: null as ((state: ViewerSnapshot) => void) | null,
 }));
 vi.mock('../viewerController', () => ({
@@ -31,6 +33,8 @@ vi.mock('../viewerController', () => ({
     zoom = lifecycle.zoom;
     fit = lifecycle.fit;
     actualSize = lifecycle.actualSize;
+    keys = lifecycle.keys;
+    workspaceAction = lifecycle.workspaceAction;
     close = () => this._api.close(1);
   },
 }));
@@ -240,6 +244,32 @@ it('hides view-only controls and enables desktop actions only after control is c
   };
   await act(async () => lifecycle.update?.(supported));
   expect(desktop.disabled).toBe(false);
+  fireEvent.click(desktop);
+  expect(lifecycle.keys).toHaveBeenLastCalledWith(['MetaLeft', 'KeyD']);
+  // A synthesized Cmd+F3 never reaches Mission Control; F11 is the macOS default.
+  await act(async () =>
+    lifecycle.update?.({ ...supported, caps: { ...supported.caps, platform: 'darwin' } }),
+  );
+  fireEvent.click(desktop);
+  expect(lifecycle.keys).toHaveBeenLastCalledWith(['F11']);
+  // Linux workspace hosts swap the shortcut buttons for host-side window actions, as on Mobile.
+  await act(async () =>
+    lifecycle.update?.({
+      ...supported,
+      caps: { ...supported.caps, platform: 'linux', workspaceNavigation: true, omarchyMenu: true },
+    }),
+  );
+  expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.showDesktop') })).toBeNull();
+  expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.allWindows') })).toBeNull();
+  for (const action of ['workspaceLeft', 'workspaceRight', 'omarchyMenu'] as const) {
+    fireEvent.click(screen.getByRole('button', { name: i18n.t(`remoteDesktop.${action}`) }));
+    expect(lifecycle.workspaceAction).toHaveBeenLastCalledWith(action);
+  }
+  lifecycle.workspaceAction.mockRejectedValueOnce(new Error('DESKTOP_INPUT_UNSUPPORTED'));
+  fireEvent.click(screen.getByRole('button', { name: i18n.t('remoteDesktop.workspaceLeft') }));
+  expect(await screen.findByText(i18n.t('remoteDesktop.viewer.actionFailed'))).toBeDefined();
+  expect(lifecycle.keys).toHaveBeenCalledTimes(2);
+  await act(async () => lifecycle.update?.(supported));
   expect(
     (
       panel.getByRole('switch', {
@@ -337,7 +367,7 @@ it.each([
   expect(toolbar.getByText(label)).toBeDefined();
 });
 
-it('marks an active privacy screen in the toolbar and for screen readers without a persistent banner', async () => {
+it('announces an active privacy screen without a banner or toolbar setting markers', async () => {
   await i18n.changeLanguage('zh-CN');
   Object.assign(window, {
     electronAPI: {
@@ -358,7 +388,7 @@ it('marks an active privacy screen in the toolbar and for screen readers without
         audio: true,
         privacyScreen: true,
         hostMute: false,
-        clipboardSync: false,
+        clipboardSync: true,
         lockOnExit: false,
       },
       safety: { privacyActive: true, notice: null, clipboardProgress: null },
@@ -385,9 +415,9 @@ it('marks an active privacy screen in the toolbar and for screen readers without
   const announcement = screen.getByText(i18n.t('remoteDesktop.privacyActive'));
   expect(announcement.getAttribute('role')).toBe('status');
   expect(announcement.classList.contains('sr-only')).toBe(true);
-  expect(
-    screen.getByRole('button', { name: '安全' }).querySelector('.remote-viewer-active-dot'),
-  ).not.toBeNull();
+  for (const name of ['剪贴板', '安全']) {
+    expect(screen.getByRole('button', { name }).querySelector('span')).toBeNull();
+  }
 });
 
 it('updates translated controls without ending or recreating the viewer connection', async () => {
