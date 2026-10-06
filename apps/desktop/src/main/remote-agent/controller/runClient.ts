@@ -277,13 +277,18 @@ export class RemoteAgentRunClient implements PolledRun {
    * 回包交付：链路抖动导致发送失败时按退避重试。对方收到 reply 才会结束对该 requestId
    * 的等待，只记日志不重试会让任务一直停在权限确认 / 工具请求上；对方按 id 去重，
    * 重复交付无副作用。任务结束或非链路类错误(载荷过大等)才放弃。
+   *
+   * 载荷只建一次、重试复用：重试重建会再走一遍上传，而对方对重复 reply 在 pending
+   * 查询处就返回、不会消费新上传，白白占住对方的 staging 缓冲；若首份上传已被消费、
+   * 只是响应丢了，复用同一载荷还能直接命中幂等返回。
    */
   private async deliverReply(requestId: string, reply: RemoteAgentReply): Promise<void> {
     let delay = 500;
+    let payload: RemoteAgentPayload | undefined;
     for (let attempt = 1; ; attempt += 1) {
       if (this.closed) return;
       try {
-        const payload = await this.payload(reply);
+        if (!payload) payload = await this.payload(reply);
         await this.invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
         return;
       } catch (error) {

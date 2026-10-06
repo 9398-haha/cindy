@@ -128,6 +128,8 @@ interface Run {
   handle?: AgentSessionHandle;
   tunnel?: RunTunnel;
   attachmentsDir: string;
+  /** 影子工作区根(按 hostSessionId 复用，任务收尾后清理)。 */
+  workspaceDir?: string;
   pending: Map<string, PendingReverse>;
   calls: Map<string, 'running' | 'done'>;
   pushSeq: Set<number>;
@@ -401,7 +403,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     controller: string,
     payload: RemoteAgentOpenPayload,
     hostSessionId: string,
-  ): Promise<{ shadowDir: string; mirrorRoot: string }> {
+  ): Promise<{ shadowDir: string; mirrorRoot: string; sessionRoot: string }> {
     const controllerDir = createHash('sha256').update(controller).digest('hex').slice(0, 16);
     const sessionRoot = path.join(deps.runsRoot, 'workspaces', controllerDir, hostSessionId);
     const mirrorRoot = path.join(sessionRoot, 'fs');
@@ -438,14 +440,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       await writeNew(target, Buffer.from(file.data, 'base64'));
     }
     if (personal.permissions) await mergeLocalPermissions(path.join(shadowDir, '.claude', 'settings.local.json'), personal.permissions);
-    return { shadowDir, mirrorRoot };
+    return { shadowDir, mirrorRoot, sessionRoot };
   }
 
   async function startRun(run: Run, payload: RemoteAgentOpenPayload): Promise<void> {
     try {
       const hostSessionId = hostSessionIdFor(run.controller, payload.sessionId);
       run.hostSessionId = hostSessionId;
-      const { shadowDir, mirrorRoot } = await withShadowLock(hostSessionId, async () => {
+      const { shadowDir, mirrorRoot, sessionRoot } = await withShadowLock(hostSessionId, async () => {
         // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
         // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
         for (const other of runs.values()) {
@@ -455,6 +457,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         return prepareShadow(run.controller, payload, hostSessionId);
       });
+      run.workspaceDir = sessionRoot;
       const tunnel = await createRunTunnel({
         http: (request, signal) => reverseHttp(run, request, signal),
         wsOpen: (connId, wsPath) => append(run, { t: 'ws', connId, kind: 'open', path: wsPath }),
@@ -550,6 +553,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function disposeRun(run: Run): Promise<void> {
     runs.delete(key(run.controller, run.id));
     await fsp.rm(run.attachmentsDir, { recursive: true, force: true }).catch(() => undefined);
+    // 影子工作区(项目说明类文件的副本)在任务收尾后一并清理，不长期留在本机；同一任务的
+    // 新旧实例共用同一份目录，只有没有其它实例还在用时才删，避免删掉新实例正在用的目录。
+    if (run.workspaceDir && run.hostSessionId !== undefined
+      && ![...runs.values()].some((other) => other.hostSessionId === run.hostSessionId)) {
+      await fsp.rm(run.workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    }
     stopSweepIfIdle();
   }
 

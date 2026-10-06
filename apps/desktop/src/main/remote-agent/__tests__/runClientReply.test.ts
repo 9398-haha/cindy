@@ -10,11 +10,13 @@ import { RemoteAgentRunClient } from '../controller/runClient';
 describe('RemoteAgentRunClient reply delivery', () => {
   it('retries a reply through transient link failures so the other side does not stall', async () => {
     const replyAttempts: number[] = [];
+    const replyPayloads: unknown[] = [];
     let failuresLeft = 2;
     const invoke = async (args: unknown[]): Promise<unknown> => {
       const op = (args[0] as { op: string }).op;
       if (op === 'reply') {
         replyAttempts.push(replyAttempts.length + 1);
+        replyPayloads.push((args[0] as { payload: unknown }).payload);
         if (failuresLeft > 0) {
           failuresLeft -= 1;
           throw new Error('TIMEOUT: link dropped mid-reply');
@@ -49,5 +51,7 @@ describe('RemoteAgentRunClient reply delivery', () => {
     }
     expect(replyAttempts).toHaveLength(3);
     expect(failuresLeft).toBe(0);
+    // 重试复用同一份载荷(同一引用)：重建载荷会在对方 staging 里多留一份无人消费的上传。
+    expect(new Set(replyPayloads).size).toBe(1);
   });
 });
