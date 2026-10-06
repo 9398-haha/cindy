@@ -310,17 +310,21 @@
   background: var(--segmented-track);
   -webkit-app-region: no-drag;
 }
-.remote-viewer-toolbar .remote-viewer-tool {
+/* Toolbar tools and popover/feedback close buttons (the popover is portaled
+   outside the window root). .cindy-button outranks Button's own utilities. */
+.cindy-button.remote-viewer-tool {
   width: var(--space-8);
   height: var(--space-8);
   padding: 0;
   color: var(--segmented-option-fg);
 }
-.remote-viewer-toolbar .remote-viewer-tool:enabled:hover,
-.remote-viewer-toolbar .remote-viewer-tool[aria-pressed='true'] {
+.cindy-button.remote-viewer-tool:enabled:hover,
+.cindy-button.remote-viewer-tool[aria-pressed='true'] {
   color: var(--text-primary);
 }
-.remote-viewer-toolbar .remote-viewer-tool[aria-pressed='true'] {
+/* Like a selected segment, a pressed tool keeps its face on hover and press. */
+.cindy-button.remote-viewer-tool[aria-pressed='true'],
+.cindy-button.remote-viewer-tool[aria-pressed='true']:enabled:is(:hover, :active) {
   --button-face-bg: var(--segmented-selected-bg);
   --button-face-border: var(--segmented-selected-border);
 }
