@@ -111,6 +111,28 @@ describe('permission ceiling', () => {
     expect(gate.authorize({ kind: 'exec', command: risky, cwd: project }).ok).toBe(false);
   });
 
+  it('holds writes and recursive reads outside the workspace until confirmed on this computer', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    const gate = new ExecutorGate(workspace, 'normal');
+    const outsideFile = path.join(outside, 'x.txt');
+    // 反向请求不能只信发起方(同账号电脑也可能被攻破)的权限逻辑：区外写在本机任务里也是
+    // 必问项(auto-review 对区外写返回 prompt)，这里只认本机用户刚批准过的同一操作。
+    expect(gate.authorize({ kind: 'write', path: outsideFile }).ok).toBe(false);
+    gate.recordApproval({ kind: 'write', path: outsideFile });
+    expect(gate.authorize({ kind: 'write', path: outsideFile }).ok).toBe(true);
+    // 可写根内的写不受影响。
+    expect(gate.authorize({ kind: 'write', path: path.join(project, 'a.ts') }).ok).toBe(true);
+    // 单文件区外读按本机语义放行；递归读(搜索 / 列举)根在区外能遍历到区外凭证子路径，要批准。
+    expect(gate.authorize({ kind: 'read', path: outsideFile }).ok).toBe(true);
+    expect(gate.authorize({ kind: 'read', path: outside, scope: 'tree' }).ok).toBe(false);
+    gate.recordApproval({ kind: 'read', path: outside });
+    expect(gate.authorize({ kind: 'read', path: outside, scope: 'tree' }).ok).toBe(true);
+    // 全权(用户在本机为这个任务选了全权)不受此限。
+    const full = new ExecutorGate(workspace, executorGateModeFor('bypassPermissions'));
+    expect(full.authorize({ kind: 'write', path: outsideFile }).ok).toBe(true);
+    expect(full.authorize({ kind: 'read', path: outside, scope: 'tree' }).ok).toBe(true);
+  });
+
   it('keeps plan mode read-only and full access unrestricted', () => {
     const workspace = new ExecutorWorkspace({ workingDir: project });
     const plan = new ExecutorGate(workspace, executorGateModeFor('default', true));

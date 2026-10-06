@@ -206,7 +206,7 @@ export class RemoteExecutor {
         }
         case 'fs.glob': {
           const cwd = this.resolvePath(str(body, 'cwd'));
-          this.authorize({ kind: 'read', path: cwd });
+          this.authorize({ kind: 'read', path: cwd, scope: 'tree' });
           const limit = Math.max(1, Math.floor(optionalNumber(body, 'limit') ?? 1000));
           return { paths: await rawGlob(this.rg, str(body, 'pattern'), cwd, limit, signal) };
         }
@@ -219,7 +219,7 @@ export class RemoteExecutor {
           const params = record(body.params) as unknown as PiGrepInput;
           if (typeof params.pattern !== 'string' || !params.pattern) throw new ExecutorRequestError('INVALID', 'pattern is required');
           const root = this.resolvePath(typeof params.path === 'string' && params.path ? params.path : '.');
-          this.authorize({ kind: 'read', path: root });
+          this.authorize({ kind: 'read', path: root, scope: 'tree' });
           return await piGrep(this.opts.rgPath, root, params, signal);
         }
         case 'exec.run': {

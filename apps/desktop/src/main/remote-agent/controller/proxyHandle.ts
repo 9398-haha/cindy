@@ -175,6 +175,8 @@ export interface RemoteHandleDeps {
   onPermissionMode?: (mode: string) => void;
   onPlanMode?: (enabled: boolean) => void;
   onExtraDirs?: (dirs: string[]) => void;
+  /** 可写目录变化时同步给执行器(在对方确认成功后调用，保持两边一致)。 */
+  onWritableDirs?: (dirs: string[]) => void;
   /** 本机 MCP 身份引用的 vendorOptions 同步更新。 */
   onVendorOptions?: (patch: Record<string, unknown>) => void;
   /** 句柄关闭后释放本机资源(执行器、MCP 身份等)。 */
@@ -325,6 +327,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     }),
     ...optional('setWritableDirs', async (dirs: string[]) => {
       await call('setWritableDirs', dirs);
+      // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
+      // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
+      deps.onWritableDirs?.(dirs);
     }),
     // 本机 MCP 身份(协同等工具)必须立即看到改动；对方不支持时也照样更新本机这一份。
     setVendorOptions: async (patch: Record<string, unknown>) => {

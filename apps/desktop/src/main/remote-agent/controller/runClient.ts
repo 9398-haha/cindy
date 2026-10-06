@@ -5,8 +5,9 @@
  * 调用方(Agent 事件、状态镜像、方法结果、反向请求、WebSocket 帧)；反向请求处理完用 reply 回包。
  * 大载荷先分段上传再引用。
  *
- * 链路抖动由拉取器处理(poll 按游标幂等)；其余 op 不自动重放(open / call / reply / push 在对方
- * 按 id 去重，结果不明时由调用方决定)。对方长时间不可达时拉取器结束任务并报告原因。
+ * 链路抖动由拉取器处理(poll 按游标幂等)；reply / push 链路失败时按同一 id / 序号重试(对方按
+ * id 去重，歧义交付不会重复投递)；open / call 不自动重放，结果不明时由调用方决定。对方长时间
+ * 不可达时拉取器结束任务并报告原因。
  */
 import { promisify } from 'node:util';
 import { gzip } from 'node:zlib';
@@ -43,6 +44,8 @@ const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const CLOSE_DRAIN_MS = 5_000;
 /** 回包交付重试上限(链路抖动时对方一直在等同一 requestId 的回包)。 */
 const MAX_REPLY_DELIVER_ATTEMPTS = 30;
+/** push 帧批次交付重试上限(对方按 seq 去重，同序号重试不会重复投递)。 */
+const MAX_PUSH_DELIVER_ATTEMPTS = 30;
 
 export class RemoteAgentRemoteError extends Error {
   constructor(readonly info: RemoteAgentErrorInfo) {
@@ -94,12 +97,11 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 把一个 JSON 值做成载荷：小的内联，大的 gzip 后分段上传。 */
-  async payload(value: unknown): Promise<RemoteAgentPayload> {
+  async payload(value: unknown, uploadId = this.newId()): Promise<RemoteAgentPayload> {
     const text = JSON.stringify(value ?? null);
     if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS) return { json: JSON.parse(text) as unknown };
     const gz = await gzipAsync(Buffer.from(text, 'utf8'));
     if (gz.length > REMOTE_AGENT_MAX_PAYLOAD_BYTES) throw new Error('The request is too large to send to the other computer.');
-    const uploadId = this.newId();
     const chunks = Math.max(1, Math.ceil(gz.length / REMOTE_AGENT_UPLOAD_CHUNK_BYTES));
     for (let index = 0; index < chunks; index += 1) {
       const data = gz.subarray(index * REMOTE_AGENT_UPLOAD_CHUNK_BYTES, (index + 1) * REMOTE_AGENT_UPLOAD_CHUNK_BYTES);
@@ -146,10 +148,33 @@ export class RemoteAgentRunClient implements PolledRun {
     return result;
   }
 
+  /**
+   * 推帧：对方按 seq 去重，所以链路抖动时用同一个 seq 重试——歧义交付(对方已收到但回包
+   * 丢失)重发不会重复投递，帧序列也不会缺批。重试耗尽才抛给调用方决定后续处置。
+   */
   async push(frames: RemoteAgentPushFrame[]): Promise<void> {
     if (this.closed || frames.length === 0) return;
     this.pushSeq += 1;
-    await this.invoke([{ op: 'push', runId: this.runId, seq: this.pushSeq, frames }]);
+    const seq = this.pushSeq;
+    let delay = 500;
+    for (let attempt = 1; ; attempt += 1) {
+      if (this.closed) return;
+      try {
+        await this.invoke([{ op: 'push', runId: this.runId, seq, frames }]);
+        return;
+      } catch (error) {
+        const retryable = isRetryableLinkError(error) && attempt < MAX_PUSH_DELIVER_ATTEMPTS;
+        this.log?.warn(retryable ? 'remote agent: push failed; retrying' : 'remote agent: push failed', {
+          runId: this.runId,
+          seq,
+          attempt,
+          error: String(error),
+        });
+        if (!retryable) throw error;
+        await sleep(delay);
+        delay = Math.min(delay * 2, 5_000);
+      }
+    }
   }
 
   async close(mode: 'close' | 'detach', reason: RemoteAgentTeardownReason): Promise<void> {
@@ -278,17 +303,19 @@ export class RemoteAgentRunClient implements PolledRun {
    * 的等待，只记日志不重试会让任务一直停在权限确认 / 工具请求上；对方按 id 去重，
    * 重复交付无副作用。任务结束或非链路类错误(载荷过大等)才放弃。
    *
-   * 载荷只建一次、重试复用：重试重建会再走一遍上传，而对方对重复 reply 在 pending
-   * 查询处就返回、不会消费新上传，白白占住对方的 staging 缓冲；若首份上传已被消费、
-   * 只是响应丢了，复用同一载荷还能直接命中幂等返回。
+   * 载荷只建一次、重试复用，且复用同一个 uploadId(分段上传按 (uploadId, index) 幂等)：
+   * 重试重建会再走一遍上传，而对方对重复 reply 在 pending 查询处就返回、不会消费新上传，
+   * 白白占住对方的 staging 缓冲；若首份上传已被消费、只是响应丢了，复用同一载荷还能直接
+   * 命中幂等返回。上传中途失败后同一 uploadId 重传，也不会多留半份暂存载荷。
    */
   private async deliverReply(requestId: string, reply: RemoteAgentReply): Promise<void> {
-    let delay = 500;
+    const uploadId = this.newId();
     let payload: RemoteAgentPayload | undefined;
+    let delay = 500;
     for (let attempt = 1; ; attempt += 1) {
       if (this.closed) return;
       try {
-        if (!payload) payload = await this.payload(reply);
+        payload ??= await this.payload(reply, uploadId);
         await this.invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
         return;
       } catch (error) {

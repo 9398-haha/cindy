@@ -233,8 +233,19 @@ export class ExecServerRelay {
       try {
         await this.deps.push(batch);
       } catch (error) {
-        this.deps.log?.warn('remote agent: exec-server frames could not be delivered', { error: String(error) });
+        // 批次已从 outbox 取出但交付失败(push 同序号重试耗尽)：不能只记日志就继续发后续帧
+        // ——远端 Codex 会永久缺这条 JSON-RPC 回复卡住，丢失的中间分片还会把后续分片拼成
+        // 损坏消息。丢弃未发帧并关掉全部 exec-server 连接，让对方按连接断开明确恢复。
+        this.deps.log?.warn('remote agent: exec-server frames could not be delivered; closing connections', { error: String(error) });
+        this.dropAll();
+        return;
       }
     }
+  }
+
+  /** 交付链路断了：丢掉未发帧，关掉全部连接触发对方的明确恢复。 */
+  private dropAll(): void {
+    this.outbox = [];
+    for (const connId of [...this.connections.keys()]) this.dropConnection(connId, true);
   }
 }

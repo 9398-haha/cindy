@@ -1984,8 +1984,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (input.hook_event_name === 'PreToolUse') {
           const pre = input as PreToolUseHookInput & { agent_id?: string; agent_type?: string };
           const builtin = deviceHostedBuiltinToolName(pre.tool_name);
+          // 参数化规则(Bash(git diff:*) 之类)要按本次命令判范围，不能当成整个工具放行。
+          const toolInput = pre.tool_input as Record<string, unknown> | undefined;
+          const command = typeof toolInput?.command === 'string' ? toolInput.command : undefined;
           if (builtin && pre.agent_id && pre.agent_type
-            && !deviceHostedSubagentAllows(pre.agent_type, builtin, await loadHostedAgentRules())) {
+            && !deviceHostedSubagentAllows(pre.agent_type, builtin, await loadHostedAgentRules(),
+              command !== undefined ? { command } : undefined)) {
             return {
               continue: true,
               hookSpecificOutput: {

@@ -319,6 +319,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     return JSON.parse(raw.toString('utf8')) as unknown;
   }
 
+  /**
+   * 去重路径上的载荷丢弃：重复 / 过期 op 的上传载荷若不取走，会一直占着暂存配额到过期，
+   * 歧义交付下反复重试的大载荷会把无关上传挡在门外。
+   */
+  function discardPayload(controller: string, payload: RemoteAgentPayload): void {
+    if ('json' in payload) return;
+    uploads.delete(key(controller, payload.uploadId));
+    stopSweepIfIdle();
+  }
+
   function append(run: Run, item: unknown): void {
     if (run.log.append(item)) return;
     if (!run.closing) {
@@ -394,6 +404,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     return file;
   }
 
+  /** 影子工作目录根：`<会话根>/fs/<控制端镜像>` 的上级，按控制端 + 本机侧任务 id 定址。 */
+  function shadowSessionRoot(controller: string, hostSessionId: string): string {
+    const controllerDir = createHash('sha256').update(controller).digest('hex').slice(0, 16);
+    return path.join(deps.runsRoot, 'workspaces', controllerDir, hostSessionId);
+  }
+
   /**
    * 影子目录：`<会话根>/fs/<控制端真实路径逐级镜像>`。逐级镜像让上级目录里的说明文件落在对应的
    * 上级目录，Agent 照本机方式沿目录向上加载；路径对同一任务固定(恢复会话依赖工作目录不变)。
@@ -404,8 +420,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     payload: RemoteAgentOpenPayload,
     hostSessionId: string,
   ): Promise<{ shadowDir: string; mirrorRoot: string; sessionRoot: string }> {
-    const controllerDir = createHash('sha256').update(controller).digest('hex').slice(0, 16);
-    const sessionRoot = path.join(deps.runsRoot, 'workspaces', controllerDir, hostSessionId);
+    const sessionRoot = shadowSessionRoot(controller, hostSessionId);
     const mirrorRoot = path.join(sessionRoot, 'fs');
     const segments = mirrorSegments(payload.workspace.workingDir);
     const shadowDir = path.join(mirrorRoot, ...segments);
@@ -555,11 +570,26 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     await fsp.rm(run.attachmentsDir, { recursive: true, force: true }).catch(() => undefined);
     // 影子工作区(项目说明类文件的副本)在任务收尾后一并清理，不长期留在本机；同一任务的
     // 新旧实例共用同一份目录，只有没有其它实例还在用时才删，避免删掉新实例正在用的目录。
-    if (run.workspaceDir && run.hostSessionId !== undefined
-      && ![...runs.values()].some((other) => other.hostSessionId === run.hostSessionId)) {
-      await fsp.rm(run.workspaceDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    await cleanupShadow(run);
     stopSweepIfIdle();
+  }
+
+  /**
+   * 影子工作区里是同步过去的项目与个人说明副本，任务收尾后没有恢复价值，留着只会把
+   * 敏感项目上下文堆到下一个任务、退出登录与换账号之后。删除与 prepareShadow 共用同一把
+   * 影子锁，且同一(控制端, 本机侧任务)还有实例在时保留：否则「扫描到没人用 → 删目录」
+   * 与「替换实例重建目录」之间存在竞态，可能删掉替换实例刚建好的目录。
+   */
+  async function cleanupShadow(run: Run): Promise<void> {
+    const hostSessionId = run.hostSessionId;
+    if (!hostSessionId) return;
+    const workspaceDir = run.workspaceDir ?? shadowSessionRoot(run.controller, hostSessionId);
+    await withShadowLock(hostSessionId, async () => {
+      for (const other of runs.values()) {
+        if (other !== run && other.controller === run.controller && other.hostSessionId === hostSessionId) return;
+      }
+      await fsp.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    });
   }
 
   function requireRun(controller: string, runId: string): Run {
@@ -693,7 +723,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       case 'open': {
         const existing = runs.get(key(controller, request.runId));
-        if (existing) return {};
+        if (existing) {
+          discardPayload(controller, request.payload);
+          return {};
+        }
         if (!deps.isAgentAvailable(request.agentKind)) fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available on this computer`);
         const active = [...runs.values()].filter((run) => run.controller === controller && run.closedAt === undefined).length;
         if (active >= REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER) fail('REMOTE_AGENT_BUSY', 'too many tasks are running from this computer');
@@ -721,7 +754,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       case 'call': {
         const run = requireRun(controller, request.runId);
         if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
-        if (run.calls.has(request.callId)) return {};
+        if (run.calls.has(request.callId)) {
+          discardPayload(controller, request.payload);
+          return {};
+        }
         run.calls.set(request.callId, 'running');
         void call(run, request.callId, request.method, request.payload);
         return {};
@@ -731,7 +767,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       case 'reply': {
         const run = requireRun(controller, request.runId);
         const pending = run.pending.get(request.requestId);
-        if (!pending) return {};
+        if (!pending) {
+          // 重复 / 已取消的回包：载荷要显式丢掉，不能留在暂存区占配额到过期。
+          discardPayload(controller, request.payload);
+          return {};
+        }
         const reply = parseRemoteAgentReply(await resolvePayload(controller, request.payload));
         run.pending.delete(request.requestId);
         pending.resolve(reply);
@@ -784,7 +824,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     dispose(): void {
       if (sweepTimer) clearInterval(sweepTimer);
       sweepTimer = null;
-      for (const run of runs.values()) void finishRun(run, 'aborted', 'app-quit');
+      // 退出前尽力收尾：影子工作目录含同步过去的项目与个人说明，不能留到下次启动。
+      for (const run of runs.values()) void finishRun(run, 'aborted', 'app-quit').then(() => disposeRun(run));
     },
   };
 }

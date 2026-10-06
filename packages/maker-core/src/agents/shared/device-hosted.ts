@@ -98,12 +98,20 @@ export function deviceHostedClaudeNote(hosted: DeviceHostedSession, localWorking
  * 子代理的工具限制(设备托管)。本机任务里 Claude Code 按子代理定义收窄自带工具；顶替成 Cindy
  * 工具后 SDK 不再按名字收窄(MCP 工具一律放行)，这里按同样的定义判一次：
  *  - 自带的只读子代理(Explore / Plan)不能写文件；
- *  - 自定义子代理写了 tools 时只能用列出的工具，写了 disallowedTools 时不能用列出的工具。
+ *  - 自定义子代理写了 tools 时只能用列出的工具，写了 disallowedTools 时不能用列出的工具；
+ *  - 参数化条目(如 `Bash(git diff:*)`)只覆盖范围内的调用：必须按本次 `input.command` 判定，
+ *    不能当成整个工具的放行 —— 否则被 MCP 顶替后子代理可执行任意命令，与本机不一致。
  * 不认识的子代理不额外限制(与本机一致：没有定义就继承全部工具)。
  */
 export interface DeviceHostedAgentToolRule {
   tools?: string[];
   disallowedTools?: string[];
+}
+
+/** 本次顶替工具调用的参数(参数化工具规则按它收窄范围)。 */
+export interface DeviceHostedToolCall {
+  /** Bash 本次执行的命令；没有命令(BashOutput / KillShell 或拿不到参数)时缺省。 */
+  command?: string;
 }
 
 const READ_ONLY_BUILTIN_AGENTS: Record<string, DeviceHostedAgentToolRule> = {
@@ -138,18 +146,55 @@ export function parseClaudeAgentToolRule(markdown: string): { name: string; rule
   };
 }
 
-/** 子代理能否用某个顶替工具(自带工具名)。BashOutput / KillShell 跟随 Bash。 */
+/** 子代理能否用某个顶替工具(自带工具名)。BashOutput / KillShell 跟随 Bash 的非参数化条目。 */
 export function deviceHostedSubagentAllows(
   agentType: string,
   builtin: string,
   customRules: ReadonlyMap<string, DeviceHostedAgentToolRule>,
+  call?: DeviceHostedToolCall,
 ): boolean {
   const rule = customRules.get(agentType) ?? READ_ONLY_BUILTIN_AGENTS[agentType];
   if (!rule) return true;
   const name = builtin === 'BashOutput' || builtin === 'KillShell' ? 'Bash' : builtin;
-  const matches = (entry: string) => entry === name || entry === builtin || entry === deviceHostedExecToolName(builtin)
-    || entry.startsWith(`${name}(`);
-  if (rule.disallowedTools?.some(matches)) return false;
-  if (rule.tools && !rule.tools.some((entry) => entry === '*' || matches(entry))) return false;
+  const coversTool = (tool: string) => tool === name || tool === builtin || tool === deviceHostedExecToolName(builtin);
+  /** 参数化条目只约束 Bash 命令本身；BashOutput / KillShell 不执行命令，不被它覆盖。 */
+  const entryCovers = (entry: string, side: 'allow' | 'deny'): boolean => {
+    const split = splitToolEntry(entry);
+    if (!coversTool(split.tool)) return false;
+    if (split.scope === null) return true;
+    if (builtin !== 'Bash') return false;
+    const verdict = toolScopeVerdict(split.scope, call);
+    // allow 侧只有证明确在范围内才放行；deny 侧拿不准就拦(fail-closed)。
+    return side === 'allow' ? verdict === 'match' : verdict !== 'no-match';
+  };
+  if (rule.disallowedTools?.some((entry) => entryCovers(entry, 'deny'))) return false;
+  if (rule.tools && !rule.tools.some((entry) => entry === '*' || entryCovers(entry, 'allow'))) return false;
   return true;
+}
+
+/** `Bash(git diff:*)` → 工具名 `Bash` + 参数范围 `git diff:*`；不是参数化条目时 scope 为 null。 */
+function splitToolEntry(entry: string): { tool: string; scope: string | null } {
+  const open = entry.indexOf('(');
+  if (open <= 0 || !entry.endsWith(')')) return { tool: entry, scope: null };
+  return { tool: entry.slice(0, open), scope: entry.slice(open + 1, -1) };
+}
+
+type ScopeVerdict = 'match' | 'no-match' | 'unknown';
+
+/**
+ * 参数化条目的范围与本次命令的匹配：`:*` 结尾按前缀匹配(与 Claude Code 同语义的保守
+ * 实现)，其余整串精确匹配。范围为空、含不移植的通配符或拿不到本次命令时返回 unknown，
+ * 由调用方按 allow / deny 侧各自的安全方向解释。
+ */
+function toolScopeVerdict(scope: string, call: DeviceHostedToolCall | undefined): ScopeVerdict {
+  const spec = scope.trim();
+  const command = call?.command?.trim();
+  if (!spec || !command) return 'unknown';
+  if (spec.endsWith(':*')) {
+    const prefix = spec.slice(0, -2).trim();
+    if (!prefix) return 'unknown';
+    return command === prefix || command.startsWith(prefix) ? 'match' : 'no-match';
+  }
+  if (/[?*[\]{}]/.test(spec)) return 'unknown';
+  return command === spec ? 'match' : 'no-match';
 }

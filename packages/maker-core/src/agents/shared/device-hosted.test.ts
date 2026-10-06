@@ -105,11 +105,37 @@ describe('deviceHostedSubagentAllows', () => {
       ['star', { tools: ['*'] }],
     ]);
     expect(deviceHostedSubagentAllows('reader', 'Read', rules)).toBe(true);
-    expect(deviceHostedSubagentAllows('reader', 'Bash', rules)).toBe(true);
     expect(deviceHostedSubagentAllows('reader', 'Write', rules)).toBe(false);
     expect(deviceHostedSubagentAllows('prefixed', 'Edit', rules)).toBe(true);
     expect(deviceHostedSubagentAllows('prefixed', 'Read', rules)).toBe(false);
     expect(deviceHostedSubagentAllows('star', 'Write', rules)).toBe(true);
+  });
+
+  it('scopes parameterised entries to the command of this call', () => {
+    const rules = new Map<string, DeviceHostedAgentToolRule>([
+      ['reader', { tools: ['Read', 'Bash(git log:*)'] }],
+    ]);
+    // 范围内放行；范围外不放行 —— 参数化条目不能当成整个 Bash 的通行证。
+    expect(deviceHostedSubagentAllows('reader', 'Bash', rules, { command: 'git log --oneline' })).toBe(true);
+    expect(deviceHostedSubagentAllows('reader', 'Bash', rules, { command: 'git log' })).toBe(true);
+    expect(deviceHostedSubagentAllows('reader', 'Bash', rules, { command: 'git push origin' })).toBe(false);
+    expect(deviceHostedSubagentAllows('reader', 'Bash', rules, { command: 'rm -rf /' })).toBe(false);
+    // 拿不到本次命令时不放行(无法证明在范围内)。
+    expect(deviceHostedSubagentAllows('reader', 'Bash', rules)).toBe(false);
+    expect(deviceHostedSubagentAllows('reader', 'Bash', rules, {})).toBe(false);
+    // 参数化条目不覆盖跟随 Bash 的后台壳工具；非参数化条目才覆盖。
+    expect(deviceHostedSubagentAllows('reader', 'BashOutput', rules, { command: 'git log' })).toBe(false);
+  });
+
+  it('applies parameterised deny entries only to matching commands', () => {
+    const rules = new Map<string, DeviceHostedAgentToolRule>([
+      ['no-push', { disallowedTools: ['Bash(git push:*)'] }],
+    ]);
+    expect(deviceHostedSubagentAllows('no-push', 'Bash', rules, { command: 'git push origin main' })).toBe(false);
+    expect(deviceHostedSubagentAllows('no-push', 'Bash', rules, { command: 'git diff' })).toBe(true);
+    expect(deviceHostedSubagentAllows('no-push', 'BashOutput', rules)).toBe(true);
+    // 无法证明不命中时按拦下处理。
+    expect(deviceHostedSubagentAllows('no-push', 'Bash', rules)).toBe(false);
   });
 
   it('lets background shell helpers follow Bash', () => {

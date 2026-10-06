@@ -54,4 +54,51 @@ describe('RemoteAgentRunClient reply delivery', () => {
     // 重试复用同一份载荷(同一引用)：重建载荷会在对方 staging 里多留一份无人消费的上传。
     expect(new Set(replyPayloads).size).toBe(1);
   });
+
+  it('reuses one uploaded payload when retrying a large reply', async () => {
+    const uploadIds = new Set<string>();
+    const replyUploadIds: Array<string | undefined> = [];
+    let failuresLeft = 1;
+    const invoke = async (args: unknown[]): Promise<unknown> => {
+      const op = args[0] as { op: string; uploadId?: string; payload?: { uploadId?: string } };
+      if (op.op === 'upload' && op.uploadId) uploadIds.add(op.uploadId);
+      if (op.op === 'reply') {
+        replyUploadIds.push(op.payload?.uploadId);
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          throw new Error('TIMEOUT: link dropped mid-reply');
+        }
+      }
+      return {};
+    };
+    let seq = 0;
+    const client = new RemoteAgentRunClient(
+      'run-1',
+      { invoke, unregister: () => undefined } as unknown as RemoteAgentPoller,
+      {
+        onEvent: () => undefined,
+        onState: () => undefined,
+        onWs: () => undefined,
+        onClosed: () => undefined,
+        // 大回包(超过内联上限)走分段上传。
+        onRequest: async () => ({ type: 'callback', value: 'x'.repeat(2 * 1024 * 1024) }),
+      },
+      () => `generated-${(seq += 1)}`,
+    );
+    client.onData(Buffer.from(`${JSON.stringify({
+      t: 'request',
+      requestId: '11111111-2222-4333-8444-555555555555',
+      request: { type: 'callback', name: 'onTranscriptUserEntry', args: ['call-1', 'entry-1'] },
+    })}\n`), false);
+    const deadline = Date.now() + 10_000;
+    while (replyUploadIds.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    // 重试复用同一份上传载荷(同一个 uploadId)：每次都造新 upload 会把载荷留在对方
+    // 暂存区直到过期，反复歧义交付会占满配额、挡住无关上传。
+    expect(replyUploadIds).toHaveLength(2);
+    expect(new Set(replyUploadIds).size).toBe(1);
+    expect(replyUploadIds[0]).toBeDefined();
+    expect(uploadIds.size).toBe(1);
+  });
 });

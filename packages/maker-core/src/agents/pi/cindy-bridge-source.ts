@@ -4310,9 +4310,12 @@ export default async function cindyBridge(pi: any) {
     // 目标存在 → realpath 目标;目标不存在 → realpath 最近的**存在的父目录**,
     // 用真实父目录判定(父目录链上的 symlink 一并解析)。
     // 设备托管：目标在任务所在电脑上，本机文件系统无从解析，按真实工作目录词法解析
-    // (那台电脑的执行器会按真实路径再守一道凭证与高危上限)。
-    const writeTargetResolved = CINDY_HOSTED
-      ? (targetPath ? path.resolve(CINDY_HOSTED.cwd, targetPath) : null)
+    // (那台电脑的执行器会按真实路径再守一道凭证与高危上限)。路径实现按那台电脑的平台
+    // 选(path.win32 / path.posix)，与提示改写一致 —— 用本机 path.resolve 解析异构平台
+    // 路径(如 macOS 上解析 C:\project\file)会得到畸形路径，写证据与可写根对不上。
+    const hostedRealPath = CINDY_HOSTED ? (CINDY_HOSTED.platform === 'win32' ? path.win32 : path.posix) : null;
+    const writeTargetResolved = CINDY_HOSTED && hostedRealPath
+      ? (targetPath ? hostedRealPath.resolve(CINDY_HOSTED.cwd, targetPath) : null)
       : resolveFileWriteTargetPath(targetPath);
     if (
       targetPath

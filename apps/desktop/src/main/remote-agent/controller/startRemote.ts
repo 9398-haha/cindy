@@ -124,8 +124,12 @@ export async function startRemoteAgentSession(
   deps: StartRemoteAgentDeps,
 ): Promise<AgentSessionHandle> {
   if (!opts.sessionId) throw new Error('remote agent sessions require a session id');
-  const extraDirs = [...new Set([...(opts.extraDirs ?? []), ...(opts.writableDirs ?? [])])];
-  const workspace = new ExecutorWorkspace({ workingDir: opts.workingDir, extraDirs });
+  // 附加目录(只读引用)与可写目录分开跟踪，运行中任一侧变化都重算执行器根目录：
+  // 否则新授予的目录过不了本机 shell/root 判定，撤掉的还被本机上限当可信根。
+  let extraDirs = [...new Set(opts.extraDirs ?? [])];
+  let writableDirs = [...new Set(opts.writableDirs ?? [])];
+  const workspace = new ExecutorWorkspace({ workingDir: opts.workingDir, extraDirs: [...extraDirs, ...writableDirs] });
+  const applyDirs = () => workspace.setExtraDirs([...new Set([...extraDirs, ...writableDirs])]);
   const gate = new ExecutorGate(workspace, executorGateModeFor(opts.permissionMode, opts.planMode === true));
   const executor = new RemoteExecutor({
     workspace,
@@ -196,7 +200,7 @@ export async function startRemoteAgentSession(
     },
     onWs: (item: Extract<RemoteAgentStreamItem, { t: 'ws' }>) => {
       if (relay) relay.handle(item);
-      else if (item.kind === 'open') void pushFrames?.([{ connId: item.connId, kind: 'close' }]);
+      else if (item.kind === 'open') void pushFrames?.([{ connId: item.connId, kind: 'close' }])?.catch(() => undefined);
     },
     onClosed: (reason, error) => {
       if (controller) controller.onClosed(reason, error?.message);
@@ -259,7 +263,14 @@ export async function startRemoteAgentSession(
       planMode = enabled;
       executor.setGateMode(executorGateModeFor(permissionMode, planMode));
     },
-    onExtraDirs: (dirs) => workspace.setExtraDirs([...new Set([...dirs, ...(opts.writableDirs ?? [])])]),
+    onExtraDirs: (dirs) => {
+      extraDirs = [...new Set(dirs)];
+      applyDirs();
+    },
+    onWritableDirs: (dirs) => {
+      writableDirs = [...new Set(dirs)];
+      applyDirs();
+    },
     onVendorOptions: (patch) => {
       Object.assign(vendorOptions, patch);
     },
