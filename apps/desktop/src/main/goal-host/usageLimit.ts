@@ -30,6 +30,17 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
 }
 
 /**
+ * turn error 自带的限额重置时刻(unix ms)。Claude 订阅会话由 translator 从 SDK
+ * `rate_limit_event` 带上 —— 账号快照(getAccountLimit)读不到订阅的 5h / 周窗口,
+ * 没有它目标会停在 usageLimited 等人手动恢复。
+ */
+export function readTurnUsageResetAt(data: unknown): number | null {
+  if (!data || typeof data !== 'object') return null;
+  const v = (data as { usageResetAt?: unknown }).usageResetAt;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
  * turn error 的 data 是否表示"上游模型服务没有可用容量"(Codex 的
  * `Selected model is at capacity` / Anthropic 的 529 overloaded)。
  *

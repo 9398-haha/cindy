@@ -5,6 +5,7 @@ import {
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
+  readTurnUsageResetAt,
 } from '../usageLimit';
 
 describe('classifyTurnUsageLimit', () => {
@@ -121,5 +122,18 @@ describe('classifyTurnOverload', () => {
     // null，noProgressStreak 又不被过载轮推进，三道预算护栏一道都拦不住。
     // 调大直接等比放大容量故障期的请求量与额度消耗。
     expect(MAX_CONSECUTIVE_OVERLOAD_TURNS).toBe(3);
+  });
+});
+
+describe('readTurnUsageResetAt', () => {
+  it('reads the reset time carried by the error', () => {
+    expect(readTurnUsageResetAt({ sdkError: 'rate_limit', usageResetAt: 1_791_202_800_000 })).toBe(1_791_202_800_000);
+  });
+
+  it('returns null when absent or malformed', () => {
+    expect(readTurnUsageResetAt({ sdkError: 'rate_limit' })).toBeNull();
+    expect(readTurnUsageResetAt({ usageResetAt: '1791202800000' })).toBeNull();
+    expect(readTurnUsageResetAt({ usageResetAt: 0 })).toBeNull();
+    expect(readTurnUsageResetAt(null)).toBeNull();
   });
 });

@@ -211,6 +211,13 @@ export interface RuntimeState {
   toolResultBatchSeq: number;
   usageSegmentSeq: number;
   generation: ClaudeGenerationState;
+  /**
+   * 被拒额度窗口(`rateLimitType`)→ 重置时刻(unix ms)。每条 `rate_limit_event`
+   * 只描述一个窗口,只有同一窗口再报非 rejected 才移除,别的窗口的 allowed 不影响。
+   * 会话级而非 turn 级:CLI 已知被拒后会本地短路后续请求,那些 turn 直接报限额
+   * 错误、不再重发事件,仍要能带上同一个重置时刻。
+   */
+  rateLimitRejectedResetAtMs: Map<string, number>;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -236,6 +243,7 @@ export function newRuntimeState(): RuntimeState {
     toolResultBatchSeq: 0,
     usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
+    rateLimitRejectedResetAtMs: new Map(),
   };
 }
 
@@ -928,6 +936,26 @@ export function translateSdkMessage(
 
     case 'result': {
       handleResult(msg, queue, ctx);
+      return;
+    }
+
+    case 'rate_limit_event': {
+      // 订阅额度快照另由 index.ts 旁路转给 host;这里只记被拒窗口的重置时刻,
+      // 供限额错误带给下游(目标模式据此到点自动续跑)。
+      const info = (rawMsg as {
+        rate_limit_info?: { status?: unknown; resetsAt?: unknown; rateLimitType?: unknown };
+      }).rate_limit_info;
+      if (typeof info?.status !== 'string') return;
+      const windowKey = typeof info.rateLimitType === 'string' ? info.rateLimitType : '';
+      const resetsAt = typeof info.resetsAt === 'number' && info.resetsAt > 0 ? info.resetsAt : null;
+      if (info.status === 'rejected' && resetsAt != null) {
+        // resetsAt 是 epoch 秒;误给毫秒时不再放大。
+        const resetAtMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
+        ctx.rt.rateLimitRejectedResetAtMs.set(windowKey, resetAtMs);
+        ctx.log.info('SDK ▷ rate limit rejected', { rateLimitType: windowKey, resetAtMs });
+      } else if (info.status !== 'rejected') {
+        ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+      }
       return;
     }
 
@@ -2356,6 +2384,17 @@ function handleResult(
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
+    // 多个窗口同时被拒时取最晚的重置,早醒只会再撞一次限额。已过点也照带:
+    // 下游按零延迟立即续跑,丢掉反而只能等手动恢复。但过点的只用一次——到点后
+    // 仍被本地短路拒绝时不会有新事件,反复带同一个过期时刻会让下游无限立即重试。
+    const rejectedResets = [...ctx.rt.rateLimitRejectedResetAtMs.values()];
+    const usageReset = rejectedResets.length > 0
+      ? { usageResetAt: Math.max(...rejectedResets) }
+      : {};
+    const nowMs = Date.now();
+    for (const [windowKey, resetAtMs] of ctx.rt.rateLimitRejectedResetAtMs) {
+      if (resetAtMs <= nowMs) ctx.rt.rateLimitRejectedResetAtMs.delete(windowKey);
+    }
     const errorMessage = pendingApiError?.agentMeta
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
@@ -2391,6 +2430,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...(pendingApiError.retryAttempt !== undefined
               ? { retryAttempt: pendingApiError.retryAttempt }
               : {}),
@@ -2406,6 +2446,7 @@ function handleResult(
             ...classifiedReason,
             ...(errorStatus !== undefined ? { errorStatus } : {}),
             ...(usageLimit ? { usageLimit: true } : {}),
+            ...usageReset,
             ...modelAccessError,
           }
         // reason 是稳定 key, renderer 按它走 i18n(规则 18); message 仅作非
