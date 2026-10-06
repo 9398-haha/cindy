@@ -261,6 +261,14 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, var(--space-40));
   align-items: center;
 }
+/* Ratio and size labels carry more than one word; give them the row's width. */
+.remote-viewer-field-wide {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-3);
+}
+.remote-viewer-field-wide > :nth-child(n + 3) {
+  grid-column: 1 / -1;
+}
 .remote-viewer-display-select {
   flex: none;
   width: 100%;

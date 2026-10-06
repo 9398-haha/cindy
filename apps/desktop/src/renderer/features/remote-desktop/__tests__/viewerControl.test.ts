@@ -57,11 +57,7 @@ async function fixture(
   }));
   let remembered = options.remembered ?? null;
   const memory = vi.fn(
-    async (
-      _generation: number,
-      _displayId: string,
-      value?: RememberedViewerResolution | null,
-    ) => {
+    async (_generation: number, _displayId: string, value?: RememberedViewerResolution | null) => {
       if (value !== undefined) remembered = value;
       return remembered;
     },
@@ -137,13 +133,9 @@ async function fixture(
     resolution: memory,
     ...options.api,
   } satisfies RemoteDesktopViewerApi;
-  controller = new DesktopViewerController(
-    api,
-    (options.root ?? {}) as HTMLElement,
-    (state) => {
-      snapshot = state;
-    },
-  );
+  controller = new DesktopViewerController(api, (options.root ?? {}) as HTMLElement, (state) => {
+    snapshot = state;
+  });
   await vi.advanceTimersByTimeAsync(0);
   return { control, heartbeat, clipboard, resolution, memory, api };
 }
@@ -509,6 +501,9 @@ it('passes actual logical geometry to rendering and reacquires control after fit
   });
   expect(snapshot.controlling).toBe(true);
   expect(f.control).toHaveBeenLastCalledWith(true);
+  // The list keeps the size the user asked for as current, not the host's logical size.
+  const current = (await controller.resolutionModes()).filter((mode) => mode.current);
+  expect(current).toMatchObject([{ width: 1920, height: 1420 }]);
 });
 
 const sent = (type: string) =>
@@ -558,11 +553,8 @@ it('offers same-ratio choices after fitting and restores the original display', 
   present();
   // Host modes keep the monitor's ratio: the portrait mode is not offered.
   expect((await controller.resolutionModes()).map((mode) => mode.id)).toEqual(['4k']);
-  expect(controller.viewerDisplayMatched(500, 1000)).toBe(false);
   await controller.fitDisplay(500, 1000);
   expect(snapshot.fittedDisplay).toEqual({ width: 960, height: 1920 });
-  expect(controller.viewerDisplayMatched(500, 1000)).toBe(true);
-  expect(controller.viewerDisplayMatched(1000, 500)).toBe(false);
   const fitted = await controller.resolutionModes();
   expect(fitted.every((mode) => Math.abs(mode.width / mode.height - 0.5) < 0.003)).toBe(true);
   expect(fitted.find((mode) => mode.current)).toMatchObject({ width: 960, height: 1920 });
@@ -573,7 +565,10 @@ it('offers same-ratio choices after fitting and restores the original display', 
     undefined,
   );
   expect(snapshot.fittedDisplay).toEqual({ width: 960, height: 1920 });
+  // Fitting the same ratio again is a fit, not a restore; restoring is explicit.
   await controller.fitDisplay(500, 1000);
+  expect(request.mock.calls.some(([, r]) => r.op === 'restoreViewerDisplay')).toBe(false);
+  await controller.restoreDisplay();
   expect(request.mock.calls.some(([, r]) => r.op === 'restoreViewerDisplay')).toBe(true);
   expect(snapshot.fittedDisplay).toBeNull();
   expect(f.memory).toHaveBeenLastCalledWith(1, 'one', null);
@@ -584,7 +579,10 @@ it('remembers system modes per monitor and forgets the computer’s own mode', a
   const original = f.api.request;
   vi.spyOn(f.api, 'request').mockImplementation(async (generation, r) =>
     r.op === 'displayModes'
-      ? [{ ...mode4k, current: true }, { id: 'hd', width: 1920, height: 1080, current: false }]
+      ? [
+          { ...mode4k, current: true },
+          { id: 'hd', width: 1920, height: 1080, current: false },
+        ]
       : original(generation, r),
   );
   present();
@@ -614,7 +612,7 @@ it('reapplies a remembered system mode once control and the first frame are read
   expect(f.resolution).toHaveBeenCalledOnce();
 });
 
-it('refits a remembered fit to the current window at the remembered size', async () => {
+it('reapplies a remembered fit at its own size and ratio', async () => {
   const f = await fixture(undefined, false, {
     remembered: { kind: 'fit', width: 1280, height: 960 },
     root: { clientWidth: 1000, clientHeight: 500 },
@@ -624,10 +622,28 @@ it('refits a remembered fit to the current window at the remembered size', async
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledWith(
     1,
-    expect.objectContaining({ op: 'viewerDisplay', width: 1280, height: 640 }),
+    expect.objectContaining({ op: 'viewerDisplay', width: 1280, height: 960 }),
     undefined,
   );
-  expect(snapshot.fittedDisplay).toEqual({ width: 1920, height: 960 });
+  expect(snapshot.fittedDisplay).toEqual({ width: 1280, height: 960 });
+});
+
+it('switches the fitted ratio and keeps it across same-ratio sizes', async () => {
+  const f = await fixture();
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  await controller.fitDisplay(500, 1000);
+  const screenRatio = { width: 1512, height: 982 };
+  await controller.fitDisplay(1512, 982, true, undefined, { ratio: screenRatio });
+  expect(request).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({ op: 'viewerDisplay', width: 1512, height: 982 }),
+    undefined,
+  );
+  expect(snapshot.fittedDisplay).toEqual(screenRatio);
+  await controller.resolution({ id: 'fitted:1210x786', width: 1210, height: 786, current: false });
+  expect(snapshot.fittedDisplay).toEqual(screenRatio);
+  expect(f.memory).toHaveBeenLastCalledWith(1, 'one', { kind: 'fit', width: 1210, height: 786 });
 });
 
 it('does not retry a remembered choice that failed in this window', async () => {
@@ -690,17 +706,38 @@ it('maps channel refusals to the relay and real failures to errors', async () =>
   const f = await channelFixture();
   present();
   f.ask(control, 'busy');
-  runtime.post?.({ type: 'channelReply', epoch: 'lease', id: 'busy', ok: false, error: 'DESKTOP_CHANNEL_BUSY' });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'busy',
+    ok: false,
+    error: 'DESKTOP_CHANNEL_BUSY',
+  });
   f.ask({ op: 'displayModes', lease: 'lease' }, 'large');
-  runtime.post?.({ type: 'channelReply', epoch: 'lease', id: 'large', ok: false, error: 'DESKTOP_REPLY_TOO_LARGE' });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'large',
+    ok: false,
+    error: 'DESKTOP_REPLY_TOO_LARGE',
+  });
   f.ask(control, 'failed');
-  runtime.post?.({ type: 'channelReply', epoch: 'lease', id: 'failed', ok: false, error: 'DESKTOP_VIEW_ONLY' });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'failed',
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
   f.ask(control, 'unsent');
   runtime.post?.({ type: 'channelRequestState', epoch: 'lease', id: 'unsent', sent: false });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.channelReply).toHaveBeenCalledWith(1, 'busy', { kind: 'relay' });
   expect(f.channelReply).toHaveBeenCalledWith(1, 'large', { kind: 'relay' });
-  expect(f.channelReply).toHaveBeenCalledWith(1, 'failed', { kind: 'error', code: 'DESKTOP_VIEW_ONLY' });
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'failed', {
+    kind: 'error',
+    code: 'DESKTOP_VIEW_ONLY',
+  });
   expect(f.channelReply).toHaveBeenCalledWith(1, 'unsent', { kind: 'relay' });
 });
 

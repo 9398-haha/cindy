@@ -137,6 +137,9 @@ export class DesktopViewerController {
   >();
   /** The computer's own mode at the start of a lease; choosing it again forgets the memory. */
   private hostMode: { lease: string; modeId?: string } | null = null;
+  /** The size last asked of a fitted display. A HiDPI host may report a smaller
+   * logical size; the list still shows the entry the user chose as current. */
+  private fittedRequest: { lease: string; size: Size } | null = null;
   /** The remembered display choice is reapplied once per lease. */
   private rememberedLease: string | null = null;
   /** A remembered choice that failed is not retried in this window, so it cannot loop reconnects. */
@@ -729,7 +732,11 @@ export class DesktopViewerController {
   async resolutionModes(): Promise<RemoteDesktopDisplayMode[]> {
     const lease = this.session.lease;
     if (!lease) return [];
-    if (this.state.fittedDisplay) return fittedDisplayModes(this.state.fittedDisplay, lease.display);
+    if (this.state.fittedDisplay)
+      return fittedDisplayModes(
+        this.state.fittedDisplay,
+        this.fittedRequest?.lease === lease.lease ? this.fittedRequest.size : lease.display,
+      );
     const modes = await this.displayModes();
     // CoreGraphics modes keep their own orientation when Electron's display
     // geometry is rotated. Compare modes in the enumeration's coordinate space.
@@ -755,22 +762,19 @@ export class DesktopViewerController {
     }
     throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
   }
-  /** Whether the fit button restores the computer's own display for this viewer size. */
-  viewerDisplayMatched(width: number, height: number): boolean {
+  /** Returns from a fitted picture to the computer's own display and ratio. */
+  async restoreDisplay(): Promise<void> {
     const fitted = this.state.fittedDisplay;
-    return Boolean(
-      fitted &&
-        this.state.caps?.viewerDisplayRestore &&
-        this.session.lease &&
-        sameAspect(fitted, width, height),
-    );
+    if (!fitted || !this.state.caps?.viewerDisplayRestore) return;
+    await this.fitDisplay(fitted.width, fitted.height, false, undefined, { restore: true });
   }
+  /** `ratio` names the picture shape chosen for the same-ratio size list. */
   async fitDisplay(
     width: number,
     height: number,
     exactResolution = false,
     modeId?: string,
-    options: { viewport?: Size; remembered?: boolean } = {},
+    options: { ratio?: Size; remembered?: boolean; restore?: boolean } = {},
   ): Promise<void> {
     if (
       exactResolution &&
@@ -789,10 +793,7 @@ export class DesktopViewerController {
     )
       return;
     const fitted = this.state.fittedDisplay;
-    // Fitting again at the ratio already fitted restores the computer's display.
-    const restore = Boolean(
-      !exactResolution && fitted && caps?.viewerDisplayRestore && sameAspect(fitted, width, height),
-    );
+    const restore = Boolean(options.restore && fitted && caps?.viewerDisplayRestore);
     this.publish({ controlPending: true });
     this.syncControl();
     // A host that can follow display changes keeps the running stream; only a
@@ -822,9 +823,7 @@ export class DesktopViewerController {
             ? { kind: 'mode', modeId, width, height }
             : { kind: 'fit', width: size.width, height: size.height },
       );
-      const fittedBase = options.viewport
-        ? viewerDisplaySize(options.viewport.width, options.viewport.height)
-        : null;
+      this.fittedRequest = modeId || restore ? null : { lease: lease.lease, size: { ...size } };
       this.publish({
         // Keep the physical source as the reconnect target; the temporary
         // display is only the current capture/input surface.
@@ -832,13 +831,15 @@ export class DesktopViewerController {
         // The temporary capture surface is lease state, never a reconnectable
         // display choice in the selector.
         caps,
-        // Same-ratio sizes stay around the plain fit of the viewer.
+        // Keep the chosen ratio rather than a rounded size, so same-ratio
+        // choices do not drift from one resolution change to the next.
         fittedDisplay:
           modeId || restore
             ? null
-            : exactResolution && (fitted ?? fittedBase)
-              ? (fitted ?? fittedBase)
-              : { width: next.display.width, height: next.display.height },
+            : (options.ratio ??
+              (exactResolution && fitted
+                ? fitted
+                : { width: next.display.width, height: next.display.height })),
       });
       const geometry = {
         width: next.display.width,
@@ -915,23 +916,12 @@ export class DesktopViewerController {
       if (!unchanged()) return;
       if (remembered.kind === 'fit') {
         if (!caps.viewerDisplay) return;
-        // Same path as the button: measure this window now, then fit at the
-        // remembered size if it is one of the same-ratio choices.
-        const viewport = { width: this.root.clientWidth, height: this.root.clientHeight };
-        const base = viewerDisplaySize(viewport.width, viewport.height);
-        const edge = Math.max(remembered.width, remembered.height);
-        const exact = base
-          ? fittedDisplayModes(base, base).find((mode) => Math.max(mode.width, mode.height) === edge)
-          : undefined;
-        if (exact)
-          await this.fitDisplay(exact.width, exact.height, true, undefined, {
-            viewport,
-            remembered: true,
-          });
-        else
-          await this.fitDisplay(viewport.width, viewport.height, false, undefined, {
-            remembered: true,
-          });
+        // The ratio is a choice of its own now, not this window's shape.
+        const size = { width: remembered.width, height: remembered.height };
+        await this.fitDisplay(size.width, size.height, true, undefined, {
+          ratio: size,
+          remembered: true,
+        });
         return;
       }
       if (!caps.resolutionRestore) return;
