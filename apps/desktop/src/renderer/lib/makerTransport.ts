@@ -411,6 +411,23 @@ export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
 }
 
 /**
+ * 「应用退出中断」横幅的运行态真值:时间戳来自哪台设备的 session 行,就问哪台设备。
+ * 远程会话的 turn 只在被控端跑,控制端本机 main 永远答「不在 turn 中」,拿它当真值会把
+ * 被控端正在跑的任务误判成中断。deviceId 由调用方显式传入(视图的粘滞归属),不在这里
+ * 重新解析易失的 session origin —— 重连窗口内退回本机同样会得到错误的 false。
+ */
+export async function getSessionTurnActiveOn(
+  sessionId: string,
+  deviceId: string | null | undefined,
+): Promise<boolean> {
+  if (!deviceId) {
+    const result = await window.electronAPI.maker.getSessionTurnActive(sessionId);
+    return result?.inTurn === true;
+  }
+  return (await invokeRemote(deviceId, 'maker:session-in-turn', [sessionId])) === true;
+}
+
+/**
  * 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。
  *
  * 远程会话取回**最新一页**(没有 before / beforeTs 游标)时顺手写进冷缓存
