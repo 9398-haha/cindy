@@ -878,7 +878,8 @@ function ViewerTool({
     <Tip text={label} side="bottom">
       <Button
         variant="secondary"
-        className="remote-viewer-icon"
+        tone="quiet"
+        className="remote-viewer-tool"
         aria-label={label}
         aria-pressed={pressed}
         disabled={disabled}
@@ -912,8 +913,9 @@ function ViewerPanel({
       <PopoverTrigger asChild>
         <Tip text={label} side="bottom">
           <Button
-            variant={open ? 'primary' : 'secondary'}
-            className="remote-viewer-panel-trigger"
+            variant="secondary"
+            tone="quiet"
+            className="remote-viewer-tool"
             aria-label={label}
             aria-pressed={open}
           >
