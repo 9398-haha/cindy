@@ -235,24 +235,6 @@
 .remote-viewer-panel-section:empty {
   display: none;
 }
-.remote-viewer-toolgroup {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-1);
-  padding-inline: var(--space-2);
-  border-right: 1px solid var(--border-default);
-  -webkit-app-region: no-drag;
-}
-.remote-viewer-icon {
-  width: var(--space-9);
-  height: var(--space-9);
-  padding: 0;
-}
-.remote-viewer-panel-trigger {
-  width: var(--space-9);
-  padding: 0;
-}
 .remote-viewer-feedback {
   position: absolute;
   bottom: var(--space-4);
@@ -272,11 +254,6 @@
 @media (max-width: 1100px) {
   .remote-viewer-toolbar-network {
     display: none;
-  }
-}
-@media (max-width: 900px) {
-  .remote-viewer-toolgroup {
-    padding-inline: var(--space-1);
   }
 }
 .remote-viewer-field {
@@ -319,36 +296,38 @@
   }
 }
 
+/* Each group is one borderless track (same recipe as SegmentedControl); the
+   tools inside stay flat, so the toolbar never nests a frame inside a frame. */
+.remote-viewer-toolgroup,
 .remote-viewer-zoom-group,
 .remote-viewer-panels {
-  box-sizing: border-box;
-  height: var(--space-9);
   display: flex;
   flex: none;
   align-items: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-1);
-  border: 1px solid var(--border-default);
+  gap: 2px;
+  padding: 2px;
   border-radius: var(--radius-full);
-  background: var(--surface-elevated);
+  background: var(--segmented-track);
   -webkit-app-region: no-drag;
 }
-.remote-viewer-zoom-group .remote-viewer-icon,
-.remote-viewer-panels .remote-viewer-panel-trigger {
-  height: var(--space-7);
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  box-shadow: none;
+.remote-viewer-toolbar .remote-viewer-tool {
+  width: var(--space-8);
+  height: var(--space-8);
+  padding: 0;
+  color: var(--segmented-option-fg);
 }
-.remote-viewer-zoom-group .remote-viewer-icon:enabled:hover,
-.remote-viewer-zoom-group .remote-viewer-icon[aria-pressed='true'],
-.remote-viewer-panels .remote-viewer-panel-trigger:enabled:hover,
-.remote-viewer-panels .remote-viewer-panel-trigger[aria-pressed='true'] {
-  background: var(--button-secondary-hover);
+.remote-viewer-toolbar .remote-viewer-tool:enabled:hover,
+.remote-viewer-toolbar .remote-viewer-tool[aria-pressed='true'] {
+  color: var(--text-primary);
+}
+.remote-viewer-toolbar .remote-viewer-tool[aria-pressed='true'] {
+  --button-face-bg: var(--segmented-selected-bg);
+  --button-face-border: var(--segmented-selected-border);
 }
 .remote-viewer-zoom-divider {
   width: 1px;
-  height: var(--space-5);
-  background: var(--border-default);
+  height: var(--space-4);
+  margin-inline: 2px;
+  /* --border-default nearly matches the Light track; derive from the tool ink instead. */
+  background: color-mix(in srgb, var(--segmented-option-fg) 35%, transparent);
 }
