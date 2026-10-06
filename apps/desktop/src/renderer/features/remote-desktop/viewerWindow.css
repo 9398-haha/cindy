@@ -266,7 +266,8 @@
   grid-template-columns: auto minmax(0, 1fr);
   column-gap: var(--space-3);
 }
-.remote-viewer-field-wide > :nth-child(n + 3) {
+/* Hints and errors sit below the label/control row and use its full width. */
+.remote-viewer-field > :nth-child(n + 3) {
   grid-column: 1 / -1;
 }
 .remote-viewer-display-select {

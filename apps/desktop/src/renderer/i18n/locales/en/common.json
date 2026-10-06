@@ -315,7 +315,7 @@
       "automatic": "Automatic",
       "saver": "Data saver",
       "hd": "HD",
-      "qualityHint": "Auto keeps motion smooth and sharpens when your network allows. Data saver limits usage (up to 30 fps). HD keeps text sharp and lowers the frame rate when bandwidth is short.",
+      "qualityHint": "Automatic favors smoothness, Data saver uses less data, HD favors sharp text.",
       "resolution": "Computer resolution",
       "clipboardFailed": "Could not transfer clipboard content. Check control access and try again.",
       "settingsFailed": "Could not save this setting. Try again.",
