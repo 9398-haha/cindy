@@ -406,6 +406,8 @@ describe("buildUserProvider (per-runtime)", () => {
             id: "unknown-model",
             efforts: [],
             defaultEffort: null,
+            // 没有任何来源声明过档位:[] 只是占位,准入不得当成明确无档位(#5535)。
+            effortsUnknown: true,
           }),
           expect.objectContaining({
             id: "discovered-model",
@@ -427,6 +429,12 @@ describe("buildUserProvider (per-runtime)", () => {
         expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty(
           "reasoning",
         );
+        // 发现元数据、显式 reasoning:true 与 reasoning:false 都算已声明,不带「未知」标记。
+        for (const index of [1, 2, 3]) {
+          expect(provider.models[agent]?.[index]).not.toHaveProperty(
+            "effortsUnknown",
+          );
+        }
       }
     },
   );
@@ -631,6 +639,7 @@ describe("buildUserProvider (per-runtime)", () => {
       id: "custom/my-model",
       efforts: [],
       defaultEffort: null,
+      effortsUnknown: true,
     });
   });
 
