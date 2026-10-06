@@ -250,6 +250,11 @@ import {
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
 import {
+  createQueueReorderAdapter,
+  type SessionQueueMoveResult,
+  type SessionQueueSteerResult,
+} from './sessionQueueControl.js';
+import {
   createSessionBindingLifecycle,
   finalizeSessionClose,
   runSessionCloseCleanup,
@@ -816,9 +821,11 @@ import {
   type InterruptWorkerResult,
   type ListWorkerQueuedMessagesResult,
   type MergeWorkerQueuedMessagesResult,
+  type MoveWorkerQueuedMessageResult,
   type OrcaTeamService,
   type OrcaWorkerEffort,
   type SendToWorkerResult,
+  type SteerWorkerQueuedMessageResult,
   type WorkerQueuedMessageControlResult,
   type WorkerTerminalTurnCapture,
 } from './orcaTeamService.js';
@@ -1904,6 +1911,21 @@ interface OrcaCollabService {
         message: string;
       }
   >;
+  steerSessionQueuedMessage: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+  }) => Promise<
+    SessionQueueSteerResult | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  moveSessionQueuedMessage: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+    position: number;
+  }) => Promise<
+    SessionQueueMoveResult | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
   steerSession: (params: {
     callerSessionId: string;
     targetSessionId: string;
@@ -2130,6 +2152,7 @@ interface OrcaCollabService {
     callerLeadSessionId: string;
     targetSessionId: string;
     message: string;
+    delivery?: 'queue' | 'steer';
   }) => Promise<SendToWorkerResult>;
   interruptWorker: (params: {
     callerLeadSessionId: string;
@@ -2139,8 +2162,19 @@ interface OrcaCollabService {
   // 排队消息控制:只作用于 lead 自己发出的 orca 排队条目,归属校验与 send/idle/archive 同一套 resolveWorkerRef。
   listWorkerQueuedMessages: (params: {
     callerLeadSessionId: string;
-    workerRef: string;
+    workerRef?: string;
   }) => Promise<ListWorkerQueuedMessagesResult>;
+  steerWorkerQueuedMessage: (params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }) => Promise<SteerWorkerQueuedMessageResult>;
+  moveWorkerQueuedMessage: (params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+    position: number;
+  }) => Promise<MoveWorkerQueuedMessageResult>;
   updateWorkerQueuedMessage: (params: {
     callerLeadSessionId: string;
     workerRef: string;
@@ -11650,6 +11684,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionRowSnapshot,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
+    steerControlInput: (sessionId, item, expectedTurn) =>
+      inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     withSendToSessionLock,
     prepareUnhealthySession: (sessionId) =>
@@ -11714,6 +11750,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return orcaInterAgentDispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
     };
   dispatchInterAgentMessageHolder = dispatchOrEnqueueOrcaInterAgentMessage;
+
+  // Agent 选择的排队行插话 / 排序(cindy_orca 与 cindy_helper 共用)。
+  const { steerStoredControlMessage, moveStoredControlMessage } = createQueueReorderAdapter({
+    getLiveSession: (sessionId) => maker.getSession(sessionId),
+    hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
+    // inputCoordinator 在本函数更后面才声明,只能在调用时取用。
+    getCoordinator: () => inputCoordinator,
+  });
 
   ipcMain.handle(
     MAKER_INVOKE.SESSION_ENABLE_ORCA,
@@ -12175,6 +12219,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       targetSessionId,
       message,
       workerId,
+      delivery,
       dispatchMeta,
       onAccepted,
       onAcceptedRollback,
@@ -12186,6 +12231,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         source: 'lead',
         senderLabel: 'Lead',
         workerId,
+        ...(delivery ? { delivery } : {}),
         meta: dispatchMeta,
         onAccepted,
         onAcceptedRollback,
@@ -12201,6 +12247,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         dispatchOutcome: result.dispatchOutcome,
         targetTitle: result.targetTitle ?? null,
         targetLastUserSendAt: result.targetLastUserSendAt ?? null,
+        ...(result.steerFallbackReason ? { steerFallbackReason: result.steerFallbackReason } : {}),
       };
     },
     reserveWorkerMessage: async ({
@@ -12305,6 +12352,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
     mergeQueuedMessages: (sessionId, clientIds, buildReplacement) =>
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
+    steerStoredQueuedMessage: steerStoredControlMessage,
+    moveQueuedMessage: moveStoredControlMessage,
     sendAutoBridgeToLead: async (leadSessionId, message, workerId) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
@@ -13635,6 +13684,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.remove(sessionId, clientId);
       return !inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId);
     },
+    steerStoredQueuedMessage: steerStoredControlMessage,
+    moveQueuedMessage: moveStoredControlMessage,
     createId,
   });
 
@@ -13685,6 +13736,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
+    steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
+    moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
     steerSession: (params) => sessionControlService.steerSession(params),
     stopSessionTurn: (params) => sessionControlService.stopSessionTurn(params),
     getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
@@ -13702,6 +13755,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     updateWorkerQueuedMessage: (params) => orcaTeamService.updateWorkerQueuedMessage(params),
     cancelWorkerQueuedMessage: (params) => orcaTeamService.cancelWorkerQueuedMessage(params),
     mergeWorkerQueuedMessages: (params) => orcaTeamService.mergeWorkerQueuedMessages(params),
+    steerWorkerQueuedMessage: (params) => orcaTeamService.steerWorkerQueuedMessage(params),
+    moveWorkerQueuedMessage: (params) => orcaTeamService.moveWorkerQueuedMessage(params),
     startTeam: ({ leadSessionId, workerPermissionMode }) => startOrcaTeamForCaller(leadSessionId, workerPermissionMode),
     createWorker: async (params) => {
       try {
@@ -15735,6 +15790,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 可见行),理由与踩过的坑记在 helper 的注释里。
     supersedeRetriedUserTurn,
     getLastAssistantTranscriptUuid,
+    // 插话并入正在运行的 turn,不开启新 turn:排队时登记的「新 turn 接管」回调不再适用,
+    // 只释放登记(不运行),否则会给已在跑的 worker 另建一份 running/auto-bridge 身份。
+    onSteerAccepted: (_sessionId, item) => {
+      orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
+    },
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
