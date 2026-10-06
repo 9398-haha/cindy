@@ -32,6 +32,8 @@ let project: string;
 let hostRoot: string;
 let hostInputs: HostedStartInput[];
 let hostSends: Array<{ message: UserMessage; opts: SendOptions }>;
+/** 假 Agent 最后一次 exec.run 的退出码(副作用断言用)。 */
+let execExits: number[];
 let authorized: boolean;
 
 function queue() {
@@ -109,6 +111,7 @@ function fakeHostedAgent(input: HostedStartInput): AgentSessionHandle {
       const decision = await resolver!({ kind: 'permission', requestId: 'r1', toolName: 'bash', input: { command } } as InteractionRequest);
       if (decision.kind === 'permission' && decision.behavior === 'allow') {
         const after = await exec('exec.run', { command });
+        execExits.push(Number(after.json.exitCode ?? NaN));
         events.push({ type: 'text', data: { text: `after:${after.status}` }, source: input.kind });
       }
       await opts?.onTranscriptUserEntry?.('entry-42');
@@ -155,6 +158,7 @@ beforeEach(() => {
   fs.writeFileSync(path.join(project, 'hello.txt'), 'from-controller');
   hostInputs = [];
   hostSends = [];
+  execExits = [];
   authorized = true;
 });
 
@@ -219,7 +223,13 @@ describe('remote agent round trip', () => {
     await reader;
     const texts = collected.filter((event) => event.type === 'text').map((event) => (event.data as { text: string }).text);
     expect(texts).toEqual(['read:from-controller', 'tools:7', 'before:403', 'after:200']);
-    expect(fs.existsSync(path.join(root, 'victim'))).toBe(false);
+    // 命令副作用只在 posix 上断言：`rm -rf` 是 bash 命令，Windows 无 Git Bash 时 exec
+    // 走 cmd 回退、天然跑不动(Agent 的命令都是 bash 写法，与 Claude Code 对 Windows 的
+    // 要求一致)。命令与确认流本身在两个平台都已断言。
+    if (process.platform !== 'win32') {
+      expect(execExits.at(-1)).toBe(0);
+      expect(fs.existsSync(path.join(root, 'victim'))).toBe(false);
+    }
     expect(requests).toHaveLength(1);
     expect(entries).toEqual(['entry-42']);
 
