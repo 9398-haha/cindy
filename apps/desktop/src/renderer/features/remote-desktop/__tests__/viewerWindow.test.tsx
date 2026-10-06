@@ -337,7 +337,7 @@ it.each([
   expect(toolbar.getByText(label)).toBeDefined();
 });
 
-it('marks an active privacy screen in the toolbar and for screen readers without a persistent banner', async () => {
+it('announces an active privacy screen without a banner or toolbar setting markers', async () => {
   await i18n.changeLanguage('zh-CN');
   Object.assign(window, {
     electronAPI: {
@@ -358,7 +358,7 @@ it('marks an active privacy screen in the toolbar and for screen readers without
         audio: true,
         privacyScreen: true,
         hostMute: false,
-        clipboardSync: false,
+        clipboardSync: true,
         lockOnExit: false,
       },
       safety: { privacyActive: true, notice: null, clipboardProgress: null },
@@ -385,9 +385,9 @@ it('marks an active privacy screen in the toolbar and for screen readers without
   const announcement = screen.getByText(i18n.t('remoteDesktop.privacyActive'));
   expect(announcement.getAttribute('role')).toBe('status');
   expect(announcement.classList.contains('sr-only')).toBe(true);
-  expect(
-    screen.getByRole('button', { name: '安全' }).querySelector('.remote-viewer-active-dot'),
-  ).not.toBeNull();
+  for (const name of ['剪贴板', '安全']) {
+    expect(screen.getByRole('button', { name }).querySelector('span')).toBeNull();
+  }
 });
 
 it('updates translated controls without ending or recreating the viewer connection', async () => {

@@ -508,7 +508,6 @@ export function RemoteDesktopViewerWindow() {
           <ViewerPanel
             label={t('remoteDesktop.viewer.clipboardPanel')}
             icon={<Clipboard size={16} />}
-            active={state?.preferences.clipboardSync}
             open={settings === 'clipboard'}
             restoreFocus={() => activePanel.current === null}
             onOpenChange={(open) => openPanel('clipboard', open)}
@@ -550,7 +549,6 @@ export function RemoteDesktopViewerWindow() {
           <ViewerPanel
             label={t('remoteDesktop.viewer.securityPanel')}
             icon={<Shield size={16} />}
-            active={state?.safety.privacyActive}
             open={settings === 'security'}
             restoreFocus={() => activePanel.current === null}
             onOpenChange={(open) => openPanel('security', open)}
@@ -817,7 +815,6 @@ function ViewerTool({
 function ViewerPanel({
   label,
   icon,
-  active,
   open,
   restoreFocus,
   onOpenChange,
@@ -825,7 +822,6 @@ function ViewerPanel({
 }: {
   label: string;
   icon: ReactNode;
-  active?: boolean;
   open: boolean;
   restoreFocus(): boolean;
   onOpenChange(open: boolean): void;
@@ -844,7 +840,6 @@ function ViewerPanel({
             aria-pressed={open}
           >
             {icon}
-            {active && <span className="remote-viewer-active-dot" aria-hidden="true" />}
           </Button>
         </Tip>
       </PopoverTrigger>
