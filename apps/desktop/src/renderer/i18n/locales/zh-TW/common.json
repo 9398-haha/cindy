@@ -10033,7 +10033,14 @@
       "outsideWorkdir": "該檔案在任務工作目錄之外，遠端任務暫不支援訪問",
       "staleCopy": "遠端連線不可用，已顯示本地歷史副本(可能不是最新版本)",
       "staleBadge": "歷史副本",
-      "revealLocalCopy": "下載並定位本地副本"
+      "downloadToLocal": "下載到本機",
+      "downloadPacking": "遠端電腦正在打包…已打包 {{size}}",
+      "downloadProgress": "正在下載…{{received}} / {{total}}",
+      "downloadProgressUnknown": "正在下載…已接收 {{received}}",
+      "downloadExtracting": "正在解壓縮…",
+      "downloadUnsupported": "遠端電腦暫不支援下載資料夾，請更新該電腦上的 Cindy 後重試",
+      "downloadNoSpace": "磁碟空間不足，無法完成下載",
+      "downloadSkipped": "已下載到「下載項目」資料夾，但有部分檔案未能下載"
     },
     "mivoAction": {
       "promptPlaceholder": "輸入提示詞，按 Enter 傳送",

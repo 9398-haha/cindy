@@ -10056,7 +10056,14 @@
       "outsideWorkdir": "This file is outside the session working directory and can't be accessed in remote sessions yet",
       "staleCopy": "Remote connection unavailable — showing a local cached copy (may be outdated)",
       "staleBadge": "Cached copy",
-      "revealLocalCopy": "Download and reveal local copy"
+      "downloadToLocal": "Download to this computer",
+      "downloadPacking": "Remote computer is packing… {{size}} packed",
+      "downloadProgress": "Downloading… {{received}} / {{total}}",
+      "downloadProgressUnknown": "Downloading… {{received}} received",
+      "downloadExtracting": "Unpacking…",
+      "downloadUnsupported": "The remote computer can't download folders yet. Update Cindy on that computer and try again",
+      "downloadNoSpace": "Not enough disk space to finish the download",
+      "downloadSkipped": "Saved to Downloads, but some files could not be downloaded"
     },
     "mivoAction": {
       "promptPlaceholder": "Type a prompt, press Enter to send",

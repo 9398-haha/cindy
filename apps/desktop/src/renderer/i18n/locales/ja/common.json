@@ -10039,7 +10039,14 @@
       "outsideWorkdir": "このファイルはセッションの作業ディレクトリ外にあるため、リモートセッションではまだアクセスできません",
       "staleCopy": "リモート接続が利用できないため、ローカルのキャッシュ済みコピーを表示しています(最新ではない可能性があります)",
       "staleBadge": "キャッシュ済み",
-      "revealLocalCopy": "ローカルコピーをダウンロードして表示"
+      "downloadToLocal": "このコンピュータにダウンロード",
+      "downloadPacking": "リモートコンピュータでまとめています…{{size}}",
+      "downloadProgress": "ダウンロード中…{{received}} / {{total}}",
+      "downloadProgressUnknown": "ダウンロード中…{{received}} 受信済み",
+      "downloadExtracting": "展開しています…",
+      "downloadUnsupported": "リモートコンピュータはまだフォルダのダウンロードに対応していません。そのコンピュータの Cindy を更新してから再試行してください",
+      "downloadNoSpace": "ディスクの空き容量が足りないため、ダウンロードを完了できません",
+      "downloadSkipped": "ダウンロードフォルダに保存しましたが、一部のファイルはダウンロードできませんでした"
     },
     "mivoAction": {
       "promptPlaceholder": "プロンプトを入力し、Enter で送信",

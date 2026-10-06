@@ -188,7 +188,8 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
     expect(fileBrowserKeys).toEqual(expect.arrayContaining([
       'listDir', 'listAllFiles', 'readFile', 'writeFile', 'createFile', 'createFolder',
       'deleteEntry', 'renameEntry', 'stat', 'startWatch', 'stopWatch', 'onEvent',
-      'fetchRemote', 'readCached', 'cachePut', 'onTransferProgress', 'chatFetch', 'chatStat',
+      'fetchRemote', 'readCached', 'cachePut', 'onTransferProgress', 'chatFetch', 'chatDownload',
+      'chatStat',
     ]));
     expect(terminalKeys).toEqual(expect.arrayContaining([
       'create', 'write', 'resize', 'dispose', 'restart', 'onData', 'onExit',
