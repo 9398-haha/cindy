@@ -68,8 +68,9 @@ describe('workspace', () => {
     expect(workspace.resolve('a/b.txt')).toBe(path.join(project, 'a/b.txt'));
     expect(workspace.resolve('/remote/shadow/proj/src/x.ts')).toBe(path.join(project, 'src/x.ts'));
     expect(workspace.resolve('/remote/shadow/proj')).toBe(project);
-    // 同前缀但不是同一目录的不映射。
-    expect(workspace.resolve('/remote/shadow/projX/y')).toBe(path.resolve('/remote/shadow/projX/y'));
+    // 同前缀但不是同一目录的不映射。期望值也从 workingDir 解析：Windows 上盘符跟首个参数走，
+    // 直接 path.resolve(输入) 会拿到当前进程盘符、与实现语义不一致。
+    expect(workspace.resolve('/remote/shadow/projX/y')).toBe(path.resolve(project, '/remote/shadow/projX/y'));
     expect(workspace.mapCommand('cat /remote/shadow/proj/a.txt && ls /remote/shadow/projX'))
       .toBe(`cat ${project}/a.txt && ls /remote/shadow/projX`);
     expect(() => workspace.resolve('')).toThrow();

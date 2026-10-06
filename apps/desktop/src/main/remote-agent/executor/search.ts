@@ -92,7 +92,8 @@ export async function piGrep(
       const file = event.data?.path?.text;
       const lineNumber = event.data?.line_number;
       if (!file || typeof lineNumber !== 'number') return;
-      const display = rootIsDirectory ? file.replace(/^\.\//, '').split(path.sep).join('/') : path.basename(root);
+      // rg 的路径在 Windows 上是 `.` 开头的反斜杠形式(`.\src\a.ts`)，统一剥掉前缀并转正斜杠。
+      const display = rootIsDirectory ? file.replace(/^\.[\\/]/, '').split(/[\\/]/).join('/') : path.basename(root);
       if (lastPath !== undefined && (display !== lastPath || lineNumber > lastLine + 1) && context > 0) {
         outputLines.push('--');
       }
