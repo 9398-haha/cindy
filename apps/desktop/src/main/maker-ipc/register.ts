@@ -388,6 +388,7 @@ import {
   getSessionRowSnapshotStrict,
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
+  scheduleWorktreeRecycleForStatusChange,
   setSessionRuntimeCleanup,
 } from '../localDb/ipc/sessions.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
@@ -12192,7 +12193,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const workerRecycleScope = captureSessionRecycleScope();
       await archiveSingleWorkerSession(sessionId, beforeMutation);
       await beforeMutation?.();
-      await recycleSessionWorktreeForStatusChange(sessionId, 'archived', workerRecycleScope);
+      // 与普通归档(patchSessionMetaInDb)一致:status 落库即回执,回收(quiesce + git worktree
+      // remove + 文件清理)放后台,不让手机/桌面的归档回执等它。调用方(IPC / MCP archive_worker /
+      // 插件 releaseWorker)都不依赖回收已完成;回收在队列里按 captured scope 自行复核仍可删。
+      // 插件 releaseWorker 在持有该 session send 锁时调到这里,而回收要拿同一把 route 锁——
+      // 若在此 await 会自等到锁 watchdog bail,后台调度同时消除了这处自锁。
+      scheduleWorktreeRecycleForStatusChange(sessionId, 'archived', workerRecycleScope);
     },
     getManualInterrupt,
     clearManualInterrupt,

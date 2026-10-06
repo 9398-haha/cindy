@@ -557,7 +557,7 @@ async function recycleSessionWorktreeInQueue(
   }
 }
 
-function scheduleWorktreeRecycleForStatusChange(
+export function scheduleWorktreeRecycleForStatusChange(
   sessionId: string,
   status: unknown,
   capturedScope?: SessionRecycleScope,
