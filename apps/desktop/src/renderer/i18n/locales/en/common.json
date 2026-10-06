@@ -292,6 +292,8 @@
       "controlDisabled": "On the remote computer, open Cindy Settings → Remote control and allow control of this computer.",
       "unsupported": "This device does not support remote desktop.",
       "checkFailed": "Could not check this computer. Check its network connection.",
+      "checkInterrupted": "Couldn’t confirm this computer’s status just now. It will be checked again the next time you view it.",
+      "unresponsive": "This computer isn’t responding right now. It will be checked again automatically when it recovers.",
       "screenRecordingRequired": "On the remote Mac, open System Settings → Privacy & Security and allow screen recording for Cindy. Reopen Cindy if prompted.",
       "noDisplay": "No available display on this computer."
     },

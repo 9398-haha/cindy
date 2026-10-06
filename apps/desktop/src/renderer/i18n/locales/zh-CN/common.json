@@ -292,6 +292,8 @@
       "controlDisabled": "请在远程电脑的 Cindy 设置 → 远程控制中，允许控制这台电脑。",
       "unsupported": "此设备不支持远程桌面。",
       "checkFailed": "未能确认电脑状态，请检查这台电脑的网络连接。",
+      "checkInterrupted": "暂时没能确认电脑状态，再次查看时会自动重新检查。",
+      "unresponsive": "这台电脑暂时没有响应，恢复后会自动重新检查。",
       "screenRecordingRequired": "请在远程 Mac 的系统设置 → 隐私与安全性中，为 Cindy 开启屏幕录制权限。如果系统要求，请重新打开 Cindy。",
       "noDisplay": "这台电脑没有可用的显示器。"
     },
