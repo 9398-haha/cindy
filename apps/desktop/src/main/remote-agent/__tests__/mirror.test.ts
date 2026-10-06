@@ -101,6 +101,25 @@ describe('collectAncestorInstructionFiles', () => {
   });
 });
 
+describe('collectProjectInstructionFiles', () => {
+  it('rejects symlinks so a checkout cannot smuggle files from outside the project', async () => {
+    const project = path.join(root, 'proj');
+    const outside = path.join(root, 'outside');
+    write(path.join(project, 'CLAUDE.md'), 'real rules');
+    write(path.join(outside, 'leak.md'), 'secret leak');
+    write(path.join(outside, '.env'), 'SECRET=1');
+    fs.mkdirSync(path.join(project, '.claude', 'skills'), { recursive: true });
+    // 同名文件、目录与独立文件三种符号链接借道都不跟随。
+    fs.symlinkSync(path.join(outside, '.env'), path.join(project, 'CLAUDE.local.md'));
+    fs.symlinkSync(outside, path.join(project, '.claude', 'skills', 'leak'));
+    fs.symlinkSync(path.join(outside, 'leak.md'), path.join(project, '.claude', 'skills', 'leak.md'));
+    const files = await collectProjectInstructionFiles(project);
+    expect(files.map((file) => file.path)).toEqual(['CLAUDE.md']);
+    const decoded = files.map((file) => Buffer.from(file.data, 'base64').toString());
+    expect(decoded).toEqual(['real rules']);
+  });
+});
+
 describe('collectPersonalConfig', () => {
   it("collects Claude Code's personal memory, skills, agents, commands and permission rules", async () => {
     const home = path.join(root, 'home');

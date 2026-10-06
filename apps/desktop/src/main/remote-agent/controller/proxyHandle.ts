@@ -405,7 +405,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return null;
     },
     onClosed(reason, message) {
-      if (reason !== 'closed' && reason !== 'detached' && reason !== 'ended') {
+      // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。
+      if (reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
         queue.push({
           type: 'error',
           data: {

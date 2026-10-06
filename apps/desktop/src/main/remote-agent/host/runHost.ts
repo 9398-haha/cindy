@@ -117,6 +117,8 @@ interface PendingReverse {
 interface Run {
   id: string;
   controller: string;
+  /** 本机侧任务 id：影子目录按它存放，同一任务多次打开共用。 */
+  hostSessionId?: string;
   owner: unknown;
   kind: RemoteAgentKind;
   log: EventLog;
@@ -248,8 +250,17 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const runs = new Map<string, Run>();
   const uploads = new Map<string, Upload>();
+  /** 影子目录重建按 hostSessionId 串行：同一任务的两次打开不并发争用同一个目录。 */
+  const shadowLocks = new Map<string, Promise<unknown>>();
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
   const key = (controller: string, id: string) => `${controller}\0${id}`;
+
+  function withShadowLock<T>(hostSessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = shadowLocks.get(hostSessionId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    shadowLocks.set(hostSessionId, next.then(() => undefined, () => undefined));
+    return next;
+  }
 
   function ensureSweep(): void {
     if (sweepTimer) return;
@@ -433,7 +444,17 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   async function startRun(run: Run, payload: RemoteAgentOpenPayload): Promise<void> {
     try {
       const hostSessionId = hostSessionIdFor(run.controller, payload.sessionId);
-      const { shadowDir, mirrorRoot } = await prepareShadow(run.controller, payload, hostSessionId);
+      run.hostSessionId = hostSessionId;
+      const { shadowDir, mirrorRoot } = await withShadowLock(hostSessionId, async () => {
+        // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
+        // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
+        for (const other of runs.values()) {
+          if (other !== run && other.controller === run.controller && other.hostSessionId === hostSessionId && !other.closing) {
+            await finishRun(other, 'superseded', 'navigation');
+          }
+        }
+        return prepareShadow(run.controller, payload, hostSessionId);
+      });
       const tunnel = await createRunTunnel({
         http: (request, signal) => reverseHttp(run, request, signal),
         wsOpen: (connId, wsPath) => append(run, { t: 'ws', connId, kind: 'open', path: wsPath }),
@@ -644,8 +665,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const uploadKey = key(controller, request.uploadId);
         let upload = uploads.get(uploadKey);
         const chunk = Buffer.from(request.data, 'base64');
+        // 配额对每个新 chunk 都重查，不只是建 uploadId 时：否则可以先建很多 uploadId
+        // 各带一小片，再往每个里追加大段数据，绕开只在首次检查的配额、无上限占内存。
+        if (!upload?.chunks[request.index] && stagedBytes(controller) + chunk.length > MAX_STAGED_BYTES_PER_CONTROLLER) {
+          fail('REMOTE_AGENT_BUSY', 'too much staged data');
+        }
         if (!upload) {
-          if (stagedBytes(controller) + chunk.length > MAX_STAGED_BYTES_PER_CONTROLLER) fail('REMOTE_AGENT_BUSY', 'too much staged data');
           upload = { controller, chunks: [], bytes: 0, touchedAt: now() };
           uploads.set(uploadKey, upload);
           ensureSweep();

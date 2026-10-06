@@ -1768,9 +1768,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
           allowPrivilegedLinks,
         );
         if (isManagedMarkdownVideoUrl(normalized)) {
+          // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
+          // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
           return (
             <ChatVideoView
-              src={normalized}
+              src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
               filename={markdownMediaFilename(normalized, alt)}
               variant="tool-output"
               sessionId={currentSessionId}

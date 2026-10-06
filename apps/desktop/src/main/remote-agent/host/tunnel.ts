@@ -145,7 +145,11 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
         res.end(response.body);
       } catch (error) {
         if (res.destroyed) return;
-        const message = error instanceof Error ? error.message : String(error);
+        // 错误消息/栈可能携带本机路径等信息，不原样回给隧道对端；按错误类别给固定文案。
+        const raw = error instanceof Error ? error.message : String(error);
+        const message = /aborted/i.test(raw)
+          ? 'The request was cancelled.'
+          : 'The task has ended on the computer where it runs.';
         res.writeHead(502, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { code: 'REMOTE_AGENT_TUNNEL', message } }));
       }

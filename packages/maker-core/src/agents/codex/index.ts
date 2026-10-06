@@ -20,7 +20,7 @@
  *  - renderer 不感知 thread_id / app-server 任何概念
  */
 
-import { deviceHostedEnvironmentNote } from '../shared/device-hosted.js';
+import { deviceHostedEnvironmentNote, stripTrailingSlashes } from '../shared/device-hosted.js';
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -5385,7 +5385,7 @@ assertRouteCurrent();
       for (const name of hostedLocalMcpNames) {
         if (!hosted!.mcpServers.includes(name)) out[`mcp_servers.${name}.enabled`] = false;
       }
-      const base = `${hosted!.tunnelUrl.replace(/\/+$/, '')}/t/${encodeURIComponent(hosted!.tunnelToken)}/mcp/`;
+      const base = `${stripTrailingSlashes(hosted!.tunnelUrl)}/t/${encodeURIComponent(hosted!.tunnelToken)}/mcp/`;
       for (const name of hosted!.mcpServers) {
         out[`mcp_servers.${name}.url`] = `${base}${encodeURIComponent(name)}`;
         out[`mcp_servers.${name}.enabled`] = true;
@@ -6909,7 +6909,7 @@ assertRouteCurrent();
       assertCurrentHost('environment/add');
       await host.request(Method.EnvironmentAdd, {
         environmentId: hostedEnvironmentId,
-        execServerUrl: `${hosted.tunnelUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws/exec-server`,
+        execServerUrl: `${stripTrailingSlashes(hosted.tunnelUrl.replace(/^http/, 'ws'))}/ws/exec-server`,
         authBearerToken: hosted.tunnelToken,
       }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS });
       assertCurrentHost('environment/add');

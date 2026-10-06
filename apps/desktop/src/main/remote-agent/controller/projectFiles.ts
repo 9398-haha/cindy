@@ -45,11 +45,16 @@ interface Budget {
   bytes: number;
 }
 
-async function readLimited(file: string, budget: Budget): Promise<Buffer | null> {
+async function readLimited(file: string, budget: Budget, root: string): Promise<Buffer | null> {
   if (budget.files >= MAX_FILES) return null;
   try {
-    const stat = await fs.stat(file);
-    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || budget.bytes + stat.size > MAX_TOTAL_BYTES) return null;
+    // 不跟随符号链接：项目里的链接可能指向工作目录外(如 ~/.ssh、.env)，一旦跟随，
+    // 越界字节会被序列化后带到运行 Agent 的那台电脑上。用 lstat 先拒掉链接本身。
+    const stat = await fs.lstat(file);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_FILE_BYTES || budget.bytes + stat.size > MAX_TOTAL_BYTES) return null;
+    // 规范路径仍须落在真实根目录内(防 `..` 与目录链接借道)。
+    const [realFile, realRoot] = await Promise.all([fs.realpath(file), fs.realpath(root)]);
+    if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${path.sep}`)) return null;
     const data = await fs.readFile(file);
     budget.files += 1;
     budget.bytes += data.length;
@@ -76,22 +81,16 @@ async function walk(
   }
   for (const entry of entries) {
     if (entry.name === '.git' || entry.name === 'node_modules') continue;
+    // 目录与文件的符号链接都不跟随：目标可能落在项目外，readLimited 的根内校验拦不住
+    // “整棵目录是链接”的借道，这里直接跳过。
+    if (entry.isSymbolicLink()) continue;
     const child = `${relative}/${entry.name}`;
     const full = path.join(root, child);
-    let isDir = entry.isDirectory();
-    let isFile = entry.isFile();
-    if (entry.isSymbolicLink()) {
-      try {
-        const stat = await fs.stat(full);
-        isDir = stat.isDirectory();
-        isFile = stat.isFile();
-      } catch {
-        continue;
-      }
-    }
+    const isDir = entry.isDirectory();
+    const isFile = entry.isFile();
     if (isDir) await walk(root, child, depth + 1, budget, out, rename);
     else if (isFile && isSafeProjectFilePath(rename(child))) {
-      const data = await readLimited(full, budget);
+      const data = await readLimited(full, budget, root);
       if (data) out.push({ path: rename(child), data: data.toString('base64') });
     }
   }
@@ -113,11 +112,11 @@ export async function collectProjectInstructionFiles(workingDir: string): Promis
   const budget: Budget = { files: 0, bytes: 0 };
   const out: RemoteAgentWireFile[] = [];
   for (const name of TOP_LEVEL_FILES) {
-    const data = await readLimited(path.join(workingDir, name), budget);
+    const data = await readLimited(path.join(workingDir, name), budget, workingDir);
     if (data) out.push({ path: name, data: data.toString('base64') });
   }
   for (const name of SETTINGS_FILES) {
-    const data = await readLimited(path.join(workingDir, name), budget);
+    const data = await readLimited(path.join(workingDir, name), budget, workingDir);
     const sanitized = data ? sanitizeClaudeSettings(data) : null;
     if (sanitized) out.push({ path: name, data: sanitized.toString('base64') });
   }
@@ -138,7 +137,7 @@ export async function collectAncestorInstructionFiles(workingDir: string): Promi
     if (parent === dir || path.dirname(parent) === parent) break;
     dir = parent;
     for (const name of ANCESTOR_INSTRUCTION_FILES) {
-      const data = await readLimited(path.join(dir, name), budget);
+      const data = await readLimited(path.join(dir, name), budget, dir);
       if (data) out.push({ up, name, data: data.toString('base64') });
     }
   }
@@ -182,7 +181,7 @@ export async function collectPersonalConfig(
   const roots: CollectedPersonalConfig['roots'] = [];
   if (kind === 'claude-code') {
     const configDir = claudeConfigDir(env, home);
-    const memory = await readLimited(path.join(configDir, 'CLAUDE.md'), budget);
+    const memory = await readLimited(path.join(configDir, 'CLAUDE.md'), budget, configDir);
     if (memory) personal.memory = memory.toString('utf8');
     const projectEntries = new Set(projectFiles.map((file) => file.path.split('/').slice(0, 3).join('/')));
     for (const dir of PERSONAL_CLAUDE_DIRECTORIES) {
@@ -206,7 +205,7 @@ export async function collectPersonalConfig(
         if (stat.isDirectory()) {
           await walk(configDir, `${dir}/${entry.name}`, 1, budget, personal.files, (value) => `.claude/${value}`);
         } else if (stat.isFile()) {
-          const data = await readLimited(local, budget);
+          const data = await readLimited(local, budget, configDir);
           if (data) personal.files.push({ path: relative, data: data.toString('base64') });
         }
         if (personal.files.length > before) roots.push({ relative, local });
@@ -227,7 +226,7 @@ export async function collectPersonalConfig(
     const codexHome = codexHomeDir(env, home);
     // 与 Codex 的读取顺序一致：AGENTS.override.md 优先于 AGENTS.md。
     for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
-      const data = await readLimited(path.join(codexHome, name), budget);
+      const data = await readLimited(path.join(codexHome, name), budget, codexHome);
       if (data && data.toString('utf8').trim()) {
         personal.instructions = data.toString('utf8');
         break;

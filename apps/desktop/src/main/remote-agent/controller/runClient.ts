@@ -31,7 +31,7 @@ import {
 } from '@cindy/device-link';
 
 import { LineSplitter } from '../eventLog';
-import { RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
+import { isRetryableLinkError, RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
 
 export { isRetryableLinkError, RemoteAgentPoller, type RemoteAgentInvoke } from './poller';
 
@@ -41,6 +41,8 @@ const gzipAsync = promisify(gzip);
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
 /** 结束时等对方收尾事件到达的最长时间。 */
 const CLOSE_DRAIN_MS = 5_000;
+/** 回包交付重试上限(链路抖动时对方一直在等同一 requestId 的回包)。 */
+const MAX_REPLY_DELIVER_ATTEMPTS = 30;
 
 export class RemoteAgentRemoteError extends Error {
   constructor(readonly info: RemoteAgentErrorInfo) {
@@ -268,11 +270,34 @@ export class RemoteAgentRunClient implements PolledRun {
       this.inflight.delete(requestId);
     }
     if (this.closed || abort.signal.aborted) return;
-    try {
-      const payload = await this.payload(reply);
-      await this.invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
-    } catch (error) {
-      this.log?.warn('remote agent: reply failed', { runId: this.runId, error: String(error) });
+    await this.deliverReply(requestId, reply);
+  }
+
+  /**
+   * 回包交付：链路抖动导致发送失败时按退避重试。对方收到 reply 才会结束对该 requestId
+   * 的等待，只记日志不重试会让任务一直停在权限确认 / 工具请求上；对方按 id 去重，
+   * 重复交付无副作用。任务结束或非链路类错误(载荷过大等)才放弃。
+   */
+  private async deliverReply(requestId: string, reply: RemoteAgentReply): Promise<void> {
+    let delay = 500;
+    for (let attempt = 1; ; attempt += 1) {
+      if (this.closed) return;
+      try {
+        const payload = await this.payload(reply);
+        await this.invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
+        return;
+      } catch (error) {
+        const retryable = isRetryableLinkError(error) && attempt < MAX_REPLY_DELIVER_ATTEMPTS;
+        this.log?.warn(retryable ? 'remote agent: reply failed; retrying' : 'remote agent: reply failed', {
+          runId: this.runId,
+          requestId,
+          attempt,
+          error: String(error),
+        });
+        if (!retryable) return;
+        await sleep(delay);
+        delay = Math.min(delay * 2, 5_000);
+      }
     }
   }
 }

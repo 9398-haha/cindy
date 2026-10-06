@@ -41,8 +41,11 @@ function findOnWindowsPath(name: string, env: NodeJS.ProcessEnv): string | null 
  * CLAUDE_CODE_GIT_BASH_PATH → PATH 上 git.exe 旁的 bin\bash.exe → 常见安装位置。找不到返回 null。
  */
 export function findWindowsGitBash(env: NodeJS.ProcessEnv = process.env): string | null {
-  const explicit = env.CLAUDE_CODE_GIT_BASH_PATH;
-  if (explicit && fs.existsSync(explicit)) return explicit;
+  // 只接受名为 bash.exe 的现存文件，避免环境变量里的任意字符串被当成可执行体。
+  const valid = (value: string | undefined): string | null =>
+    value && /[/\\]bash\.exe$/i.test(value) && fs.existsSync(value) ? value : null;
+  const explicit = valid(env.CLAUDE_CODE_GIT_BASH_PATH);
+  if (explicit) return explicit;
   const git = findOnWindowsPath('git.exe', env);
   if (git) {
     const gitDir = path.win32.dirname(git);
@@ -62,18 +65,35 @@ export function findWindowsGitBash(env: NodeJS.ProcessEnv = process.env): string
   return null;
 }
 
+/** 脚本方言：bash 系与 cmd 的包装语法完全不同，按方言生成脚本。 */
+export type ExecutorShellDialect = 'bash' | 'cmd';
+
+export interface ExecutorShell {
+  file: string;
+  dialect: ExecutorShellDialect;
+  /** 脚本文件名(固定值；执行目录即脚本所在目录)。 */
+  scriptName: string;
+  /** 执行脚本文件的命令行参数(只放固定字符串，脚本内容与路径都不进命令行)。 */
+  args: string[];
+}
+
 /** 本机用于执行命令的 shell。 */
-export function resolveExecutorShell(): { file: string; args: (script: string) => string[] } {
+export function resolveExecutorShell(): ExecutorShell {
   if (process.platform === 'win32') {
     const gitBash = findWindowsGitBash();
-    if (gitBash) return { file: gitBash, args: (script) => ['-c', script] };
-    return { file: process.env.ComSpec || 'cmd.exe', args: (script) => ['/d', '/s', '/c', script] };
+    if (gitBash) return { file: gitBash, dialect: 'bash', scriptName: 'script.sh', args: ['script.sh'] };
+    return {
+      file: process.env.ComSpec || 'cmd.exe',
+      dialect: 'cmd',
+      scriptName: 'script.cmd',
+      args: ['/d', '/s', '/c', 'script.cmd'],
+    };
   }
   const preferred = process.env.SHELL;
   const file = preferred && /\/(zsh|bash)$/.test(preferred) && fs.existsSync(preferred)
     ? preferred
     : fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
-  return { file, args: (script) => ['-c', script] };
+  return { file, dialect: 'bash', scriptName: 'script.sh', args: ['script.sh'] };
 }
 
 function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
@@ -138,6 +158,36 @@ export interface RunOptions {
   onData?: (chunk: Buffer) => void;
 }
 
+interface ScriptFile {
+  /** 脚本所在目录(执行时作为 cwd，脚本里再 cd 到真正的命令目录)。 */
+  dir: string;
+  cleanup(): Promise<void>;
+}
+
+/**
+ * 把脚本内容写成临时脚本文件，交给 shell 按文件执行。
+ *
+ * 脚本内容与任何动态路径都不进命令行(命令行只带固定脚本文件名)：既避免路径里的
+ * 引号 / 空格 / 元字符改变命令行语义，也绕开 Windows 命令行长度上限；bash 与 cmd
+ * 各按自己的方言包装开头的 `cd`(脚本目录是临时目录，命令目录在脚本里切过去)。
+ */
+async function writeScriptFile(
+  baseDir: string,
+  shell: ExecutorShell,
+  cwd: string,
+  body: string,
+): Promise<ScriptFile> {
+  const dir = await fsp.mkdtemp(path.join(baseDir, 'cindy-run-'));
+  const content = shell.dialect === 'cmd'
+    ? `@echo off\r\ncd /d "${cwd.replace(/"/g, '')}" || exit /b 1\r\n${body}\r\n`
+    : `cd -- ${shellQuote(cwd)} || exit 1\n${body}\n`;
+  await fsp.writeFile(path.join(dir, shell.scriptName), content);
+  return {
+    dir,
+    cleanup: () => fsp.rm(dir, { recursive: true, force: true }).catch(() => undefined),
+  };
+}
+
 /** 执行一条 shell 命令直到结束；超时 / 取消时结束整个进程组。 */
 export function runOnce(script: string, opts: RunOptions): Promise<RunResult> {
   return new Promise((resolve, reject) => {
@@ -145,50 +195,62 @@ export function runOnce(script: string, opts: RunOptions): Promise<RunResult> {
       resolve({ output: Buffer.alloc(0), exitCode: null, timedOut: false, aborted: true });
       return;
     }
-    const shell = resolveExecutorShell();
-    let child: ChildProcess;
-    try {
-      child = spawn(shell.file, shell.args(script), {
-        cwd: opts.cwd,
-        env: opts.env ?? process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        windowsHide: true,
+    void (async () => {
+      const shell = resolveExecutorShell();
+      let file: ScriptFile;
+      try {
+        file = await writeScriptFile(os.tmpdir(), shell, opts.cwd, script);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      let child: ChildProcess;
+      try {
+        child = spawn(shell.file, shell.args, {
+          cwd: file.dir,
+          env: opts.env ?? process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: process.platform !== 'win32',
+          windowsHide: true,
+        });
+      } catch (error) {
+        await file.cleanup();
+        reject(error);
+        return;
+      }
+      const buffer = new OutputBuffer(RUN_MAX_OUTPUT_BYTES);
+      let timedOut = false;
+      let aborted = false;
+      const onChunk = (chunk: Buffer) => {
+        buffer.push(chunk);
+        opts.onData?.(chunk);
+      };
+      child.stdout?.on('data', onChunk);
+      child.stderr?.on('data', onChunk);
+      const timer = opts.timeoutMs && opts.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            terminate(child);
+          }, opts.timeoutMs)
+        : undefined;
+      const onAbort = () => {
+        aborted = true;
+        terminate(child);
+      };
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      child.once('error', (error) => {
+        if (timer) clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
+        void file.cleanup();
+        reject(error);
       });
-    } catch (error) {
-      reject(error);
-      return;
-    }
-    const buffer = new OutputBuffer(RUN_MAX_OUTPUT_BYTES);
-    let timedOut = false;
-    let aborted = false;
-    const onChunk = (chunk: Buffer) => {
-      buffer.push(chunk);
-      opts.onData?.(chunk);
-    };
-    child.stdout?.on('data', onChunk);
-    child.stderr?.on('data', onChunk);
-    const timer = opts.timeoutMs && opts.timeoutMs > 0
-      ? setTimeout(() => {
-          timedOut = true;
-          terminate(child);
-        }, opts.timeoutMs)
-      : undefined;
-    const onAbort = () => {
-      aborted = true;
-      terminate(child);
-    };
-    opts.signal?.addEventListener('abort', onAbort, { once: true });
-    child.once('error', (error) => {
-      if (timer) clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', onAbort);
-      reject(error);
-    });
-    child.once('close', (code) => {
-      if (timer) clearTimeout(timer);
-      opts.signal?.removeEventListener('abort', onAbort);
-      resolve({ output: buffer.toBuffer(), exitCode: code, timedOut, aborted });
-    });
+      child.once('close', (code) => {
+        if (timer) clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
+        void file.cleanup();
+        resolve({ output: buffer.toBuffer(), exitCode: code, timedOut, aborted });
+      });
+    })();
   });
 }
 
@@ -256,9 +318,12 @@ export class ShellSession {
     await fsp.mkdir(this.tempDir, { recursive: true });
     const cwdFile = path.join(this.tempDir, `cwd-${randomUUID()}`);
     const startCwd = await this.validCwd();
-    const script = process.platform === 'win32' && !/bash\.exe$/i.test(resolveExecutorShell().file)
+    const shell = resolveExecutorShell();
+    // 开头的 `cd` 到命令目录由 runOnce 按方言包装；cmd 没有 eval 也没有 /dev/null
+    // 重定向，脚本体按方言分别生成(cmd 不跟踪 cwd，与 cmd 回退路径的既有行为一致)。
+    const script = shell.dialect === 'cmd'
       ? command
-      : `cd -- ${shellQuote(startCwd)} && eval ${shellQuote(command)} < /dev/null; __cindy_status=$?; pwd -P >| ${shellQuote(cwdFile)}; exit $__cindy_status`;
+      : `eval ${shellQuote(command)} < /dev/null; __cindy_status=$?; pwd -P >| ${shellQuote(cwdFile)}; exit $__cindy_status`;
     const started = Date.now();
     let result: RunResult;
     try {
@@ -305,13 +370,22 @@ export class ShellSession {
     await fsp.mkdir(this.tempDir, { recursive: true });
     const id = `bash_${randomUUID().slice(0, 8)}`;
     const outputPath = path.join(this.tempDir, `${id}.output`);
-    const out = fs.openSync(outputPath, 'w');
     const startCwd = await this.validCwd();
     const shell = resolveExecutorShell();
+    // 后台命令同样按方言生成脚本(cmd 没有 eval / /dev/null)：脚本写临时文件，
+    // 命令行只带固定脚本文件名，脚本内容与路径都不进命令行。
+    const body = shell.dialect === 'cmd' ? command : `eval ${shellQuote(command)} < /dev/null`;
+    let file: ScriptFile;
+    try {
+      file = await writeScriptFile(this.tempDir, shell, startCwd, body);
+    } catch (error) {
+      return { text: `Failed to start command: ${(error as Error).message}`, isError: true };
+    }
+    const out = fs.openSync(outputPath, 'w');
     let child: ChildProcess;
     try {
-      child = spawn(shell.file, shell.args(`cd -- ${shellQuote(startCwd)} && eval ${shellQuote(command)} < /dev/null`), {
-        cwd: startCwd,
+      child = spawn(shell.file, shell.args, {
+        cwd: file.dir,
         env: process.env,
         stdio: ['ignore', out, out],
         detached: process.platform !== 'win32',
@@ -319,6 +393,7 @@ export class ShellSession {
       });
     } catch (error) {
       fs.closeSync(out);
+      void file.cleanup();
       return { text: `Failed to start command: ${(error as Error).message}`, isError: true };
     }
     fs.closeSync(out);
@@ -326,9 +401,11 @@ export class ShellSession {
     child.once('exit', (code) => {
       job.exitCode = code;
       job.done = true;
+      void file.cleanup();
     });
     child.once('error', () => {
       job.done = true;
+      void file.cleanup();
     });
     this.jobs.set(id, job);
     return {

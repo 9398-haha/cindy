@@ -7,6 +7,16 @@ import type { DeviceHostedSession, PiExtraSpawnConfig } from '../base-agent.js';
 /** 交给 Pi 内 cindy-bridge 的托管配置(隧道地址、令牌、真实工作目录)。 */
 export const DEVICE_HOSTED_PI_ENV = 'CINDY_PI_HOSTED';
 
+/**
+ * 去掉结尾的斜杠。不用正则：`x+$` 这类模式在不可控输入上是多项式回溯(CodeQL
+ * “Polynomial regular expression used on uncontrolled data”)。
+ */
+export function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47) end -= 1;
+  return url.slice(0, end);
+}
+
 export function deviceHostedPiEnvValue(hosted: DeviceHostedSession): string {
   return JSON.stringify({
     url: hosted.tunnelUrl,
@@ -20,7 +30,7 @@ export function deviceHostedPiEnvValue(hosted: DeviceHostedSession): string {
 
 /** 隧道上某个 MCP 服务的地址。 */
 export function deviceHostedMcpUrl(hosted: DeviceHostedSession, name: string): string {
-  return `${hosted.tunnelUrl.replace(/\/+$/, '')}/mcp/${encodeURIComponent(name)}`;
+  return `${stripTrailingSlashes(hosted.tunnelUrl)}/mcp/${encodeURIComponent(name)}`;
 }
 
 /** Pi 的 MCP 桥配置：全部指向隧道，令牌是本任务的隧道令牌。 */
