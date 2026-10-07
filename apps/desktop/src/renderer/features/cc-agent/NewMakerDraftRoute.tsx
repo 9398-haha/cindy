@@ -910,6 +910,21 @@ export function NewMakerDraftRoute() {
     !effectiveDeviceLinkDeviceId && !effectiveRemoteHostId ? (draft.agentDeviceId ?? undefined) : undefined;
   const isAgentDeviceDraft = effectiveAgentDeviceId != null;
   /**
+   * 远程 Agent 的可选落点:在线的同账号电脑,在模型选择器左侧栏里按供应商列出(选中那里的
+   * 模型 = Agent 在那台运行)。只有已允许远程调用的供应商会投影出来;没有可用供应商的
+   * 设备不会占模型列表的位置。当前落点即使掉线也保留,让用户看得到、换得回来。
+   */
+  const remoteAgentDevices = useMemo(
+    () =>
+      selectableDevices
+        .filter(
+          (device) =>
+            device.online || device.deviceId === effectiveAgentDeviceId,
+        )
+        .map(({ deviceId, name }) => ({ deviceId, name })),
+    [selectableDevices, effectiveAgentDeviceId],
+  );
+  /**
    * 模型目录所在的电脑:任务建到远程设备时是那台;Agent 在另一台电脑运行时也是那台(模型、
    * Agent 登录与可用引擎都以运行 Agent 的电脑为准)。本机任务为 undefined。
    */
@@ -2742,6 +2757,8 @@ export function NewMakerDraftRoute() {
       fast: boolean;
       favoriteUid: string | null;
       resetToRecommended?: true;
+      /** 远程 Agent:这一行属于哪台电脑(null = 本机);未带 = 面板没有远程 Agent 入口。 */
+      agentDevice?: { deviceId: string; name: string } | null;
     }) => {
       // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
       // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
@@ -2762,7 +2779,44 @@ export function NewMakerDraftRoute() {
       // 必须无条件进入 store 的 rebase：当前 renderer 的 draft.vendor 可能还停在 storage
       // event 到达前的旧 Harness。switchVendor 自身同值早返，不会制造额外写入。
       switchVendor(selection.vendor);
-      if (usesDeviceCatalog) {
+      // ── 远程 Agent:模型面板里选到了另一台电脑上的模型(或从那台回到本机)──────────
+      // 连 Agent 的运行位置一起换。任务、项目、附件都在本机,一概不动;只有模型目录与这次
+      // 选择改按目标电脑。
+      const targetAgentDevice = selection.agentDevice;
+      const switchesAgentDevice =
+        targetAgentDevice !== undefined &&
+        (targetAgentDevice?.deviceId ?? null) !== (effectiveAgentDeviceId ?? null);
+      if (switchesAgentDevice && targetAgentDevice) {
+        // 这次显式选择就是那台电脑上的种子:seed key 按播种 effect 的构造逐字前置,并标记
+        // 控制端已触碰 —— 那台的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型
+        // (与下方跨引擎选择同一条修法)。
+        dlRuntimeTouchedRef.current = true;
+        dlSeedKeyRef.current = `${targetAgentDevice.deviceId}:${dbToMakerAgentKind(
+          normalizeDbAgentKind(selection.vendor),
+        )}`;
+        dlSeedCapabilitiesRef.current = null;
+        setDlSel({
+          model: selection.modelId,
+          // 没有档位的模型由播种夹紧按那台的目录补成合法值。
+          effort: selection.effort ?? 'high',
+          fastMode: selection.fast,
+          providerId: selection.providerId,
+        });
+        patchDraft({
+          agentDeviceId: targetAgentDevice.deviceId,
+          agentDeviceName: targetAgentDevice.name,
+        });
+        return;
+      }
+      if (switchesAgentDevice) {
+        // 回到本机:清掉那台电脑的选择,下面按本机草稿写入这次选择。
+        setDlSel(null);
+        dlSeedKeyRef.current = null;
+        dlSeedCapabilitiesRef.current = null;
+        dlRuntimeTouchedRef.current = false;
+        patchDraft({ agentDeviceId: null, agentDeviceName: null });
+      }
+      if (usesDeviceCatalog && !switchesAgentDevice) {
         dlRuntimeTouchedRef.current = true;
         // ★ 跨引擎选择必须**前置**把 seed key 推到目标引擎(2026-08-17 review 第三轮 G1)。
         //
@@ -2863,6 +2917,7 @@ export function NewMakerDraftRoute() {
       draft.vendor,
       usesDeviceCatalog,
       catalogDeviceId,
+      effectiveAgentDeviceId,
       deviceLinkInitial,
       capabilities,
       deviceDraftDefaults,
@@ -3006,12 +3061,7 @@ export function NewMakerDraftRoute() {
       // 点已选中的那一行(包括本机时点「本机」)只是确认当前选择,不该有任何副作用。
       // 下面会剥 mention chip、丢路径型附件并清 workingDir / extraDirs —— 重选同一设备时执行这些,
       // 等于用户点一下就静默丢掉已选的项目、附件和部分已写好的消息。必须先早返回。
-      // 「Agent 在另一台电脑」时点「本机」= 回到全部在本机：只清掉运行 Agent 的电脑，任务本来
-      // 就在本机，项目、附件与草稿都保持不变。
-      if (deviceId === null && effectiveAgentDeviceId && !effectiveDeviceLinkDeviceId) {
-        patchDraft({ agentDeviceId: null, agentDeviceName: null });
-        return;
-      }
+      // (Agent 在哪台电脑运行跟着模型走,由模型选择器决定;这里的「本机」只表示任务在本机。)
       if (deviceId === (effectiveDeviceLinkDeviceId ?? null)) return;
       // 换完停在这台设备的「对话」(workingDir=null):上一台的项目路径在新机器上基本不存在,
       // 留着会让用户以为项目跟过来了、发送时才在被控端 path guard 上失败。与 mobile 切设备后
@@ -3024,28 +3074,7 @@ export function NewMakerDraftRoute() {
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
       applyDraftTarget({ deviceId, deviceName, workingDir: null });
     },
-    [effectiveDeviceLinkDeviceId, effectiveAgentDeviceId, applyDraftTarget],
-  );
-  /**
-   * 「只让 Agent 在那台电脑运行」:任务、项目文件与命令留在本机。原来要把任务建到远程设备 /
-   * SSH 主机时先回到本机(那边的项目路径在本机无效);模型目录换成那台的，按那台重新播种选择。
-   */
-  const handleAgentDeviceChange = useCallback(
-    (deviceId: string, deviceName: string | null) => {
-      if (sendInFlightRef.current) return;
-      if (deviceId === (effectiveAgentDeviceId ?? null)) return;
-      if (effectiveDeviceLinkDeviceId || effectiveRemoteHostId) {
-        applyDraftTarget({ deviceId: null, deviceName: null, workingDir: null });
-      }
-      // 目录快照不在这里作废:catalogDeviceId 变了 hook 会按新电脑取,模型选择器打开时
-      // 也会对这台电脑作废并重新预取(与远程任务同一条路径)。
-      setDlSel(null);
-      dlSeedKeyRef.current = null;
-      dlSeedCapabilitiesRef.current = null;
-      dlRuntimeTouchedRef.current = false;
-      patchDraft({ agentDeviceId: deviceId, agentDeviceName: deviceName });
-    },
-    [effectiveAgentDeviceId, effectiveDeviceLinkDeviceId, effectiveRemoteHostId, applyDraftTarget],
+    [effectiveDeviceLinkDeviceId, applyDraftTarget],
   );
   const handleOpenRemoteProject = useCallback((deviceId?: string) => {
     setAddRemoteProjectDeviceId(deviceId ?? null);
@@ -5517,8 +5546,6 @@ export function NewMakerDraftRoute() {
                   devices={selectableDevices}
                   value={effectiveDeviceLinkDeviceId ?? null}
                   onChange={handleDeviceChange}
-                  agentDeviceId={effectiveAgentDeviceId ?? null}
-                  onAgentDeviceChange={handleAgentDeviceChange}
                   open={devicePickerOpen}
                   onOpenChange={handleDevicePickerOpenChange}
                   // 窄屏 pill 排会进正常流并 flex-wrap;多台时收成图标 + 状态点少占一行。
@@ -5617,6 +5644,8 @@ export function NewMakerDraftRoute() {
                     remoteHostId={draft.remoteHostId ?? null}
                     deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}
                     agentDeviceId={effectiveAgentDeviceId ?? null}
+                    agentDeviceName={draft.agentDeviceName}
+                    remoteAgentDevices={remoteAgentDevices}
                     modelMemoryOverride={deviceLinkDraftMemory}
                     initialModel={draftInitialModel}
                     initialEffort={draftInitialEffort}

@@ -122,6 +122,8 @@ import {
   resolveModelSelectorAgentIdentity,
   type EffortChangeOptions,
   type ModelMemoryAccessors,
+  type RemoteAgentSelectorOptions,
+  type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import {
   enqueueEffortChange,
@@ -532,6 +534,14 @@ interface ChatInputProps {
    * 切换模型也走本机 IPC(由本机转给那台的 Agent)。与 deviceLinkDeviceId 互斥。
    */
   agentDeviceId?: string | null;
+  /** agentDeviceId 那台电脑的名字(模型选择器悬停 / 读屏用);未知时显示「另一台电脑」。 */
+  agentDeviceName?: string | null;
+  /**
+   * 新任务草稿可选的「Agent 在其他电脑运行」目标(在线的同账号电脑)。传了且非空时,模型面板
+   * 左侧栏在本机供应商之后列出这些电脑上的供应商;选中那里的模型会经 onUnifiedDraftSelect 的
+   * agentDevice 交给草稿层。已建任务 / 远程任务 / SSH 任务不传。
+   */
+  remoteAgentDevices?: readonly { deviceId: string; name: string }[];
   /**
    * device-link「纯显示镜像」记忆 override:非空时优先于本机全局模型预设注入 ModelSelector,
    * 用于远程草稿 / 远程会话——非选中行读被控端镜像、改动经隧道写穿被控端,绝不碰控制端本地记忆
@@ -849,6 +859,11 @@ interface ChatInputProps {
     favoriteUid: string | null;
     /** 来自配置浮层「恢复推荐」，不得把推荐档重新写成用户 override。 */
     resetToRecommended?: true;
+    /**
+     * 只在传了 remoteAgentDevices 时出现:这一行属于哪台电脑(null = 本机)。与当前
+     * agentDeviceId 不同 = 连 Agent 的运行位置一起换。
+     */
+    agentDevice?: UnifiedSelectionAgentDevice;
   }) => void;
   /**
    * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
@@ -856,6 +871,21 @@ interface ChatInputProps {
    */
   selectedFavoriteUid?: string | null;
 }
+
+/** 本机模型全局预设的读写器(本机目录的选择器共用一份,引用稳定)。 */
+const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
+  getEffort: getProviderModelEffort,
+  setEffort: setProviderModelEffort,
+  setChoice: setProviderModelChoice,
+  getFast: getProviderModelFast,
+  setFast: setProviderModelFast,
+  getThinking: getProviderModelThinking,
+  setThinking: setProviderModelThinking,
+  // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
+  // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
+  clearEffort: clearProviderModelEffort,
+  clearFast: clearProviderModelFast,
+};
 
 /** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
 const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
@@ -1118,6 +1148,8 @@ export function ChatInput({
   remoteHostId,
   deviceLinkDeviceId: _deviceLinkDeviceId,
   agentDeviceId: _agentDeviceId,
+  agentDeviceName = null,
+  remoteAgentDevices,
   modelMemoryOverride,
   initialModel,
   initialEffort,
@@ -1999,20 +2031,21 @@ export function ChatInput({
     if (modelMemoryOverride) return modelMemoryOverride;
     // 模型目录在另一台电脑时不掺本机记忆(那台的来源 id 与本机的不是一回事)。
     if (catalogDeviceId) return undefined;
-    return {
-      getEffort: getProviderModelEffort,
-      setEffort: setProviderModelEffort,
-      setChoice: setProviderModelChoice,
-      getFast: getProviderModelFast,
-      setFast: setProviderModelFast,
-      getThinking: getProviderModelThinking,
-      setThinking: setProviderModelThinking,
-      // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
-      // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
-      clearEffort: clearProviderModelEffort,
-      clearFast: clearProviderModelFast,
-    };
+    return LOCAL_MODEL_MEMORY;
   }, [catalogDeviceId, modelMemoryOverride, sshCodexHostId]);
+
+  // 远程 Agent(仅本机新任务草稿):模型面板左侧栏同时列出其他电脑上的供应商。
+  const remoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(
+    () =>
+      !sessionId && !deviceLinkDeviceId && !remoteHostId && remoteAgentDevices && remoteAgentDevices.length > 0
+        ? {
+            devices: remoteAgentDevices,
+            selectedDeviceId: agentDeviceId,
+            localModelMemory: LOCAL_MODEL_MEMORY,
+          }
+        : undefined,
+    [sessionId, deviceLinkDeviceId, remoteHostId, remoteAgentDevices, agentDeviceId],
+  );
 
   // 把「用户在当前来源下选定的 (model, effort)」记进模型全局预设,供其它非活跃行和之后的
   // 模型切换恢复。agent / 来源缺失(未知模型 / 0 已连接来源)/ device-link 无镜像时静默跳过。
@@ -7044,19 +7077,30 @@ export function ChatInput({
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
       rowModelId?: string;
       resetToRecommended?: true;
+      agentDevice?: UnifiedSelectionAgentDevice;
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
+      // 这一行与当前目录不在同一台电脑(远程 Agent 换落点):记忆按目标目录写 —— 落到本机就写
+      // 本机预设;落到另一台电脑就不写(那台的记忆由它自己的草稿播种接管)。
+      const crossDevice =
+        selection.agentDevice !== undefined &&
+        (selection.agentDevice?.deviceId ?? null) !== agentDeviceId;
+      const targetMemory = crossDevice
+        ? selection.agentDevice === null
+          ? LOCAL_MODEL_MEMORY
+          : undefined
+        : modelMemory;
       if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
-          modelMemory?.setEffort(
+          targetMemory?.setEffort(
             targetKind,
             selection.providerId,
             selection.modelId,
             selection.effort,
           );
         }
-        modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast);
+        targetMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast);
       }
       // 乐观来源:草稿没有 SSoT 回流,pill 的来源图标靠这份本地态即时跟上。
       setSelectedProviderId(selection.providerId);
@@ -7068,9 +7112,10 @@ export function ChatInput({
         fast: selection.fast,
         favoriteUid: selection.favoriteUid,
         ...(selection.resetToRecommended ? { resetToRecommended: true as const } : {}),
+        ...(selection.agentDevice !== undefined ? { agentDevice: selection.agentDevice } : {}),
       });
     },
-    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
+    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId],
   );
 
   const showModelSwitchFailure = useCallback(
@@ -9075,6 +9120,21 @@ export function ChatInput({
                         : undefined
                     }
                     deviceId={catalogDeviceId}
+                    // 远程 Agent(仅本机新任务草稿):面板同时列出其他电脑上的供应商,选中即换 Agent 落点。
+                    {...(remoteAgentOptions && unifiedPanelActive && onUnifiedDraftSelect
+                      ? { remoteAgent: remoteAgentOptions }
+                      : {})}
+                    // Agent 在另一台电脑运行(草稿或已建任务):trigger 用带信号波纹的远程 Logo。
+                    agentDevice={
+                      agentDeviceId
+                        ? {
+                            deviceId: agentDeviceId,
+                            name:
+                              remoteAgentDevices?.find((device) => device.deviceId === agentDeviceId)
+                                ?.name ?? agentDeviceName,
+                          }
+                        : null
+                    }
                     // SSH 远程会话隐藏订阅直连模型(chatgpt/ / xai/):bridge 只挂在本地 compat-proxy,
                     // 远程模式走 remoteEndpoint 不经翻译,选了必失败。
                     excludeSubscriptionDirect={!!remoteHostId}

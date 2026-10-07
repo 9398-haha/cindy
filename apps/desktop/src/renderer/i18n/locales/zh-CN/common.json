@@ -2525,6 +2525,12 @@
           "empty": "该供应商这次没有返回任何可用模型，下面是上次获取的列表。请确认账号权限后重试。"
         },
         "suspendedBanner": "该供应商已停用，凭证已保留；启用后其模型才会重新可用",
+        "remoteAccess": {
+          "label": "允许被远程调用",
+          "description": "开启后，同账号的其他电脑可以用这个供应商的模型，让 Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
+          "ariaLabel": "允许同账号的其他电脑调用此供应商",
+          "writeFailed": "远程调用设置未能保存，请重试"
+        },
         "moreActionsAria": "更多操作"
       },
       "detect": {
@@ -8935,6 +8941,8 @@
         "ariaWithEffort": "选择模型。当前：{{model}}，推理强度：{{effort}}",
         "pendingAria": "选择模型。下条消息：{{agent}} · {{model}}",
         "pendingAriaWithEffort": "选择模型。下条消息：{{agent}} · {{model}}，推理强度：{{effort}}",
+        "agentDevice": "Agent 在 {{device}} 上运行",
+        "agentDeviceUnnamed": "Agent 在另一台电脑上运行",
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
@@ -8990,6 +8998,8 @@
       "unified": {
         "railFavorites": "收藏",
         "railAll": "全部",
+        "railRemoteProvider": "{{provider}} · {{device}}",
+        "remoteLoading": "正在读取那台电脑的模型…",
         "favoritesGroup": "收藏",
         "favoritesEmpty": "还没有收藏——把鼠标停到模型行上，点 ☆ 存到这里",
         "addFavorite": "存为收藏",
@@ -9356,10 +9366,7 @@
       "onlineHint": "已连接，可在其上创建",
       "offlineHint": "离线 · 连上后可用",
       "attachmentsDropped": "已移除 {{count}} 个附件：它们是上一台设备上的文件",
-      "attachmentsRemoteUnsupported": "远程设备暂不支持文件附件，已跳过 {{count}} 个（图片可以）",
-      "agentSection": "只让 Agent 在其他电脑运行",
-      "agentHint": "任务和文件留在本机，用这台的登录与模型",
-      "agentPill": "Agent 在 {{device}}"
+      "attachmentsRemoteUnsupported": "远程设备暂不支持文件附件，已跳过 {{count}} 个（图片可以）"
     },
     "pluginSuggestions": {
       "changed": "这条推荐已更新，请换一批后重新选择。",
@@ -10347,7 +10354,8 @@
       "REMOTE_AGENT_NOT_FOUND": "这个任务在运行 Agent 的电脑上已经结束。请重新发送。",
       "REMOTE_AGENT_BUSY": "那台电脑上同时运行的任务太多。先结束一些任务后再试。",
       "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
-      "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。"
+      "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。"
     },
     "generatedFiles": {
       "title": "本条消息生成的文件",

@@ -91,6 +91,16 @@ export interface RemoteAgentHostDeps {
   startHosted(input: HostedStartInput): Promise<AgentSessionHandle>;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
+  /**
+   * 「允许被远程调用」(供应商级授权，默认关)。不提供 = 不做供应商级限制(测试 / 旧接线)。
+   *  - resolve：把对方要用的来源落到本机已开放的供应商上。providerId 是字符串时只核对它是否开放；
+   *    null / 缺省时在已开放的供应商里按本机默认规则挑一个。返回 null = 没有开放的供应商可用。
+   *  - isAllowed：进行中的任务每次发消息前复核(用户可能刚把它关掉)。
+   */
+  providerAccess?: {
+    resolve(kind: RemoteAgentKind, model: string, providerId: string | null | undefined): Promise<string | null>;
+    isAllowed(providerId: string): boolean;
+  };
   captureOwner(): unknown;
   isOwnerCurrent(owner: unknown): boolean;
   /** 本机存放影子目录与附件的根目录。 */
@@ -135,6 +145,8 @@ interface Run {
   pushSeq: Set<number>;
   /** 拼接中的分段 WebSocket 消息(按连接)。 */
   pushParts: Map<string, string>;
+  /** 这个任务正在用的本机供应商(已核对开放)；没接供应商授权时为空。 */
+  providerId?: string;
   lastState?: string;
   stateTimer?: ReturnType<typeof setInterval>;
 }
@@ -178,6 +190,10 @@ async function mergeLocalPermissions(
 
 function fail(code: string, message: string): never {
   throw new Error(`[${code}] ${message}`);
+}
+
+function failProviderNotAllowed(): never {
+  fail('REMOTE_AGENT_PROVIDER_NOT_ALLOWED', 'this provider is not allowed for remote use on this computer');
 }
 
 export function remoteAgentErrorInfo(error: unknown): RemoteAgentErrorInfo {
@@ -607,6 +623,27 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const target = (handle as unknown as Record<string, unknown>)[method];
       if (typeof target !== 'function') fail('REMOTE_AGENT_UNSUPPORTED', `${method} is not supported by this agent`);
       let callArgs: unknown[] = args;
+      // 供应商授权：新一轮对话前复核(关掉后不再开始新的一轮，进行中的这一轮照常结束)；
+      // 换模型时显式换来源(含 null = 默认)要落到开放的供应商上，只换模型则沿用当前来源。
+      let nextProviderId: string | undefined;
+      const access = deps.providerAccess;
+      if (access && method === 'send' && run.providerId && !access.isAllowed(run.providerId)) {
+        failProviderNotAllowed();
+      }
+      if (access && method === 'setModel') {
+        const opts = args[1];
+        if (opts && typeof opts === 'object' && !Array.isArray(opts) && 'providerId' in opts) {
+          const requested = (opts as { providerId?: unknown }).providerId;
+          const resolved = await access.resolve(
+            run.kind,
+            typeof args[0] === 'string' ? args[0] : '',
+            typeof requested === 'string' ? requested : null,
+          );
+          if (!resolved) failProviderNotAllowed();
+          nextProviderId = resolved;
+          callArgs = [args[0], { ...opts, providerId: resolved }, ...args.slice(2)];
+        }
+      }
       if (method === 'send' || method === 'steer') {
         const message = await decodeUserMessage(args[0], (data, ext) => writeAttachment(run, data, ext));
         const opts = await decodeSendOptions(args[1], {
@@ -621,6 +658,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         callArgs = [message, opts];
       }
       const value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
+      if (nextProviderId) run.providerId = nextProviderId;
       append(run, { t: 'result', callId, ok: true, ...(value !== undefined ? { value: JSON.parse(JSON.stringify(value)) } : {}) });
     } catch (error) {
       append(run, { t: 'result', callId, ok: false, error: remoteAgentErrorInfo(error) });
@@ -730,7 +768,21 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!deps.isAgentAvailable(request.agentKind)) fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available on this computer`);
         const active = [...runs.values()].filter((run) => run.controller === controller && run.closedAt === undefined).length;
         if (active >= REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER) fail('REMOTE_AGENT_BUSY', 'too many tasks are running from this computer');
-        const payload = decodeOpenPayload(await resolvePayload(controller, request.payload));
+        let payload = decodeOpenPayload(await resolvePayload(controller, request.payload));
+        // 供应商授权：来源落到本机已开放的供应商上，并以显式来源启动(核对的就是实际用的)。
+        let providerId: string | undefined;
+        if (deps.providerAccess) {
+          const resolved = await deps.providerAccess.resolve(
+            request.agentKind,
+            payload.options.model,
+            payload.options.providerId,
+          );
+          if (!resolved) failProviderNotAllowed();
+          providerId = resolved;
+          payload = { ...payload, options: { ...payload.options, providerId: resolved } };
+        }
+        // 上面有等待：同一个 runId 的重发可能已经先登记了。
+        if (runs.has(key(controller, request.runId))) return {};
         const run: Run = {
           id: request.runId,
           controller,
@@ -744,6 +796,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           calls: new Map(),
           pushSeq: new Set(),
           pushParts: new Map(),
+          ...(providerId ? { providerId } : {}),
         };
         runs.set(key(controller, request.runId), run);
         ensureSweep();

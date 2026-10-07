@@ -2525,6 +2525,12 @@
           "empty": "該供應商這次沒有返回任何可用模型，下面是上次獲取的列表。請確認帳號權限後重試。"
         },
         "suspendedBanner": "該供應商已停用，憑證已保留；啟用後其模型才會重新可用",
+        "remoteAccess": {
+          "label": "允許遠端呼叫",
+          "description": "開啟後，同帳號的其他電腦可以用這個供應商的模型，讓 Agent 在這台電腦上執行，使用這台電腦的登入和配額。",
+          "ariaLabel": "允許同帳號的其他電腦呼叫此供應商",
+          "writeFailed": "遠端呼叫設定未能儲存，請重試"
+        },
         "moreActionsAria": "更多操作"
       },
       "detect": {
@@ -8934,6 +8940,8 @@
         "ariaWithEffort": "選擇模型。當前：{{model}}，推理強度：{{effort}}",
         "pendingAria": "選擇模型。下條訊息：{{agent}} · {{model}}",
         "pendingAriaWithEffort": "選擇模型。下條訊息：{{agent}} · {{model}}，推理強度：{{effort}}",
+        "agentDevice": "Agent 在 {{device}} 上執行",
+        "agentDeviceUnnamed": "Agent 在另一臺電腦上執行",
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
@@ -8989,6 +8997,8 @@
       "unified": {
         "railFavorites": "收藏",
         "railAll": "全部",
+        "railRemoteProvider": "{{provider}} · {{device}}",
+        "remoteLoading": "正在讀取那臺電腦的模型…",
         "favoritesGroup": "收藏",
         "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
         "addFavorite": "存為收藏",
@@ -9356,10 +9366,7 @@
       "onlineHint": "已連線，可在其上建立",
       "offlineHint": "離線 · 連上後可用",
       "attachmentsDropped": "已移除 {{count}} 個附件：它們是上一臺裝置上的檔案",
-      "attachmentsRemoteUnsupported": "遠端裝置暫不支援檔案附件，已跳過 {{count}} 個（圖片可以）",
-      "agentSection": "只讓 Agent 在其他電腦執行",
-      "agentHint": "任務和檔案留在本機，使用這臺的登入與模型",
-      "agentPill": "Agent 在 {{device}}"
+      "attachmentsRemoteUnsupported": "遠端裝置暫不支援檔案附件，已跳過 {{count}} 個（圖片可以）"
     },
     "pluginSuggestions": {
       "changed": "這條推薦已更新，請換一批後重新選擇。",
@@ -10346,7 +10353,8 @@
       "REMOTE_AGENT_NOT_FOUND": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
       "REMOTE_AGENT_BUSY": "那臺電腦上同時執行的任務太多。先結束一些任務後再試。",
       "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
-      "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。"
+      "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦沒有允許遠端呼叫這個供應商。請在那臺電腦的「設定 → 模型供應商」裡開啟「允許遠端呼叫」，或換一個模型。"
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",

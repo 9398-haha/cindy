@@ -15,12 +15,9 @@
  *     主场景,默认停在某台远程机器有误发风险。
  *   - 窄屏且有多台时收成图标 + 状态点:pill 排在窄屏会进正常流并 flex-wrap,省掉设备名可以
  *     少一次换行。只有一台对端时不收(名字短,信息更重要)。
- *   - 「只让 Agent 在那台运行」单独成段(传了 onAgentDeviceChange 才显示):任务、项目文件与命令
- *     留在本机,Agent 用那台的登录、供应商与网络。它和「在那台上创建」是两件事 —— 后者整个任务
- *     都建在那台 —— 所以分段列出、各自写明，选中后 pill 显示「Agent 在 X」。
  */
 
-import { Check, ChevronDown, Cpu, Laptop } from 'lucide-react';
+import { Check, ChevronDown, Laptop } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -41,10 +38,6 @@ interface Props {
   /** 窄屏(pill 排进正常流)时收成图标 + 状态点。 */
   compact?: boolean;
   disabled?: boolean;
-  /** 任务在本机、Agent 在这台电脑上运行;null = Agent 也在本机。 */
-  agentDeviceId?: string | null;
-  /** 不传 = 不提供「只让 Agent 在其他电脑运行」。 */
-  onAgentDeviceChange?: (deviceId: string, deviceName: string | null) => void;
 }
 
 /**
@@ -72,8 +65,6 @@ export function DeviceSwitcherPill({
   onOpenChange,
   compact = false,
   disabled = false,
-  agentDeviceId = null,
-  onAgentDeviceChange,
 }: Props) {
   const { t } = useTranslation();
 
@@ -81,18 +72,10 @@ export function DeviceSwitcherPill({
   if (devices.length === 0) return null;
 
   const localLabel = t('ccAgent.sidebar.machineSwitcher.localMachine');
-  // 任务在本机、Agent 在另一台:pill 显示 Agent 所在的电脑(状态点也跟它走)。
-  const agentDevice = value == null && agentDeviceId != null ? agentDeviceId : null;
-  const label = agentDevice
-    ? t('newChat.deviceSwitcher.agentPill', { device: resolveDeviceLabel(devices, agentDevice, localLabel) })
-    : resolveDeviceLabel(devices, value, localLabel);
-  const current = agentDevice
-    ? devices.find((d) => d.deviceId === agentDevice)
-    : value == null
-      ? null
-      : devices.find((d) => d.deviceId === value);
+  const label = resolveDeviceLabel(devices, value, localLabel);
+  const current = value == null ? null : devices.find((d) => d.deviceId === value);
   // 本机不画状态点(它永远在线,画了只是噪音)。
-  const showDot = current != null || agentDevice != null;
+  const showDot = current != null;
   // 当前值必须进 aria-label:compact 模式下按钮只剩图标 + 状态点、不渲染设备名文本,只报
   // 「设备」会让读屏用户完全不知道当前选的是哪台机器(Copilot review)。非 compact 时名字虽然
   // 可见,一并读出也不冗余 —— aria-label 会覆盖内文,不会重复播报。
@@ -123,15 +106,11 @@ export function DeviceSwitcherPill({
             compact ? 'px-2.5' : 'min-w-20 max-w-[200px] px-3',
           )}
         >
-          {agentDevice ? (
-            <Cpu size={12} strokeWidth={2} className="shrink-0 text-[var(--create-agent-control-icon)]" />
-          ) : (
-            <Laptop
-              size={12}
-              strokeWidth={2}
-              className="shrink-0 text-[var(--create-agent-control-icon)]"
-            />
-          )}
+          <Laptop
+            size={12}
+            strokeWidth={2}
+            className="shrink-0 text-[var(--create-agent-control-icon)]"
+          />
           {showDot && (
             <span
               aria-hidden
@@ -176,7 +155,7 @@ export function DeviceSwitcherPill({
           icon={<Laptop size={20} strokeWidth={2} className="shrink-0 text-[var(--folder-item-icon)]" />}
           name={localLabel}
           hint={t('newChat.deviceSwitcher.localHint')}
-          selected={value == null && agentDevice == null}
+          selected={value == null}
           onSelect={() => select(null, null)}
         />
 
@@ -203,39 +182,6 @@ export function DeviceSwitcherPill({
             />
           ))}
         </div>
-
-        {onAgentDeviceChange && (
-          <>
-            <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
-            <div className="px-3 py-2">
-              <span className="text-xs font-normal text-[var(--folder-label)]">
-                {t('newChat.deviceSwitcher.agentSection')}
-              </span>
-            </div>
-            <div className="pending-queue-scroll -mr-2 max-h-[216px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2">
-              {devices.map((device) => (
-                <DeviceRow
-                  key={device.deviceId}
-                  testId="create-agent-agent-device-option"
-                  icon={<Cpu size={20} strokeWidth={2} className="shrink-0 text-[var(--folder-item-icon)]" />}
-                  name={device.name}
-                  hint={
-                    device.online
-                      ? t('newChat.deviceSwitcher.agentHint')
-                      : t('newChat.deviceSwitcher.offlineHint')
-                  }
-                  online={device.online}
-                  disabled={!device.online}
-                  selected={agentDevice === device.deviceId}
-                  onSelect={() => {
-                    onAgentDeviceChange(device.deviceId, device.name);
-                    onOpenChange(false);
-                  }}
-                />
-              ))}
-            </div>
-          </>
-        )}
       </PopoverContent>
     </Popover>
   );
@@ -249,15 +195,14 @@ interface RowProps {
   disabled?: boolean;
   selected: boolean;
   onSelect: () => void;
-  testId?: string;
 }
 
-function DeviceRow({ icon, name, hint, online, disabled, selected, onSelect, testId }: RowProps) {
+function DeviceRow({ icon, name, hint, online, disabled, selected, onSelect }: RowProps) {
   return (
     <button
       type="button"
       disabled={disabled}
-      data-testid={testId ?? 'create-agent-device-option'}
+      data-testid="create-agent-device-option"
       onClick={onSelect}
       className={cn(
         'flex w-full items-center gap-3 rounded-[8px] px-3 py-[10px] text-left',

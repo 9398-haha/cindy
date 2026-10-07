@@ -2525,6 +2525,12 @@
           "empty": "今回このプロバイダーから利用可能なモデルが返されませんでした。以下は前回取得した一覧です。アカウントの権限を確認してから再試行してください。"
         },
         "suspendedBanner": "このプロバイダーは無効になっています。認証情報は保持されており、有効にすると再びモデルを利用できます。",
+        "remoteAccess": {
+          "label": "リモート利用を許可",
+          "description": "オンにすると、同じアカウントの他のコンピューターがこのプロバイダーのモデルを使い、このコンピューター上で Agent を実行できます。このコンピューターのサインインとクォータを使います。",
+          "ariaLabel": "このアカウントの他のコンピューターにこのプロバイダーの利用を許可",
+          "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
+        },
         "moreActionsAria": "その他の操作"
       },
       "detect": {
@@ -8935,6 +8941,8 @@
         "ariaWithEffort": "モデルを選択。現在：{{model}}、推論強度：{{effort}}",
         "pendingAria": "モデルを選択。次のメッセージ：{{agent}} · {{model}}",
         "pendingAriaWithEffort": "モデルを選択。次のメッセージ：{{agent}} · {{model}}、推論強度：{{effort}}",
+        "agentDevice": "Agent は {{device}} で実行",
+        "agentDeviceUnnamed": "Agent は別のパソコンで実行",
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
@@ -8990,6 +8998,8 @@
       "unified": {
         "railFavorites": "お気に入り",
         "railAll": "すべて",
+        "railRemoteProvider": "{{provider}} · {{device}}",
+        "remoteLoading": "そのパソコンのモデルを読み込み中…",
         "favoritesGroup": "お気に入り",
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
         "addFavorite": "お気に入りに保存",
@@ -9356,10 +9366,7 @@
       "onlineHint": "接続済み — 作成できます",
       "offlineHint": "オフライン — 接続後に利用可能",
       "attachmentsDropped": "添付ファイル {{count}} 件を削除しました（前のデバイス上のファイルです）",
-      "attachmentsRemoteUnsupported": "リモートデバイスではファイル添付に未対応のため {{count}} 件をスキップしました（画像は可）",
-      "agentSection": "Agent だけ別のパソコンで実行",
-      "agentHint": "セッションとファイルはこちらに残し、そのパソコンのサインインとモデルを使います",
-      "agentPill": "Agent: {{device}}"
+      "attachmentsRemoteUnsupported": "リモートデバイスではファイル添付に未対応のため {{count}} 件をスキップしました（画像は可）"
     },
     "pluginSuggestions": {
       "changed": "このおすすめは更新されました。おすすめを入れ替えて、もう一度選んでください。",
@@ -10347,7 +10354,8 @@
       "REMOTE_AGENT_NOT_FOUND": "このセッションは Agent を実行しているパソコンですでに終了しています。もう一度送信してください。",
       "REMOTE_AGENT_BUSY": "相手のパソコンで実行中のセッションが多すぎます。いくつか終了してからもう一度お試しください。",
       "REMOTE_AGENT_UNSUPPORTED": "相手のパソコンではこの Agent を使えません。そのパソコンでインストールまたはサインインするか、別の Agent を選んでください。",
-      "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。"
+      "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。"
     },
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",

@@ -50,11 +50,20 @@ describe('parseDeviceProviderViews', () => {
 
 describe('readDeviceProviderViews', () => {
   it('asks the other computer for its provider list with the controller capabilities', async () => {
-    const invoke = vi.fn(async () => ({ ok: true, result: { providers: [provider()] } }));
+    const invoke = vi.fn(async () => ({ ok: true, result: { providers: [provider({ remoteInvocationEnabled: true })] } }));
     expect((await readDeviceProviderViews(invoke, 'device-b')).map((view) => view.id)).toEqual(['spark']);
     expect(invoke).toHaveBeenCalledWith('device-b', 'maker:provider:list', [
       { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
     ]);
+  });
+
+  it('keeps only the providers that computer allows for remote use', async () => {
+    const invoke = vi.fn(async () => ({ ok: true, result: { providers: [
+      provider({ id: 'shared', remoteInvocationEnabled: true }),
+      provider({ id: 'private', remoteInvocationEnabled: false }),
+      provider({ id: 'legacy' }),
+    ] } }));
+    expect((await readDeviceProviderViews(invoke, 'device-b')).map((view) => view.id)).toEqual(['shared']);
   });
 
   it('keeps the error code when the other computer cannot answer', async () => {

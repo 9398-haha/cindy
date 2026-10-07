@@ -14,6 +14,9 @@ import {
 } from '../../device-link/broadcast-tap.js';
 import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
 import { readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
+import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
+import { resolveSharedProviderId } from './providerAccess';
 import { createRemoteAgentHost, type HostedStartInput, type RemoteAgentHost } from './runHost';
 
 const log = createLogger('remote-agent:host');
@@ -73,6 +76,17 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
     isControllerAuthorized: (controller) => {
       const settings = readDeviceLinkSettings();
       return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller);
+    },
+    providerAccess: {
+      resolve: async (kind, model, providerId) =>
+        resolveSharedProviderId(
+          await getDesktopProviderService().listProviders({ allowSideEffects: false }),
+          isRemoteProviderInvocationAllowed,
+          kind,
+          model,
+          providerId,
+        ),
+      isAllowed: isRemoteProviderInvocationAllowed,
     },
     captureOwner: captureDataOwnerBroadcastScope,
     isOwnerCurrent: (owner) => isDataOwnerBroadcastScopeCurrent(owner as DataOwnerBroadcastScope),

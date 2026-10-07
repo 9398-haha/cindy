@@ -82,6 +82,8 @@ export const REMOTE_AGENT_ERROR_CODES = [
   'REMOTE_AGENT_EXPIRED',
   'REMOTE_AGENT_ACCOUNT_CHANGED',
   'REMOTE_AGENT_UNAVAILABLE',
+  // 那台电脑没有对这个供应商打开「允许被远程调用」(或已关闭)。
+  'REMOTE_AGENT_PROVIDER_NOT_ALLOWED',
 ] as const;
 export type RemoteAgentErrorCode = (typeof REMOTE_AGENT_ERROR_CODES)[number];
 

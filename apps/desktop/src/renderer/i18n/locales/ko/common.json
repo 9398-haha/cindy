@@ -2525,6 +2525,12 @@
           "empty": "이번에는 이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 아래는 마지막으로 가져온 목록입니다. 계정 권한을 확인한 후 다시 시도하세요."
         },
         "suspendedBanner": "이 제공자는 비활성화되어 있습니다. 자격 증명은 유지되며, 활성화하면 모델을 다시 사용할 수 있습니다.",
+        "remoteAccess": {
+          "label": "원격 사용 허용",
+          "description": "켜면 같은 계정의 다른 컴퓨터가 이 제공자의 모델로 이 컴퓨터에서 Agent를 실행할 수 있습니다. 이 컴퓨터의 로그인과 할당량을 씁니다.",
+          "ariaLabel": "이 계정의 다른 컴퓨터에서 이 제공자를 사용하도록 허용",
+          "writeFailed": "원격 사용 설정을 저장하지 못했습니다. 다시 시도해 주세요."
+        },
         "moreActionsAria": "추가 작업"
       },
       "detect": {
@@ -8935,6 +8941,8 @@
         "ariaWithEffort": "모델 선택. 현재: {{model}}, 추론 강도: {{effort}}",
         "pendingAria": "모델 선택. 다음 메시지: {{agent}} · {{model}}",
         "pendingAriaWithEffort": "모델 선택. 다음 메시지: {{agent}} · {{model}}, 추론 강도: {{effort}}",
+        "agentDevice": "Agent가 {{device}}에서 실행",
+        "agentDeviceUnnamed": "Agent가 다른 컴퓨터에서 실행",
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
@@ -8990,6 +8998,8 @@
       "unified": {
         "railFavorites": "즐겨찾기",
         "railAll": "전체",
+        "railRemoteProvider": "{{provider}} · {{device}}",
+        "remoteLoading": "그 컴퓨터의 모델을 불러오는 중…",
         "favoritesGroup": "즐겨찾기",
         "favoritesEmpty": "즐겨찾기가 없습니다 — 모델 행에 마우스를 올리고 ☆를 눌러 저장하세요",
         "addFavorite": "즐겨찾기에 저장",
@@ -9356,10 +9366,7 @@
       "onlineHint": "연결됨 — 생성 가능",
       "offlineHint": "오프라인 — 연결 후 사용 가능",
       "attachmentsDropped": "첨부파일 {{count}}개를 제거했습니다 — 이전 기기에 있는 파일입니다",
-      "attachmentsRemoteUnsupported": "원격 기기에서는 파일 첨부를 지원하지 않아 {{count}}개를 건너뛰었습니다(이미지는 가능)",
-      "agentSection": "Agent만 다른 컴퓨터에서 실행",
-      "agentHint": "세션과 파일은 이곳에 두고, 그 컴퓨터의 로그인과 모델을 사용합니다",
-      "agentPill": "Agent: {{device}}"
+      "attachmentsRemoteUnsupported": "원격 기기에서는 파일 첨부를 지원하지 않아 {{count}}개를 건너뛰었습니다(이미지는 가능)"
     },
     "pluginSuggestions": {
       "changed": "이 추천이 업데이트되었습니다. 추천을 바꾼 뒤 다시 선택해 주세요.",
@@ -10347,7 +10354,8 @@
       "REMOTE_AGENT_NOT_FOUND": "이 세션은 Agent를 실행하는 컴퓨터에서 이미 종료되었습니다. 다시 보내 주세요.",
       "REMOTE_AGENT_BUSY": "상대 컴퓨터에서 실행 중인 세션이 너무 많습니다. 일부를 종료한 뒤 다시 시도하세요.",
       "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
-      "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요."
+      "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자의 원격 사용을 허용하지 않았습니다. 그 컴퓨터의 설정 → 모델 제공자에서 원격 사용 허용을 켜거나 다른 모델을 선택하세요."
     },
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",

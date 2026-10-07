@@ -2526,6 +2526,12 @@
           "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
         },
         "suspendedBanner": "This provider is disabled. Credentials are kept; enable it to use its models again.",
+        "remoteAccess": {
+          "label": "Allow remote use",
+          "description": "When on, other computers on your account can use this provider's models to run an Agent on this computer, using this computer's sign-in and quota.",
+          "ariaLabel": "Allow other computers on this account to use this provider",
+          "writeFailed": "Couldn't save the remote access setting. Please try again."
+        },
         "moreActionsAria": "More Actions"
       },
       "detect": {
@@ -8948,6 +8954,8 @@
         "ariaWithEffort": "Select model. Current: {{model}}, effort: {{effort}}",
         "pendingAria": "Select model. Next message: {{agent}} · {{model}}",
         "pendingAriaWithEffort": "Select model. Next message: {{agent}} · {{model}}, effort: {{effort}}",
+        "agentDevice": "Agent runs on {{device}}",
+        "agentDeviceUnnamed": "Agent runs on another computer",
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
@@ -9003,6 +9011,8 @@
       "unified": {
         "railFavorites": "Favorites",
         "railAll": "All",
+        "railRemoteProvider": "{{provider}} · {{device}}",
+        "remoteLoading": "Loading models from that computer…",
         "favoritesGroup": "Favorites",
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
         "addFavorite": "Save to favorites",
@@ -9369,10 +9379,7 @@
       "onlineHint": "Connected — available",
       "offlineHint": "Offline — available once connected",
       "attachmentsDropped": "Removed {{count}} attachment(s) — they live on the previous device",
-      "attachmentsRemoteUnsupported": "File attachments aren't supported on a remote device — skipped {{count}} (images are fine)",
-      "agentSection": "Run Only the Agent on Another Computer",
-      "agentHint": "Session and files stay here; uses its sign-in and models",
-      "agentPill": "Agent on {{device}}"
+      "attachmentsRemoteUnsupported": "File attachments aren't supported on a remote device — skipped {{count}} (images are fine)"
     },
     "pluginSuggestions": {
       "changed": "This suggestion has changed. Shuffle the suggestions and choose again.",
@@ -10364,7 +10371,8 @@
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_BUSY": "Too many sessions are running on the other computer. End some of them and try again.",
       "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
-      "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers."
+      "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model."
     },
     "generatedFiles": {
       "title": "Files created this message",

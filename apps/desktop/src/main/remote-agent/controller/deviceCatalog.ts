@@ -4,6 +4,8 @@
  * 那台电脑经设备互联的 `maker:provider:list` 给出去敏后的供应商视图；Agent 在那台运行的任务
  * (以及它的协同 Worker)按这份目录选模型与来源。与渲染端 useDeviceProviders 同一个通道、同一份
  * 投影；只做最小校验，缺少 routing 的 Agent 补空 entry(与渲染端解析边界一致)。
+ * 读取时只留那台电脑开了「允许被远程调用」的供应商(`remoteInvocationEnabled === true`)：
+ * 换模型、协同 Worker、定时任务的默认来源都只能落在这些供应商上。
  */
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
@@ -46,7 +48,7 @@ export function parseDeviceProviderViews(value: unknown): ProviderView[] {
   });
 }
 
-/** 读那台电脑的供应商视图。 */
+/** 读那台电脑允许被远程调用的供应商视图。 */
 export async function readDeviceProviderViews(invoke: RemoteInvoke, deviceId: string): Promise<ProviderView[]> {
   const result = await invoke(deviceId, 'maker:provider:list', [
     { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
@@ -54,5 +56,5 @@ export async function readDeviceProviderViews(invoke: RemoteInvoke, deviceId: st
   if (!result.ok) {
     throw Object.assign(new Error(result.error?.message ?? 'provider list unavailable'), { code: result.error?.code });
   }
-  return parseDeviceProviderViews(result.result);
+  return parseDeviceProviderViews(result.result).filter((view) => view.remoteInvocationEnabled === true);
 }

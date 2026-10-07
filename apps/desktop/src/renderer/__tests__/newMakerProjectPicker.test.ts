@@ -1282,9 +1282,9 @@ describe('Shared create project picker', () => {
   it('routes every draft-target transition through the single action', () => {
     // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
     // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
-    // 第六条:选「只让 Agent 在其他电脑运行」时,原来要建到远程设备 / SSH 的草稿先回本机。
+    // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(6);
+    expect(calls.length).toBe(5);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');
@@ -1683,7 +1683,9 @@ describe('Shared create project picker', () => {
     // 5 → 6:统一模型选择器(M5)新增 handleUnifiedDraftSelect —— 它同样是一次
     // 控制端对远程运行配置的显式编辑,漏打这个标记的话下一次 capabilities 刷新
     // 会把用户刚选的模型重种回被控端默认。
-    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(6);
+    // 6 → 7:同一处理器里「选到另一台电脑上的模型」(远程 Agent 换落点)也是显式编辑,
+    // 那台的 capabilities 到达时同样只能夹紧、不能重种。
+    expect((runtimeHandlers.match(/dlRuntimeTouchedRef\.current = true;/g) ?? []).length).toBe(7);
   });
 
   /**
@@ -1779,9 +1781,9 @@ describe('New Maker 草稿的 wire model id 口径', () => {
       handlerStart,
       newMakerDraftRouteSource.indexOf('// ─── 用户改 workingDir', handlerStart),
     );
-    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel —— 两条都用
-    // selection.modelId(wire id),一处都不能换成行 id。
-    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(2);
+    // 本地草稿落 lastByVendor(→ createSession)、device-link 草稿落 dlSel、远程 Agent 换落点
+    // 时播种那台电脑的 dlSel —— 三条都用 selection.modelId(wire id),一处都不能换成行 id。
+    expect((handler.match(/model: selection\.modelId,/g) ?? []).length).toBe(3);
     // 归一化行 id 不进草稿层,连字段都不该出现在写入实参里。
     expect(handler).not.toContain('rowModelId');
   });

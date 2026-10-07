@@ -22,6 +22,10 @@ import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
+import {
+  isRemoteProviderInvocationAllowed,
+  setRemoteProviderInvocationEnabled,
+} from '../maker-host/remote-provider-access-store.js';
 import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
@@ -6077,6 +6081,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setModelsDisabled: (providerId, modelIds, disabled) =>
       setModelsDisabled(providerId, modelIds, disabled),
     setProviderDisabled: (providerId, disabled) => setProviderDisabled(providerId, disabled),
+    getRemoteProviderInvocationEnabled: (providerId) =>
+      isRemoteProviderInvocationAllowed(providerId),
+    setRemoteProviderInvocationEnabled: (providerId, enabled) =>
+      setRemoteProviderInvocationEnabled(providerId, enabled),
     stageClearProviderDisableOverrides: (providerId) =>
       stageProviderDisableOverridesClear(providerId),
     // 「恢复默认」= 删除该供应商整组停用 override(configuration-and-overrides.md §4)。

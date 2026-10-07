@@ -649,6 +649,10 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
+    // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
+    delete rest.remoteInvocationEnabled;
+    if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
     const logoKind = typeof p.id === 'string'
       ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
       : null;

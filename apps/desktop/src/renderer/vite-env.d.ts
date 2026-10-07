@@ -5692,6 +5692,11 @@ interface ElectronAPI {
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
     ) => Promise<{ ok: true }>;
+    /** 供应商级远程 Agent 授权；默认关闭，设置页写入后经 PROVIDER_CHANGED 刷新。 */
+    setProviderRemoteAccess: (input: {
+      providerId: string;
+      enabled: boolean;
+    }) => Promise<{ ok: true; enabled: boolean }>;
     /** Persist the visible provider order only if the active owner still matches. */
     setProviderOrder: (
       dataOwnerId: string | null,

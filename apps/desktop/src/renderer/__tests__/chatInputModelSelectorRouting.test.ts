@@ -489,7 +489,7 @@ describe('ChatInput model source switching wiring', () => {
     const draftBlock = chatInputSource.slice(
       draftStart,
       chatInputSource.indexOf(
-        '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+        '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId]',
         draftStart,
       ),
     );
@@ -497,11 +497,16 @@ describe('ChatInput model source switching wiring', () => {
     // rowModelId 只在类型声明与注释里出现,**不得**出现在任何写入实参上。
     expect(draftBlock).not.toContain('selection.rowModelId');
     for (const write of [
-      'modelMemory?.setEffort(',
-      'modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
+      'targetMemory?.setEffort(',
+      'targetMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
     ]) {
       expect(draftBlock).toContain(write);
     }
+    // 远程 Agent 换落点:记忆按目标目录写(回本机写本机预设,去另一台电脑不写),
+    // 落点原样交给草稿层。
+    expect(draftBlock).toContain('selection.agentDevice === null');
+    expect(draftBlock).toContain('? LOCAL_MODEL_MEMORY');
+    expect(draftBlock).toContain('agentDevice: selection.agentDevice');
     // 「恢复推荐」已先删除记忆键；直通草稿时不得把推荐档位重新写成 override。
     expect(draftBlock).toContain('!selection.resetToRecommended');
     expect(draftBlock).toContain(
@@ -512,7 +517,7 @@ describe('ChatInput model source switching wiring', () => {
   it('keeps a new conversation model pick on the draft path', () => {
     const draftStart = chatInputSource.indexOf('const handleUnifiedDraftSelect = useCallback(');
     const draftEnd = chatInputSource.indexOf(
-      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId]',
       draftStart,
     );
     const draftHandler = chatInputSource.slice(draftStart, draftEnd);
