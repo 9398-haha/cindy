@@ -47,6 +47,7 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
 import { setProviderModelMemoryOwner } from '@/state/providerModelMemory';
+import { setAgentDeviceModelMemoryOwner } from '@/state/agentDeviceModelMemory';
 import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
@@ -333,6 +334,7 @@ export function AuthProvider({
       setDataOwnerGenerationState(state.ownerGeneration);
       setNewMakerDraftOwner(state.dataOwnerId);
       setProviderModelMemoryOwner(state.dataOwnerId);
+      setAgentDeviceModelMemoryOwner(state.dataOwnerId);
       // 模型选择器的持久记忆与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
       // 登出时同样传 null(state.dataOwnerId 在 signed-out 快照里就是 null,分区键退回
       // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。

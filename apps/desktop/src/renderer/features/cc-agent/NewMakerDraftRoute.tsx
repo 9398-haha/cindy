@@ -116,6 +116,7 @@ import {
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory';
 import {
   deliverRecoverableHandoff,
   rememberRecoverableHandoff,
@@ -1560,14 +1561,22 @@ export function NewMakerDraftRoute() {
   ]);
 
   // 运行 Agent 的电脑只提供模型目录：任务在本机，没有远程草稿默认值，改用本次运行内对这台
-  // 电脑的上一次选择(见 agentDeviceDraftMemory)。
+  // 电脑的上一次选择 + 本机为这台电脑记的每模型档位(见 agentDeviceDraftMemory)。
+  const agentDeviceModelMemoryVersion = useAgentDeviceModelMemoryVersion();
   const deviceDraftDefaultsReady = isAgentDeviceDraft || remoteDraftState.status === 'ready';
   const deviceDraftDefaults = useMemo<RemoteDraftDefaults | null>(
     () =>
       isAgentDeviceDraft && effectiveAgentDeviceId
         ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
         : remoteDraftState.value,
-    [isAgentDeviceDraft, effectiveAgentDeviceId, capabilityAgentKind, remoteDraftState.value],
+    // agentDeviceModelMemoryVersion:档位记忆变了要重新取回,切模型时才按最新档位还原。
+    [
+      isAgentDeviceDraft,
+      effectiveAgentDeviceId,
+      capabilityAgentKind,
+      remoteDraftState.value,
+      agentDeviceModelMemoryVersion,
+    ],
   );
 
   // seed dlSel:等被控端 capabilities + 草稿值都就绪后播种。切设备 / vendor 必须重种；同一目标
