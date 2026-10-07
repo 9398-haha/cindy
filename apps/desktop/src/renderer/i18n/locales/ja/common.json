@@ -404,7 +404,9 @@
     "SSH_HOST_PREFS_WRITE_FAILED": "ホストは保存されていますが、表示名または Agent Proxy の設定を保存できませんでした。ローカルストレージの権限を確認して再試行してください。",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "このタスクのタブ数の上限に達しました。いくつかのタブを閉じてください",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "タブの内容が大きすぎるため、追加できません",
-    "RIGHT_SIDEBAR_UNKNOWN_KIND": "このタブの種類は現在使用できません"
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "このタブの種類は現在使用できません",
+    "REMOTE_AGENT_DEVICE_UNREACHABLE": "モデルは切り替わっていません：Agent を実行するパソコンに接続できません。オンラインでリモート操作を許可していることを確認してから、もう一度お試しください。",
+    "REMOTE_AGENT_MODEL_UNAVAILABLE": "モデルは切り替わっていません：そのパソコンにこのモデルがないか、このプロバイダーの「リモート利用を許可」がオンになっていません。別のモデルを選んでください。"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -9285,6 +9287,13 @@
           "cancel": "現在の Agent を維持",
           "dontShowAgain": "次回から表示しない"
         }
+      },
+      "agentRelocation": {
+        "titleLocal": "Agent をこのパソコンで実行し直しますか？",
+        "titleOther": "Agent を「{{device}}」で実行しますか？",
+        "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
+        "confirm": "パソコンを切り替える",
+        "cancel": "このままにする"
       }
     },
     "agentSelect": {
@@ -10118,7 +10127,11 @@
         "toggleHint": "引き継ぎ内容を表示",
         "handoffTitle": "引き継ぎ内容——切り替え時に新しいエンジンへ送信されたコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
         "handoffTitleEnglishSource": "引き継ぎ内容——切り替え時に新しいエンジンへ送信されたコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)",
-        "resumedBadge": "セッション再開"
+        "resumedBadge": "セッション再開",
+        "relocatedHere": "Agent をこのパソコンで実行するようにしました",
+        "relocatedTo": "Agent を {{device}} で実行するようにしました",
+        "relocatedTaskComputer": "Agent をタスクのあるパソコンで実行するようにしました",
+        "relocatedElsewhere": "Agent を別のパソコンで実行するようにしました"
       },
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",

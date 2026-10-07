@@ -637,21 +637,40 @@ export function resolveModelSelectorAgentIdentity(
   };
 }
 
+/** 远程 Agent 草稿里一次行选中的落点电脑;null = Agent 在本机。 */
+export type UnifiedSelectionAgentDevice = { deviceId: string; name: string } | null;
+
+/** 已建任务里选中了另一台电脑(或本机)目录里的一行:连 Agent 的运行位置一起换。 */
+export interface RemoteAgentRelocation {
+  providerId: string;
+  /** 目标引擎的 wire model id。 */
+  modelId: string;
+  agent: AgentKind;
+  /** 该行生效档位;不可调档时为 undefined。 */
+  effort?: Effort;
+  fast: boolean;
+  /** 这一行所属的电脑;null = 本机。 */
+  agentDevice: UnifiedSelectionAgentDevice;
+}
+
 /**
- * 远程 Agent 的选择入口(只有本机新任务草稿传)。模型面板的左侧栏在本机供应商之后列出
- * 这些电脑上的供应商;选中那台电脑上的模型 = Agent 在那台电脑运行,任务和文件仍在本机。
+ * 远程 Agent 的选择入口(本机新任务草稿与本机已建任务传)。模型面板的左侧栏在本机供应商之后
+ * 列出这些电脑上的供应商;选中那台电脑上的模型 = Agent 在那台电脑运行,任务和文件仍在本机。
  */
 export interface RemoteAgentSelectorOptions {
   /** 可以运行 Agent 的其他电脑(已配对、在线)。 */
   devices: readonly { deviceId: string; name: string }[];
-  /** 草稿当前的 Agent 所在电脑;null = 本机。 */
+  /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 本机。 */
   selectedDeviceId: string | null;
   /** 本机目录的模型记忆。Agent 当前在其他电脑时,浏览本机目录用它显示各行的档位。 */
   localModelMemory?: ModelMemoryAccessors;
+  /**
+   * 已建任务传:选中的行不在 Agent 落点那台电脑的目录里 = 把 Agent 挪过去(与跨引擎同一套意图,
+   * 下一条消息发送时生效)。返回 false = 没有执行(确认被取消 / 登记失败),面板留在原地。
+   * 草稿不传(草稿走 onUnifiedSelect,行带 agentDevice)。
+   */
+  onRelocate?: (selection: RemoteAgentRelocation) => Promise<boolean>;
 }
-
-/** 远程 Agent 草稿里一次行选中的落点电脑;null = Agent 在本机。 */
-export type UnifiedSelectionAgentDevice = { deviceId: string; name: string } | null;
 
 interface ModelSelectorProps {
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
@@ -3034,6 +3053,51 @@ function ModelSelectorContentView({
     const panelSelection = browsingSelectedCatalog
       ? { providerId: activeSourceId, modelId }
       : { providerId: null, modelId: '' };
+    // 已建任务浏览的不是 Agent 落点那台的目录:选中的行要连运行位置一起换,同引擎 / 跨引擎
+    // 两条会话链路都按当前落点的目录工作,这里一律改道给 onRelocate。
+    const relocate =
+      remoteAgent?.onRelocate && !onUnifiedSelect && !browsingSelectedCatalog
+        ? remoteAgent.onRelocate
+        : undefined;
+    const relocateRow = (
+      row: { providerId: string; modelId: string; agent: AgentKind; effort?: Effort; fast: boolean },
+      dismiss: boolean,
+    ): Promise<boolean> =>
+      runLiveWrite(() => relocate!({ ...row, agentDevice: remoteBrowseDevice })).then((applied) => {
+        if (applied && dismiss) {
+          closeOptionsPanel();
+          onDismiss?.();
+        }
+        return applied;
+      });
+    const panelSessionEngineFilter =
+      sessionEngineFilter && relocate
+        ? {
+            ...sessionEngineFilter,
+            onCrossEngineSelect: (args: Parameters<NonNullable<typeof sessionEngineFilter>['onCrossEngineSelect']>[0]) =>
+              relocateRow(
+                {
+                  providerId: args.providerId,
+                  modelId: args.modelId,
+                  agent: args.targetAgent,
+                  ...(args.effort ? { effort: args.effort } : {}),
+                  fast: args.fast === true,
+                },
+                true,
+              ),
+            onCrossEngineConfigure: (args: Parameters<NonNullable<typeof sessionEngineFilter>['onCrossEngineSelect']>[0]) =>
+              relocateRow(
+                {
+                  providerId: args.providerId,
+                  modelId: args.modelId,
+                  agent: args.targetAgent,
+                  ...(args.effort ? { effort: args.effort } : {}),
+                  fast: args.fast === true,
+                },
+                false,
+              ),
+          }
+        : sessionEngineFilter;
     return (
       // 外层多包一层「百分比钳制」:面板列自身的 max-h 公式(560px/100vh)不知道宿主
       // popover 实际给了多少纵向空间 —— morph 弹层按锚点位置算出的可用高度可能更小,
@@ -3168,7 +3232,7 @@ function ModelSelectorContentView({
             configurationEnabled={configurationEnabled}
             selectionPolicy={unifiedSelectionPolicy}
             isRouteDisabled={(providerId, id, rowAgent) => providersOverride ? false : modelDisabledOf(providers.find((provider) => provider.id === providerId) ?? null, id, rowAgent)}
-            {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
+            {...(panelSessionEngineFilter ? { sessionEngineFilter: panelSessionEngineFilter } : {})}
             {...(followSession ? { followSession: {
               ...followSession,
               onFollow: async () => {
@@ -3204,6 +3268,20 @@ function ModelSelectorContentView({
                   return applied;
                 });
               }
+              if (relocate) {
+                const agent = vendorKeyToAgentKind(rowConfig.engine);
+                if (!agent) return false;
+                return relocateRow(
+                  {
+                    providerId,
+                    modelId: id,
+                    agent,
+                    ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                    fast: rowConfig.fast,
+                  },
+                  true,
+                );
+              }
               // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
               // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
               // 「同模型不同配置的收藏」与「锚点只在真的应用后才记」两件事收在
@@ -3228,6 +3306,20 @@ function ModelSelectorContentView({
                   ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
                   ...withAgentDevice,
                 });
+              }
+              if (relocate) {
+                const agent = vendorKeyToAgentKind(rowConfig.engine);
+                if (!agent) return false;
+                return relocateRow(
+                  {
+                    providerId,
+                    modelId: id,
+                    agent,
+                    ...(nextEffort ? { effort: nextEffort } : {}),
+                    fast: rowConfig.fast,
+                  },
+                  false,
+                );
               }
               return applyUnifiedSessionSelect({
                 providerId,
@@ -3255,6 +3347,8 @@ function ModelSelectorContentView({
                   ...withAgentDevice,
                 });
               }
+              // 浏览别的电脑的目录时没有「正在用的那一行」,也就没有锚点可清。
+              if (relocate) return;
               onSessionFavoriteAnchorChange?.(null);
             }}
             {...(onEffortChange

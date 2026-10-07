@@ -165,6 +165,7 @@ import {
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import {
   canExposeWritableDirsChange,
   resolveManualCompactChannel,
@@ -2091,6 +2092,27 @@ export function CCAgentSessionView({
   const { mode: authMode, user: authUser, dataOwnerId } = useAuth();
   // Agent 在另一台电脑运行的任务:模型目录同样以那台为准(任务本身在本机)。
   const agentDeviceId = remoteDeviceId ? undefined : (session?.agentDeviceId ?? undefined);
+  // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
+  // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
+  const { devices: selectableDevices } = useSelectableDevices();
+  const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
+  const remoteAgentDevices = useMemo(
+    () =>
+      remoteDeviceId || session?.remoteHostId
+        ? undefined
+        : selectableDevices
+            .filter(
+              (device) =>
+                device.online ||
+                device.deviceId === agentDeviceId ||
+                device.deviceId === pendingAgentDeviceId,
+            )
+            .map(({ deviceId, name }) => ({ deviceId, name })),
+    [selectableDevices, remoteDeviceId, session?.remoteHostId, agentDeviceId, pendingAgentDeviceId],
+  );
+  const agentDeviceName = agentDeviceId
+    ? (selectableDevices.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
+    : null;
   const catalogDeviceId = remoteDeviceId ?? agentDeviceId;
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
@@ -5520,6 +5542,8 @@ export function CCAgentSessionView({
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
                   agentDeviceId={session?.agentDeviceId ?? null}
+                  agentDeviceName={agentDeviceName}
+                  {...(remoteAgentDevices ? { remoteAgentDevices } : {})}
                   modelMemoryOverride={remoteModelMemoryOverride}
                   initialModel={session?.model}
                   initialProviderId={session?.providerId ?? null}

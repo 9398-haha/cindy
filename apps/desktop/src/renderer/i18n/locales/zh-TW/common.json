@@ -404,7 +404,9 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "遠端專案目錄不可訪問，請恢復網路盤連線後重試。",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "目前任務已達標籤數量上限，請先關閉一些標籤",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "標籤內容過大，無法新增",
-    "RIGHT_SIDEBAR_UNKNOWN_KIND": "此標籤類型暫時無法使用"
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "此標籤類型暫時無法使用",
+    "REMOTE_AGENT_DEVICE_UNREACHABLE": "模型未切換：要執行 Agent 的那台電腦暫時連不上。確認它在線並允許遠端控制後重試。",
+    "REMOTE_AGENT_MODEL_UNAVAILABLE": "模型未切換：那台電腦上沒有這個模型，或沒有對這個供應商開啟「允許遠端呼叫」。請換一個模型。"
   },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
@@ -9285,6 +9287,13 @@
           "cancel": "保留當前 Agent",
           "dontShowAgain": "下次不再提醒"
         }
+      },
+      "agentRelocation": {
+        "titleLocal": "改回這台電腦執行 Agent？",
+        "titleOther": "改到「{{device}}」上執行 Agent？",
+        "description": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
+        "confirm": "換電腦執行",
+        "cancel": "保持不變"
       }
     },
     "agentSelect": {
@@ -10117,7 +10126,11 @@
         "toggleHint": "檢視交接內容",
         "handoffTitle": "交接內容——切換時傳送給新引擎的上下文摘要(不計入對話記錄，僅在此展示)",
         "handoffTitleEnglishSource": "交接內容——切換時傳送給新引擎的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)",
-        "resumedBadge": "已續接原任務"
+        "resumedBadge": "已續接原任務",
+        "relocatedHere": "Agent 已改到這台電腦上執行",
+        "relocatedTo": "Agent 已改到 {{device}} 上執行",
+        "relocatedTaskComputer": "Agent 已改到任務所在的電腦上執行",
+        "relocatedElsewhere": "Agent 已改到另一台電腦上執行"
       },
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",

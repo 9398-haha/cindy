@@ -404,7 +404,9 @@
     "SSH_HOST_PREFS_WRITE_FAILED": "호스트는 저장되었지만 표시 이름 또는 Agent Proxy 설정을 저장하지 못했습니다. 로컬 저장소 권한을 확인한 후 다시 시도하세요.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "이 작업의 탭 한도에 도달했습니다. 일부 탭을 닫아 주세요",
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "탭 내용이 너무 커서 추가할 수 없습니다",
-    "RIGHT_SIDEBAR_UNKNOWN_KIND": "이 탭 유형은 현재 사용할 수 없습니다"
+    "RIGHT_SIDEBAR_UNKNOWN_KIND": "이 탭 유형은 현재 사용할 수 없습니다",
+    "REMOTE_AGENT_DEVICE_UNREACHABLE": "모델이 바뀌지 않았습니다: Agent를 실행할 컴퓨터에 연결할 수 없습니다. 온라인 상태이고 원격 제어를 허용하는지 확인한 뒤 다시 시도하세요.",
+    "REMOTE_AGENT_MODEL_UNAVAILABLE": "모델이 바뀌지 않았습니다: 그 컴퓨터에 이 모델이 없거나, 이 제공자의 “원격 사용 허용”이 켜져 있지 않습니다. 다른 모델을 선택하세요."
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -9285,6 +9287,13 @@
           "cancel": "현재 Agent 유지",
           "dontShowAgain": "다음부터 표시하지 않기"
         }
+      },
+      "agentRelocation": {
+        "titleLocal": "Agent를 다시 이 컴퓨터에서 실행할까요?",
+        "titleOther": "Agent를 “{{device}}”에서 실행할까요?",
+        "description": "원래 컴퓨터에 있는 대화 기록은 옮길 수 없어 인수인계 요약으로 이어집니다. 사고 내용 등은 완전히 이어지지 않을 수 있습니다. 다음 메시지를 보낼 때 적용됩니다.",
+        "confirm": "컴퓨터 전환",
+        "cancel": "그대로 두기"
       }
     },
     "agentSelect": {
@@ -10118,7 +10127,11 @@
         "toggleHint": "인계 내용 보기",
         "handoffTitle": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
         "handoffTitleEnglishSource": "인계 내용——전환 시 새 엔진에 전송된 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
-        "resumedBadge": "세션 재개됨"
+        "resumedBadge": "세션 재개됨",
+        "relocatedHere": "이제 Agent가 이 컴퓨터에서 실행됩니다",
+        "relocatedTo": "이제 Agent가 {{device}}에서 실행됩니다",
+        "relocatedTaskComputer": "이제 Agent가 작업이 있는 컴퓨터에서 실행됩니다",
+        "relocatedElsewhere": "이제 Agent가 다른 컴퓨터에서 실행됩니다"
       },
       "contextRebuild": {
         "labelOverflow": "컨텍스트를 정리하고 계속합니다",

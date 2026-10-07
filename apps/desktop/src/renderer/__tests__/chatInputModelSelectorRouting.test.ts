@@ -381,7 +381,8 @@ describe('ChatInput model source switching wiring', () => {
     expect(chatInputSource).toContain(
       'const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;',
     );
-    expect(chatInputSource).toContain('const catalogDeviceId = deviceLinkDeviceId ?? agentDeviceId ?? undefined;');
+    // 已建任务换电脑的意图期内,目录跟随意图里的电脑(effectiveAgentDeviceId)。
+    expect(chatInputSource).toContain('const catalogDeviceId = deviceLinkDeviceId ?? effectiveAgentDeviceId ?? undefined;');
   });
 
   /**

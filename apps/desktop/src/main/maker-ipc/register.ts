@@ -22,6 +22,7 @@ import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
+import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import {
   isRemoteProviderInvocationAllowed,
   setRemoteProviderInvocationEnabled,
@@ -136,7 +137,7 @@ import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
 import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
-import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.js';
 import { getDeviceLinkStatus, getMobileNotifyGeneration, sendMobileBotGroupNotify } from '../device-link/index.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
@@ -7046,6 +7047,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   /**
+   * Agent 将在另一台电脑运行时的选择准入(远程 Agent)：那台在线、允许被远程调用这个来源、
+   * 目录里有这个模型。在选择时就拒绝，不留一个发送时在那台失败、且每次发送都重试的意图。
+   */
+  async function assertAgentDeviceRouteUsable(
+    deviceId: string,
+    agent: AgentKind,
+    model: string,
+    providerId: string | null,
+  ): Promise<void> {
+    const rejection = await checkDeviceRoute(
+      () => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
+      agent,
+      providerId,
+      model,
+    );
+    if (!rejection) return;
+    log.warn('remote agent selection rejected', { agent, model, providerId, rejection });
+    // device-link 控制端降级为 PRECONDITION_FAILED(不把新 code 变成跨版本 wire 契约)。
+    const code = rejection === 'unreachable' ? 'REMOTE_AGENT_DEVICE_UNREACHABLE' : 'REMOTE_AGENT_MODEL_UNAVAILABLE';
+    throwIpcError(
+      isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code,
+      rejection === 'unreachable'
+        ? 'the computer that would run the agent is not reachable; the model was not changed'
+        : 'that computer does not offer this model to other computers; the model was not changed',
+    );
+  }
+
+  /** 分隔条展示用的电脑名：null = 任务所在电脑(本机)，其他按设备目录最近一次的名字。 */
+  function describeAgentDevice(deviceId: string | null): string | null {
+    if (!deviceId) return getHostSourceDevice().name ?? null;
+    try {
+      return readLastKnownDeviceNames()[deviceId] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 懒启动 / 队列恢复时,renderer 传来的 createOpts 可能没有 providerId,但 DB 里的
    * sessions.provider_id 才是这条会话的真实来源选择。必须在 maker.createSession 前补齐,
    * 否则 agent 首轮 auth gate 会按默认 fallback 判断,之后 hydrate 路由表已经太晚。
@@ -8743,11 +8782,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: sessions.providerId,
           effort: sessions.effort,
           fastMode: sessions.fastMode,
+          agentDeviceId: sessions.agentDeviceId,
+          remoteHostId: sessions.remoteHostId,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
       if (!row) return;
+      // Agent 换电脑也在发送事务内落地：快照里的旧位置不能把 Agent 拉回原来那台。
+      // 缺省(undefined)交给 bootstrapSession 按任务记录读取，与恢复路径同一口径。
+      if (!co.remoteHostId && !row.remoteHostId) {
+        co.agentDeviceId = row.agentDeviceId ?? undefined;
+      }
       const dbMakerKind = dbToMakerAgentKind(row.agentKind);
       if (co.agentKind !== dbMakerKind) {
         log.warn('lazy-create: createOpts agentKind drifted from DB (agent switch); reconciling', {
@@ -8830,11 +8876,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
     withSessionLock: withSendToSessionLock,
     // 停用轴边界裁决:目标路由被停用 → 抛错;隐式默认落点被停用 → 返回启用替代来源。
-    // Agent 在另一台电脑运行的任务：目标模型属于那台的目录，由那台的 Agent 启动时裁决。
-    assertModelRouteUsable: async (agent, model, providerId, sessionId) =>
-      (sessionId && await readSessionAgentDeviceId(sessionId))
-        ? undefined
-        : assertModelRouteUsable(agent, model, providerId),
+    // Agent 在另一台电脑运行的任务：目标模型属于那台的目录，由那台的 Agent 启动时裁决(选择时另
+    // 有 assertAgentDeviceRouteUsable 预检)。本次选择换了位置时按目标位置判断。
+    assertModelRouteUsable: async (agent, model, providerId, sessionId, targetAgentDeviceId) => {
+      const agentDeviceId = targetAgentDeviceId !== undefined
+        ? targetAgentDeviceId
+        : sessionId ? await readSessionAgentDeviceId(sessionId) : null;
+      return agentDeviceId ? undefined : assertModelRouteUsable(agent, model, providerId);
+    },
+    assertAgentDeviceRouteUsable,
+    describeAgentDevice,
     getSessionRow: async (sessionId) => {
       const db = getDbClient().drizzle;
       const [row] = await db
@@ -8848,6 +8899,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           orcaRole: sessions.orcaRole,
           sdkSessionId: sessions.sdkSessionId,
           source: sessions.source,
+          agentDeviceId: sessions.agentDeviceId,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -8861,7 +8913,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     findParkedEngineSession: (sessionId, targetDbKind) =>
       findParkedEngineSession(sessionId, targetDbKind),
     applyAgentSwitchToDb: async (sessionId, patch) => {
-      const verifiedWindow = lookupVerifiedContextWindow(
+      // 把 Agent 挪到另一台电脑时那台的目录才算数，不拿本机目录的窗口写进去。
+      const movingToOtherDevice = typeof patch.agentDeviceId === 'string';
+      const verifiedWindow = movingToOtherDevice ? undefined : lookupVerifiedContextWindow(
         (agentKind, modelId, pid) =>
           resolveConfiguredContextWindow(
             getActiveCatalog(),
@@ -18014,6 +18068,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       providerId: string | null;
       effort: string | null;
       fastMode: boolean;
+      agentDeviceId: string | null;
     };
     assertRuntimeOwnerCurrent(): void;
     assertSharedTaskCurrent: { admit(): void };
@@ -18045,6 +18100,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !runtimeStatus.orcaRole) {
       assertRuntimeOwnerCurrent();
       assertSharedTaskCurrent.admit();
+      // 那台的目录里没有这个模型(例如控制端列的是任务所在电脑的目录)：现在就拒绝，
+      // 不登记一个发送时必然失败、之后每次发送都重试的意图。
+      if (runtimeStatus.agentDeviceId) {
+        await assertAgentDeviceRouteUsable(runtimeStatus.agentDeviceId, agentKind, model, targetProviderId);
+        if (supersededByOwnerBoundary()) return { deferred: false, superseded: true };
+        assertRuntimeOwnerCurrent();
+        assertSharedTaskCurrent.admit();
+      }
       const intent = {
         ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
         ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
