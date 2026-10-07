@@ -6439,13 +6439,19 @@
       "dismiss": "關閉提示"
     },
     "dialog": {
-      "title": "系統憑證儲存不可用",
-      "intro": "Cindy 無法透過系統憑證儲存讀取登入憑證，登入狀態和相關整合會持續失效。可嘗試以下步驟恢復：",
-      "stepMacKeychain": "退出 Cindy，開啟「鑰匙串訪問」，搜尋「Cindy Safe Storage」並檢查其訪問控制；必要時刪除該條目（已儲存的整合憑證會失效，需要重新連線）",
-      "stepRestart": "重新啟動 Cindy",
-      "stepRelogin": "如果仍未恢復，退出登入後重新登入",
-      "confirm": "知道了"
-    }
+      "title": "登入資訊暫時無法存取",
+      "intro": "Cindy 無法讀取或儲存這台電腦上的登入資訊。這是本機儲存問題，重新取得驗證碼無法解決。",
+      "stepMacKeychain": "解鎖 Mac 和登入鑰匙圈。如果 macOS 詢問是否允許 Cindy 存取其鑰匙圈項目，請選擇「永遠允許」。",
+      "stepLinuxKeyring": "解鎖桌面的金鑰環，並確認系統的金鑰儲存服務正在執行。",
+      "stepRestartMac": "從 Cindy 選單選擇結束（⌘Q），再重新開啟。僅關閉視窗不會結束應用程式。",
+      "stepRestart": "從 Cindy 選單或系統匣選擇結束，再重新開啟。僅關閉視窗可能仍會在背景執行。",
+      "stepSupport": "完整結束後仍未恢復，請聯絡 feedback@cindy.app，提供作業系統、Cindy 版本和下方錯誤碼。記錄僅私下提供給支援人員。",
+      "preserveData": "請保留已儲存的憑證和鑰匙圈項目，刪除它們可能導致其他已連線帳號無法使用。",
+      "openLogs": "開啟記錄資料夾",
+      "logsFailed": "無法開啟記錄資料夾，請重試，或將錯誤碼傳送至 feedback@cindy.app",
+      "confirm": "關閉說明"
+    },
+    "recheck": "重新嘗試登入"
   },
   "localDbGate": {
     "title": "本地資料暫時無法開啟",
@@ -6456,7 +6462,7 @@
   "login": {
     "title": "歡迎使用 Cindy",
     "subtitle": "選擇一種方式安全登入",
-    "savedLoginPreserved": "已儲存的登入資訊仍在本機",
+    "savedLoginPreserved": "恢復操作會保留已儲存的登入資訊",
     "phonePlaceholder": "請輸入手機號碼",
     "emailPlaceholder": "請輸入電子郵件",
     "invalidEmail": "請輸入正確的電子郵件地址",
@@ -6556,7 +6562,7 @@
       "fallback": "登入失敗，請稍後重試",
       "AUTH_SERVICE_UNAVAILABLE": "登入服務暫不可用",
       "AUTH_REQUEST_FAILED": "登入請求失敗，請重試",
-      "CREDENTIAL_STORE_UNAVAILABLE": "請完全退出 Cindy 後重新開啟，以恢復登入",
+      "CREDENTIAL_STORE_UNAVAILABLE": "登入儲存無法使用，請檢視解決方法",
       "BROWSER_OPEN_FAILED": "無法開啟瀏覽器，請重試",
       "BROWSER_OPEN_TIMEOUT": "瀏覽器未及時啟動，請重試",
       "NETWORK_ERROR": "網路連線失敗，請檢查網路",
@@ -6582,6 +6588,13 @@
       "INVALID_LOGIN_TICKET": "登入會話已過期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已過期，請重新登入",
       "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配"
+    },
+    "rateLimit": {
+      "retryAt": "請在 {{time}}（本機時間）之後重試。",
+      "unknownWait": "伺服器未提供等待時間，請稍後再試，避免連續取得驗證碼。",
+      "intro": "登入服務暫時限制了請求次數。這與本機憑證儲存異常是不同的問題。",
+      "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
+      "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
     }
   },
   "legacyMigration": {

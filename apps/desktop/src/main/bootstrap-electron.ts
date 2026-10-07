@@ -5810,8 +5810,11 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:get-login-state', async () => authManager.getLoginState());
 
-  ipcMain.handle('auth:dispatch-login-action', async (_event, action: unknown) => {
-    return authManager.dispatchLoginAction(action);
+  ipcMain.handle('auth:dispatch-login-action', async (event, action: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    // Login can be the first real credential operation to observe an unavailable
+    // backend. Reuse the bounded, idle-only recovery after the action settles.
+    return authManager.dispatchLoginAction(action).finally(() => authCredentialRecovery.request());
   });
 
   // 登录 captcha 托管挑战页地址(不含 query)。只返回按构建区域拼出的公开 URL,

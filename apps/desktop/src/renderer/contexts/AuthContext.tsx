@@ -22,7 +22,6 @@ import {
   createAuthService,
   type AuthService,
   type AuthState,
-  type AuthFlowState,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
   type DesktopAccountSwitcherSnapshot,
@@ -58,8 +57,21 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
-import { awaitDesktopLoginStateLoad } from '../../shared/authIpc';
+import { awaitDesktopLoginStateLoad, type DesktopLoginState } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
+
+/** Keep response metadata attached to the exact screen it describes. */
+function presentLoginResult(result: DesktopLoginActionResult): DesktopLoginState | null {
+  if (!result.state) return null;
+  return {
+    ...result.state,
+    retryAt: result.success
+      ? result.state.retryAt
+      : result.code === 'RATE_LIMITED'
+        ? (result.retryAt ?? result.state.retryAt)
+        : undefined,
+  };
+}
 
 /**
  * 登录态上下文：user / isAuthenticated / isCanary / deviceId 全部来自 main 的
@@ -90,7 +102,7 @@ export interface AuthContextValue {
   /** SkillHub 跨设备识别：本机 deviceId（machineIdSync），登录前后都有值；初始化前为 null */
   deviceId: string | null;
   /** Renderer-safe login screen state; auth tickets remain in main. */
-  loginState: AuthFlowState | null;
+  loginState: DesktopLoginState | null;
   loadLoginState: () => Promise<DesktopLoginActionResult>;
   dispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   logout: () => Promise<void>;
@@ -166,7 +178,7 @@ export function AuthProvider({
   const [hasAccountDeletionReceipt, setHasAccountDeletionReceipt] = useState(false);
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
-  const [loginState, setLoginState] = useState<AuthFlowState | null>(null);
+  const [loginState, setLoginState] = useState<DesktopLoginState | null>(null);
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -495,10 +507,8 @@ export function AuthProvider({
     // preparing 只允许在 load 进行中出现。settle / throw / 30s 超时都必须落到
     // identifier 或既有 error 步,避免 AUTH_FLOW_SUPERSEDED + state=null 或 IPC
     // 挂起把「正在连接登录服务」变成永不结束。
-    const result = await awaitDesktopLoginStateLoad(() =>
-      authServiceRef.current!.getLoginState(),
-    );
-    setLoginState(result.state);
+    const result = await awaitDesktopLoginStateLoad(() => authServiceRef.current!.getLoginState());
+    setLoginState(presentLoginResult(result));
     return result;
   }, []);
 
@@ -536,7 +546,7 @@ export function AuthProvider({
           const captchaToken = captchaGate ? await captchaGate() : undefined;
           if (captchaToken === null) {
             // 用户取消挑战：停在 method-choice，个人行可再次发起（会重新过闸）
-            setLoginState(result.state);
+            setLoginState(presentLoginResult(result));
             return result;
           }
           return dispatchLoginAction({
@@ -547,7 +557,7 @@ export function AuthProvider({
           });
         }
       }
-      setLoginState(result.state);
+      setLoginState(presentLoginResult(result));
       return result;
     },
     [],
@@ -571,7 +581,7 @@ export function AuthProvider({
 
   const beginAddAccount = useCallback(async () => {
     const result = await authServiceRef.current!.beginAddAccount();
-    setLoginState(result.state);
+    setLoginState(presentLoginResult(result));
     return result;
   }, []);
 

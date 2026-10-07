@@ -6441,13 +6441,19 @@
       "dismiss": "Dismiss"
     },
     "dialog": {
-      "title": "System credential storage unavailable",
-      "intro": "Cindy cannot read its sign-in credentials from the system credential storage, so the signed-in state and related integrations will keep failing. Try the following steps to recover:",
-      "stepMacKeychain": "Quit Cindy, open Keychain Access, search for \"Cindy Safe Storage\" and check its access control; delete the entry if necessary (saved integration credentials will be invalidated and need to be reconnected)",
-      "stepRestart": "Restart Cindy",
-      "stepRelogin": "If it still does not recover, sign out and sign in again",
-      "confirm": "OK"
-    }
+      "title": "Sign-In Storage Unavailable",
+      "intro": "Cindy cannot read or save sign-in details on this computer. This is a local storage problem; requesting another verification code will not fix it.",
+      "stepMacKeychain": "Unlock the Mac and its login keychain. If macOS asks to let Cindy access its keychain item, choose “Always Allow”.",
+      "stepLinuxKeyring": "Unlock your desktop keyring and check that its secret storage service is running.",
+      "stepRestartMac": "Quit Cindy from its menu (⌘Q), then reopen it. Closing the window alone does not quit the app.",
+      "stepRestart": "Quit Cindy from its menu or system tray, then reopen it. Closing the window alone may leave it running.",
+      "stepSupport": "If this persists after a full restart, contact feedback@cindy.app with your OS, Cindy version, and the error code below. Share logs only privately with support.",
+      "preserveData": "Keep the saved credentials and keychain entries. Deleting them can make other connected accounts unusable.",
+      "openLogs": "Open Logs Folder",
+      "logsFailed": "The logs folder could not be opened. Try again, or send the error code to feedback@cindy.app.",
+      "confirm": "Close Help"
+    },
+    "recheck": "Retry Sign-In"
   },
   "localDbGate": {
     "title": "Local data could not be opened",
@@ -6458,7 +6464,7 @@
   "login": {
     "title": "Welcome to Cindy",
     "subtitle": "Choose a secure way to sign in",
-    "savedLoginPreserved": "Your saved sign-in is still on this device",
+    "savedLoginPreserved": "Recovery keeps your saved sign-in details",
     "phonePlaceholder": "Enter your phone number",
     "emailPlaceholder": "Enter your email",
     "invalidEmail": "Please enter a valid email address",
@@ -6558,7 +6564,7 @@
       "fallback": "Sign-in failed. Please try again.",
       "AUTH_SERVICE_UNAVAILABLE": "The sign-in service is temporarily unavailable.",
       "AUTH_REQUEST_FAILED": "The sign-in request failed. Please try again.",
-      "CREDENTIAL_STORE_UNAVAILABLE": "Quit Cindy completely, then reopen it to restore sign-in.",
+      "CREDENTIAL_STORE_UNAVAILABLE": "Sign-in storage is unavailable. View solutions.",
       "BROWSER_OPEN_FAILED": "Could not open the browser. Please try again.",
       "BROWSER_OPEN_TIMEOUT": "The browser did not start in time. Please try again.",
       "NETWORK_ERROR": "Could not connect. Check your network and try again.",
@@ -6584,6 +6590,13 @@
       "INVALID_LOGIN_TICKET": "The sign-in session expired. Start again.",
       "INVALID_BIND_TICKET": "The verification session expired. Start again.",
       "REGION_MISMATCH": "The sign-in service region does not match this app."
+    },
+    "rateLimit": {
+      "retryAt": "Try again after {{time}} (local time).",
+      "unknownWait": "The server did not provide a waiting time. Please wait before trying again.",
+      "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
+      "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
+      "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
     }
   },
   "legacyMigration": {

@@ -6439,13 +6439,19 @@
       "dismiss": "닫기"
     },
     "dialog": {
-      "title": "시스템 자격 증명 저장소를 사용할 수 없음",
-      "intro": "Cindy가 시스템 자격 증명 저장소에서 로그인 자격 증명을 읽을 수 없어 로그인 상태와 관련 연동이 계속 실패합니다. 다음 단계를 시도해 보세요:",
-      "stepMacKeychain": "Cindy를 종료하고 '키체인 접근'을 열어 'Cindy Safe Storage'를 검색한 뒤 접근 제어를 확인하세요. 필요하면 해당 항목을 삭제하세요(저장된 연동 자격 증명은 무효화되어 다시 연결해야 합니다)",
-      "stepRestart": "Cindy 다시 시작",
-      "stepRelogin": "여전히 복구되지 않으면 로그아웃 후 다시 로그인하세요",
-      "confirm": "확인"
-    }
+      "title": "로그인 정보를 읽거나 저장할 수 없음",
+      "intro": "Cindy가 이 컴퓨터의 로그인 정보를 읽거나 저장할 수 없습니다. 로컬 저장소 문제이므로 인증 코드를 다시 받아도 해결되지 않습니다.",
+      "stepMacKeychain": "Mac과 로그인 키체인의 잠금을 해제하세요. macOS가 Cindy의 키체인 항목 접근 허용 여부를 물으면 ‘항상 허용’을 선택하세요.",
+      "stepLinuxKeyring": "데스크톱 키링의 잠금을 해제하고 비밀 정보 저장 서비스가 실행 중인지 확인하세요.",
+      "stepRestartMac": "Cindy 메뉴에서 종료(⌘Q)를 선택한 뒤 다시 여세요. 창만 닫으면 앱이 종료되지 않습니다.",
+      "stepRestart": "Cindy 메뉴나 시스템 트레이에서 종료를 선택한 뒤 다시 여세요. 창만 닫으면 백그라운드에서 계속 실행될 수 있습니다.",
+      "stepSupport": "완전히 종료한 뒤에도 복구되지 않으면 OS, Cindy 버전, 아래 오류 코드를 feedback@cindy.app으로 보내세요. 로그는 공개하지 말고 지원 담당자에게만 전달하세요.",
+      "preserveData": "저장된 자격 증명과 키체인 항목을 유지하세요. 삭제하면 다른 연결된 계정도 사용할 수 없게 될 수 있습니다.",
+      "openLogs": "로그 폴더 열기",
+      "logsFailed": "로그 폴더를 열 수 없습니다. 다시 시도하거나 오류 코드를 feedback@cindy.app으로 보내세요.",
+      "confirm": "도움말 닫기"
+    },
+    "recheck": "로그인 다시 시도"
   },
   "localDbGate": {
     "title": "로컬 데이터를 열 수 없습니다",
@@ -6456,7 +6462,7 @@
   "login": {
     "title": "Cindy에 오신 것을 환영합니다",
     "subtitle": "안전한 로그인 방법을 선택하세요",
-    "savedLoginPreserved": "저장된 로그인 정보는 이 기기에 남아 있습니다",
+    "savedLoginPreserved": "복구 과정에서 저장된 로그인 정보를 유지합니다",
     "phonePlaceholder": "휴대폰 번호 입력",
     "emailPlaceholder": "이메일 입력",
     "invalidEmail": "올바른 이메일 주소를 입력하세요",
@@ -6556,7 +6562,7 @@
       "fallback": "로그인에 실패했습니다. 다시 시도하세요.",
       "AUTH_SERVICE_UNAVAILABLE": "로그인 서비스를 일시적으로 사용할 수 없습니다.",
       "AUTH_REQUEST_FAILED": "로그인 요청에 실패했습니다.",
-      "CREDENTIAL_STORE_UNAVAILABLE": "Cindy를 완전히 종료한 뒤 다시 열어 로그인을 복구하세요.",
+      "CREDENTIAL_STORE_UNAVAILABLE": "로그인 저장소를 사용할 수 없습니다. 해결 방법을 확인하세요.",
       "BROWSER_OPEN_FAILED": "브라우저를 열 수 없습니다. 다시 시도하세요.",
       "BROWSER_OPEN_TIMEOUT": "브라우저 시작 시간이 초과되었습니다. 다시 시도하세요.",
       "NETWORK_ERROR": "네트워크 연결을 확인하세요.",
@@ -6582,6 +6588,13 @@
       "INVALID_LOGIN_TICKET": "로그인 세션이 만료되었습니다.",
       "INVALID_BIND_TICKET": "확인 세션이 만료되었습니다.",
       "REGION_MISMATCH": "로그인 서비스 지역이 이 앱과 일치하지 않습니다."
+    },
+    "rateLimit": {
+      "retryAt": "{{time}}(현지 시간) 이후에 다시 시도하세요.",
+      "unknownWait": "서버가 대기 시간을 제공하지 않았습니다. 인증 코드를 연속으로 요청하지 말고 잠시 기다려 주세요.",
+      "intro": "로그인 서비스가 요청을 일시적으로 제한하고 있습니다. 컴퓨터의 자격 증명 저장소 오류와는 별개의 문제입니다.",
+      "guidance": "잠시 기다린 뒤 인증 코드를 요청하세요. 재시작, 재설치 또는 네트워크 변경으로 제한이 해제된다는 보장은 없습니다.",
+      "support": "기다린 뒤에도 로그인할 수 없으면 OS, Cindy 버전, 오류 발생 시간, 아래 오류 코드와 로그를 feedback@cindy.app으로 비공개로 보내세요. 로그를 공개하지 마세요."
     }
   },
   "legacyMigration": {
