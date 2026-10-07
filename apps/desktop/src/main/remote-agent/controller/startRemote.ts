@@ -84,27 +84,42 @@ function parentOf(value: string): string | null {
 }
 
 /**
- * 影子目录(对方电脑上的路径) → 本机真实路径的映射。影子目录按真实路径逐级镜像，所以每一级
- * 上级目录都一一对应；同步过去的个人 Skill 等映射回你这台的个人配置目录。越具体的放越前面。
+ * 影子目录(对方电脑上的路径) → 本机真实路径的映射。虚拟工作区使用固定 opaque 层级，旧协议
+ * 仍按真实路径逐级镜像；同步过去的个人 Skill 等映射回你这台的个人配置目录。越具体的放越前面。
  */
 export function shadowAliases(
-  started: { shadowDir: string; mirrorRoot?: string },
+  started: { shadowDir: string; mirrorRoot?: string; extraDirs?: string[]; writableDirs?: string[]; virtualWorkspace?: boolean },
   workingDir: string,
   personalRoots: ReadonlyArray<{ relative: string; local: string }>,
+  directories?: { extraDirs: readonly string[]; writableDirs: readonly string[] },
 ): Array<{ from: string; to: string }> {
   if (!started.shadowDir) return [];
   const aliases: Array<{ from: string; to: string }> = personalRoots.map((root) => ({
     from: `${started.shadowDir.replace(/[\\/]+$/, '')}/${root.relative}`,
     to: root.local,
   }));
+  if (started.virtualWorkspace && directories) {
+    for (const key of ['extraDirs', 'writableDirs'] as const) {
+      for (const [index, from] of (started[key] ?? []).entries()) {
+        const to = directories[key][index];
+        if (to) aliases.push({ from, to });
+      }
+    }
+  }
+  if (started.virtualWorkspace && started.mirrorRoot) {
+    const native = /^[A-Za-z]:|^\\\\/.test(started.mirrorRoot) ? path.win32 : path.posix;
+    aliases.push({ from: native.join(started.mirrorRoot, 'home'), to: os.homedir() });
+    aliases.push({ from: native.join(started.mirrorRoot, 'tmp'), to: os.tmpdir() });
+  }
   const mirrorRoot = started.mirrorRoot?.replace(/\\/g, '/').replace(/\/+$/, '');
   let shadow = started.shadowDir;
   let real = workingDir;
+  const realPath = /^[A-Za-z]:|^\\\\/.test(workingDir) ? path.win32 : path.posix;
   aliases.push({ from: shadow, to: real });
   if (!mirrorRoot) return aliases;
   for (;;) {
     const nextShadow = parentOf(shadow);
-    const nextReal = path.dirname(real);
+    const nextReal = realPath.dirname(real);
     if (!nextShadow || nextReal === real || !nextShadow.startsWith(`${mirrorRoot}/`)) break;
     shadow = nextShadow;
     real = nextReal;
@@ -148,6 +163,8 @@ export async function startRemoteAgentSession(
   const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name) });
 
   let controller: RemoteAgentHandleController | null = null;
+  let personalRoots: Array<{ relative: string; local: string }> = [];
+  let projectionReady = false;
   const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
   let closedEarly: { reason: string; message?: string } | null = null;
   // Codex：对方的 Codex 把本机当作 exec-server 执行环境。客户端在下面创建，帧推送时再取。
@@ -157,6 +174,7 @@ export async function startRemoteAgentSession(
     ? new ExecServerRelay({
         codexPath,
         cwd: workspace.workingDir,
+        workspace,
         authorize: (action) => executor.check(action),
         push: async (frames) => {
           await pushFrames?.(frames);
@@ -182,6 +200,15 @@ export async function startRemoteAgentSession(
       else early.push({ type: 'event', value: event });
     },
     onState: (state) => {
+      const projection = state.workspaceProjection as Parameters<typeof shadowAliases>[0] | undefined;
+      if (projection?.virtualWorkspace === true && typeof projection.shadowDir === 'string') {
+        workspace.setAliases(shadowAliases(projection, workspace.workingDir, personalRoots, { extraDirs, writableDirs }));
+        workspace.setVirtualRoot(projection.mirrorRoot);
+        projectionReady = true;
+        state = { ...state };
+        delete state.workspaceProjection;
+        if (!Object.keys(state).length) return;
+      }
       if (controller) controller.onState(state);
       else early.push({ type: 'state', value: state });
     },
@@ -216,8 +243,10 @@ export async function startRemoteAgentSession(
   const ancestorFiles = await (deps.collectAncestorFiles?.(opts.workingDir) ?? Promise.resolve([])).catch(() => []);
   const collectedPersonal = await (deps.collectPersonal?.(kind, projectFiles) ?? Promise.resolve(null))
     .catch(() => null);
+  personalRoots = collectedPersonal?.roots ?? [];
   const payload: RemoteAgentOpenPayload = {
     sessionId: opts.sessionId,
+    virtualWorkspace: true,
     options: encodeStartOptions(opts),
     workspace: {
       workingDir: opts.workingDir,
@@ -226,6 +255,7 @@ export async function startRemoteAgentSession(
       platform: process.platform,
       shell: shellName(),
       osVersion: `${os.type()} ${os.release()}`,
+      // 仅供被控端把项目说明中的本机 Home 路径投影到虚拟工作区；不会进入 deviceHosted。
       homeDir: os.homedir(),
       isGitRepo: await deps.isGitRepo(opts.workingDir).catch(() => false),
     },
@@ -245,7 +275,10 @@ export async function startRemoteAgentSession(
   }
   if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
   const started = parseStartedInfo(startedRaw, kind);
-  workspace.setAliases(shadowAliases(started, workspace.workingDir, collectedPersonal?.roots ?? []));
+  if (!projectionReady) {
+    workspace.setAliases(shadowAliases(started, workspace.workingDir, collectedPersonal?.roots ?? [], { extraDirs, writableDirs }));
+    workspace.setVirtualRoot(started.virtualWorkspace ? started.mirrorRoot : undefined);
+  }
 
   controller = createRemoteAgentHandle({
     client,

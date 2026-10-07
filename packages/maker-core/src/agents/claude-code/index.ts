@@ -2677,7 +2677,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 设备托管：cindy_exec 工具按对应的自带工具名走同一套权限判断(确认卡、会话规则、自动审查、
     // IM 等每轮策略看到的都是 Bash / Read 等原名)；本机任务里 Claude Code 自己就免确认的操作
     // (工作区内读取、静态可证只读的命令、自动接受编辑档下的工作区写入)这里同样免确认。
-    const hostedPath = hosted?.platform === 'win32' ? path.win32 : path.posix;
+    // 工具参数是 Agent 主机上的虚拟路径；执行命令的语法仍按 hosted.platform 判断。
+    const hostedPath = hosted?.pathPlatform === 'win32' ? path.win32 : path.posix;
     const hostedInside = (target: unknown, roots: readonly string[]): boolean => {
       if (!hosted || typeof target !== 'string' || !target) return false;
       const resolved = hostedPath.resolve(hosted.workingDir, target);

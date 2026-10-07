@@ -7,6 +7,7 @@
  * 本机项目里。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { isSensitiveCredentialPath } from '@cindy/maker-core';
@@ -61,9 +62,29 @@ function stripAliasPrefix(input: string, from: string): string | null {
   const normalizedInput = input.replace(/\\/g, '/');
   const normalizedFrom = from.replace(/\\/g, '/').replace(/\/+$/, '');
   if (!normalizedFrom) return null;
-  if (normalizedInput === normalizedFrom) return '';
-  if (normalizedInput.startsWith(`${normalizedFrom}/`)) return normalizedInput.slice(normalizedFrom.length + 1);
+  const windows = /^[A-Za-z]:|^\/\//.test(normalizedFrom);
+  const comparedInput = windows ? normalizedInput.toLowerCase() : normalizedInput;
+  const comparedFrom = windows ? normalizedFrom.toLowerCase() : normalizedFrom;
+  if (comparedInput === comparedFrom) return '';
+  if (comparedInput.startsWith(`${comparedFrom}/`)) return normalizedInput.slice(normalizedFrom.length + 1);
   return null;
+}
+
+/** 对已知目录做单次双向投影，最长前缀先匹配，防止替换结果再次被短祖先别名改写。 */
+export function projectPathText(text: string, aliases: readonly ExecutorPathAlias[]): string {
+  const entries = aliases.filter((alias) => alias.from.replace(/[\\/]+$/, '').length > 2)
+    .sort((a, b) => b.from.length - a.from.length);
+  if (!entries.length) return text;
+  const patterns = entries.map((alias) => alias.from.replace(/[\\/]+$/, '').split(/[\\/]/)
+    .map((part) => part.replace(/[.*+?^$()|[\]{}]/g, '\\$&')).join('[/\\\\]'));
+  // 左右都要求边界，避免修改 longer/project2 或文本里的同前缀标识符。
+  const pattern = new RegExp('(^|[\\s\'"=([{:,>+])(' + patterns.join('|') + ')(?=$|[/\\\\\\s\'";:|&)<>.,}\\]])([/\\\\][^\\s\'";:|&)<>]*|)', 'gi');
+  return text.replace(pattern, (match: string, left: string, prefix: string, suffix: string) => {
+    const alias = entries.find((entry) => stripAliasPrefix(prefix, entry.from) === '');
+    if (!alias) return match;
+    const separator = alias.to.includes('\\') ? '\\' : '/';
+    return left + alias.to.replace(/[\\/]+$/, '') + suffix.replace(/[\\/]/g, separator);
+  });
 }
 
 export class ExecutorWorkspace {
@@ -71,6 +92,7 @@ export class ExecutorWorkspace {
   private roots: string[];
   private extraDirs: string[];
   private aliases: ExecutorPathAlias[];
+  private virtualRoot?: string;
 
   constructor(roots: ExecutorWorkspaceRoots) {
     if (!path.isAbsolute(roots.workingDir)) throw new ExecutorPathError('working directory must be absolute');
@@ -84,7 +106,26 @@ export class ExecutorWorkspace {
 
   /** Agent 启动后才知道它那边的影子目录，届时设置。 */
   setAliases(aliases: readonly ExecutorPathAlias[]): void {
-    this.aliases = aliases.filter((alias) => alias.from && path.isAbsolute(alias.to));
+    this.aliases = aliases.filter((alias) => alias.from && path.isAbsolute(alias.to))
+      .sort((a, b) => b.from.length - a.from.length);
+  }
+
+  setVirtualRoot(root?: string): void {
+    this.virtualRoot = root;
+  }
+
+  /** 运行中新增的目录分配新的 opaque 别名，撤销授权不撤销路径身份。 */
+  virtualizeDirs(dirs: readonly string[]): string[] {
+    if (!this.virtualRoot) return [...dirs];
+    const native = /^[A-Za-z]:|^\\\\/.test(this.virtualRoot) ? path.win32 : path.posix;
+    return dirs.map((dir) => {
+      const real = this.resolve(dir);
+      const exact = this.aliases.find((alias) => path.resolve(alias.to) === real);
+      if (exact) return exact.from;
+      const virtual = native.join(this.virtualRoot!, 'additional', 'runtime-' + this.aliases.length);
+      this.setAliases([...this.aliases, { from: virtual, to: real }]);
+      return virtual;
+    });
   }
 
   /** 任务运行中附加目录变化时更新。 */
@@ -107,17 +148,52 @@ export class ExecutorWorkspace {
     return input;
   }
 
+  /** 本机真实路径投影到 Agent 主机上的路径；仅匹配完整路径段。 */
+  toAgentPath(input: string): string {
+    if (!this.virtualRoot) return input;
+    const aliases = [...this.aliases].sort((a, b) => b.to.length - a.to.length);
+    for (const alias of aliases) {
+      const rest = stripAliasPrefix(input, alias.to);
+      if (rest === null) continue;
+      const native = /^[A-Za-z]:|^\\\\/.test(alias.from) ? path.win32 : path.posix;
+      return rest ? native.join(alias.from, ...rest.split('/')) : alias.from;
+    }
+    return input;
+  }
+
+  /** 工具的命令输出/诊断使用虚拟路径，文件内容与读写字节不经过文本替换。 */
+  mapTextForAgent(text: string): string {
+    if (!this.virtualRoot) return text;
+    const aliases = this.aliases.flatMap((alias) => {
+      const real = alias.to.replace(/\\/g, '/');
+      const entries = [{ from: real, to: alias.from }];
+      // Git Bash / MSYS 的 pwd 和诊断使用 /c/...，而 Node 返回 C:\...。
+      if (/^[A-Za-z]:\//.test(real)) entries.push({ from: '/' + real[0].toLowerCase() + real.slice(2), to: alias.from });
+      if (process.platform === 'win32') {
+        const temporary = os.tmpdir().replace(/\\/g, '/').replace(/\/+$/, '');
+        const relative = stripAliasPrefix(real, temporary);
+        if (relative !== null) entries.push({ from: '/tmp' + (relative ? '/' + relative : ''), to: alias.from });
+      }
+      return entries;
+    });
+    return projectPathText(text, aliases);
+  }
+
+  mapOutputForAgent(data: Buffer): Buffer {
+    const text = data.toString('utf8');
+    // 二进制 stdout 不做 UTF-8 往返，避免 exec.run / process/output 改变原始字节。
+    if (!Buffer.from(text, 'utf8').equals(data)) return data;
+    const projected = this.mapTextForAgent(text);
+    return projected === text ? data : Buffer.from(projected, 'utf8');
+  }
+
   /** 命令文本里出现的影子目录前缀替换成本机目录(按完整路径段)。 */
   mapCommand(command: string): string {
-    let next = command;
-    for (const alias of this.aliases) {
-      const from = alias.from.replace(/\/+$/, '');
-      if (!from) continue;
-      // 只在后面是路径边界时替换，避免误伤更长的同前缀路径。
-      const pattern = new RegExp(`${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[/\\s'"\`;:|&)<>])`, 'g');
-      next = next.replace(pattern, () => alias.to);
-    }
-    return next;
+    // Windows 上的 Bash 使用正斜杠，避免未引用的反斜杠被 shell 当成转义。
+    return projectPathText(command, this.aliases.map((alias) => ({
+      from: alias.from,
+      to: process.platform === 'win32' ? alias.to.replace(/\\/g, '/') : alias.to,
+    })));
   }
 
   /** 把 Agent 给的路径解析成本机绝对路径(相对路径以 baseDir / 工作目录为基准)。 */

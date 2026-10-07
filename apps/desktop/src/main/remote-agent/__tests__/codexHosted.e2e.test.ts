@@ -173,10 +173,12 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     expect(fs.readFileSync(path.join(project, 'made-by-codex.txt'), 'utf8')).toBe('hello codex\n');
     const last = bodies.at(-1)!;
     // 命令在控制端的项目目录执行。
-    expect(last).toContain(project);
+    expect(last).not.toContain(project);
+    expect(last).toContain(hostRoot);
     expect(last).toContain('hello.txt');
     // 模型看到的工作目录与项目说明都来自控制端。
-    expect(bodies[0]).toContain(project);
+    expect(bodies[0]).not.toContain(project);
+    expect(bodies[0]).toContain(hostRoot);
     expect(bodies[0]).toContain('Keep answers short.');
     const hostFiles = fs.readdirSync(hostRoot, { recursive: true }).map(String);
     expect(hostFiles.some((file) => file.endsWith('made-by-codex.txt'))).toBe(false);

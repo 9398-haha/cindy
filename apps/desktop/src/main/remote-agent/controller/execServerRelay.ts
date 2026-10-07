@@ -10,7 +10,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
@@ -21,6 +21,7 @@ import {
 } from '@cindy/device-link';
 
 import type { ExecutorAction, ExecutorGateDecision } from '../executor/gate';
+import type { ExecutorWorkspace } from '../executor/workspace';
 
 export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
 /** exec-server 单行(一条 JSON-RPC 消息)上限：大文件读写的 base64 也在这里面。 */
@@ -31,6 +32,7 @@ const FRAME_CHARS = REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS - 1024;
 export interface ExecServerRelayDeps {
   codexPath: string;
   cwd: string;
+  workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
   env?: NodeJS.ProcessEnv;
@@ -83,6 +85,61 @@ export function execServerActions(method: string, params: unknown, cwd: string):
     .filter((value): value is string => !!value);
   const kind = READ_METHODS.has(method) ? 'read' : 'write';
   return paths.map((target) => ({ kind, path: target }) as ExecutorAction);
+}
+
+/** 仅映射协议路径和命令，绝不改写 fs/writeFile 的文件数据。 */
+export function mapExecServerParams(value: unknown, workspace: ExecutorWorkspace): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const result = { ...value as Record<string, unknown> };
+  for (const key of ['cwd', 'path', 'sourcePath', 'destinationPath', 'source', 'destination', 'from', 'to', 'target']) {
+    const item = result[key];
+    if (typeof item !== 'string') continue;
+    if (item.startsWith('file://')) {
+      const url = new URL(item);
+      const foreign = decodeURIComponent(url.pathname).replace(/^\/([A-Za-z]:)/, '$1');
+      result[key] = pathToFileURL(workspace.resolve(foreign)).href;
+    } else result[key] = workspace.resolve(item);
+  }
+  if (Array.isArray(result.argv)) result.argv = result.argv.map((part) => typeof part === 'string' ? workspace.mapCommand(part) : part);
+  if (typeof result.command === 'string') result.command = workspace.mapCommand(result.command);
+  return result;
+}
+
+/** JSON 层逐字符串投影，文件 base64 数据原样返回；进程输出单独解码。 */
+export function mapExecServerResult(value: unknown, workspace: ExecutorWorkspace, method?: string): unknown {
+  if (typeof value === 'string') {
+    if (value.startsWith('file://')) {
+      try {
+        const uri = new URL(value);
+        const real = fileURLToPath(uri);
+        const virtual = workspace.toAgentPath(real);
+        if (virtual === real) return value;
+        uri.host = '';
+        uri.pathname = virtual.replace(/\\/g, '/');
+        return uri.href;
+      } catch { return value; }
+    }
+    return workspace.mapTextForAgent(value);
+  }
+  if (Array.isArray(value)) return value.map((item) => mapExecServerResult(item, workspace, method));
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  // 初始化里的 HOME / temp 同样只暴露本机虚拟目录；这些别名不增加执行权限。
+  if (record.environmentInfo && typeof record.environmentInfo === 'object') {
+    const info = record.environmentInfo as Record<string, unknown>;
+    const directories = [info.userHomeDir, info.tempDir, ...(Array.isArray(info.temporaryDirectories) ? info.temporaryDirectories : [])];
+    workspace.virtualizeDirs(directories.flatMap((dir) => {
+      if (typeof dir !== 'string') return [];
+      try { return [dir.startsWith('file://') ? fileURLToPath(dir) : dir]; } catch { return []; }
+    }));
+  }
+  const currentMethod = typeof record.method === 'string' ? record.method : method;
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => {
+    if (currentMethod === 'process/output' && key === 'chunk' && typeof item === 'string') {
+      return [key, workspace.mapOutputForAgent(Buffer.from(item, 'base64')).toString('base64')];
+    }
+    return [key, mapExecServerResult(item, workspace, currentMethod)];
+  }));
 }
 
 export class ExecServerRelay {
@@ -142,7 +199,7 @@ export class ExecServerRelay {
         if (index < 0) break;
         const line = connection.buffer.slice(0, index);
         connection.buffer = connection.buffer.slice(index + 1);
-        if (line.trim()) this.sendMessage(connId, line);
+        if (line.trim()) this.sendMessage(connId, this.projectOutbound(line));
       }
       if (connection.buffer.length > MAX_LINE_CHARS) {
         this.deps.log?.warn('remote agent: exec-server line too long; closing', { connId });
@@ -166,18 +223,28 @@ export class ExecServerRelay {
       message = null;
     }
     if (message && typeof message.method === 'string' && message.id !== undefined) {
+      message.params = mapExecServerParams(message.params, this.deps.workspace);
+      data = JSON.stringify(message);
       for (const action of execServerActions(message.method, message.params, this.deps.cwd)) {
         const decision = this.deps.authorize(action);
         if (!decision.ok) {
           this.sendMessage(connId, JSON.stringify({
             id: message.id,
-            error: { code: -32001, message: decision.reason ?? 'Not allowed on this computer.' },
+            error: { code: -32001, message: this.deps.workspace.mapTextForAgent(decision.reason ?? 'Not allowed in this workspace.') },
           }));
           return;
         }
       }
     }
     connection.child.stdin.write(`${data}\n`);
+  }
+
+  private projectOutbound(line: string): string {
+    try {
+      return JSON.stringify(mapExecServerResult(JSON.parse(line), this.deps.workspace));
+    } catch {
+      return this.deps.workspace.mapTextForAgent(line);
+    }
   }
 
   private dropConnection(connId: string, notifyRemote: boolean): void {

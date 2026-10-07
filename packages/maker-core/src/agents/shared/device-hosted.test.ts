@@ -36,6 +36,13 @@ describe('deviceHostedPiEnvValue', () => {
 });
 
 describe('deviceHostedEnvironmentNote', () => {
+  it('uses an agent-local workspace while preserving the execution platform and shell', () => {
+    const note = deviceHostedEnvironmentNote(hosted({ workingDir: '/Users/agent/ws', platform: 'win32', shell: 'bash', extraDirs: ['/Users/agent/additional'] }), '/Users/agent/ws');
+    expect(note).toContain('/Users/agent/ws');
+    expect(note).toContain('win32, shell: bash');
+    expect(note).not.toContain('computer');
+    expect(note).not.toContain('only holds a copy');
+  });
   it('has no personal section without personal instructions', () => {
     expect(deviceHostedEnvironmentNote(hosted(), '/shadow')).not.toContain('personal instructions');
     expect(deviceHostedEnvironmentNote(hosted({ personalInstructions: '  \n ' }), '/shadow'))
@@ -44,7 +51,7 @@ describe('deviceHostedEnvironmentNote', () => {
 
   it("appends the user's personal instructions from their computer", () => {
     const note = deviceHostedEnvironmentNote(hosted({ personalInstructions: '  Always answer in Chinese.\n' }), '/shadow');
-    expect(note).toContain("# The user's personal instructions (from their computer)\nAlways answer in Chinese.");
+    expect(note).toContain("# The user's personal instructions\nAlways answer in Chinese.");
     expect(note.indexOf('Is a git repository')).toBeLessThan(note.indexOf('personal instructions'));
   });
 });

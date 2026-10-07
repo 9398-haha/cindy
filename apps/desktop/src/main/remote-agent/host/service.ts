@@ -46,10 +46,17 @@ export function hostedStartOptions(input: HostedStartInput): StartSessionOptions
     ...(options.resumeSessionId ? { resumeSessionId: options.resumeSessionId } : {}),
     ...(options.codexHistoryHasProductPrompt !== undefined ? { codexHistoryHasProductPrompt: options.codexHistoryHasProductPrompt } : {}),
     ...(options.vendorOptions ? { vendorOptions: { ...options.vendorOptions } } : {}),
-    extraDirs: [...workspace.extraDirs],
-    writableDirs: [...workspace.writableDirs],
+    extraDirs: [...(input.extraDirs ?? workspace.extraDirs)],
+    writableDirs: [...(input.writableDirs ?? workspace.writableDirs)],
     deviceHosted: {
       ...workspace,
+      workingDir: input.virtualWorkspace ? input.shadowDir : workspace.workingDir,
+      // 旧协议把控制端真实路径直接交给 Agent；只有虚拟工作区才采用 Agent 主机的路径风格。
+      pathPlatform: input.virtualWorkspace ? process.platform : workspace.platform,
+      extraDirs: [...(input.extraDirs ?? workspace.extraDirs)],
+      writableDirs: [...(input.writableDirs ?? workspace.writableDirs)],
+      // HOME 属于 Agent 主机；不能把控制端的个人目录带入 Agent 上下文。
+      homeDir: undefined,
       tunnelUrl: input.tunnel.url,
       tunnelToken: input.tunnel.token,
       mcpServers: [...input.mcpServers],

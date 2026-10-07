@@ -1734,12 +1734,14 @@ export class TurnDispatchRejectedError extends Error {
 
 /** 设备托管会话的描述(见 StartSessionOptions.deviceHosted)。 */
 export interface DeviceHostedSession {
-  /** 任务所在电脑上的真实工作目录：模型看到的、工具使用的都是这个路径。 */
+  /** Agent 主机上的虚拟工作目录，执行器映射到任务真实目录；旧协议兼容真实路径。 */
   workingDir: string;
   extraDirs: string[];
   writableDirs: string[];
   /** 任务所在电脑的平台与 shell(写进给模型的环境说明)。 */
   platform: NodeJS.Platform;
+  /** 虚拟工作区路径采用 Agent 进程所在主机的路径风格；缺省按当前进程判断。 */
+  pathPlatform?: NodeJS.Platform;
   shell: string;
   osVersion?: string;
   homeDir?: string;
@@ -1750,8 +1752,7 @@ export interface DeviceHostedSession {
   /** 经隧道可用的 Cindy MCP 服务名(`<tunnelUrl>/mcp/<name>`)。 */
   mcpServers: string[];
   /**
-   * 本机影子目录按任务所在电脑的真实路径逐级镜像时的镜像根：其下每一级目录都对应那台电脑上的
-   * 同一级目录(上级目录里的项目说明放在对应位置，Agent 照常向上加载)。
+   * 本机虚拟工作区根：父目录层级对应执行端的上级说明文件，Agent 照常向上加载。
    */
   mirrorRoot?: string;
   /** 任务所在电脑上用户的个人说明(该 Agent 的用户级说明文件)，写进给模型的环境说明。 */

@@ -466,6 +466,13 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   里的权限规则；Codex 的 `AGENTS(.override).md`；不含 hooks / env)。两者缺省按空处理。B 把影子目录按
   A 的真实路径逐级镜像在 `<runs>/workspaces/<控制端>/<任务>/fs/` 下，`open` 回包的 `mirrorRoot` 告诉 A
   镜像根，A 据此把影子路径逐级映射回真实路径；项目里已有的同名文件以项目为准。
+- **本机虚拟工作区**：新版 A 的 open 载荷携带可选 virtualWorkspace: true，新版 B 回包回显
+  virtualWorkspace、extraDirs、writableDirs。双方支持时，B 使用不含 A 真实目录名的固定短父级
+  层级，继续承载最多 24 级祖先说明文件。Agent prompt、文件引用、工具路径诊断与命令输出使用
+  B 本机虚拟路径；文件读写字节保持原样。A 的真实目录继续用于权限 gate、执行与变更抓取，路径
+  别名不增加授权。执行平台与 shell 保留 A 的实际值，以免跨 macOS / Windows / Linux 选错命令。
+  旧 A 不传字段，新 B 沿用原镜像合同；旧 B 忽略字段且不回显，新 A 保留原合同，不投影返回值。
+  此增量不修改 channel、relay、协议版本或服务器，也不是 OS 虚拟化。
 - **回退**：`REMOTE_AGENT_METHODS` 含 `previewRewindFiles` / `commitRewindFiles`，B 在 `describeHandle`
   里声明支持后 A 才提供回退；文件按 A 本机的保存点链回退，对话由 B 截断。B 不支持时 A 关闭回退并提示
   升级那台的 Cindy。

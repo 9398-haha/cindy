@@ -59,6 +59,24 @@ function errorStatus(code: string): number {
 
 export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
   const doFetch = deps.fetch ?? fetch;
+  const workspace = deps.executor.workspace;
+
+  const mapArguments = (value: unknown, key = ''): unknown => {
+    if (typeof value === 'string') {
+      if (/^(?:cmd|command)$/.test(key)) return workspace.mapCommand(value);
+      if (/^(?:path|filePath|file_path|directory|workingDir|cwd|root|libraryRoot|sourcePath|destinationPath)$/i.test(key)) return workspace.mapAlias(value);
+      return value;
+    }
+    if (Array.isArray(value)) return value.map((item) => mapArguments(item, key));
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, name)]));
+  };
+  const projectResult = (value: unknown): unknown => {
+    if (typeof value === 'string') return workspace.mapTextForAgent(value);
+    if (Array.isArray(value)) return value.map(projectResult);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, projectResult(item)]));
+  };
 
   async function forwardMcp(
     target: LocalMcpTarget,
@@ -76,10 +94,24 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
     const response = await doFetch(target.url, {
       method,
       headers: outgoing,
-      ...(body && method !== 'GET' && method !== 'HEAD' ? { body: new Uint8Array(body) } : {}),
+      ...(body && method !== 'GET' && method !== 'HEAD' ? { body: new Uint8Array((() => {
+        try {
+          const message = JSON.parse(body.toString('utf8'));
+          if (message.method === 'tools/call' && message.params?.arguments) message.params.arguments = mapArguments(message.params.arguments);
+          return Buffer.from(JSON.stringify(message));
+        } catch { return body; }
+      })()) } : {}),
       signal,
     });
-    const data = Buffer.from(await response.arrayBuffer());
+    let data = Buffer.from(await response.arrayBuffer());
+    if (response.headers.get('content-type')?.includes('application/json')) {
+      try { data = Buffer.from(JSON.stringify(projectResult(JSON.parse(data.toString('utf8'))))); } catch { /* 非 JSON 原样透传。 */ }
+    } else if (response.headers.get('content-type')?.includes('text/event-stream')) {
+      data = Buffer.from(data.toString('utf8').split('\n').map((line) => {
+        if (!line.startsWith('data:')) return line;
+        try { return 'data: ' + JSON.stringify(projectResult(JSON.parse(line.slice(5).trim()))); } catch { return line; }
+      }).join('\n'));
+    }
     const replyHeaders: Array<[string, string]> = [];
     response.headers.forEach((value, name) => {
       if (FORWARD_RESPONSE_HEADERS.has(name.toLowerCase())) replyHeaders.push([name, value]);

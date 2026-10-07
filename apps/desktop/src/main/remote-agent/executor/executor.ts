@@ -208,7 +208,7 @@ export class RemoteExecutor {
           const cwd = this.resolvePath(str(body, 'cwd'));
           this.authorize({ kind: 'read', path: cwd, scope: 'tree' });
           const limit = Math.max(1, Math.floor(optionalNumber(body, 'limit') ?? 1000));
-          return { paths: await rawGlob(this.rg, str(body, 'pattern'), cwd, limit, signal) };
+          return { paths: (await rawGlob(this.rg, str(body, 'pattern'), cwd, limit, signal)).map((item) => this.workspace.toAgentPath(item)) };
         }
         case 'fs.mime': {
           const target = this.resolvePath(str(body, 'path'));
@@ -220,7 +220,8 @@ export class RemoteExecutor {
           if (typeof params.pattern !== 'string' || !params.pattern) throw new ExecutorRequestError('INVALID', 'pattern is required');
           const root = this.resolvePath(typeof params.path === 'string' && params.path ? params.path : '.');
           this.authorize({ kind: 'read', path: root, scope: 'tree' });
-          return await piGrep(this.opts.rgPath, root, params, signal);
+          const result = await piGrep(this.opts.rgPath, root, params, signal);
+          return { ...result, text: this.workspace.mapTextForAgent(result.text) };
         }
         case 'exec.run': {
           const command = this.workspace.mapCommand(str(body, 'command'));
@@ -233,7 +234,7 @@ export class RemoteExecutor {
           try {
             const result = await runOnce(command, { cwd, timeoutMs, signal });
             return {
-              output: result.output.toString('base64'),
+              output: this.workspace.mapOutputForAgent(result.output).toString('base64'),
               exitCode: result.exitCode,
               ...(result.timedOut ? { timedOut: true } : {}),
               ...(result.aborted ? { aborted: true } : {}),
@@ -247,13 +248,14 @@ export class RemoteExecutor {
       }
     } catch (error) {
       if (error instanceof ExecutorRequestError) throw error;
-      throw new ExecutorRequestError(errorCode(error), (error as Error)?.message ?? String(error));
+      throw new ExecutorRequestError(errorCode(error), this.workspace.mapTextForAgent((error as Error)?.message ?? String(error)));
     }
   }
 
   // ─── Claude Code 风格工具 ──────────────────────────────────────
 
   async callTool(name: string, rawArgs: unknown, signal?: AbortSignal): Promise<ToolResult> {
+    this.workspace.virtualizeDirs([this.shell.getTempDir()]);
     if (this.closed) return textResult('The task has ended on the computer where it runs.', true);
     let args: Record<string, unknown>;
     try {
@@ -269,13 +271,13 @@ export class RemoteExecutor {
           const id = optionalString(args, 'bash_id') ?? optionalString(args, 'task_id') ?? optionalString(args, 'shell_id');
           if (!id) return textResult('bash_id is required.', true);
           const result = await this.shell.readBackground(id, optionalString(args, 'filter'));
-          return textResult(result.text, result.isError);
+          return textResult(this.workspace.mapTextForAgent(result.text), result.isError);
         }
         case 'KillShell': {
           const id = optionalString(args, 'shell_id') ?? optionalString(args, 'task_id') ?? optionalString(args, 'bash_id');
           if (!id) return textResult('shell_id is required.', true);
           const result = this.shell.killBackground(id);
-          return textResult(result.text, result.isError);
+          return textResult(this.workspace.mapTextForAgent(result.text), result.isError);
         }
         case 'Read': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
@@ -285,14 +287,14 @@ export class RemoteExecutor {
             offset: optionalNumber(args, 'offset'),
             limit: optionalNumber(args, 'limit'),
             pages: optionalString(args, 'pages'),
-          }, this.readState, this.workspace.workingDir, this.opts.extractPdfText);
+          }, this.readState, this.workspace.toAgentPath(this.workspace.workingDir), this.opts.extractPdfText, this.workspace.toAgentPath(target));
         }
         case 'Write': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
           const content = args.content;
           if (typeof content !== 'string') return textResult('content must be a string.', true);
           this.authorizeTool({ kind: 'write', path: target });
-          return await ccWrite(target, content, this.readState, this.writeHooks);
+          return await ccWrite(target, content, this.readState, this.writeHooks, this.workspace.toAgentPath(target));
         }
         case 'Edit': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
@@ -304,7 +306,7 @@ export class RemoteExecutor {
             old_string: args.old_string,
             new_string: args.new_string,
             replace_all: args.replace_all === true,
-          }, this.readState, this.writeHooks);
+          }, this.readState, this.writeHooks, this.workspace.toAgentPath(target));
         }
         case 'NotebookEdit': {
           const target = this.resolvePath(str(args, 'notebook_path'), this.shell.getCwd());
@@ -324,11 +326,11 @@ export class RemoteExecutor {
           return textResult(`Unknown tool: ${name}`, true);
       }
     } catch (error) {
-      if (error instanceof ExecutorDenied) return textResult(error.message, true);
-      if (error instanceof ExecutorRequestError) return textResult(error.message, true);
+      if (error instanceof ExecutorDenied) return textResult(this.workspace.mapTextForAgent(error.message), true);
+      if (error instanceof ExecutorRequestError) return textResult(this.workspace.mapTextForAgent(error.message), true);
       const code = (error as NodeJS.ErrnoException)?.code;
-      if (code === 'EACCES' || code === 'EPERM') return textResult(`Permission denied: ${(error as Error).message}`, true);
-      return textResult((error as Error)?.message ?? String(error), true);
+      if (code === 'EACCES' || code === 'EPERM') return textResult(this.workspace.mapTextForAgent(`Permission denied: ${(error as Error).message}`), true);
+      return textResult(this.workspace.mapTextForAgent((error as Error)?.message ?? String(error)), true);
     }
   }
 
@@ -347,7 +349,7 @@ export class RemoteExecutor {
       const result = args.run_in_background === true
         ? await this.shell.startBackground(command)
         : await this.shell.run(command, timeout, signal);
-      return textResult(result.text, result.isError);
+      return textResult(this.workspace.mapTextForAgent(result.text), result.isError);
     } finally {
       this.opts.capture?.noteOpaqueWrite();
     }
@@ -367,7 +369,7 @@ export function executorCcToolDefinitions(platform: NodeJS.Platform = process.pl
   description: string;
   inputSchema: Record<string, unknown>;
 }> {
-  const where = 'on the user\'s computer, where the project lives';
+  const where = 'in the current workspace';
   const shellNote = platform === 'win32'
     ? 'Commands run in Git Bash when available, otherwise cmd.exe.'
     : `Commands run with ${path.basename(process.env.SHELL || 'bash')}.`;

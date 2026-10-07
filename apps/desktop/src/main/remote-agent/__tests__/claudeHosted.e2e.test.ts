@@ -227,11 +227,13 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
       'mcp__cindy_exec__NotebookEdit', 'mcp__cindy_exec__BashOutput', 'mcp__cindy_exec__KillShell',
     ]));
     // 系统提示说明了项目的真实位置；项目说明来自同步的影子目录。
-    expect(first.system).toContain(`The project lives on the user's computer at \`${project}\``);
+    expect(first.system).not.toContain(project);
+    expect(first.system).toContain('# Workspace');
     expect(`${first.system}\n${first.firstUser}`).toContain('Always answer briefly.');
     const last = requests.at(-1)!;
     expect(last.results.map((result) => result.isError)).toEqual([false, false, false, false]);
-    expect(last.results[0].text).toContain(project);
+    expect(last.results[0].text).not.toContain(project);
+    expect(last.results[0].text).toContain(hostRoot);
     expect(last.results[0].text).toContain('hello.txt');
     expect(last.results[2].text).toContain('hello from the controller');
     expect(fs.readFileSync(path.join(project, 'made.txt'), 'utf8')).toBe('two\n');

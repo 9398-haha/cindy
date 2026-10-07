@@ -43,6 +43,7 @@ import {
 import type { AgentSessionHandle, InteractionRequest } from '@cindy/maker-core';
 
 import { EventLog, waitForAny } from '../eventLog';
+import { projectPathText } from '../executor/workspace';
 import {
   MAX_ANCESTOR_LEVELS,
   decodeOpenPayload,
@@ -75,8 +76,13 @@ export interface HostedStartInput {
   hostSessionId: string;
   /** 影子目录：只放项目说明类文件，作为 Agent 进程的工作目录。 */
   shadowDir: string;
-  /** 影子目录按控制端真实路径逐级镜像的根(上级目录里的说明文件放在对应的上级)。 */
+  /** Agent 主机上的 opaque 虚拟工作区根。 */
   mirrorRoot: string;
+  /** 虚拟附加目录，与 workspace.extraDirs 按顺序对应。 */
+  extraDirs?: string[];
+  /** 虚拟可写目录，与 workspace.writableDirs 按顺序对应。 */
+  writableDirs?: string[];
+  virtualWorkspace?: boolean;
   /** 控制端的个人说明(写进给 Agent 的环境说明)。 */
   personalInstructions?: string;
   options: RemoteAgentWireStartOptions;
@@ -140,6 +146,7 @@ interface Run {
   attachmentsDir: string;
   /** 影子工作区根(按 hostSessionId 复用，任务收尾后清理)。 */
   workspaceDir?: string;
+  virtualRoot?: string;
   pending: Map<string, PendingReverse>;
   calls: Map<string, 'running' | 'done'>;
   pushSeq: Set<number>;
@@ -244,7 +251,7 @@ export function snapshotHandleState(handle: AgentSessionHandle): Record<string, 
 }
 
 /** 启动结果里给控制端的会话描述(静态部分 + 支持哪些可选方法)。 */
-function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoot: string): Record<string, unknown> {
+function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoot: string, extraDirs: readonly string[], writableDirs: readonly string[], virtualWorkspace: boolean): Record<string, unknown> {
   const methods = REMOTE_AGENT_METHODS.filter((method) => typeof (handle as unknown as Record<string, unknown>)[method] === 'function');
   return {
     id: handle.id,
@@ -252,6 +259,9 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
     model: handle.model,
     shadowDir,
     mirrorRoot,
+    extraDirs,
+    writableDirs,
+    virtualWorkspace,
     methods,
     ...(handle.requestSessionId ? { requestSessionId: handle.requestSessionId } : {}),
     ...(handle.codexProxyActive !== undefined ? { codexProxyActive: handle.codexProxyActive } : {}),
@@ -435,13 +445,62 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     controller: string,
     payload: RemoteAgentOpenPayload,
     hostSessionId: string,
-  ): Promise<{ shadowDir: string; mirrorRoot: string; sessionRoot: string }> {
+  ): Promise<{ shadowDir: string; mirrorRoot: string; sessionRoot: string; extraDirs: string[]; writableDirs: string[]; projectText(text: string): string }> {
     const sessionRoot = shadowSessionRoot(controller, hostSessionId);
     const mirrorRoot = path.join(sessionRoot, 'fs');
-    const segments = mirrorSegments(payload.workspace.workingDir);
+    // 固定短层级承载最多 MAX_ANCESTOR_LEVELS 个上级说明文件，不带控制端目录名。
+    const segments = payload.virtualWorkspace
+      ? ['workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p')]
+      : mirrorSegments(payload.workspace.workingDir);
     const shadowDir = path.join(mirrorRoot, ...segments);
     await fsp.rm(sessionRoot, { recursive: true, force: true });
     await fsp.mkdir(shadowDir, { recursive: true });
+    if (payload.virtualWorkspace) await Promise.all(['home', 'tmp'].map((name) => fsp.mkdir(path.join(mirrorRoot, name), { recursive: true })));
+    const foreignPath = payload.workspace.platform === 'win32' ? path.win32 : path.posix;
+    const realWorkspace = foreignPath.resolve(payload.workspace.workingDir);
+    const virtualByReal = new Map<string, string>();
+    const virtualFor = (raw: string, index: number): string => {
+      const resolved = foreignPath.resolve(raw);
+      const key = payload.workspace.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      const existing = virtualByReal.get(key);
+      if (existing) return existing;
+      const relative = foreignPath.relative(realWorkspace, resolved);
+      const insideWorkspace = relative === '' || (!relative.startsWith('..') && !foreignPath.isAbsolute(relative));
+      const virtual = insideWorkspace
+        ? path.join(shadowDir, ...relative.split(/[\\/]+/).filter(Boolean))
+        : path.join(mirrorRoot, 'additional', 'dir-' + index);
+      virtualByReal.set(key, virtual);
+      return virtual;
+    };
+    const virtualAll = [...payload.workspace.extraDirs, ...payload.workspace.writableDirs]
+      .map((dir, index) => payload.virtualWorkspace ? virtualFor(dir, index) : dir);
+    if (payload.virtualWorkspace) await Promise.all([...new Set(virtualAll)].map((dir) => fsp.mkdir(dir, { recursive: true })));
+    const extraCount = payload.workspace.extraDirs.length;
+    const pathAliases = [{ from: payload.workspace.workingDir, to: shadowDir }];
+    if (payload.virtualWorkspace && payload.workspace.homeDir) {
+      pathAliases.push({ from: payload.workspace.homeDir, to: path.join(mirrorRoot, 'home') });
+    }
+    let realParent = payload.workspace.workingDir;
+    let virtualParent = shadowDir;
+    for (let up = 1; up <= MAX_ANCESTOR_LEVELS; up += 1) {
+      const nextReal = foreignPath.dirname(realParent);
+      if (nextReal === realParent) break;
+      realParent = nextReal;
+      virtualParent = path.dirname(virtualParent);
+      pathAliases.push({ from: realParent, to: virtualParent });
+    }
+    [...payload.workspace.extraDirs, ...payload.workspace.writableDirs].forEach((from, index) => {
+      pathAliases.push({ from, to: virtualAll[index] });
+    });
+    const projectText = (text: string) => payload.virtualWorkspace ? projectPathText(text, pathAliases) : text;
+    const projectBytes = (data: Buffer): Buffer => {
+      // Skill 目录允许随包携带非文本资源；只投影有效的文本字节，避免 UTF-8 转换损坏二进制。
+      if (!payload.virtualWorkspace || data.includes(0)) return data;
+      const text = data.toString('utf8');
+      if (!Buffer.from(text, 'utf8').equals(data)) return data;
+      const projected = projectText(text);
+      return projected === text ? data : Buffer.from(projected, 'utf8');
+    };
     const inside = (target: string, root: string) => target.startsWith(`${root}${path.sep}`);
     const writeNew = async (target: string, data: Buffer) => {
       await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -453,32 +512,32 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const target = path.join(shadowDir, ...file.path.split('/'));
       if (!inside(target, shadowDir)) continue;
       await fsp.mkdir(path.dirname(target), { recursive: true });
-      await fsp.writeFile(target, Buffer.from(file.data, 'base64'));
+      await fsp.writeFile(target, projectBytes(Buffer.from(file.data, 'base64')));
     }
     for (const file of payload.ancestorFiles) {
       if (file.up > segments.length - 1) continue;
       let dir = shadowDir;
       for (let level = 0; level < file.up; level += 1) dir = path.dirname(dir);
       if (!inside(dir, mirrorRoot)) continue;
-      await writeNew(path.join(dir, file.name), Buffer.from(file.data, 'base64'));
+      await writeNew(path.join(dir, file.name), projectBytes(Buffer.from(file.data, 'base64')));
     }
     const { personal } = payload;
-    if (personal.memory) await writeNew(path.join(sessionRoot, 'CLAUDE.md'), Buffer.from(personal.memory, 'utf8'));
+    if (personal.memory) await writeNew(path.join(sessionRoot, 'CLAUDE.md'), Buffer.from(projectText(personal.memory), 'utf8'));
     // 项目里已有同名文件时以项目为准(只写不存在的)。
     for (const file of personal.files) {
       const target = path.join(shadowDir, ...file.path.split('/'));
       if (!inside(target, shadowDir)) continue;
-      await writeNew(target, Buffer.from(file.data, 'base64'));
+      await writeNew(target, projectBytes(Buffer.from(file.data, 'base64')));
     }
-    if (personal.permissions) await mergeLocalPermissions(path.join(shadowDir, '.claude', 'settings.local.json'), personal.permissions);
-    return { shadowDir, mirrorRoot, sessionRoot };
+    if (personal.permissions) await mergeLocalPermissions(path.join(shadowDir, '.claude', 'settings.local.json'), Object.fromEntries(Object.entries(personal.permissions).map(([key, rules]) => [key, rules?.map(projectText)])));
+    return { shadowDir, mirrorRoot, sessionRoot, extraDirs: virtualAll.slice(0, extraCount), writableDirs: virtualAll.slice(extraCount), projectText };
   }
 
   async function startRun(run: Run, payload: RemoteAgentOpenPayload): Promise<void> {
     try {
       const hostSessionId = hostSessionIdFor(run.controller, payload.sessionId);
       run.hostSessionId = hostSessionId;
-      const { shadowDir, mirrorRoot, sessionRoot } = await withShadowLock(hostSessionId, async () => {
+      const { shadowDir, mirrorRoot, sessionRoot, extraDirs, writableDirs, projectText } = await withShadowLock(hostSessionId, async () => {
         // 断线后旧实例还没清理就重新打开同一任务时，新旧实例共用同一个影子目录：
         // 先结束旧实例再重建，避免删掉旧 Agent 还在使用的目录，或两个实例争用重建后的目录。
         for (const other of runs.values()) {
@@ -489,6 +548,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return prepareShadow(run.controller, payload, hostSessionId);
       });
       run.workspaceDir = sessionRoot;
+      run.virtualRoot = payload.virtualWorkspace ? mirrorRoot : undefined;
       const tunnel = await createRunTunnel({
         http: (request, signal) => reverseHttp(run, request, signal),
         wsOpen: (connId, wsPath) => append(run, { t: 'ws', connId, kind: 'open', path: wsPath }),
@@ -497,13 +557,20 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       });
       run.tunnel = tunnel;
       if (run.closing) return;
+      // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
+      if (payload.virtualWorkspace) append(run, { t: 'state', state: {
+        workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true },
+      } });
       const handle = await deps.startHosted({
         kind: run.kind,
         hostSessionId,
         shadowDir,
         mirrorRoot,
-        ...(payload.personal.instructions ? { personalInstructions: payload.personal.instructions } : {}),
-        options: payload.options,
+        extraDirs,
+        writableDirs,
+        virtualWorkspace: payload.virtualWorkspace === true,
+        ...(payload.personal.instructions ? { personalInstructions: projectText(payload.personal.instructions) } : {}),
+        options: Object.fromEntries(Object.entries(payload.options).map(([key, value]) => [key, typeof value === 'string' ? projectText(value) : value])) as unknown as RemoteAgentWireStartOptions,
         workspace: payload.workspace,
         tunnel: { url: tunnel.url, token: tunnel.token },
         mcpServers: payload.mcpServers,
@@ -526,7 +593,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (reply.type === 'interaction') return reply.result as Awaited<ReturnType<Parameters<AgentSessionHandle['setInteractionResolver']>[0]>>;
         throw new Error(reply.type === 'error' ? reply.error.message : 'interaction failed');
       });
-      append(run, { t: 'started', handle: describeHandle(handle, shadowDir, mirrorRoot) });
+      append(run, { t: 'started', handle: describeHandle(handle, shadowDir, mirrorRoot, extraDirs, writableDirs, payload.virtualWorkspace === true) });
       run.lastState = JSON.stringify(snapshotHandleState(handle));
       run.stateTimer = setInterval(() => emitState(run), STATE_INTERVAL_MS);
       (run.stateTimer as { unref?: () => void }).unref?.();
@@ -623,6 +690,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const target = (handle as unknown as Record<string, unknown>)[method];
       if (typeof target !== 'function') fail('REMOTE_AGENT_UNSUPPORTED', `${method} is not supported by this agent`);
       let callArgs: unknown[] = args;
+      if (run.virtualRoot && (method === 'setExtraDirs' || method === 'setWritableDirs')) {
+        const dirs = Array.isArray(args[0]) ? args[0] : [];
+        await Promise.all(dirs.filter((dir): dir is string => typeof dir === 'string').map(async (dir) => {
+          const relative = path.relative(run.virtualRoot!, dir);
+          if (!relative.startsWith('..') && !path.isAbsolute(relative)) await fsp.mkdir(dir, { recursive: true });
+        }));
+      }
       // 供应商授权：新一轮对话前复核(关掉后不再开始新的一轮，进行中的这一轮照常结束)；
       // 换模型时显式换来源(含 null = 默认)要落到开放的供应商上，只换模型则沿用当前来源。
       let nextProviderId: string | undefined;

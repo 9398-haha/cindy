@@ -139,6 +139,8 @@ export interface RemoteAgentWirePersonal {
 export interface RemoteAgentOpenPayload {
   /** 控制端任务 id。 */
   sessionId: string;
+  /** 可选增量能力：Agent 使用本机虚拟工作区，旧控制端不传时沿用原路径合同。 */
+  virtualWorkspace?: boolean;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -263,6 +265,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   });
   return {
     sessionId,
+    ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,

@@ -18,6 +18,8 @@ import {
 } from '../controller/projectFiles';
 import { shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
+import { hostedStartOptions } from '../host/service';
+import { ExecutorWorkspace } from '../executor/workspace';
 import { MAX_ANCESTOR_LEVELS } from '../wire';
 
 const RG = path.resolve(__dirname, '../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
@@ -102,16 +104,36 @@ describe('collectAncestorInstructionFiles', () => {
 });
 
 describe('collectProjectInstructionFiles', () => {
-  it('rejects symlinks so a checkout cannot smuggle files from outside the project', async () => {
+  it('rejects directory links so a checkout cannot smuggle files from outside the project', async () => {
+    const project = path.join(root, 'proj');
+    const outside = path.join(root, 'outside');
+    write(path.join(project, 'CLAUDE.md'), 'real rules');
+    write(path.join(outside, 'SKILL.md'), 'secret leak');
+    fs.mkdirSync(path.join(project, '.claude', 'skills'), { recursive: true });
+    // Windows junction 不需要文件 symlink 的管理员权限，目录越界检查仍实跑。
+    fs.symlinkSync(outside, path.join(project, '.claude', 'skills', 'leak'), process.platform === 'win32' ? 'junction' : 'dir');
+    const files = await collectProjectInstructionFiles(project);
+    expect(files.map((file) => file.path)).toEqual(['CLAUDE.md']);
+    expect(files.map((file) => Buffer.from(file.data, 'base64').toString())).toEqual(['real rules']);
+  });
+
+  it('rejects file symlinks when the filesystem supports creating them', async (context) => {
     const project = path.join(root, 'proj');
     const outside = path.join(root, 'outside');
     write(path.join(project, 'CLAUDE.md'), 'real rules');
     write(path.join(outside, 'leak.md'), 'secret leak');
     write(path.join(outside, '.env'), 'SECRET=1');
     fs.mkdirSync(path.join(project, '.claude', 'skills'), { recursive: true });
-    // 同名文件、目录与独立文件三种符号链接借道都不跟随。
-    fs.symlinkSync(path.join(outside, '.env'), path.join(project, 'CLAUDE.local.md'));
-    fs.symlinkSync(outside, path.join(project, '.claude', 'skills', 'leak'));
+    // 实际探测文件 symlink 能力；有权限的 Windows 与 macOS/Linux 均保留真实覆盖。
+    try {
+      fs.symlinkSync(path.join(outside, '.env'), path.join(project, 'CLAUDE.local.md'), 'file');
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
     fs.symlinkSync(path.join(outside, 'leak.md'), path.join(project, '.claude', 'skills', 'leak.md'));
     const files = await collectProjectInstructionFiles(project);
     expect(files.map((file) => file.path)).toEqual(['CLAUDE.md']);
@@ -211,7 +233,10 @@ describe('shadow on the other computer', () => {
     const handle = await startRemoteAgentSession('claude-code', {
       sessionId: 'task-1',
       workingDir: project,
+      extraDirs: [path.join(project, 'src'), path.join(root, 'external')],
+      writableDirs: [path.join(root, 'external')],
       model: 'claude-opus',
+      userPrompt: `Please inspect ${path.join(project, 'src', 'index.ts')}.`,
       permissionMode: 'default',
     }, {
       invoke: async (args) => JSON.parse(JSON.stringify(await host.handle('controller-1', JSON.parse(JSON.stringify(args[0]))) ?? null)),
@@ -238,7 +263,8 @@ describe('shadow on the other computer', () => {
     const [input] = inputs;
     const read = (file: string) => fs.readFileSync(file, 'utf8');
     expect(input.shadowDir.startsWith(`${input.mirrorRoot}${path.sep}`)).toBe(true);
-    expect(input.shadowDir.endsWith(path.join('work', 'team', 'proj'))).toBe(true);
+    expect(input.shadowDir).not.toContain(project);
+    expect(path.relative(input.mirrorRoot, input.shadowDir).split(path.sep)).toHaveLength(MAX_ANCESTOR_LEVELS + 1);
     expect(read(path.join(input.shadowDir, 'CLAUDE.md'))).toBe('project rules');
     expect(read(path.join(path.dirname(input.shadowDir), 'AGENTS.md'))).toBe('team rules');
     expect(read(path.join(path.dirname(path.dirname(input.shadowDir)), 'CLAUDE.md'))).toBe('work rules');
@@ -251,6 +277,24 @@ describe('shadow on the other computer', () => {
       permissions: { allow: ['Bash(ls:*)', 'Bash(npm test:*)'] },
     });
     expect(input.personalInstructions).toBe('personal instructions');
+    expect(input.extraDirs?.[0]).toBe(path.join(input.shadowDir, 'src'));
+    expect(input.extraDirs?.[1]).toBe(path.join(input.mirrorRoot, 'additional', 'dir-1'));
+    expect(input.writableDirs?.[0]).toBe(input.extraDirs?.[1]);
+    expect(input.workspace.homeDir).toBe(os.homedir());
+    expect(input.options.userPrompt).toBe(`Please inspect ${path.join(input.shadowDir, 'src', 'index.ts')}.`);
+    const opts = hostedStartOptions(input);
+    expect(opts.deviceHosted?.workingDir).toBe(input.shadowDir);
+    expect(opts.deviceHosted?.pathPlatform).toBe(process.platform);
+    expect(opts.deviceHosted?.homeDir).toBeUndefined();
+    expect(opts.extraDirs).toEqual(input.extraDirs);
+    expect(opts.writableDirs).toEqual(input.writableDirs);
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setAliases(shadowAliases({ ...input }, project, [], {
+      extraDirs: [path.join(project, 'src'), path.join(root, 'external')], writableDirs: [path.join(root, 'external')],
+    }));
+    workspace.setVirtualRoot(input.mirrorRoot);
+    expect(workspace.resolve(input.extraDirs![1])).toBe(path.join(root, 'external'));
+    expect(workspace.toAgentPath(path.join(root, 'external', 'a.ts'))).toBe(path.join(input.extraDirs![1], 'a.ts'));
 
     await handle.close({ reason: 'navigation' });
     host.dispose();

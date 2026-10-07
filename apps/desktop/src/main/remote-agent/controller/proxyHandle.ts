@@ -37,8 +37,11 @@ export interface RemoteStartedInfo {
   agentKind: AgentKind;
   model: string;
   shadowDir: string;
-  /** 影子目录按真实路径镜像时的镜像根(那台电脑上的路径)。 */
+  /** Agent 主机上的虚拟镜像根。 */
   mirrorRoot?: string;
+  extraDirs?: string[];
+  writableDirs?: string[];
+  virtualWorkspace?: boolean;
   methods: string[];
   state: Record<string, unknown>;
   requestSessionId?: string;
@@ -58,7 +61,10 @@ export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind
     agentKind: kind,
     model: str(value.model) ?? '',
     shadowDir: str(value.shadowDir) ?? '',
+    virtualWorkspace: value.virtualWorkspace === true,
     ...(str(value.mirrorRoot) ? { mirrorRoot: str(value.mirrorRoot) } : {}),
+    extraDirs: Array.isArray(value.extraDirs) ? value.extraDirs.filter((item): item is string => typeof item === 'string') : [],
+    writableDirs: Array.isArray(value.writableDirs) ? value.writableDirs.filter((item): item is string => typeof item === 'string') : [],
     methods: Array.isArray(value.methods) ? value.methods.filter((m): m is string => typeof m === 'string') : [],
     state: value.state && typeof value.state === 'object' ? value.state as Record<string, unknown> : {},
     ...(str(value.requestSessionId) ? { requestSessionId: str(value.requestSessionId) } : {}),
@@ -216,6 +222,16 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   async function sendLike(method: 'send' | 'steer', message: UserMessage, opts?: SendOptions): Promise<void> {
     const encoded = await encodeSendOptions(opts, readImage);
     const wireMessage = await encodeUserMessage(message, readImage);
+    const projectMessage = (wire: typeof wireMessage) => {
+      if (typeof wire.content === 'string') wire.content = deps.workspace.mapTextForAgent(wire.content);
+      else wire.content = wire.content.map((block) => {
+        if (block.type === 'text') return { ...block, text: deps.workspace.mapTextForAgent(block.text) };
+        if (block.type === 'file' || block.type === 'mention') return { ...block, path: deps.workspace.toAgentPath(block.path) };
+        return block;
+      });
+    };
+    projectMessage(wireMessage);
+    if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
     const callId = deps.newId();
     if (encoded.onTranscriptUserEntry || encoded.onInteractionStateChange) {
       sendCallbacks.set(callId, {
@@ -323,10 +339,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     }),
     ...optional('setExtraDirs', async (dirs: string[], libraryRoot?: string | null) => {
       deps.onExtraDirs?.(dirs);
-      await call('setExtraDirs', dirs, libraryRoot ?? null);
+      await call('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
     }),
     ...optional('setWritableDirs', async (dirs: string[]) => {
-      await call('setWritableDirs', dirs);
+      await call('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
       // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
       // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
       deps.onWritableDirs?.(dirs);

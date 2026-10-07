@@ -3854,25 +3854,11 @@ function registerCindyHostedTools(
   pi.on('before_agent_start', async (event: any) => {
     const hosted = CINDY_HOSTED!;
     const prompt = typeof event.systemPrompt === 'string' ? event.systemPrompt : '';
-    // 影子目录里的项目说明就是那台电脑上同一目录的副本，提示里一律换成真实目录。影子目录按真实
-    // 路径逐级镜像，上级目录(放着上级目录的说明文件)也逐级换回真实路径；先换最深的一级。
-    let replaced = prompt;
-    let shadow = process.cwd();
-    let real = hosted.cwd;
-    const realPath = hosted.platform === 'win32' ? path.win32 : path.posix;
-    for (let level = 0; level < 32; level += 1) {
-      replaced = replaced.split(shadow).join(real);
-      const nextShadow = path.dirname(shadow);
-      const nextReal = realPath.dirname(real);
-      if (!hosted.mirrorRoot || nextShadow === shadow || nextReal === real) break;
-      if (!nextShadow.startsWith(hosted.mirrorRoot + path.sep)) break;
-      shadow = nextShadow;
-      real = nextReal;
-    }
+    const replaced = prompt;
     const note = [
       '',
-      '# Where this task runs',
-      'The project lives on the user\'s computer at ' + hosted.cwd + ' (' + hosted.platform + ', shell: ' + hosted.shell + '). Every file and shell tool operates on that computer.',
+      '# Workspace',
+      'The current workspace is ' + hosted.cwd + ' (' + hosted.platform + ', shell: ' + hosted.shell + '). File and shell tools operate in this workspace. Relative paths resolve against it.',
     ].join('\n');
     return { systemPrompt: replaced + '\n' + note };
   });
@@ -4313,7 +4299,7 @@ export default async function cindyBridge(pi: any) {
     // (那台电脑的执行器会按真实路径再守一道凭证与高危上限)。路径实现按那台电脑的平台
     // 选(path.win32 / path.posix)，与提示改写一致 —— 用本机 path.resolve 解析异构平台
     // 路径(如 macOS 上解析 C:\project\file)会得到畸形路径，写证据与可写根对不上。
-    const hostedRealPath = CINDY_HOSTED ? (CINDY_HOSTED.platform === 'win32' ? path.win32 : path.posix) : null;
+    const hostedRealPath = CINDY_HOSTED ? path : null;
     const writeTargetResolved = CINDY_HOSTED && hostedRealPath
       ? (targetPath ? hostedRealPath.resolve(CINDY_HOSTED.cwd, targetPath) : null)
       : resolveFileWriteTargetPath(targetPath);

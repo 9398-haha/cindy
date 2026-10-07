@@ -128,7 +128,7 @@ describe('hosted shadow workspace cleanup', () => {
 
     host.dispose();
     await settle();
-    expect(fs.existsSync(sessionRoot('controller-1', 'task-1'))).toBe(false);
+    await vi.waitFor(() => expect(fs.existsSync(sessionRoot('controller-1', 'task-1'))).toBe(false));
   });
 
   it('keeps the workspace of a replacement run and removes it when that run ends', async () => {
@@ -158,7 +158,7 @@ describe('hosted shadow workspace cleanup', () => {
     clock += 61_000;
     await vi.advanceTimersByTimeAsync(5_000);
     await settle();
-    expect(fs.existsSync(sessionRootPath)).toBe(false);
+    await vi.waitFor(() => expect(fs.existsSync(sessionRootPath)).toBe(false));
     host.dispose();
   });
 });

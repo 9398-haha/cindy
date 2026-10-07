@@ -296,6 +296,14 @@ export interface ShellSessionOptions {
   tempDir?: string;
 }
 
+/** Git Bash 的 pwd 使用 MSYS 挂载路径，权限与后续文件工具必须回到 Windows 本机路径。 */
+export function normalizeShellCwd(cwd: string): string {
+  if (process.platform !== 'win32') return cwd;
+  if (/^\/tmp(?:\/|$)/.test(cwd)) return path.join(os.tmpdir(), cwd.slice(4));
+  const drive = /^\/([A-Za-z])(?:\/|$)/.exec(cwd);
+  return drive ? path.win32.normalize(drive[1].toUpperCase() + ':/' + cwd.slice(drive[0].length)) : cwd;
+}
+
 export class ShellSession {
   private cwd: string;
   private readonly jobs = new Map<string, BackgroundJob>();
@@ -309,6 +317,10 @@ export class ShellSession {
 
   getCwd(): string {
     return this.cwd;
+  }
+
+  getTempDir(): string {
+    return this.tempDir;
   }
 
   /** 执行一条命令；命令结束后记下它所在的目录，下一条命令从那里开始。 */
@@ -334,7 +346,7 @@ export class ShellSession {
     }
     let resetNote = '';
     try {
-      const next = (await fsp.readFile(cwdFile, 'utf8')).trim();
+      const next = normalizeShellCwd((await fsp.readFile(cwdFile, 'utf8')).trim());
       if (next) {
         if (this.opts.isAllowedCwd(next)) this.cwd = next;
         else {

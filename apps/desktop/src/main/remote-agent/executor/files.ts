@@ -257,6 +257,7 @@ async function readPdfText(
   absPath: string,
   pages: string | undefined,
   extract: PdfTextExtractor | undefined,
+  displayPath = absPath,
 ): Promise<ToolResult> {
   if (!extract) {
     return textResult('Reading PDF files is not available here. Extract the text with Bash (for example pdftotext) instead.', true);
@@ -281,7 +282,7 @@ async function readPdfText(
     return [`--- Page ${match[1]} ---\n${section.slice(match[0].length)}`];
   });
   const notes = [
-    `PDF ${absPath}: ${extracted.numPages} page(s). Text of pages ${range.first}-${lastRead} follows; images, layout and scanned pages are not included.`,
+    `PDF ${displayPath}: ${extracted.numPages} page(s). Text of pages ${range.first}-${lastRead} follows; images, layout and scanned pages are not included.`,
   ];
   if (!requested && extracted.numPages > lastRead) {
     notes.push(`Use the pages parameter (for example "${lastRead + 1}-${Math.min(extracted.numPages, lastRead + CC_PDF_MAX_PAGES_PER_READ)}") to read more.`);
@@ -297,13 +298,14 @@ export async function ccRead(
   readState: ReadStateTracker,
   cwd: string,
   extractPdfText?: PdfTextExtractor,
+  displayPath = absPath,
 ): Promise<ToolResult> {
   const stat = await statOrNull(absPath);
   if (!stat) {
     return textResult(`File does not exist. Note: your current working directory is ${cwd}.`, true);
   }
   if (stat.isDirectory()) {
-    return textResult(`EISDIR: illegal operation on a directory, read '${absPath}'. Use Bash with ls to list a directory.`, true);
+    return textResult(`EISDIR: illegal operation on a directory, read '${displayPath}'. Use Bash with ls to list a directory.`, true);
   }
   const ext = path.extname(absPath).toLowerCase();
   if (IMAGE_MIME[ext] || CONVERTIBLE_IMAGE_EXTENSIONS.has(ext)) {
@@ -313,7 +315,7 @@ export async function ccRead(
   }
   if (ext === '.pdf') {
     if (stat.size > CC_PDF_MAX_BYTES) return textResult(`PDF is too large to read (${stat.size} bytes).`, true);
-    const result = await readPdfText(absPath, input.pages, extractPdfText);
+    const result = await readPdfText(absPath, input.pages, extractPdfText, displayPath);
     if (!result.isError) readState.record(absPath, stat.mtimeMs);
     return result;
   }
@@ -446,9 +448,10 @@ export async function ccWrite(
   content: string,
   readState: ReadStateTracker,
   hooks: FileWriteHooks,
+  displayPath = absPath,
 ): Promise<ToolResult> {
   const stat = await statOrNull(absPath);
-  if (stat?.isDirectory()) return textResult(`EISDIR: illegal operation on a directory, write '${absPath}'`, true);
+  if (stat?.isDirectory()) return textResult(`EISDIR: illegal operation on a directory, write '${displayPath}'`, true);
   if (stat) {
     const problem = await readState.check(absPath);
     if (problem) return textResult(problem, true);
@@ -458,7 +461,7 @@ export async function ccWrite(
   await fsp.writeFile(absPath, content, 'utf8');
   const after = await fsp.stat(absPath);
   readState.record(absPath, after.mtimeMs);
-  return textResult(stat ? `The file ${absPath} has been updated successfully.` : `File created successfully at: ${absPath}`);
+  return textResult(stat ? `The file ${displayPath} has been updated successfully.` : `File created successfully at: ${displayPath}`);
 }
 
 export interface CcEditInput {
@@ -482,20 +485,21 @@ export async function ccEdit(
   input: CcEditInput,
   readState: ReadStateTracker,
   hooks: FileWriteHooks,
+  displayPath = absPath,
 ): Promise<ToolResult> {
   const { old_string: oldString, new_string: newString } = input;
   if (oldString === newString) {
     return textResult('No changes to make: old_string and new_string are exactly the same.', true);
   }
   const stat = await statOrNull(absPath);
-  if (stat?.isDirectory()) return textResult(`EISDIR: illegal operation on a directory, edit '${absPath}'`, true);
+  if (stat?.isDirectory()) return textResult(`EISDIR: illegal operation on a directory, edit '${displayPath}'`, true);
   if (!stat) {
-    if (oldString !== '') return textResult(`File does not exist: ${absPath}`, true);
+    if (oldString !== '') return textResult(`File does not exist: ${displayPath}`, true);
     await hooks.beforeWrite(absPath);
     await fsp.mkdir(path.dirname(absPath), { recursive: true });
     await fsp.writeFile(absPath, newString, 'utf8');
     readState.record(absPath, (await fsp.stat(absPath)).mtimeMs);
-    return textResult(`File created successfully at: ${absPath}`);
+    return textResult(`File created successfully at: ${displayPath}`);
   }
   const problem = await readState.check(absPath);
   if (problem) return textResult(problem, true);
@@ -505,7 +509,7 @@ export async function ccEdit(
     await hooks.beforeWrite(absPath);
     await fsp.writeFile(absPath, newString, 'utf8');
     readState.record(absPath, (await fsp.stat(absPath)).mtimeMs);
-    return textResult(`The file ${absPath} has been updated successfully.`);
+    return textResult(`The file ${displayPath} has been updated successfully.`);
   }
   // 文件用 CRLF 时按 LF 匹配，写回时恢复原换行风格。
   const crlf = original.includes('\r\n');
@@ -526,7 +530,7 @@ export async function ccEdit(
   await hooks.beforeWrite(absPath);
   await fsp.writeFile(absPath, crlf ? updated.replace(/\n/g, '\r\n') : updated, 'utf8');
   readState.record(absPath, (await fsp.stat(absPath)).mtimeMs);
-  return textResult(`The file ${absPath} has been updated successfully.`);
+  return textResult(`The file ${displayPath} has been updated successfully.`);
 }
 
 export interface CcNotebookEditInput {

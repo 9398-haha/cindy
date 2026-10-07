@@ -72,14 +72,14 @@ describe('workspace', () => {
     // 直接 path.resolve(输入) 会拿到当前进程盘符、与实现语义不一致。
     expect(workspace.resolve('/remote/shadow/projX/y')).toBe(path.resolve(project, '/remote/shadow/projX/y'));
     expect(workspace.mapCommand('cat /remote/shadow/proj/a.txt && ls /remote/shadow/projX'))
-      .toBe(`cat ${project}/a.txt && ls /remote/shadow/projX`);
+      .toBe(`cat ${process.platform === 'win32' ? project.replace(/\\/g, '/') : project}/a.txt && ls /remote/shadow/projX`);
     expect(() => workspace.resolve('')).toThrow();
     expect(() => workspace.resolve('a\0b')).toThrow();
   });
 
   it('judges containment by real path so symlinks cannot borrow their way out', () => {
     const workspace = new ExecutorWorkspace({ workingDir: project });
-    fs.symlinkSync(outside, path.join(project, 'link'));
+    fs.symlinkSync(outside, path.join(project, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
     expect(workspace.contains(path.join(project, 'x.txt'))).toBe(true);
     expect(workspace.contains(path.join(project, 'link', 'x.txt'))).toBe(false);
     expect(workspace.contains(path.join(project, '..', 'outside'))).toBe(false);

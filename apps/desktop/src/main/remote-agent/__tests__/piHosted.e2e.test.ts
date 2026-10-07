@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
+import { hostedStartOptions } from '../host/service';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
@@ -146,20 +147,7 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
     const agent = new PiAgent(piDeps(path.join(root, 'pi-home')));
     const host = createRemoteAgentHost({
       isAgentAvailable: (kind) => kind === 'pi',
-      startHosted: (input) => agent.startSession({
-        sessionId: input.hostSessionId,
-        workingDir: input.shadowDir,
-        model: input.options.model,
-        permissionMode: input.options.permissionMode as never,
-        extraDirs: input.workspace.extraDirs,
-        writableDirs: input.workspace.writableDirs,
-        deviceHosted: {
-          ...input.workspace,
-          tunnelUrl: input.tunnel.url,
-          tunnelToken: input.tunnel.token,
-          mcpServers: input.mcpServers,
-        },
-      }),
+      startHosted: (input) => agent.startSession(hostedStartOptions(input)),
       isControllerAuthorized: () => true,
       captureOwner: () => 'owner',
       isOwnerCurrent: () => true,
@@ -202,7 +190,8 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
     const last = requests.at(-1)!;
     const [bash, write, read, edit, grep, ls, find] = last.results;
     // 命令在控制端的项目目录执行，看得到控制端的文件。
-    expect(bash).toContain(project);
+    expect(bash).not.toContain(project);
+    expect(bash).toContain(hostRoot);
     expect(bash).toContain('hello.txt');
     expect(write).toMatch(/made-by-pi\.txt/);
     expect(read).toContain('hello from the controller');
@@ -217,9 +206,10 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
     expect(hostFiles.some((file) => file.endsWith('made-by-pi.txt'))).toBe(false);
     expect(hostFiles.some((file) => file.endsWith('AGENTS.md'))).toBe(true);
     // 模型看到的是控制端的真实目录与项目说明。
-    expect(requests[0].system).toContain(`<cwd>\n${project}\n</cwd>`);
-    expect(requests[0].system).not.toContain(hostRoot);
-    expect(requests[0].system).toContain(`<project_instructions path="${path.join(project, 'AGENTS.md')}">`);
+    expect(requests[0].system).not.toContain(project);
+    expect(requests[0].system).toContain('# Workspace');
+    expect(requests[0].system).toContain(hostRoot);
+    expect(requests[0].system).toContain('AGENTS.md');
     expect(requests[0].system).toContain('Always be precise.');
     // 工具清单与本机任务一致(读写编辑也有提示片段)。
     expect(requests[0].system).toMatch(/- read: /);
@@ -249,13 +239,7 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
     const agent = new PiAgent(piDeps(path.join(root, 'pi-home-ask')));
     const host = createRemoteAgentHost({
       isAgentAvailable: () => true,
-      startHosted: (input) => agent.startSession({
-        sessionId: input.hostSessionId,
-        workingDir: input.shadowDir,
-        model: input.options.model,
-        permissionMode: input.options.permissionMode as never,
-        deviceHosted: { ...input.workspace, tunnelUrl: input.tunnel.url, tunnelToken: input.tunnel.token, mcpServers: input.mcpServers },
-      }),
+      startHosted: (input) => agent.startSession(hostedStartOptions(input)),
       isControllerAuthorized: () => true,
       captureOwner: () => 'owner',
       isOwnerCurrent: () => true,

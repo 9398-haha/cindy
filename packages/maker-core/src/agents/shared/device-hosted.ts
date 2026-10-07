@@ -4,7 +4,7 @@
  */
 import type { DeviceHostedSession, PiExtraSpawnConfig } from '../base-agent.js';
 
-/** 交给 Pi 内 cindy-bridge 的托管配置(隧道地址、令牌、真实工作目录)。 */
+/** 交给 Pi 内 cindy-bridge 的托管配置(隧道地址、令牌、Agent 主机上的工作目录)。 */
 export const DEVICE_HOSTED_PI_ENV = 'CINDY_PI_HOSTED';
 
 /**
@@ -66,21 +66,20 @@ export function deviceHostedExecToolName(builtin: string): string {
 }
 
 /**
- * 给模型的环境说明：项目在哪台电脑、哪个目录，工具在哪执行。只陈述事实，让模型使用真实路径。
+ * 给模型的环境说明：模型只看到 Agent 主机上的虚拟工作区路径；执行端平台与 shell 保留真实值。
  */
-export function deviceHostedEnvironmentNote(hosted: DeviceHostedSession, localWorkingDir: string): string {
+export function deviceHostedEnvironmentNote(hosted: DeviceHostedSession, _localWorkingDir: string): string {
   const lines = [
-    '# Where this task runs',
-    `The project lives on the user's computer at \`${hosted.workingDir}\` (${hosted.platform}, shell: ${hosted.shell}${hosted.osVersion ? `, ${hosted.osVersion}` : ''}).`,
-    `Every file and shell tool operates on that computer. Use paths under \`${hosted.workingDir}\`; relative paths resolve against it.`,
-    `The local working directory \`${localWorkingDir}\` only holds a copy of the project instructions; do not use it.`,
+    '# Workspace',
+    `The current workspace is \`${hosted.workingDir}\` (${hosted.platform}, shell: ${hosted.shell}${hosted.osVersion ? `, ${hosted.osVersion}` : ''}).`,
+    `File and shell tools operate in this workspace. Use paths under \`${hosted.workingDir}\`; relative paths resolve against it.`,
   ];
   if (hosted.extraDirs.length || hosted.writableDirs.length) {
-    lines.push(`Additional directories on that computer: ${[...new Set([...hosted.extraDirs, ...hosted.writableDirs])].map((dir) => `\`${dir}\``).join(', ')}.`);
+    lines.push(`Additional workspace directories: ${[...new Set([...hosted.extraDirs, ...hosted.writableDirs])].map((dir) => `\`${dir}\``).join(', ')}.`);
   }
   lines.push(`Is a git repository: ${hosted.isGitRepo ? 'yes' : 'no'}.`);
   if (hosted.personalInstructions?.trim()) {
-    lines.push('', "# The user's personal instructions (from their computer)", hosted.personalInstructions.trim());
+    lines.push('', "# The user's personal instructions", hosted.personalInstructions.trim());
   }
   return lines.join('\n');
 }
