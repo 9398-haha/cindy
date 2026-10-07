@@ -809,6 +809,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           maxRuns: REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER,
           uploadChunkBytes: REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
           maxPayloadBytes: REMOTE_AGENT_MAX_PAYLOAD_BYTES,
+          virtualWorkspace: true,
         };
         return caps;
       }

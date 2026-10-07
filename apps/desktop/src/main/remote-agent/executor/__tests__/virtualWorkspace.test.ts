@@ -34,8 +34,8 @@ describe('virtual workspace', () => {
     expect(fs.readFileSync(path.join(project, 'made.txt'), 'utf8')).toBe('literal ' + project);
     expect(workspace.resolve(target)).toBe(path.join(project, 'made.txt'));
     const read = await executor.callTool('Read', { file_path: target });
-    // 文件内容不做路径替换，否则精确 Edit 将失去原始字符串。
-    expect(read.content).toEqual([{ type: 'text', text: '1\tliteral ' + project }]);
+    // 文本文件内容也投影；写回时会还原，避免 Agent 通过中间文件读出本机路径。
+    expect(read.content).toEqual([{ type: 'text', text: '1	literal ' + virtual }]);
     const edited = await executor.callTool('Edit', { file_path: target, old_string: project, new_string: 'updated' });
     expect(JSON.stringify(edited)).not.toContain(project.replace(/\\/g, '\\\\'));
     expect(fs.readFileSync(path.join(project, 'made.txt'), 'utf8')).toBe('literal updated');
@@ -51,6 +51,8 @@ describe('virtual workspace', () => {
       .toBe('cat /real/project/src/x.ts; C:\\virtual\\project2');
     expect(projectPathText('pwd /real/project/src /real/project2', [{ from: '/real/project', to: '/virtual/project' }]))
       .toBe('pwd /virtual/project/src /real/project2');
+    expect(projectPathText(';`/real/project`? /real/project&x', [{ from: '/real/project', to: '/virtual/project' }]))
+      .toBe(';`/virtual/project`? /virtual/project&x');
     const { workspace, project, executor } = setup('/Users/agent/workspace');
     expect(workspace.mapCommand('cd "/Users/agent/workspace"')).toContain(project.replace(/\\/g, '/'));
     expect(workspace.mapTextForAgent(project)).toBe('/Users/agent/workspace');
@@ -65,7 +67,7 @@ describe('virtual workspace', () => {
     await executor.close();
   });
 
-  it('maps Codex request paths and commands before permission checks, without touching file bytes', async () => {
+  it('maps Codex request paths and commands before permission checks and projects text file bytes', async () => {
     const { workspace, project, executor } = setup('/Users/agent/workspace');
     const params = mapExecServerParams({ path: 'file:///Users/agent/workspace/a.txt', dataBase64: Buffer.from(project).toString('base64') }, workspace);
     expect(params).toEqual({ path: pathToFileURL(path.join(project, 'a.txt')).href, dataBase64: Buffer.from(project).toString('base64') });
@@ -75,7 +77,7 @@ describe('virtual workspace', () => {
     const output = mapExecServerResult({ method: 'process/output', params: { chunk: Buffer.from(project).toString('base64') } }, workspace) as any;
     expect(Buffer.from(output.params.chunk, 'base64').toString()).toBe('/Users/agent/workspace');
     const fileData = { result: { dataBase64: Buffer.from(project).toString('base64') } };
-    expect(mapExecServerResult(fileData, workspace)).toEqual(fileData);
+    expect(Buffer.from((mapExecServerResult(fileData, workspace) as any).result.dataBase64, 'base64').toString()).toBe(project);
     await executor.close();
   });
 
@@ -88,7 +90,7 @@ describe('virtual workspace', () => {
         mcpTarget: () => ({ url: 'http://unused', headers: {} }),
         fetch: async (_url, options) => {
           received = JSON.parse(Buffer.from(options!.body as Uint8Array).toString());
-          const result = { result: { content: [{ type: 'text', text: 'File: ' + path.join(project, 'a.txt') }] } };
+          const result = { result: { content: [{ type: 'text', text: 'File: ' + path.join(project, 'a.txt') }], file: pathToFileURL(path.join(project, 'a.txt')).href } };
           return new Response(sse ? 'data: ' + JSON.stringify(result) + '\n\n' : JSON.stringify(result), {
             headers: { 'content-type': sse ? 'text/event-stream' : 'application/json' },
           });
@@ -103,6 +105,7 @@ describe('virtual workspace', () => {
       if (reply.type === 'http') {
         const body = Buffer.from(reply.body!, 'base64').toString();
         expect(body).toContain('/Users/agent/workspace/a.txt');
+        expect(body).toContain('file:///Users/agent/workspace/a.txt');
         expect(body).not.toContain(project.replace(/\\/g, '\\\\'));
       }
     }

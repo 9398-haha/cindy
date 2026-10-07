@@ -6,6 +6,7 @@
  * 让 Agent 照常加载项目说明与 Skill)在这里映射回本机真实目录，模型即使用了影子路径也落在
  * 本机项目里。
  */
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,8 +78,9 @@ export function projectPathText(text: string, aliases: readonly ExecutorPathAlia
   if (!entries.length) return text;
   const patterns = entries.map((alias) => alias.from.replace(/[\\/]+$/, '').split(/[\\/]/)
     .map((part) => part.replace(/[.*+?^$()|[\]{}]/g, '\\$&')).join('[/\\\\]'));
-  // 左右都要求边界，避免修改 longer/project2 或文本里的同前缀标识符。
-  const pattern = new RegExp('(^|[\\s\'"=([{:,>+])(' + patterns.join('|') + ')(?=$|[/\\\\\\s\'";:|&)<>.,}\\]])([/\\\\][^\\s\'";:|&)<>]*|)', 'gi');
+  // 左右都要求路径段边界，避免修改 longer/project2 或文本里的同前缀标识符。
+  // 这里的边界覆盖 shell 的 ;、反引号、?、& 等分隔符。
+  const pattern = new RegExp('(^|[^A-Za-z0-9_])(' + patterns.join('|') + ')(?=$|[^A-Za-z0-9_])([/\\\\][^\\s\\x60;:|&)<>}\\]]*|)', 'gi');
   return text.replace(pattern, (match: string, left: string, prefix: string, suffix: string) => {
     const alias = entries.find((entry) => stripAliasPrefix(prefix, entry.from) === '');
     if (!alias) return match;
@@ -93,6 +95,8 @@ export class ExecutorWorkspace {
   private extraDirs: string[];
   private aliases: ExecutorPathAlias[];
   private virtualRoot?: string;
+  private hostedEnvRoot?: string;
+  private hostedHomeDir?: string;
 
   constructor(roots: ExecutorWorkspaceRoots) {
     if (!path.isAbsolute(roots.workingDir)) throw new ExecutorPathError('working directory must be absolute');
@@ -106,7 +110,21 @@ export class ExecutorWorkspace {
 
   /** Agent 启动后才知道它那边的影子目录，届时设置。 */
   setAliases(aliases: readonly ExecutorPathAlias[]): void {
-    this.aliases = aliases.filter((alias) => alias.from && path.isAbsolute(alias.to))
+    const expanded: ExecutorPathAlias[] = [];
+    for (const alias of aliases) {
+      if (!alias.from || !path.isAbsolute(alias.to)) continue;
+      expanded.push(alias);
+      const canonical = realPathOrAncestor(alias.to);
+      if (path.resolve(canonical) !== path.resolve(alias.to)) expanded.push({ from: alias.from, to: canonical });
+    }
+    const seen = new Set<string>();
+    this.aliases = expanded
+      .filter((alias) => {
+        const key = alias.from + '\\0' + path.resolve(alias.to);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .sort((a, b) => b.from.length - a.from.length);
   }
 
@@ -161,7 +179,7 @@ export class ExecutorWorkspace {
     return input;
   }
 
-  /** 工具的命令输出/诊断使用虚拟路径，文件内容与读写字节不经过文本替换。 */
+  /** 工具输出、诊断和可逆的 UTF-8 文本内容使用虚拟路径；二进制字节保持原样。 */
   mapTextForAgent(text: string): string {
     if (!this.virtualRoot) return text;
     const aliases = this.aliases.flatMap((alias) => {
@@ -179,21 +197,157 @@ export class ExecutorWorkspace {
     return projectPathText(text, aliases);
   }
 
+  /** 把 Agent 虚拟路径还原成本机路径，用于文本文件写回。 */
+  mapTextFromAgent(text: string): string {
+    if (!this.virtualRoot) return text;
+    return projectPathText(text, this.aliases.map((alias) => ({
+      from: alias.from.replace(/\\/g, '/'),
+      to: alias.to,
+    })));
+  }
+
   mapOutputForAgent(data: Buffer): Buffer {
     const text = data.toString('utf8');
     // 二进制 stdout 不做 UTF-8 往返，避免 exec.run / process/output 改变原始字节。
-    if (!Buffer.from(text, 'utf8').equals(data)) return data;
+    if (data.includes(0) || !Buffer.from(text, 'utf8').equals(data)) return data;
     const projected = this.mapTextForAgent(text);
     return projected === text ? data : Buffer.from(projected, 'utf8');
   }
 
-  /** 命令文本里出现的影子目录前缀替换成本机目录(按完整路径段)。 */
-  mapCommand(command: string): string {
-    // Windows 上的 Bash 使用正斜杠，避免未引用的反斜杠被 shell 当成转义。
-    return projectPathText(command, this.aliases.map((alias) => ({
+  mapInputFromAgent(data: Buffer): Buffer {
+    const text = data.toString('utf8');
+    if (data.includes(0) || !Buffer.from(text, 'utf8').equals(data)) return data;
+    const projected = this.mapTextFromAgent(text);
+    return projected === text ? data : Buffer.from(projected, 'utf8');
+  }
+
+  /**
+   * 为控制端执行器创建隔离环境。只保留运行 shell 所需的通用系统变量；用户目录、临时目录
+   * 和凭证类变量都不从 Desktop 进程继承。目录仍在控制端落地，但会注册成虚拟别名，命令的
+   * env / printenv 输出再经过 mapOutputForAgent 时只会看到 Agent 侧路径。
+   */
+  hostedProcessEnv(tempDir: string): NodeJS.ProcessEnv {
+    const root = this.hostedEnvRoot ?? path.join(tempDir, 'env', randomUUID());
+    if (this.hostedEnvRoot !== root) {
+      this.hostedEnvRoot = root;
+      fs.mkdirSync(path.join(root, 'home'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'tmp'), { recursive: true });
+    }
+    const fakeHome = path.join(root, 'home');
+    const fakeTemp = path.join(root, 'tmp');
+    this.hostedHomeDir = fakeHome;
+    this.virtualizeDirs([fakeHome, fakeTemp]);
+    const env: NodeJS.ProcessEnv = {};
+    const allowed = [
+      'PATHEXT', 'SystemRoot', 'WINDIR', 'ComSpec', 'COMSPEC', 'SystemDrive', 'OS',
+      'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'PROCESSOR_LEVEL', 'PROCESSOR_REVISION',
+      'NUMBER_OF_PROCESSORS', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'COLORTERM', 'CI',
+      'NODE_ENV', 'FORCE_COLOR', 'NO_COLOR',
+    ];
+    for (const key of allowed) {
+      const value = process.env[key];
+      if (value !== undefined) env[key] = value;
+    }
+    const pathValue = process.env.PATH ?? process.env.Path ?? '';
+    // PATH 仍保留完整命令搜索能力；每个目录都登记成虚拟别名，printenv/env 的输出会投影回
+    // Agent 侧路径。这样用户级 Node/pnpm、Git Bash 等不会因为隔离而失效。
+    const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
+    if (pathEntries.length) {
+      const pathRoot = path.join(root, 'path');
+      fs.mkdirSync(pathRoot, { recursive: true });
+      const hostedPathEntries: string[] = [];
+      for (const [index, target] of pathEntries.entries()) {
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(target);
+        } catch {
+          continue;
+        }
+        if (!stat.isDirectory()) continue;
+        const link = path.join(pathRoot, `entry-${index}`);
+        try {
+          if (!fs.existsSync(link)) {
+            fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+          }
+          hostedPathEntries.push(link);
+          // Keep both sides addressable: child env uses the temporary link, while diagnostics such
+          // as process.execPath may still report the linked target directory.
+          this.virtualizeDirs([target, link]);
+        } catch {
+          // A PATH entry that cannot be linked is omitted rather than reintroducing a real path.
+        }
+      }
+      if (hostedPathEntries.length) env.PATH = hostedPathEntries.join(path.delimiter);
+    }
+    env.HOME = fakeHome;
+    env.USERPROFILE = fakeHome;
+    env.TMP = fakeTemp;
+    env.TEMP = fakeTemp;
+    env.TMPDIR = fakeTemp;
+    env.XDG_CONFIG_HOME = path.join(fakeHome, '.config');
+    env.XDG_CACHE_HOME = path.join(fakeHome, '.cache');
+    env.APPDATA = path.join(fakeHome, 'AppData', 'Roaming');
+    env.LOCALAPPDATA = path.join(fakeHome, 'AppData', 'Local');
+    env.USERNAME = 'agent';
+    env.USER = 'agent';
+    env.LOGNAME = 'agent';
+    if (process.platform !== 'win32') env.SHELL = '/bin/bash';
+    return env;
+  }
+
+  /** 任务结束后移除 fake HOME/TMP 与 PATH 链接，避免临时目录残留。 */
+  async cleanupHostedProcessEnv(): Promise<void> {
+    const root = this.hostedEnvRoot;
+    this.hostedEnvRoot = undefined;
+    this.hostedHomeDir = undefined;
+    if (!root) return;
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
+  }
+
+  /** 命令文本里出现的影子目录前缀替换成本机目录(按 shell 语法安全引用)。 */
+  mapCommand(command: string, dialect: 'bash' | 'cmd' = 'bash'): string {
+    const aliases = this.aliases.map((alias) => ({
       from: alias.from,
       to: process.platform === 'win32' ? alias.to.replace(/\\/g, '/') : alias.to,
-    })));
+    })).filter((alias) => alias.from.replace(/[\\/]+$/, '').length > 2)
+      .sort((a, b) => b.from.length - a.from.length);
+    if (!aliases.length) return command;
+    const patterns = aliases.map((alias) => alias.from.replace(/[\\/]+$/, '').split(/[\\/]/)
+      .map((part) => part.replace(/[.*+?^$()|[\\]{}]/g, '\\$&')).join('[/\\\\]'));
+    const pattern = new RegExp('(^|[^A-Za-z0-9_])(' + patterns.join('|') + ')(?=$|[^A-Za-z0-9_])([/\\\\][^\\s\\x60;:|&)<>}\\]]*|)', 'gi');
+    const quoteContext = (input: string, end: number): 'none' | 'single' | 'double' => {
+      let quote: 'none' | 'single' | 'double' = 'none';
+      let escaped = false;
+      for (let i = 0; i < end; i += 1) {
+        const char = input[i];
+        if (escaped) { escaped = false; continue; }
+        if (char === '\\' && quote !== 'single') { escaped = true; continue; }
+        if (quote === 'none' && char === "'") quote = 'single';
+        else if (quote === 'none' && char === '"') quote = 'double';
+        else if (quote === 'single' && char === "'") quote = 'none';
+        else if (quote === 'double' && char === '"') quote = 'none';
+      }
+      return quote;
+    };
+    const quote = (value: string, context: 'none' | 'single' | 'double'): string => {
+      if (dialect === 'cmd') {
+        const safe = value.replace(/%/g, '%%');
+        return context === 'double' ? safe : /[\s"&|<>^]/.test(safe) ? '"' + safe.replace(/"/g, '\\"') + '"' : safe;
+      }
+      if (/^[A-Za-z0-9_./:-]+$/.test(value)) return value;
+      if (context === 'single') return value.replace(/'/g, "'\\''");
+      if (context === 'double') return value.replace(/[\\$\x60"]/g, '\\$&');
+      return /[\s'"\x60$;&|<>()[\\]{}!*?]/.test(value)
+        ? "'" + value.replace(/'/g, "'\\''") + "'"
+        : value;
+    };
+    return command.replace(pattern, (match: string, left: string, prefix: string, suffix: string, offset: number, input: string) => {
+      const alias = aliases.find((entry) => stripAliasPrefix(prefix, entry.from) === '');
+      if (!alias) return match;
+      const separator = alias.to.includes('\\') ? '\\' : '/';
+      const target = alias.to.replace(/[\\/]+$/, '') + suffix.replace(/[\\/]/g, separator);
+      return left + quote(target, quoteContext(input, offset + left.length));
+    });
   }
 
   /** 把 Agent 给的路径解析成本机绝对路径(相对路径以 baseDir / 工作目录为基准)。 */
@@ -203,7 +357,7 @@ export class ExecutorWorkspace {
     }
     const trimmed = input.startsWith('@') ? input.slice(1) : input;
     const expanded = trimmed === '~' || trimmed.startsWith('~/')
-      ? path.join(process.env.HOME ?? '', trimmed.slice(1))
+      ? path.join(this.hostedHomeDir ?? process.env.HOME ?? '', trimmed.slice(1))
       : trimmed;
     return path.resolve(this.mapAlias(baseDir), this.mapAlias(expanded));
   }

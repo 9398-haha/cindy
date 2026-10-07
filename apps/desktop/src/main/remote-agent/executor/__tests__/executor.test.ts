@@ -8,7 +8,7 @@ import { handleExecMcpRequest } from '../ccMcp';
 import { RemoteExecutor } from '../executor';
 import { EXECUTOR_APPROVAL_TTL_MS, ExecutorGate, executorGateModeFor } from '../gate';
 import type { PdfTextExtractor } from '../files';
-import { findWindowsGitBash, truncateOutput } from '../shell';
+import { createExecutorEnv, findWindowsGitBash, truncateOutput } from '../shell';
 import { ExecutorWorkspace } from '../workspace';
 
 const RG = path.resolve(__dirname, '../../../../../../ripgrep-bin', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg');
@@ -63,6 +63,50 @@ afterEach(() => {
 });
 
 describe('workspace', () => {
+  it('filters credentials and real user directories from child environments while keeping PATH', () => {
+    const env = createExecutorEnv({
+      PATH: 'tool-path',
+      HOME: 'C:/Users/real',
+      USERPROFILE: 'C:/Users/real',
+      TEMP: 'C:/Users/real/AppData/Local/Temp',
+      OPENAI_API_KEY: 'secret',
+      SESSION_TOKEN: 'secret',
+      SAFE_FLAG: '1',
+    });
+    expect(env).toEqual({ PATH: 'tool-path', SAFE_FLAG: '1' });
+  });
+
+  it('gives hosted processes virtual home and temp paths without dropping command search', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setVirtualRoot('/Users/agent');
+    const env = workspace.hostedProcessEnv(path.join(root, 'hosted-temp'));
+    expect(env.PATH).toBeTruthy();
+    expect(env.HOME).not.toBe(os.homedir());
+    expect(workspace.resolve('~/.config')).toBe(path.join(env.HOME!, '.config'));
+    expect(workspace.mapTextForAgent(env.HOME!)).not.toContain(os.homedir());
+    expect(workspace.mapTextForAgent(env.TMP!)).not.toContain(os.tmpdir());
+  });
+
+  it('passes the isolated environment to Claude shell commands', async () => {
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setVirtualRoot('/Users/agent');
+    const executor = new RemoteExecutor({
+      workspace,
+      gate: new ExecutorGate(workspace, 'normal'),
+      rgPath: RG,
+      tempDir: path.join(root, 'shell-temp'),
+    });
+    const bash = process.platform === 'win32' && !findWindowsGitBash()
+      ? 'node -p "process.env.HOME"'
+      : "node -p 'process.env.HOME'";
+    const result = await executor.callTool('Bash', { command: bash });
+    const output = text(result);
+    expect(result.isError).not.toBe(true);
+    expect(output).toContain('/Users/agent');
+    expect(output).not.toContain(os.homedir());
+    await executor.close();
+  });
+
   it('resolves relative paths against the working directory and maps shadow paths back', () => {
     const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: '/remote/shadow/proj', to: project }] });
     expect(workspace.resolve('a/b.txt')).toBe(path.join(project, 'a/b.txt'));
@@ -107,6 +151,9 @@ describe('permission ceiling', () => {
     expect(gate.authorize({ kind: 'exec', command: risky, cwd: project }).ok).toBe(false);
     gate.recordApproval({ kind: 'exec', command: risky, cwd: project });
     expect(gate.authorize({ kind: 'exec', command: risky, cwd: project }).ok).toBe(true);
+    const cwdBound = 'rm -rf build';
+    gate.recordApproval({ kind: 'exec', command: cwdBound, cwd: project });
+    expect(gate.authorize({ kind: 'exec', command: cwdBound, cwd: outside }).ok).toBe(false);
     // 命令批准用一次即失效。
     expect(gate.authorize({ kind: 'exec', command: risky, cwd: project }).ok).toBe(false);
   });

@@ -55,6 +55,7 @@ export async function piGrep(
   root: string,
   input: PiGrepInput,
   signal?: AbortSignal,
+  env?: NodeJS.ProcessEnv,
 ): Promise<PiGrepResult> {
   const stat = await fsp.stat(root);
   const rootIsDirectory = stat.isDirectory();
@@ -77,7 +78,7 @@ export async function piGrep(
   let lastLine = -1;
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(rgPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal });
+    const child = spawn(rgPath, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], signal });
     const reader = readline.createInterface({ input: child.stdout });
     let stopped = false;
     reader.on('line', (raw) => {

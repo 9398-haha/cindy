@@ -21,6 +21,7 @@ import {
 } from '@cindy/device-link';
 
 import type { ExecutorAction, ExecutorGateDecision } from '../executor/gate';
+import { createExecutorEnv, resolveExecutorShell } from '../executor/shell';
 import type { ExecutorWorkspace } from '../executor/workspace';
 
 export const EXEC_SERVER_WS_PATH = '/ws/exec-server';
@@ -35,7 +36,7 @@ export interface ExecServerRelayDeps {
   workspace: ExecutorWorkspace;
   authorize(action: ExecutorAction): ExecutorGateDecision;
   push(frames: RemoteAgentPushFrame[]): Promise<void>;
-  env?: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv);
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }
 
@@ -87,8 +88,8 @@ export function execServerActions(method: string, params: unknown, cwd: string):
   return paths.map((target) => ({ kind, path: target }) as ExecutorAction);
 }
 
-/** 仅映射协议路径和命令，绝不改写 fs/writeFile 的文件数据。 */
-export function mapExecServerParams(value: unknown, workspace: ExecutorWorkspace): unknown {
+/** 映射协议路径、命令和可逆的 UTF-8 文件数据；二进制内容保持原样。 */
+export function mapExecServerParams(value: unknown, workspace: ExecutorWorkspace, method?: string): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const result = { ...value as Record<string, unknown> };
   for (const key of ['cwd', 'path', 'sourcePath', 'destinationPath', 'source', 'destination', 'from', 'to', 'target']) {
@@ -100,12 +101,15 @@ export function mapExecServerParams(value: unknown, workspace: ExecutorWorkspace
       result[key] = pathToFileURL(workspace.resolve(foreign)).href;
     } else result[key] = workspace.resolve(item);
   }
-  if (Array.isArray(result.argv)) result.argv = result.argv.map((part) => typeof part === 'string' ? workspace.mapCommand(part) : part);
-  if (typeof result.command === 'string') result.command = workspace.mapCommand(result.command);
+  if (Array.isArray(result.argv)) result.argv = result.argv.map((part) => typeof part === 'string' ? workspace.mapCommand(part, resolveExecutorShell().dialect) : part);
+  if (typeof result.command === 'string') result.command = workspace.mapCommand(result.command, resolveExecutorShell().dialect);
+  if (method?.startsWith('fs/write') && typeof result.dataBase64 === 'string') {
+    result.dataBase64 = workspace.mapInputFromAgent(Buffer.from(result.dataBase64, 'base64')).toString('base64');
+  }
   return result;
 }
 
-/** JSON 层逐字符串投影，文件 base64 数据原样返回；进程输出单独解码。 */
+/** JSON 层逐字符串投影；文件 base64 数据保持原始字节，进程输出单独解码。 */
 export function mapExecServerResult(value: unknown, workspace: ExecutorWorkspace, method?: string): unknown {
   if (typeof value === 'string') {
     if (value.startsWith('file://')) {
@@ -180,7 +184,9 @@ export class ExecServerRelay {
     try {
       child = spawn(this.deps.codexPath, ['exec-server', '--listen', 'stdio://'], {
         cwd: this.deps.cwd,
-        env: this.deps.env ?? process.env,
+        env: typeof this.deps.env === 'function'
+          ? this.deps.env()
+          : createExecutorEnv(this.deps.env ?? process.env),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -223,7 +229,7 @@ export class ExecServerRelay {
       message = null;
     }
     if (message && typeof message.method === 'string' && message.id !== undefined) {
-      message.params = mapExecServerParams(message.params, this.deps.workspace);
+      message.params = mapExecServerParams(message.params, this.deps.workspace, message.method);
       data = JSON.stringify(message);
       for (const action of execServerActions(message.method, message.params, this.deps.cwd)) {
         const decision = this.deps.authorize(action);

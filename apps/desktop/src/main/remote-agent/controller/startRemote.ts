@@ -175,6 +175,7 @@ export async function startRemoteAgentSession(
         codexPath,
         cwd: workspace.workingDir,
         workspace,
+        env: () => workspace.hostedProcessEnv(path.join(os.tmpdir(), 'cindy-remote-agent')),
         authorize: (action) => executor.check(action),
         push: async (frames) => {
           await pushFrames?.(frames);
@@ -267,6 +268,10 @@ export async function startRemoteAgentSession(
 
   let startedRaw: Record<string, unknown>;
   try {
+    const caps = await RemoteAgentRunClient.caps(deps.invoke);
+    if (caps.virtualWorkspace !== true) {
+      throw new Error('[REMOTE_AGENT_UNSUPPORTED] The other computer does not support the virtual workspace required to protect local paths.');
+    }
     startedRaw = await client.open(kind, payload);
   } catch (error) {
     client.abandon('start-failed');

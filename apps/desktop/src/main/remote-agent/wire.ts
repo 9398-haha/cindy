@@ -139,7 +139,7 @@ export interface RemoteAgentWirePersonal {
 export interface RemoteAgentOpenPayload {
   /** 控制端任务 id。 */
   sessionId: string;
-  /** 可选增量能力：Agent 使用本机虚拟工作区，旧控制端不传时沿用原路径合同。 */
+  /** 能力增量：Agent 使用本机虚拟工作区；新控制端在 open 前必须确认对端 caps 支持。 */
   virtualWorkspace?: boolean;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;

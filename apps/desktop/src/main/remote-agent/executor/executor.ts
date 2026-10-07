@@ -7,6 +7,7 @@
  *    NotebookEdit(Claude Code 的自带文件与命令工具关掉后由它顶替)。
  * 写文件前通知「每轮改动对比」抓取改前内容；命令执行后登记一次无法预知范围的改动。
  */
+import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -32,7 +33,7 @@ import {
 } from './files';
 import type { ExecutorAction, ExecutorGate, ExecutorGateDecision, ExecutorGateMode } from './gate';
 import { piGrep, type PiGrepInput } from './search';
-import { runOnce, ShellSession } from './shell';
+import { resolveExecutorShell, runOnce, ShellSession } from './shell';
 import { ExecutorPathError, type ExecutorWorkspace } from './workspace';
 
 /** Pi bash 的超时(秒)上限，与 Pi 侧 Cindy 桥的上限一致。 */
@@ -107,11 +108,17 @@ export class RemoteExecutor {
   constructor(private readonly opts: RemoteExecutorOptions) {
     this.workspace = opts.workspace;
     this.gate = opts.gate;
-    this.rg = createRipgrepRunner(opts.rgPath);
+    const tempDir = opts.tempDir ?? path.join(os.tmpdir(), 'cindy-remote-agent');
+    // Initialize the task-local home before any Read/Write path is resolved; later calls refresh
+    // its virtual alias once the host mirror root is known.
+    opts.workspace.hostedProcessEnv(tempDir);
+    const rg = createRipgrepRunner(opts.rgPath);
+    this.rg = (args, cwd, runOptions) => rg(args, cwd, { ...runOptions, env: opts.workspace.hostedProcessEnv(tempDir) });
     this.shell = new ShellSession({
       workingDir: opts.workspace.workingDir,
       isAllowedCwd: (cwd) => opts.workspace.contains(cwd),
-      tempDir: opts.tempDir,
+      tempDir,
+      env: () => opts.workspace.hostedProcessEnv(tempDir),
     });
     this.writeHooks = {
       beforeWrite: async (absPath) => {
@@ -140,6 +147,7 @@ export class RemoteExecutor {
     if (this.closed) return;
     this.closed = true;
     await this.shell.close();
+    await this.workspace.cleanupHostedProcessEnv();
   }
 
   private ensureOpen(): void {
@@ -170,7 +178,7 @@ export class RemoteExecutor {
         case 'fs.read': {
           const target = this.resolvePath(str(body, 'path'));
           this.authorize({ kind: 'read', path: target });
-          return { data: (await rawReadFile(target)).toString('base64') };
+          return { data: this.workspace.mapOutputForAgent(await rawReadFile(target)).toString('base64') };
         }
         case 'fs.access': {
           const target = this.resolvePath(str(body, 'path'));
@@ -183,7 +191,7 @@ export class RemoteExecutor {
           const target = this.resolvePath(str(body, 'path'));
           this.authorize({ kind: 'write', path: target });
           if (typeof body.data !== 'string') throw new ExecutorRequestError('INVALID', 'data must be a base64 string');
-          const data = Buffer.from(body.data, 'base64');
+          const data = this.workspace.mapInputFromAgent(Buffer.from(body.data, 'base64'));
           await this.writeHooks.beforeWrite(target);
           await rawWriteFile(target, data);
           return {};
@@ -201,7 +209,7 @@ export class RemoteExecutor {
         }
         case 'fs.readdir': {
           const target = this.resolvePath(str(body, 'path'));
-          this.authorize({ kind: 'read', path: target });
+          this.authorize({ kind: 'read', path: target, scope: 'tree' });
           return { entries: await rawReaddir(target) };
         }
         case 'fs.glob': {
@@ -220,11 +228,12 @@ export class RemoteExecutor {
           if (typeof params.pattern !== 'string' || !params.pattern) throw new ExecutorRequestError('INVALID', 'pattern is required');
           const root = this.resolvePath(typeof params.path === 'string' && params.path ? params.path : '.');
           this.authorize({ kind: 'read', path: root, scope: 'tree' });
-          const result = await piGrep(this.opts.rgPath, root, params, signal);
+          const result = await piGrep(this.opts.rgPath, root, params, signal, this.workspace.hostedProcessEnv(this.shell.getTempDir()));
           return { ...result, text: this.workspace.mapTextForAgent(result.text) };
         }
         case 'exec.run': {
-          const command = this.workspace.mapCommand(str(body, 'command'));
+          this.workspace.virtualizeDirs([this.shell.getTempDir()]);
+          const command = this.workspace.mapCommand(str(body, 'command'), resolveExecutorShell().dialect);
           const cwd = this.resolvePath(optionalString(body, 'cwd') ?? this.workspace.workingDir);
           this.authorize({ kind: 'exec', command, cwd });
           const timeoutSeconds = optionalNumber(body, 'timeout');
@@ -232,7 +241,12 @@ export class RemoteExecutor {
             ? Math.min(timeoutSeconds, PI_BASH_MAX_TIMEOUT_SECONDS) * 1000
             : undefined;
           try {
-            const result = await runOnce(command, { cwd, timeoutMs, signal });
+            const result = await runOnce(command, {
+              cwd,
+              timeoutMs,
+              signal,
+              env: this.workspace.hostedProcessEnv(this.shell.getTempDir()),
+            });
             return {
               output: this.workspace.mapOutputForAgent(result.output).toString('base64'),
               exitCode: result.exitCode,
@@ -282,19 +296,19 @@ export class RemoteExecutor {
         case 'Read': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
           this.authorizeTool({ kind: 'read', path: target });
-          return await ccRead(target, {
+          return this.mapToolResult(await ccRead(target, {
             file_path: target,
             offset: optionalNumber(args, 'offset'),
             limit: optionalNumber(args, 'limit'),
             pages: optionalString(args, 'pages'),
-          }, this.readState, this.workspace.toAgentPath(this.workspace.workingDir), this.opts.extractPdfText, this.workspace.toAgentPath(target));
+          }, this.readState, this.workspace.toAgentPath(this.workspace.workingDir), this.opts.extractPdfText, this.workspace.toAgentPath(target)));
         }
         case 'Write': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
           const content = args.content;
           if (typeof content !== 'string') return textResult('content must be a string.', true);
           this.authorizeTool({ kind: 'write', path: target });
-          return await ccWrite(target, content, this.readState, this.writeHooks, this.workspace.toAgentPath(target));
+          return this.mapToolResult(await ccWrite(target, this.workspace.mapTextFromAgent(content), this.readState, this.writeHooks, this.workspace.toAgentPath(target)));
         }
         case 'Edit': {
           const target = this.resolvePath(str(args, 'file_path'), this.shell.getCwd());
@@ -302,11 +316,11 @@ export class RemoteExecutor {
             return textResult('old_string and new_string must be strings.', true);
           }
           this.authorizeTool({ kind: 'write', path: target });
-          return await ccEdit(target, {
-            old_string: args.old_string,
-            new_string: args.new_string,
+          return this.mapToolResult(await ccEdit(target, {
+            old_string: this.workspace.mapTextFromAgent(args.old_string),
+            new_string: this.workspace.mapTextFromAgent(args.new_string),
             replace_all: args.replace_all === true,
-          }, this.readState, this.writeHooks, this.workspace.toAgentPath(target));
+          }, this.readState, this.writeHooks, this.workspace.toAgentPath(target)));
         }
         case 'NotebookEdit': {
           const target = this.resolvePath(str(args, 'notebook_path'), this.shell.getCwd());
@@ -315,12 +329,12 @@ export class RemoteExecutor {
           const editMode = args.edit_mode === 'insert' || args.edit_mode === 'delete' || args.edit_mode === 'replace'
             ? args.edit_mode : undefined;
           this.authorizeTool({ kind: 'write', path: target });
-          return await ccNotebookEdit(target, {
+          return this.mapToolResult(await ccNotebookEdit(target, {
             cell_id: optionalString(args, 'cell_id'),
-            new_source: args.new_source,
+            new_source: this.workspace.mapTextFromAgent(args.new_source),
             cell_type: cellType,
             edit_mode: editMode,
-          }, this.readState, this.writeHooks);
+          }, this.readState, this.writeHooks));
         }
         default:
           return textResult(`Unknown tool: ${name}`, true);
@@ -339,10 +353,19 @@ export class RemoteExecutor {
     if (!decision.ok) throw new ExecutorDenied(decision.reason ?? 'Not allowed.');
   }
 
+  private mapToolResult(result: ToolResult): ToolResult {
+    return {
+      ...result,
+      content: result.content.map((item) => item.type === 'text'
+        ? { ...item, text: this.workspace.mapTextForAgent(item.text) }
+        : item),
+    };
+  }
+
   private async bash(args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
     const rawCommand = args.command;
     if (typeof rawCommand !== 'string' || !rawCommand.trim()) return textResult('command is required.', true);
-    const command = this.workspace.mapCommand(rawCommand);
+    const command = this.workspace.mapCommand(rawCommand, resolveExecutorShell().dialect);
     this.authorizeTool({ kind: 'exec', command, cwd: this.shell.getCwd() });
     const timeout = optionalNumber(args, 'timeout');
     try {

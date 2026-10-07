@@ -59,6 +59,10 @@ function pathKey(target: string): string {
   return path.resolve(target);
 }
 
+function execKey(command: string, cwd: string): string {
+  return `${path.resolve(cwd)}\\0${command}`;
+}
+
 export class ExecutorGate {
   private mode: ExecutorGateMode;
   private approvals: Approval[] = [];
@@ -83,7 +87,7 @@ export class ExecutorGate {
   recordApproval(action: ExecutorAction): void {
     this.prune();
     this.approvals.push(action.kind === 'exec'
-      ? { kind: 'exec', key: action.command, expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS }
+      ? { kind: 'exec', key: execKey(action.command, action.cwd), expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS }
       : { kind: 'path', key: pathKey(action.path), expiresAt: this.now() + EXECUTOR_APPROVAL_TTL_MS });
     if (this.approvals.length > MAX_APPROVALS) this.approvals.splice(0, this.approvals.length - MAX_APPROVALS);
   }
@@ -124,7 +128,7 @@ export class ExecutorGate {
   private consume(action: ExecutorAction): boolean {
     this.prune();
     const kind = action.kind === 'exec' ? 'exec' : 'path';
-    const key = action.kind === 'exec' ? action.command : pathKey(action.path);
+    const key = action.kind === 'exec' ? execKey(action.command, action.cwd) : pathKey(action.path);
     const index = this.approvals.findIndex((approval) => approval.kind === kind && approval.key === key);
     if (index < 0) return false;
     if (kind === 'exec') this.approvals.splice(index, 1);

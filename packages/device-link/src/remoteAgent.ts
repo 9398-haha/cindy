@@ -166,6 +166,8 @@ export interface RemoteAgentCaps {
   maxRuns: number;
   uploadChunkBytes: number;
   maxPayloadBytes: number;
+  /** 是否支持 opaque 虚拟工作区；不支持时控制端必须拒绝启动以免泄露真实路径。 */
+  virtualWorkspace?: boolean;
 }
 
 export interface RemoteAgentReadResult {
@@ -364,6 +366,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     maxRuns: count(v.maxRuns, 1_000),
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
+    ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;
