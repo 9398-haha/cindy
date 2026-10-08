@@ -4257,9 +4257,8 @@ export function ModelSelector({
           {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
               当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
           {activeSourceId && agentDevice ? (
-            // Agent 在另一台电脑:同一个图标位换成带信号波纹的远程供应商 Logo。
+            // Agent 在另一台电脑:Logo 原大小原位置不变，右上角外侧叠信号波纹。
             <RemoteSourceMark
-              size={17}
               className={cn(
                 'mr-1.5',
                 isCreateAgentVariant

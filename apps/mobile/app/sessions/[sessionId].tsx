@@ -367,7 +367,6 @@ import {
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
 import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
-import { RemoteSourceMark } from '@/session/RemoteSourceMark';
 import {
   drainComposerAnnotationSubmissions,
   drainComposerAttachments,
@@ -6956,26 +6955,22 @@ export default function SessionScreen() {
                 color={colors.textSecondary}
                 size={iconSize.sm}
               />
-            ) : composerPillSourceId ? (() => {
+            ) : composerPillSourceId ? (
               // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
               // 不静默换成 activeSourceId 的默认回退 Logo。
-              const sourceMark = (
-                <MobileModelIconMark
-                  color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-                  icon={composerDisplaySession && composerPillSourceProvider
-                    ? getModel(composerPillSourceProvider, composerDisplaySession.model, composerDisplayAgentKind)?.icon
-                    : undefined}
-                  name={composerPillSourceProvider?.name ?? composerPillSourceId}
-                  providerId={composerPillSourceId}
-                  routing={composerPillSourceProvider?.routing}
-                  logoKind={composerPillSourceProvider?.logoKind}
-                />
-              );
               // Agent(下一条消息起)在另一台电脑运行:与桌面 trigger 同一个远程标记。
-              return nextAgentDeviceId
-                ? <RemoteSourceMark size={iconSize.lg}>{sourceMark}</RemoteSourceMark>
-                : sourceMark;
-            })() : null}
+              <MobileModelIconMark
+                color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
+                icon={composerDisplaySession && composerPillSourceProvider
+                  ? getModel(composerPillSourceProvider, composerDisplaySession.model, composerDisplayAgentKind)?.icon
+                  : undefined}
+                name={composerPillSourceProvider?.name ?? composerPillSourceId}
+                providerId={composerPillSourceId}
+                routing={composerPillSourceProvider?.routing}
+                logoKind={composerPillSourceProvider?.logoKind}
+                remote={Boolean(nextAgentDeviceId)}
+              />
+            ) : null}
             onPress={toggleComposerModelPicker}
             testID="session.composerModelButton"
           />
