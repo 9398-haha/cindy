@@ -133,9 +133,10 @@ describe('server group feature parity', () => {
   it.each(['mention', 'stop', 'dismiss', 'start', 'edit'])('invalidates a pending decision on %s', async action => {
     arrange(proposed);
     let finish!: (value: { needsPlan: true; steps: typeof steps }) => void;
-    deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const decide = vi.fn<NonNullable<BotGroupChatServiceDeps['decidePlan']>>(() => new Promise(resolve => { finish = resolve; }));
+    deps.decidePlan = decide;
     await send(); await flush();
-    const signal = vi.mocked(deps.decidePlan).mock.calls[0][1];
+    const signal = decide.mock.calls[0]![1];
     if (action === 'mention') await send({ clientId: 'parity:message:2', mentions: { all: false, botIds: [botId] } });
     else if (action === 'stop') await service.stopRound(roomId);
     else if (action === 'dismiss') await service.dismissPlan({ groupId: roomId, planId });

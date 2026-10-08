@@ -938,7 +938,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     sendMessage: (input, origin) => {
       if (!current()) return Promise.resolve(chatGroupFailure(new Error('OWNER_CHANGED')));
-      const key = createHash('sha256').update(JSON.stringify([input, origin?.controllerDeviceId ?? null])).digest('hex');
+      // clientId identifies one immutable send; annotation burn-in can regenerate
+      // attachment names/URLs while the controller is retrying its lost receipt.
+      const identity = z.object({ groupId: id, clientId: z.string().min(1).max(200), text: z.string(),
+        mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional() }).safeParse(input);
+      if (!identity.success) return sendMessage(input, origin);
+      const key = createHash('sha256').update(JSON.stringify([identity.data, origin?.controllerDeviceId ?? null])).digest('hex');
       const receipt = sendReceipts.get(key);
       if (receipt) return Promise.resolve(receipt);
       const pending = pendingSends.get(key);
