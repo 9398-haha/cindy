@@ -3930,8 +3930,85 @@ const PROVIDER_SHARE_ACCESS_FAILURE: InvokeResultPayload = {
   ok: false,
   error: { code: 'ACCESS_REVOKED', message: 'provider share is not available' },
 };
-/** The only channels a provider-share guest may invoke. */
-const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([REMOTE_AGENT_CHANNEL, 'maker:provider:list']);
+/**
+ * The only channels a provider-share guest may invoke: the remote agent, and the read-only
+ * catalog reads its model picker and send gate need (provider list, agent capabilities,
+ * available agents, agent readiness), each narrowed to the shared provider below.
+ */
+const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([
+  REMOTE_AGENT_CHANNEL,
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:list-available-agents',
+  'maker:agent:status',
+]);
+const PROVIDER_SHARE_AGENT_ARG_CHANNELS: ReadonlySet<string> = new Set(['maker:get-capabilities', 'maker:agent:status']);
+const PROVIDER_SHARE_AGENT_KINDS: ReadonlySet<string> = new Set(['claude-code', 'codex', 'pi']);
+
+type SharedProviderView = { agents: string[]; models: Record<string, string[]> };
+
+/**
+ * The shared provider as the guest sees it: `null` when it is no longer open for remote use,
+ * or the failed read itself (the guest then retries instead of caching an empty answer).
+ */
+async function sharedProviderView(
+  src: string, providerId: string,
+): Promise<SharedProviderView | null | Extract<InvokeResultPayload, { ok: false }>> {
+  // Own timing: the slow-invoke log must not file this read under the guest's channel.
+  const listed = await runAuthorizedInvoke(src, { channel: 'maker:provider:list', args: [] }, new RemoteInvokeTiming());
+  if (!listed.ok) return listed;
+  const projected = projectProviderListForShare(listed.result, providerId) as { providers?: Array<Record<string, unknown>> };
+  const provider = projected.providers?.[0];
+  if (!provider) return null;
+  const agents = Array.isArray(provider.agents) ? provider.agents.filter((agent): agent is string => typeof agent === 'string') : [];
+  const models: Record<string, string[]> = {};
+  if (provider.models && typeof provider.models === 'object') {
+    for (const [agent, entries] of Object.entries(provider.models as Record<string, unknown>)) {
+      // Exact ids: in the catalog `x[1m]` and `x` are separate models, possibly from other providers.
+      models[agent] = Array.isArray(entries)
+        ? entries.flatMap((entry) => (entry && typeof (entry as { id?: unknown }).id === 'string' ? [(entry as { id: string }).id] : []))
+        : [];
+    }
+  }
+  return { agents, models };
+}
+
+/**
+ * Narrow a read-only answer to what the shared provider offers: capabilities keep only its
+ * models, available agents only the agents it serves, and agent readiness only says whether
+ * an agent the share serves is installed (no local path, account identity or this computer's
+ * own sign-in state; the guest takes readiness from the shared provider list).
+ */
+async function projectProviderShareRead(
+  src: string, channel: string, args: unknown[], result: unknown, providerId: string,
+): Promise<{ ok: true; value: unknown } | Extract<InvokeResultPayload, { ok: false }>> {
+  if (channel === 'maker:provider:list') return { ok: true, value: projectProviderListForShare(result, providerId) };
+  const view = await sharedProviderView(src, providerId);
+  if (view && 'ok' in view) return view;
+  if (channel === 'maker:agent:status') {
+    const status = result && typeof result === 'object' ? result as { binaryReady?: unknown } : {};
+    return { ok: true, value: { binaryReady: view?.agents.includes(String(args[0])) === true && status.binaryReady === true } };
+  }
+  if (channel === 'maker:list-available-agents') {
+    return { ok: true, value: Array.isArray(result) && view ? result.filter((agent) => view.agents.includes(String(agent))) : [] };
+  }
+  // maker:get-capabilities
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return { ok: true, value: result };
+  const offered = new Set(view?.models[String(args[0])] ?? []);
+  const capabilities = result as { availableModels?: unknown };
+  return {
+    ok: true,
+    value: {
+      ...capabilities,
+      availableModels: Array.isArray(capabilities.availableModels)
+        ? capabilities.availableModels.filter((model) => {
+          const id = model && typeof (model as { id?: unknown }).id === 'string' ? (model as { id: string }).id : '';
+          return id !== '' && offered.has(id);
+        })
+        : [],
+    },
+  };
+}
 
 /** Keep only the shared provider (and only while it stays open for remote use). */
 function projectProviderListForShare(result: unknown, providerId: string): unknown {
@@ -3967,12 +4044,16 @@ async function runProviderShareInvoke(
     log.warn(`blocked provider-share channel from ${shortId(src)}: ${payload.channel}`);
     return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed for shared providers` } };
   }
+  const args = Array.isArray(payload.args) ? payload.args : [];
+  if (PROVIDER_SHARE_AGENT_ARG_CHANNELS.has(payload.channel) && !PROVIDER_SHARE_AGENT_KINDS.has(String(args[0]))) {
+    return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] unknown agent' } };
+  }
   const result = await runAuthorizedInvoke(src, payload, timing);
   if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
-  if (payload.channel === 'maker:provider:list' && result.ok) {
-    return { ...result, result: projectProviderListForShare(result.result, access.providerId) };
-  }
-  return result;
+  if (payload.channel === REMOTE_AGENT_CHANNEL || !result.ok) return result;
+  const projected = await projectProviderShareRead(src, payload.channel, args, result.result, access.providerId);
+  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  return projected.ok ? { ...result, result: projected.value } : projected;
 }
 
 /** For diagnostics: whether any provider share is currently known on this computer. */

@@ -349,7 +349,6 @@
     },
     "received": {
       "title": "分享给我的供应商",
-      "description": "别人分享给你的供应商会出现在模型列表的远程供应商里。",
       "empty": "还没有人分享供应商给你。收到分享链接后，点开它或粘贴到这里。",
       "paste": "粘贴分享链接",
       "fromOwner": "来自 {{name}} 的分享",
@@ -374,7 +373,15 @@
         "empty": "请先粘贴分享链接",
         "open": "打开链接",
         "cancel": "取消"
-      }
+      },
+      "detailNote": "Agent 在 {{name}} 的电脑上运行，用的是对方的登录和配额。新建任务时在模型列表里选择它就能用。",
+      "modelsTitle": "可用的模型",
+      "modelsLoading": "正在读取对方开放的模型…",
+      "modelsFailed": "暂时读不到对方开放的模型，请稍后再试。",
+      "modelsEmpty": "对方还没有开放可用的模型。",
+      "pausedNote": "对方暂停了这个分享，恢复后才能使用。",
+      "offlineNote": "对方电脑不在线，上线后就能继续使用。",
+      "needsUpdateNote": "对方的 Cindy 更新后才能使用这个分享。"
     },
     "picker": {
       "deviceName": "{{device}} · 来自 {{owner}} 的分享",

@@ -351,7 +351,6 @@
     },
     "received": {
       "title": "Providers Shared with Me",
-      "description": "Providers others share with you appear among the remote providers in the model list.",
       "empty": "No one has shared a provider with you yet. When you get a share link, open it or paste it here.",
       "paste": "Paste Share Link",
       "fromOwner": "Shared by {{name}}",
@@ -376,7 +375,15 @@
         "empty": "Paste a share link first",
         "open": "Open Link",
         "cancel": "Cancel"
-      }
+      },
+      "detailNote": "The agent runs on {{name}}'s computer, using their sign-in and quota. To use it, choose it in the model list when you start a task.",
+      "modelsTitle": "Available Models",
+      "modelsLoading": "Loading the models they shared…",
+      "modelsFailed": "Couldn't load the models they shared. Try again later.",
+      "modelsEmpty": "They haven't made any models available yet.",
+      "pausedNote": "They've paused this share. You can use it again once they resume it.",
+      "offlineNote": "Their computer is offline. You can use it again once it is back online.",
+      "needsUpdateNote": "They need to update Cindy before you can use this share."
     },
     "picker": {
       "deviceName": "{{device}} · Shared by {{owner}}",

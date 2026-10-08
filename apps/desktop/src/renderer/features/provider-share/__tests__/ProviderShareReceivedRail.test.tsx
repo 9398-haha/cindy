@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 
-import { ProviderShareReceivedSection } from '../ProviderShareReceivedSection';
+import { ProviderShareReceivedDetail, ProviderShareReceivedRailGroup } from '../ProviderShareReceivedRail';
 import { resetProviderShareStoreForTests } from '../providerShareStore';
 
 vi.mock('react-i18next', () => ({
@@ -20,6 +20,16 @@ const confirmSpy = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: confirmSpy }) }));
 const joinSpy = vi.hoisted(() => vi.fn());
 vi.mock('../joinIntent', () => ({ requestProviderShareJoin: joinSpy }));
+const catalog = vi.hoisted(() => ({
+  value: { providers: [] as unknown[], loading: false, error: null as string | null, unsupported: false },
+}));
+const catalogDeviceIds = vi.hoisted(() => [] as Array<string | undefined>);
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  useDeviceProviders: (deviceId?: string) => {
+    catalogDeviceIds.push(deviceId);
+    return catalog.value;
+  },
+}));
 
 const share: ProviderShareReceived = {
   shareId: 'share-1',
@@ -41,6 +51,8 @@ beforeEach(() => {
   resetProviderShareStoreForTests();
   joinSpy.mockClear();
   confirmSpy.mockClear();
+  catalogDeviceIds.length = 0;
+  catalog.value = { providers: [], loading: false, error: null, unsupported: false };
   received = [];
   command.mockReset();
   command.mockImplementation(async (cmd: { action: string }) => {
@@ -55,9 +67,9 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe('ProviderShareReceivedSection', () => {
+describe('ProviderShareReceivedRailGroup', () => {
   it('stays visible when empty and hands a pasted link to the apply dialog', async () => {
-    render(<ProviderShareReceivedSection />);
+    render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={() => undefined} />);
     expect(screen.getByText('providerShare.received.title')).toBeTruthy();
     expect(screen.getByText('providerShare.received.empty')).toBeTruthy();
 
@@ -75,14 +87,53 @@ describe('ProviderShareReceivedSection', () => {
     await waitFor(() => expect(screen.queryByTestId('provider-share-paste-dialog')).toBeNull());
   });
 
-  it('lists received shares with their status and leaves after confirmation', async () => {
+  it('lists received shares next to the providers and selects one', async () => {
     received = [share];
-    render(<ProviderShareReceivedSection />);
-    expect(await screen.findByTestId('provider-share-received-row')).toBeTruthy();
+    const onSelect = vi.fn();
+    render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={onSelect} />);
+    const row = await screen.findByTestId('provider-share-received-row');
+    expect(row.textContent).toContain('Cindy AI');
+    expect(row.getAttribute('aria-label')).toContain('providerShare.received.statusPaused');
+    fireEvent.click(row);
+    expect(onSelect).toHaveBeenCalledWith('share-1');
+  });
+});
+
+describe('ProviderShareReceivedDetail', () => {
+  it('explains a paused share without reading its models, and leaves after confirmation', async () => {
+    render(<ProviderShareReceivedDetail share={share} />);
     expect(screen.getByText('providerShare.received.statusPaused')).toBeTruthy();
+    expect(screen.getByText('providerShare.received.pausedNote')).toBeTruthy();
+    expect(catalogDeviceIds.every((deviceId) => deviceId === undefined)).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: /providerShare\.received\.leaveAria/ }));
     await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'leave', memberId: 'mem-1' }));
     expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ confirmVariant: 'destructive' }));
+  });
+
+  it('lists the shared models the owner left visible', () => {
+    catalog.value = {
+      providers: [{
+        id: 'xd', name: 'Cindy AI', agents: ['claude-code', 'codex'], connected: true, routing: {},
+        models: {
+          'claude-code': [{ id: 'opus', name: 'Opus 5.5' }, { id: 'hidden', name: 'Hidden' }],
+          codex: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'gpt', name: 'GPT-5.5' }],
+        },
+      }],
+      modelVisibilityOverrides: { 'claude-code:xd:hidden': false },
+      loading: false,
+      error: null,
+      unsupported: false,
+    } as typeof catalog.value;
+    render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />);
+    expect(catalogDeviceIds).toContain('share:share-1');
+    const list = screen.getByTestId('provider-share-received-models');
+    expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5', 'GPT-5.5']);
+  });
+
+  it('says when the models cannot be read', () => {
+    catalog.value = { providers: [], loading: false, error: 'boom', unsupported: false };
+    render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />);
+    expect(screen.getByText('providerShare.received.modelsFailed')).toBeTruthy();
   });
 });

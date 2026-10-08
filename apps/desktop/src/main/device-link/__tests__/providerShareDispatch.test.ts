@@ -104,6 +104,54 @@ describe('provider share invoke', () => {
     expect(handle).toHaveBeenCalledTimes(1);
   });
 
+  it('answers the picker reads narrowed to the shared provider', async () => {
+    state.access = ACCESS;
+    const { __testing: registry } = await import('../invoke-registry');
+    registry.reset();
+    registry.register('maker:provider:list', async () => ({
+      dataOwnerId: 'owner-1',
+      ownerGeneration: 1,
+      providers: [
+        { id: 'anthropic', name: 'Anthropic', agents: ['claude-code'], remoteInvocationEnabled: true, models: { 'claude-code': [{ id: 'claude-opus-5-5' }] } },
+        { id: 'openai', name: 'OpenAI', agents: ['codex'], remoteInvocationEnabled: true, models: { codex: [{ id: 'gpt-5.5' }] } },
+      ],
+    }));
+    registry.register('maker:get-capabilities', async () => ({
+      availableModels: [{ id: 'claude-opus-5-5' }, { id: 'claude-opus-5-5[1m]' }, { id: 'claude-sonnet-5' }, { id: 'gpt-5.5' }],
+      permissionModes: [{ id: 'default' }],
+    }));
+    registry.register('maker:list-available-agents', async () => ['claude-code', 'codex', 'pi']);
+    registry.register('maker:agent:status', async () => ({
+      binaryReady: true, binaryPath: '/Users/alice/bin/claude', authReady: true, identity: 'alice@corp.com',
+    }));
+    try {
+      await expect(runInvoke(GUEST, { channel: 'maker:get-capabilities', args: ['claude-code'] })).resolves.toEqual({
+        ok: true,
+        // Exact ids: `x[1m]` is a separate catalog model the shared provider does not list.
+        result: { availableModels: [{ id: 'claude-opus-5-5' }], permissionModes: [{ id: 'default' }] },
+      });
+      await expect(runInvoke(GUEST, { channel: 'maker:get-capabilities', args: ['codex'] }))
+        .resolves.toMatchObject({ ok: true, result: { availableModels: [] } });
+      await expect(runInvoke(GUEST, { channel: 'maker:list-available-agents', args: [] }))
+        .resolves.toEqual({ ok: true, result: ['claude-code'] });
+      // Readiness only says whether an agent the share serves is installed (no sign-in, path or identity).
+      await expect(runInvoke(GUEST, { channel: 'maker:agent:status', args: ['claude-code'] }))
+        .resolves.toEqual({ ok: true, result: { binaryReady: true } });
+      await expect(runInvoke(GUEST, { channel: 'maker:agent:status', args: ['codex'] }))
+        .resolves.toEqual({ ok: true, result: { binaryReady: false } });
+      await expect(runInvoke(GUEST, { channel: 'maker:get-capabilities', args: ['../x'] }))
+        .resolves.toMatchObject({ ok: false, error: { message: expect.stringContaining('INVALID_PARAMS') } });
+      // A failed read of the shared provider is reported, not answered as an empty list.
+      registry.register('maker:provider:list', async () => {
+        throw new Error('[MODEL_VISIBILITY_NOT_READY] later');
+      });
+      await expect(runInvoke(GUEST, { channel: 'maker:list-available-agents', args: [] }))
+        .resolves.toMatchObject({ ok: false });
+    } finally {
+      registry.reset();
+    }
+  });
+
   it('projects the provider list down to the shared provider', () => {
     const projected = __testing.projectProviderListForShare({
       dataOwnerId: 'owner-membership-1',
