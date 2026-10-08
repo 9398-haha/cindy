@@ -1346,7 +1346,7 @@
     "language": {
       "title": "Language",
       "label": "Display language",
-      "hint": "Changes the interface language, not the language of AI replies.",
+      "hint": "Used for the interface and AI error reports. Other replies follow your message or language request.",
       "ariaLabel": "Display language selection",
       "options": {
         "system": "Auto (follow system)",
@@ -1391,7 +1391,7 @@
         "resetAvatar": "Restore default avatar",
         "save": "Save Profile",
         "cancel": "Cancel",
-        "syncHint": "Your name and avatar sync across your devices.",
+        "syncHint": "Your name and avatar are saved to your account and synced across your devices.",
         "avatarInvalid": "Please choose a PNG / JPG / WebP image under 5MB",
         "saveFailed": "Failed to save, please try again"
       }

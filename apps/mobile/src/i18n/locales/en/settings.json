@@ -35,7 +35,7 @@
   },
   "language": {
     "title": "Language",
-    "hint": "Changes the interface language, not the language of AI replies.",
+    "hint": "Used for the interface and AI error reports. Other replies follow your message or language request.",
     "options": {
       "system": "Auto (follow system)",
       "zh-CN": "简体中文",

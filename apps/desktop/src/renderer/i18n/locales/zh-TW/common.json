@@ -1344,7 +1344,7 @@
     "language": {
       "title": "語言",
       "label": "顯示語言",
-      "hint": "僅更改介面語言，不決定 AI 回覆語言",
+      "hint": "介面和 AI 錯誤說明使用此語言；一般回覆依你的訊息或語言要求",
       "ariaLabel": "顯示語言選擇",
       "options": {
         "system": "跟隨系統",
@@ -1389,7 +1389,7 @@
         "resetAvatar": "恢復預設頭像",
         "save": "儲存資料",
         "cancel": "取消",
-        "syncHint": "名字和頭像會同步到你的所有裝置",
+        "syncHint": "名字和頭像會儲存到帳號，並同步到你的所有裝置",
         "avatarInvalid": "請選擇 5MB 以內的 PNG / JPG / WebP 圖片",
         "saveFailed": "儲存失敗，請重試"
       }
