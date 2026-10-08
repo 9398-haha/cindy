@@ -71,6 +71,7 @@ export function toMakerAgentKind(dbKind: string): AgentKind {
 export function agentEngineLabel(dbKind: DbAgentKind): string {
   if (dbKind === 'codex') return 'Codex';
   if (dbKind === 'pi') return 'Pi';
+  if (dbKind === 'cursor') return 'Cursor';
   return 'Claude Code';
 }
 
@@ -145,7 +146,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * (测试最小 harness)。
    */
   assertModelRouteUsable?(
-    agent: 'claude-code' | 'codex' | 'pi',
+    agent: 'claude-code' | 'codex' | 'pi' | 'cursor',
     model: string,
     providerId: string | null,
     /** 被切换的任务；Agent 在另一台电脑运行的任务按那台的目录裁决(本机不校验)。 */
@@ -159,7 +160,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    */
   assertAgentDeviceRouteUsable?(
     deviceId: string,
-    agent: 'claude-code' | 'codex' | 'pi',
+    agent: 'claude-code' | 'codex' | 'pi' | 'cursor',
     model: string,
     providerId: string | null,
   ): Promise<void>;
@@ -196,6 +197,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
       /** 目标引擎下的 effort / fastMode(意图登记时由 renderer 解析,apply 时一并落库)。 */
       effort?: string;
       fastMode?: boolean;
+      permissionMode?: 'ask';
       /** Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
       agentDeviceId?: string | null;
     },
@@ -444,8 +446,11 @@ export async function performSessionAgentSwitch(
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
     throwIpcError('INVALID_PARAMS', 'sessionId required');
   }
-  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi') {
+  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi' && targetAgentKind !== 'cursor') {
     throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi');
+  }
+  if (targetAgentKind === 'cursor' && (params.effort || params.fastMode === true)) {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not expose effort or Fast controls');
   }
   if (typeof model !== 'string' || model.length === 0) {
     throwIpcError('INVALID_PARAMS', 'model required');
@@ -510,6 +515,9 @@ export async function performSessionAgentSwitch(
   const currentAgentDeviceId = row.agentDeviceId ?? null;
   const targetAgentDeviceId =
     requestedAgentDeviceId === undefined ? currentAgentDeviceId : requestedAgentDeviceId;
+  if (targetAgentKind === 'cursor' && targetAgentDeviceId) {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor requires a workspace on the executing desktop');
+  }
   const agentDeviceChanges = targetAgentDeviceId !== currentAgentDeviceId;
   // 落到另一台电脑的完整切换(换引擎或换电脑)：登记与落地前都按那台的目录裁决。同引擎同位置
   // 的模型选择走 selectSameAgentModel，在 SET_MODEL 链路里裁决。
@@ -678,6 +686,7 @@ export async function performSessionAgentSwitch(
       model,
       providerId: normalizedProviderId,
       sdkSessionId: parked?.sdkSessionId ?? null,
+      ...(targetAgentKind === 'cursor' ? { permissionMode: 'ask' as const, fastMode: false } : {}),
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
       ...(agentDeviceChanges ? { agentDeviceId: targetAgentDeviceId } : {}),

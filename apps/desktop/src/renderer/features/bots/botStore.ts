@@ -67,7 +67,7 @@ export interface BotModelOverride {
 export type { BotHarness, BotModelRoute };
 export { BOT_MODEL_CHAIN_MAX };
 
-function vendorForHarness(harness: BotCapabilities['harness']): 'cc' | 'codex' | 'pi' {
+function vendorForHarness(harness: BotCapabilities['harness']): 'cc' | 'codex' | 'pi' | 'cursor' {
   return harness === 'claude' ? 'cc' : harness;
 }
 
@@ -147,7 +147,7 @@ export interface BotSessionProjection {
   profileVersion?: number;
   runtimeSnapshot?: {
     profileVersion: number;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
     status: 'prepared' | 'applied' | 'degraded' | 'failed';
     preparedAt: number;
     appliedAt?: number;
@@ -279,7 +279,7 @@ function readGlobalModelOverrides(): Partial<Record<BotModelVendor, BotModelOver
     const value = raw ? (JSON.parse(raw) as unknown) : null;
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
     const result: Partial<Record<BotModelVendor, BotModelOverride>> = {};
-    for (const vendor of ['cc', 'codex', 'pi'] as const) {
+    for (const vendor of ['cc', 'codex', 'pi', 'cursor'] as const) {
       const item = (value as Record<string, unknown>)[vendor];
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
       const record = item as Record<string, unknown>;

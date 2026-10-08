@@ -385,7 +385,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
             fastMode: !!schedule.fastMode,
             workingDir: schedule.workingDir ?? '',
             workspaceKind: 'project',
-            permissionMode: 'bypassPermissions',
+            permissionMode: schedule.agentKind === 'cursor' ? 'ask' : 'bypassPermissions',
           },
         });
         if (!result.ok) fail(result.errorCode, result.message);

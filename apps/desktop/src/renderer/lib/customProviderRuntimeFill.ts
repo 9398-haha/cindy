@@ -5,7 +5,7 @@ import type {
 } from '@cindy/model-providers';
 import { adaptCustomProviderModelEfforts, savedCustomProviderModelShape } from '@/../shared/piRuntimeInitialization';
 
-export type RuntimeFillAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+export type RuntimeFillAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi' | 'cursor'>;
 export interface RuntimeFillHeaderRow {
   name: string;
   value: string;

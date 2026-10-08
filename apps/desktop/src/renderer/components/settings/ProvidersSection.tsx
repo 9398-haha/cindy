@@ -1,3 +1,4 @@
+import { refreshLocalCapabilities } from '@/hooks/useAgentCapabilities';
 /**
  * ProvidersSection —— 设置 → 模型供应商页(2026-07 重构:双栏管理)。
  *
@@ -2704,7 +2705,7 @@ export function ProvidersSection() {
     const model = searchParams.get('model')?.trim() || null;
     const agentParam = searchParams.get('agent');
     const agent =
-      agentParam === 'claude-code' || agentParam === 'codex' || agentParam === 'pi'
+      agentParam === 'claude-code' || agentParam === 'codex' || agentParam === 'pi' || agentParam === 'cursor'
         ? agentParam
         : undefined;
     const importId = searchParams.get('import');
@@ -2875,6 +2876,7 @@ export function ProvidersSection() {
       if (!isBuiltinRefreshableProviderId(p.id) || !beginProviderRefresh(p.id)) return;
       try {
         await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
+        await refreshLocalCapabilities();
         toast.success(t('settings.providers.models.refreshDone'));
         refetch();
       } catch (err) {

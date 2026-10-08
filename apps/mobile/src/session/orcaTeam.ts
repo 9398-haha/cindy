@@ -51,7 +51,7 @@ export interface OrcaWorkerFormValue {
 }
 
 export function orcaAgentKindForSession(session: Pick<RemoteSession, 'agentKind'>): OrcaWorkerAgentKind {
-  return session.agentKind === 'codex' || session.agentKind === 'pi' ? session.agentKind : 'claude-code';
+  return session.agentKind === 'codex' || session.agentKind === 'pi' || session.agentKind === 'cursor' ? session.agentKind : 'claude-code';
 }
 
 /** 由记忆构造表单:角色回到 developer,初始任务不记忆(与桌面一致)。 */
@@ -64,7 +64,7 @@ export function orcaWorkerFormFromPrefs(
     role: 'developer',
     agent,
     model: { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
-    permissionMode: prefs.workerPermissionMode,
+    permissionMode: agent === 'cursor' ? 'ask' : prefs.workerPermissionMode,
     initialTask: '',
   };
 }
@@ -164,12 +164,12 @@ function formWireFields(form: OrcaWorkerFormValue) {
   const model = form.model;
   return {
     ...(model ? { model: model.id } : {}),
-    ...(model?.effort ? { effort: model.effort } : {}),
+    ...(form.agent !== 'cursor' && model?.effort ? { effort: model.effort } : {}),
     // 选了具体模型就显式发送 Fast(含 false):省略会让被控端沿用 Lead / 默认的 Fast,与表单相反。
     // 「默认」模型(null)才省略,交给被控端一并解析。模型不支持 Fast 时被控端按 false 落。
-    ...(model ? { fast: model.fast } : {}),
+    ...(model ? { fast: form.agent === 'cursor' ? false : model.fast } : {}),
     ...(model?.providerId ? { providerId: model.providerId } : {}),
-    workerPermissionMode: form.permissionMode,
+    workerPermissionMode: form.agent === 'cursor' ? 'ask' : form.permissionMode,
   };
 }
 
@@ -478,5 +478,5 @@ export function orcaWorkerDisplayName(worker: Pick<OrcaTeamWorker, 'role' | 'lab
 }
 
 export function orcaAgentLabel(agent: OrcaWorkerAgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+  return agent === 'codex' ? 'Codex' : agent === 'cursor' ? 'Cursor' : agent === 'pi' ? 'Pi' : 'Claude Code';
 }

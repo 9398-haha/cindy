@@ -1342,3 +1342,20 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
     });
   });
 });
+
+
+describe('Cursor switch capability normalization', () => {
+  it('commits native Ask and disables Fast instead of inheriting the previous harness permission', async () => {
+    const { deps } = makeDeps();
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', providerId: 'cursor', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cursor', model: 'native', permissionMode: 'ask', fastMode: false,
+    }));
+  });
+  it('rejects unsupported explicit tuning before closing the previous session', async () => {
+    const { deps } = makeDeps();
+    await expect(performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', effort: 'high', applyNow: true })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+});

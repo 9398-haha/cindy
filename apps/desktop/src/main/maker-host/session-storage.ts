@@ -27,7 +27,7 @@ import { normalizeRemoteHostId } from '../localDb/mapper.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex' | 'pi' | 'cursor';
 
 // 形态映射走 shared/agentKindConversion 正本(支持 pi;此前 pi 被误落成 codex)。
 function toDbKind(k: AgentKind): DbAgentKind {
@@ -54,9 +54,10 @@ function rowToMeta(row: SessionRow): SessionMeta {
     title: row.title,
     model: row.model,
     workspaceKind: row.workspaceKind,
-    effort: row.effort,
+    // The legacy DB effort column is NOT NULL; its placeholder is not a Cursor capability.
+    effort: row.agentKind === 'cursor' ? undefined : row.effort,
     permissionMode: row.permissionMode,
-    fastMode: row.fastMode,
+    fastMode: row.agentKind === 'cursor' ? false : row.fastMode,
     planMode: row.planModeEnabled,
     ...(row.source === 'review' ? { reviewMode: true as const } : {}),
     sdkSessionId: row.sdkSessionId ?? undefined,

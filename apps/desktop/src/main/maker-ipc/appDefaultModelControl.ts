@@ -18,14 +18,14 @@ export function configureAppDefaultModelSelection(dispatch: typeof dispatchSelec
 export function availableAppDefaultModels(input: {
   providers: readonly ProviderView[];
   currentRoute?: BotModelRoute | null;
-  tuning?: (agent: 'claude-code' | 'codex' | 'pi', providerId: string, model: string) => { effort?: string; fastMode?: boolean };
-  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi'>;
+  tuning?: (agent: 'claude-code' | 'codex' | 'pi' | 'cursor', providerId: string, model: string) => { effort?: string; fastMode?: boolean };
+  availableAgents: ReadonlySet<'cc' | 'codex' | 'pi' | 'cursor'>;
   enabled: NonNullable<Parameters<typeof defaultBotModelChain>[0]['isModelEnabled']>;
 }) {
   const current = defaultBotModelChain({ providers: input.providers, providersLoading: false,
     availableAgents: input.availableAgents, availableAgentsLoaded: true,
     preferredRoute: input.currentRoute ?? undefined, isModelEnabled: input.enabled })[0];
-  return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi'] as const).flatMap(agent =>
+  return input.providers.flatMap(provider => (['claude-code', 'codex', 'pi', 'cursor'] as const).flatMap(agent =>
     (provider.models[agent] ?? []).flatMap(model => {
       const remembered = input.tuning?.(agent, provider.id, model.id);
       const route: BotModelRoute = { harness: agent === 'claude-code' ? 'claude' : agent,

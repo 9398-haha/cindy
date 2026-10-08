@@ -16,19 +16,19 @@ import {
 import { getEffectiveBotModelSettings } from './botStore';
 import { useBotTranslation } from './botPronounContext';
 
-function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
+function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' | 'cursor' {
   return harness === 'claude' ? 'cc' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
+function harnessFor(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): BotHarness {
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
-function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
+function agentKindFor(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): AgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor;
 }
 
-function defaultRoute(vendor: 'cc' | 'codex' | 'pi'): BotModelRoute {
+function defaultRoute(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): BotModelRoute {
   return { harness: harnessFor(vendor), ...getEffectiveBotModelSettings(vendor, null) };
 }
 

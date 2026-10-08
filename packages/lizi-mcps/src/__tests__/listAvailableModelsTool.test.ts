@@ -11,6 +11,21 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('list_available_models tool', () => {
+  it('preserves native Cursor model IDs and keeps the Pi catalog separate', async () => {
+    const listAvailableModels = vi.fn(async () => ({
+      ok: true as const,
+      cursor: [{ id: 'codex/native-exact-id', label: 'Native model' }],
+      pi: [{ id: 'pi-model', label: 'Pi model' }],
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerListAvailableModelsTool(registry, { listAvailableModels });
+    const result = parse(await registry.call('list_available_models', { agent: 'cursor' }));
+    expect(listAvailableModels).toHaveBeenCalledWith({ agent: 'cursor' });
+    expect(result.cursor).toEqual([{ id: 'codex/native-exact-id', label: 'Native model', tier: 'standard' }]);
+    expect(result.pi).toEqual([{ id: 'pi-model', label: 'Pi model', tier: 'standard' }]);
+    expect(result.claude_code).toBeUndefined();
+  });
+
   it('returns provider-aware routes without removing the existing model fields', async () => {
     const listAvailableModels = vi.fn(async () => ({
       ok: true as const,

@@ -580,6 +580,8 @@
     "modelDefault": "Default",
     "modelDefaultHint": "Uses the computer's default Worker model",
     "permissionLabel": "Permission mode",
+    "permissionAsk": "Ask",
+    "permissionAskHint": "Cursor follows its native configured permission policy. Cindy shows only the approval requests Cursor sends; workspace edits may run without a prompt.",
     "permissionAuto": "Auto-review",
     "permissionFull": "Full access",
     "permissionAutoHint": "Reads and writes inside the workspace and auto-reviews elevation requests. High-risk actions may be denied or need confirmation.",

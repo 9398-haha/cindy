@@ -495,11 +495,12 @@ export async function reconcileBotProfileFolder(
   return derived;
 }
 
-function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
-  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : 'cc';
+function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'cursor' {
+  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : config.harness === 'cursor' ? 'cursor' : 'cc';
 }
 
 function defaultBotModelForConfig(config: Record<string, unknown>): string {
+  if (botSessionAgentKind(config) === 'cursor') return 'cursor-default';
   return botSessionAgentKind(config) === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : 'claude-sonnet-4-6';
 }
 
@@ -879,7 +880,7 @@ async function readProfile(
       fastMode: primaryModelRoute?.fastMode ?? config.fastMode === true,
       harness:
         primaryModelRoute?.harness ??
-        (config.harness === 'codex' || config.harness === 'pi' ? config.harness : 'claude'),
+        (config.harness === 'codex' || config.harness === 'pi' || config.harness === 'cursor' ? config.harness : 'claude'),
       modelChain,
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)

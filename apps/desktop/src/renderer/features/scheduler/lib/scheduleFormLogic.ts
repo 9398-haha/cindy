@@ -138,8 +138,8 @@ export interface ScheduleFormState {
   recurring: boolean;
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
-  agentKind: 'claude-code' | 'codex' | 'pi';
-  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
   model: string;
@@ -378,7 +378,7 @@ export function applyRunMode(
 
 /** renderer Session.agentKind('cc'|'codex')→ schedule agentKind 映射。 */
 export function sessionAgentKindToScheduleAgentKind(
-  kind: 'cc' | 'codex' | 'pi',
+  kind: 'cc' | 'codex' | 'pi' | 'cursor',
 ): ScheduleFormState['agentKind'] {
   if (kind === 'codex') return 'codex';
   if (kind === 'pi') return 'pi';
@@ -587,11 +587,12 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // providerId 是可清除的来源 override：表单选回原生默认来源时值为空，仍须保留 key，
   // 让 update patch 按「key 在 + undefined」把旧 provider_id 清成 NULL。
   base.providerId = form.providerId.trim() || undefined;
-  if (form.effort && isEffortValue(form.effort)) base.effort = form.effort;
+  if (form.agentKind !== 'cursor' && form.effort && isEffortValue(form.effort)) base.effort = form.effort;
   // fastMode 对 Codex / Pi 都生效(runner.ts:665 明确 claude-code 忽略此字段);只序列化
   // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
   // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
   if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
+  if (form.agentKind === 'cursor') { base.effort = ''; base.fastMode = false; }
   return base;
 }
 

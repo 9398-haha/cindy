@@ -114,7 +114,7 @@ import {
  * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
  * 走 pi 原生 provider 直连(不过 anthropic-compat 代理),故 pi tab 额外提供显式 api 选择器。
  */
-type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
+type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi' | 'cursor'>;
 
 const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
 

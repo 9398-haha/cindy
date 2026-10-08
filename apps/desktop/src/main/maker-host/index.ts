@@ -1,3 +1,6 @@
+import { discoverCursorAgentBinarySync } from './cursor-binary-discovery.js';
+import { createDesktopCursorAuthAdapter } from './cursor-auth-adapter.js';
+import { setCursorDiscoveredModels, clearCursorDiscoveredModels, hasCursorDiscoveredModels } from './cursor-model-catalog.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
@@ -44,6 +47,7 @@ import {
   isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
+  CursorAgent,
   configureDefaultImageResizer,
   type AgentKind,
   type InteractionRequest,
@@ -398,6 +402,14 @@ let botRuntimeResourcePreflight:
   | ((opts: MakerSessionCreateOpts) => Promise<BotProfileRuntimeSnapshot | null>)
   | null = null;
 let _registerPiAgent: (() => boolean) | null = null;
+let _refreshCursorModels: ((force?: boolean) => Promise<void>) | null = null;
+/** Bounded native model discovery; reusable after the user signs in outside Cindy. */
+export async function refreshCursorModels(force = false): Promise<void> {
+  await _refreshCursorModels?.(force);
+  if (force && !hasCursorDiscoveredModels()) {
+    throw new Error('Cursor CLI is unavailable or signed out. Install the official Cursor CLI, run agent login, and retry. Restart Cindy after installing the CLI.');
+  }
+}
 /** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
@@ -947,7 +959,7 @@ export function getMaker(): Maker {
         if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))
           return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
         const agentKind = context.agentKind;
-        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'cursor')
           return { ok: false, errorCode: 'UNKNOWN_AGENT' };
         const catalog = await listBotRuntimeMcpServers({ agentKind, remoteHostId: context.remoteHostId });
         const providers = (_mcpProviders[agentKind] ?? []).map((provider) => ({
@@ -2578,6 +2590,28 @@ export function getMaker(): Maker {
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = piAgent;
 
+    // Cursor is optional and uses the user's native CLI/account. Discovery never sends a prompt.
+    const cursorBinary = discoverCursorAgentBinarySync();
+    const cursorAgent = cursorBinary.installed ? new CursorAgent({
+      binaryPath: cursorBinary.binaryPath,
+      auth: createDesktopCursorAuthAdapter(cursorBinary.binaryPath),
+      logger: desktopMakerLogger,
+      runtimeConfig: {
+        get makerMemoryEnabled() { return makerMemoryManager.isEnabled(); },
+        userDataPath: app.getPath('userData'),
+      },
+      makerMemory: makerMemoryManager,
+      mcpProviders: piMcpProviders,
+      preparePiExtraSpawnConfig: (providers, ctx) =>
+        getPiExtraSpawnConfig(providers, desktopMakerLogger, { ...ctx, agentKind: 'cursor' }),
+      registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
+      reviewAutoPermissionAction,
+    }) : null;
+    if (cursorAgent) {
+      makerAgents.cursor = cursorAgent;
+      _mcpProviders.cursor = piMcpProviders;
+    }
+
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
       getProviderById: (providerId) =>
@@ -2957,6 +2991,37 @@ export function getMaker(): Maker {
     // 为 false —— 一次性调用会被 skipped-unauthed 白白消费掉唯一机会。授权就绪后的重试
     // 由 codex auth 事件驱动(见下方 requestCodexModelBackfill 的调用点)。
     const makerRef = _maker;
+    if (cursorAgent) {
+      const owner = activeOwnerScopeKey();
+      let pending: Promise<void> | null = null;
+      let lastAttempt = 0;
+      _refreshCursorModels = (force = false) => {
+        if (pending) return pending;
+        if (!force && Date.now() - lastAttempt < 30_000) return Promise.resolve();
+        lastAttempt = Date.now();
+        pending = (async () => {
+          const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-cursor-models-'));
+          try {
+            const models = await cursorAgent.discoverModels(directory);
+            if (_maker !== makerRef || activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) return;
+            setCursorDiscoveredModels(models, owner);
+            refreshSelectableModelsAndBroadcast({ agentKind: 'cursor' });
+          } catch {
+            if (_maker === makerRef && activeOwnerScopeKey() === owner) {
+              setCursorDiscoveredModels([], owner);
+              refreshSelectableModelsAndBroadcast({ agentKind: 'cursor' });
+            }
+            desktopMakerLogger.info('Cursor model discovery unavailable; sign in with cursor-agent login');
+          } finally {
+            await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+          }
+        })().catch(() => {
+          desktopMakerLogger.warn('Cursor model discovery could not prepare its workspace');
+        }).finally(() => { pending = null; });
+        return pending;
+      };
+      void refreshCursorModels();
+    }
     _sessionArchiveSync = createSessionArchiveSync({
       capture: () => {
         const snapshot = getCurrentDbClientSnapshot();
@@ -3113,6 +3178,8 @@ export async function preflightBotRuntimeResources(
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
+  clearCursorDiscoveredModels();
+  _refreshCursorModels = null;
   disposeRemoteAgentHost();
   _sessionArchiveSync?.stop();
   _sessionArchiveSync = null;

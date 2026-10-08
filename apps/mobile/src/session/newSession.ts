@@ -17,13 +17,14 @@ import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
-export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi';
+export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi' | 'cursor';
 export type NewSessionWorkspaceKind = 'project' | 'dialogue';
 
 export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; label: string }[] = [
   { kind: 'claude-code', label: 'Claude' },
   { kind: 'codex', label: 'Codex' },
   { kind: 'pi', label: 'Pi' },
+  { kind: 'cursor', label: 'Cursor' },
 ];
 
 /**
@@ -35,7 +36,7 @@ export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; la
 export function availableNewSessionAgentOptions(
   available: ReadonlySet<NewSessionAgentKind> | null,
 ): readonly { kind: NewSessionAgentKind; label: string }[] {
-  if (!available) return NEW_SESSION_AGENT_OPTIONS;
+  if (!available) return NEW_SESSION_AGENT_OPTIONS.filter((option) => option.kind !== 'cursor');
   const filtered = NEW_SESSION_AGENT_OPTIONS.filter((option) => available.has(option.kind));
   // 防御:被控端异常返回空集时不至于把入口清空到无法创建(至少保留 Claude)。
   return filtered.length > 0 ? filtered : NEW_SESSION_AGENT_OPTIONS.filter((o) => o.kind === 'claude-code');
@@ -132,7 +133,7 @@ export function parseNewSessionDeviceOptions(
 }
 
 export function normalizeNewSessionAgentKind(value: unknown): NewSessionAgentKind | null {
-  return value === 'claude-code' || value === 'codex' || value === 'pi' ? value : null;
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'cursor' ? value : null;
 }
 
 export function pickNewSessionDefaultDevice(input: {
@@ -167,18 +168,19 @@ const DEFAULT_MODELS: Record<NewSessionAgentKind, string> = {
   'claude-code': 'claude-sonnet-4-6',
   codex: 'gpt-5.4',
   pi: 'gpt-5.4',
+  cursor: '',
 };
 
 /** 新建交互式会话的权限种子默认；三个 agent 都保留 Auto-review。 */
-export function defaultPermissionModeForNewSessionAgent(_agentKind: NewSessionAgentKind): string {
-  return 'auto';
+export function defaultPermissionModeForNewSessionAgent(agentKind: NewSessionAgentKind): string {
+  return agentKind === 'cursor' ? 'ask' : 'auto';
 }
 
 export function withAgentDefaults(
   draft: NewSessionDraft,
   agentKind: NewSessionAgentKind,
 ): NewSessionDraft {
-  if (draft.agentKind === agentKind) return draft;
+  if (draft.agentKind === agentKind) return agentKind === 'cursor' ? { ...draft, permissionMode: 'ask', fastMode: false } : draft;
   return {
     ...draft,
     agentKind,
@@ -223,7 +225,7 @@ export function summarizeNewSessionDraft(
   content: NewSessionDraftContentState = {},
 ): NewSessionDraftSummary {
   const validationMessage = validateNewSessionDraft(draft, content);
-  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'pi' ? 'Pi' : 'Claude';
+  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'cursor' ? 'Cursor' : draft.agentKind === 'pi' ? 'Pi' : 'Claude';
   const model = draft.model.trim() || i18n.t('session.new.noModelSelected');
   const effort = draft.effort.trim();
   const workspaceLabel = draft.workspaceKind === 'dialogue'
@@ -374,7 +376,7 @@ type NewSessionDefaultModel = {
   id: string;
   efforts: readonly string[];
   defaultEffort: string | null;
-  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi' | 'cursor')[];
 };
 
 function isNewSessionDefaultForAgent(
@@ -688,7 +690,7 @@ export function pickMostRecentSessionRuntime(
     const model = session.model?.trim();
     if (!model) continue;
     if (options.deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== options.deviceId) continue;
-    const agentKind: NewSessionAgentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
+    const agentKind: NewSessionAgentKind = session.agentKind === 'codex' || session.agentKind === 'pi' || session.agentKind === 'cursor'
       ? session.agentKind
       : 'claude-code';
     if (options.agentKind && agentKind !== options.agentKind) continue;
@@ -970,9 +972,9 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     model: draft.model.trim(),
-    permissionMode: draft.permissionMode,
-    fastMode: draft.fastMode,
-    ...(effort ? { effort } : {}),
+    permissionMode: draft.agentKind === 'cursor' ? 'ask' : draft.permissionMode,
+    fastMode: draft.agentKind === 'cursor' ? false : draft.fastMode,
+    ...(effort && draft.agentKind !== 'cursor' ? { effort } : {}),
     // 仅显式选了非空来源才带 providerId(空 = NULL = 被控端默认路由,对齐桌面 deviceLinkCreateArgs)。
     ...(providerId ? { providerId } : {}),
   };
@@ -1026,7 +1028,7 @@ export function sessionFromCreateResult(
     workspaceKind: fallback.workspaceKind,
     model: fallback.model,
     effort: fallback.effort,
-    permissionMode: fallback.permissionMode,
+    permissionMode: fallback.agentKind === 'cursor' ? 'ask' : fallback.permissionMode,
     fastMode: fallback.fastMode,
     status: 'active',
     agentKind: fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind,

@@ -57,7 +57,7 @@ const AUTO_ONLY_WORKER_PERMISSION_MODES = ['auto'] as const;
 
 export interface CreateWorkerForm {
   role: string;
-  agent: 'claude-code' | 'codex' | 'pi';
+  agent: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   effort?: Effort;
   fast?: boolean;
@@ -104,7 +104,7 @@ export function CreateWorkerPopover({
   const navigate = useNavigate();
   const [role, setRole] = useState('developer');
   const [customRole, setCustomRole] = useState('');
-  const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
+  const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi' | 'cursor'>('codex');
   const [model, setModel] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.model);
   const [effort, setEffort] = useState<Effort>(DEFAULT_WORKER_CREATION_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_WORKER_CREATION_PREFS.codex.fast);
@@ -122,6 +122,7 @@ export function CreateWorkerPopover({
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
   const piCaps = useAgentCapabilities('pi', deviceId);
+  const cursorCaps = useAgentCapabilities('cursor', deviceId);
   const pickerAgents = useModelPickerAgents(agent, deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
@@ -129,7 +130,7 @@ export function CreateWorkerPopover({
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
-  const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
+  const activeCapabilitiesState = agent === 'cursor' ? cursorCaps : agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   const supportsWorkerPermissionModeSelection =
     !deviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
@@ -232,7 +233,7 @@ export function CreateWorkerPopover({
   // fast=true 清掉,回退默认来源支持 Fast 也不会恢复(codex review)。收窄后按
   // 「实际会生效的来源」口径判定,不经历 false 窗口。
   const currentModelSupportsFast = Boolean(
-    (agent === 'codex' || agent === 'pi') &&
+    (agent === 'codex' || agent === 'pi' || agent === 'cursor') &&
       activeCaps?.hasFastMode &&
       providerFastSupported(narrowProviderSource(providerSource, model), model),
   );
@@ -286,7 +287,7 @@ export function CreateWorkerPopover({
     setFast(agentPrefs.fast);
     setProviderSource(deviceId ? null : agentPrefs.providerId);
     setInitialTask('');
-    setSelectedWorkerPermissionMode(stored.workerPermissionMode);
+    setSelectedWorkerPermissionMode(stored.lastAgent === 'cursor' ? 'ask' : stored.workerPermissionMode);
     setPrefsRestored(true);
   }, [deviceId, open]);
 
@@ -345,7 +346,7 @@ export function CreateWorkerPopover({
 
   const vendorKey = agentKindToVendor(agent);
   const updateAgent = useCallback(
-    (nextAgent: 'claude-code' | 'codex' | 'pi') => {
+    (nextAgent: 'claude-code' | 'codex' | 'pi' | 'cursor') => {
       if (nextAgent === agent) return;
       // 切走前把当前 agent 的 live 编辑(模型/effort/Fast/来源)快照进内存 prefs:
       // 恢复读的是 prefs,不快照会把「改了还没提交就切了个 tab」的编辑静默回滚到
@@ -364,6 +365,7 @@ export function CreateWorkerPopover({
       };
       setPrefs(snapshot);
       setAgent(nextAgent);
+      if (nextAgent === 'cursor') setSelectedWorkerPermissionMode('ask');
       const remembered = snapshot[nextAgent];
       setModel(remembered.model);
       setEffort(remembered.effort);
@@ -615,7 +617,7 @@ export function CreateWorkerPopover({
         providerId: submitProviderId,
         initialTask,
         ...(supportsWorkerPermissionModeSelection
-          ? { workerPermissionMode: selectedWorkerPermissionMode }
+          ? { workerPermissionMode: agent === 'cursor' ? 'ask' : selectedWorkerPermissionMode }
           : {}),
       });
     } finally {
@@ -753,7 +755,7 @@ export function CreateWorkerPopover({
               value={vendorKey}
               width={220}
               ariaLabel={t('orca.createWorker.agentLabel')}
-              onChange={(next) => updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')}
+              onChange={(next) => updateAgent(next === 'codex' ? 'codex' : next === 'cursor' ? 'cursor' : next === 'pi' ? 'pi' : 'claude-code')}
             />
           )}
 
@@ -817,16 +819,16 @@ export function CreateWorkerPopover({
                 // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
                 // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
                 // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
-                fastMode={!(agent === 'codex' || agent === 'pi') ? undefined : fast}
+                fastMode={!(agent === 'codex' || agent === 'pi' || agent === 'cursor') ? undefined : fast}
                 onFastModeChange={
-                  !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
+                  !(agent === 'codex' || agent === 'pi' || agent === 'cursor') ? undefined : updateFast
                 }
               />
             </div>
             {noAvailableLocalModels ? (
               <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
                 {t('orca.createWorker.noAvailableModels', {
-                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
+                  agent: agent === 'codex' ? 'Codex' : agent === 'cursor' ? 'Cursor' : agent === 'pi' ? 'Pi' : 'Claude Code',
                 })}
               </p>
             ) : null}
@@ -863,8 +865,8 @@ export function CreateWorkerPopover({
               dense
               ariaContext={t('orca.createWorker.permissionLabel')}
               allowedModes={
-                supportsWorkerPermissionModeSelection
-                  ? ORCA_WORKER_PERMISSION_MODES
+                agent === 'cursor' ? ['ask'] : supportsWorkerPermissionModeSelection
+                  ? ORCA_WORKER_PERMISSION_MODES.filter((mode) => mode !== 'ask')
                   : AUTO_ONLY_WORKER_PERMISSION_MODES
               }
             />

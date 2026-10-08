@@ -9281,6 +9281,16 @@
       "listAria": "Permission modes",
       "autoFallback": "Auto-review is temporarily unavailable. Switched to Default permissions and will ask when needed.",
       "modes": {
+        "cursor": {
+          "ask": {
+            "label": "Default permissions",
+            "description": "Cursor follows its native configured permission policy. Cindy shows only the approval requests Cursor sends; workspace edits may run without a prompt."
+          },
+          "default": {
+            "label": "Default permissions",
+            "description": "Cursor follows its native configured permission policy. Cindy shows only the approval requests Cursor sends; workspace edits may run without a prompt."
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "Default permissions",
@@ -13343,6 +13353,7 @@
       "codexVoiceAuthDescription": "Voice input uses a connected ChatGPT account for GPT realtime speech recognition. The account is not connected or needs an update. Open Model Providers to connect ChatGPT?",
       "codexBinaryMissingTitle": "Codex component not ready",
       "codexBinaryMissingDescription": "The Codex component is not ready yet, so this feature cannot be used. Try again later or check the Codex connection in Settings → Providers.",
+      "cursorSetupDescription": "Install Cursor CLI on the computer running this task and restart Cindy. Then run cursor-agent login in its terminal and refresh the model list.",
       "piBinaryMissingTitle": "Pi component not ready",
       "piBinaryMissingDescription": "The Pi component is not ready yet, so this feature cannot be used. Try again later or check the Pi connection in Settings → Providers.",
       "goToSettings": "Open Settings",

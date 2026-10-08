@@ -345,6 +345,7 @@ function providerRoutingContext(
     'claude-code': partial['claude-code'] ?? [],
     codex: partial.codex ?? [],
     pi: partial.pi ?? [],
+    cursor: partial.cursor ?? [],
   };
   return {
     availability,
@@ -3274,4 +3275,24 @@ it('rejects a plan changed during preparation without reserving or bootstrapping
   const {deps,service}=createDeps({validateCreationPlan:validate,withLeadSendLock:async (_id, operation)=>operation()});
   const result=await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});
   expect(result.ok).toBe(false);expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();expect(deps.bootstrapSession).not.toHaveBeenCalled();
+});
+
+
+describe('Cursor native worker admission', () => {
+  it('uses Ask for native workers without inheriting a full-access preference', async () => {
+    const { deps, service } = createDeps({
+      getAvailableModels: () => [{ id: 'native', efforts: [], defaultEffort: null }],
+      getProviderRoutingContext: async () => providerRoutingContext({ cursor: [{ id: 'cursor', name: 'Cursor', models: ['native'] }] }),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor', model: 'native', providerId: 'cursor' });
+    expect(result).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', permissionMode: 'ask' }));
+  });
+  it('rejects unsupported explicit permissions before creating a worker', async () => {
+    const { deps, service } = createDeps();
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor', workerPermissionMode: 'auto' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+  });
 });

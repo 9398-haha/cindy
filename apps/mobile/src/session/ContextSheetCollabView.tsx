@@ -154,14 +154,14 @@ export function OrcaWorkerFormView({
           disabled={busy}
           label={t('session.collab.permissionLabel')}
           onChange={onPermissionChange}
-          options={[
+          options={form.agent === 'cursor' ? [{ id: 'ask' as const, label: t('session.collab.permissionAsk') }] : [
             { id: 'auto' as const, label: t('session.collab.permissionAuto') },
             { id: 'bypassPermissions' as const, label: t('session.collab.permissionFull') },
           ]}
           testID="collab.permissionOptions"
           value={form.permissionMode}
         />
-        <ContextSheetNote text={t(form.permissionMode === 'auto'
+        <ContextSheetNote text={t(form.agent === 'cursor' ? 'session.collab.permissionAskHint' : form.permissionMode === 'auto'
           ? 'session.collab.permissionAutoHint'
           : 'session.collab.permissionFullHint')}
         />
