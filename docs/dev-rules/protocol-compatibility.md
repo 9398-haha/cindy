@@ -11,6 +11,17 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 账号用量上限的自动继续
+
+输入投影 `AgentInputProjection` 新增可选字段 `usageLimitWait: { resumeAt } | null`，与 `error`
+同时出现，表示被控端会在 `resumeAt` 自动继续该任务；旧被控端缺省，控制端按无等待处理。
+新增 invoke `maker:input:cancel-usage-limit-wait(sessionId, opts?)`（Desktop preload、Mobile
+transport 与 device-link 的 core / review-input / mobile allowlist 均已登记），只撤等待、保留错误
+与 typed recovery，返回最新投影；控制端只在投影带等待时显示取消入口，因此不会对旧被控端发起
+该调用。自动继续复用既有 `CONTINUE_AFTER_ERROR_PROMPT` 与 `agentMeta.autoResume`，
+`autoResumeInfo.reason` 新值 `usage-limit-reset`，旧客户端按普通自动续跑行显示。
+Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无需改动。
+
 ## Agent 跨设备历史发现与搜索
 
 `cindy_helper` 的 `list_history_devices` 使用现有同账号设备目录；`list_sessions` 和

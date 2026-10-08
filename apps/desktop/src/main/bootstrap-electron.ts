@@ -751,6 +751,7 @@ import {
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
   setGoalIdleObserver,
+  setGoalOwnsUsageLimitProbe,
   setGoalStopObserver,
   setGoalAskAnswerObserver,
   withSendToSessionLock,
@@ -6163,6 +6164,11 @@ const registerIpcHandlers = () => {
       });
       setGoalDeferredResumeCancelObserver((sid) => {
         getGoalController()?.cancelDeferredManualResume(sid, { restoreUsageResume: true });
+      });
+      // 目标在管的任务由 goal-host 自己等额度重置,普通任务的限额自动继续让路。
+      setGoalOwnsUsageLimitProbe(async (sid) => {
+        const goal = await getGoalController()?.getStatus(sid);
+        return goal?.status === 'active' || goal?.status === 'usageLimited';
       });
       // 用户 Stop 当前 turn → 暂停 active 目标。返回 Promise 让 ABORT_SESSION 在 abort 前 await,
       // 确保目标先 paused + detach 监听,abort 终止事件不再触发续跑判定。

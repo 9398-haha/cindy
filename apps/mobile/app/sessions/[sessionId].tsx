@@ -7529,6 +7529,11 @@ export default function SessionScreen() {
     void runQueueAction(() => maker.input.clearError(sessionId));
   };
 
+  const cancelUsageLimitWait = () => {
+    if (queueAvailabilityReason) return;
+    void runQueueAction(() => maker.input.cancelUsageLimitWait(sessionId));
+  };
+
   // --- session-tail-banner:error-tail / interrupted 收尾提示(对齐桌面两套 banner)---
   // dismissedTailErrorClientIds 声明在上方 renderItems 区(errorTailClientId 过滤要用);
   // acked = interrupted 已操作或本窗口内会话跑起来过(对齐桌面「跑起来即熄灭」锁存)。
@@ -9856,6 +9861,7 @@ export default function SessionScreen() {
                           busy={queueBusy}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}
+                          onCancelUsageLimitWait={cancelUsageLimitWait}
                           onResume={resumeQueue}
                           onRetryError={retryQueueError}
                           projection={inputProjection}

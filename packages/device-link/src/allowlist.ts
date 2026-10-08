@@ -183,6 +183,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   // 整条内容替换(文本+附件),手机端排队消息复用 composer 编辑;老被控端无 handler →
@@ -622,6 +623,7 @@ export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Se
   'maker:input:resume',
   'maker:input:retry-last-error',
   'maker:input:clear-error',
+  'maker:input:cancel-usage-limit-wait',
   'maker:input:remove',
   'maker:input:update-text',
   'maker:input:update-content',

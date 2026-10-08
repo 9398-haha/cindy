@@ -335,7 +335,6 @@ import {
   shouldRevealOrcaWorkersBeforeFirstPaint,
 } from './lib/orcaPassiveReveal';
 import { didOpenOrcaWorkersTab, revealOrcaWorkersWithRetry } from './lib/orcaWorkersRevealRetry';
-import { usageLimitScheduleNavigationState } from '@/features/scheduler/lib/usageLimitScheduleCreateIntent';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
   ensureOrcaWorkersTab,
@@ -1771,6 +1770,8 @@ export function CCAgentSessionView({
     updateSystemCardData,
     error,
     usageLimitRecovery,
+    usageLimitWait,
+    cancelUsageLimitWait,
     errorIsRecoverable,
     errorRetryText,
     disposedErrorPersistId,
@@ -4231,26 +4232,6 @@ export function CCAgentSessionView({
     continueAfterSilentStop();
   }, [continueAfterSilentStop]);
 
-  const handleContinueAfterUsageReset = useCallback(() => {
-    if (!sessionId || !usageLimitRecovery || remoteDeviceId) return;
-    const requestId =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `${sessionId}:${Date.now()}`;
-    navigate('/cc-agent/scheduled', {
-      state: usageLimitScheduleNavigationState({
-        kind: 'usage-limit-recovery',
-        requestId,
-        sessionId,
-        agentKind:
-          session?.agentKind === 'codex' || session?.agentKind === 'pi'
-            ? session.agentKind
-            : 'claude-code',
-        resetAtMs: usageLimitRecovery.resetAtMs,
-      }),
-    });
-  }, [navigate, remoteDeviceId, session?.agentKind, sessionId, usageLimitRecovery]);
-
   // 点击 Cancel 关闭报错 banner 同样是处置(用户选择不管它了)。
   const handleDismissError = useCallback(() => {
     if (sessionId) ackErrorAlertHandled(sessionId);
@@ -5299,9 +5280,8 @@ export function CCAgentSessionView({
                 retryText={errorRetryText}
                 onRetry={handleRetry}
                 onSilentStopContinue={handleSilentStopContinue}
-                onContinueAfterUsageReset={
-                  usageLimitRecovery && !remoteDeviceId ? handleContinueAfterUsageReset : undefined
-                }
+                usageLimitWait={usageLimitWait}
+                onCancelUsageLimitWait={cancelUsageLimitWait}
                 usageLimitRecovery={usageLimitRecovery}
                 onCancel={handleDismissError}
                 agentKind={session?.agentKind}

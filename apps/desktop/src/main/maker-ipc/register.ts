@@ -145,6 +145,7 @@ import {
   isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
+  USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
   type AgentInputClearBoundaryOpts,
   type AgentInputCreateOpts,
   type AgentInputQueuedMessage,
@@ -910,6 +911,9 @@ import {
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
+import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
+import { readAccountUsageLimit, subscriptionFamilyOf } from '../usage/accountUsageLimit.js';
+import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -1150,7 +1154,7 @@ import {
 import { stampSharedTaskInput } from './sharedTaskInput.js';
 import { createSharedTaskContextUsageGuard } from './sharedTaskContextUsage.js';
 import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
-import { assertSharedTaskInteractionResolveCurrent, setSharedTaskInteractionReader, setSharedTaskQueueReader } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskInteractionResolveCurrent, isSessionSharedTaskActive, setSharedTaskInteractionReader, setSharedTaskQueueReader } from '../device-link/sharedTaskDispatch.js';
 
 function captureSharedTaskSettingGuard(sessionId: string) {
   const context = getDeviceLinkInvokeContext();
@@ -1310,6 +1314,99 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
+
+/**
+ * 目标模式是否在管这个会话(active / usageLimited 时由 goal-host 自己等额度重置)。
+ * setter 注入避免 register↔goal-host 环;bootstrap 接上 GoalController。
+ */
+let goalOwnsUsageLimitProbe: ((sessionId: string) => Promise<boolean>) | null = null;
+export function setGoalOwnsUsageLimitProbe(
+  probe: ((sessionId: string) => Promise<boolean>) | null,
+): void {
+  goalOwnsUsageLimitProbe = probe;
+}
+
+async function isUsageLimitAutoResumeEligible(sessionId: string): Promise<boolean> {
+  if (agentInputCoordinatorHolder?.isExecutionPaused(sessionId)) return false;
+  const row = await getSessionRowSnapshot(sessionId);
+  // Orca worker 的失败已桥给 Lead 重新安排;伙伴有自己的候选链与群聊编排,都不在这里续跑。
+  if (!row || row.orcaRole === 'worker' || row.source === 'bot') return false;
+  // 共享中的任务撞上限额不自动等待(Dash 2026-10-08):访客可能已影响本任务,等待期间撤权后
+  // 到点续跑不安全,交给房主手动处理。报错时与到点时都复核。
+  if (isSessionSharedTaskActive(sessionId)) return false;
+  return !(await goalOwnsUsageLimitProbe?.(sessionId).catch(() => false));
+}
+
+/**
+ * 会话当前实际在跑的来源与模型:临时切换(set_session_runtime)或自动降级的运行时覆盖优先,
+ * 否则用会话保存的选择。分模型额度必须按实际运行的模型匹配。
+ */
+export function resolveSessionRuntimeRoute(
+  sessionId: string,
+  agentKind: string,
+  saved: { providerId?: string | null; model?: string | null } | null,
+): { providerId: string | null; modelId: string | null } {
+  const override = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  if (override && override.agentKind === agentKind) {
+    return { providerId: override.providerId ?? null, modelId: override.model ?? null };
+  }
+  return {
+    providerId: getSessionProvider(sessionId) ?? saved?.providerId ?? null,
+    modelId: saved?.model ?? null,
+  };
+}
+
+/**
+ * 会话所用账号的重置时刻:错误自带 → 报错原文 → 订阅用量快照(须显示已用满)。
+ * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
+ * 周期额度耗尽,按产品规则只报错不等待。
+ */
+async function resolveSessionUsageResetAt(
+  sessionId: string,
+  signals: InterruptedTurnErrorSignals,
+): Promise<number | null> {
+  const row = await getSessionRowSnapshot(sessionId);
+  const agentKind = row?.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
+  if (!row || !agentKind) return null;
+  const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
+  if (!subscriptionFamilyOf(agentKind, providerId)) return null;
+  // SSH 远程会话的报错用远端主机的本地时间:不带时区的钟点不按本机时区理解。
+  const fromError = readTurnUsageResetAt(signals, Date.now(), {
+    localTimeZoneTrusted: !row.remoteHostId,
+  });
+  if (fromError !== null) return fromError;
+  // SSH 远程会话用远端主机自己的登录,本机快照属于另一个账号,不能拿来推算。
+  if (row.remoteHostId) return null;
+  const limit = await readAccountUsageLimit(agentKind, providerId, modelId);
+  return limit?.limited ? limit.resetAtMs : null;
+}
+
+// 普通任务撞上账号限额:照常报错,同时等额度重置后自动继续(仅本次运行内有效)。
+// coordinator 是可变绑定,必须懒读。
+const usageLimitAutoResume = new UsageLimitAutoResume({
+  now: () => Date.now(),
+  random: () => Math.random(),
+  setTimer: (fn, delayMs) => {
+    const timer = setTimeout(fn, delayMs);
+    timer.unref?.();
+    return timer;
+  },
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  isEligible: isUsageLimitAutoResumeEligible,
+  resolveResetAt: resolveSessionUsageResetAt,
+  arm: (sessionId, token, resumeAt) =>
+    agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
+  isCurrent: (sessionId, token) =>
+    agentInputCoordinatorHolder?.isUsageLimitWaitCurrent(sessionId, token) ?? false,
+  cancel: (sessionId, token) => {
+    agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId, token);
+  },
+  continueSession: async (sessionId, token, info) =>
+    agentInputCoordinatorHolder
+      ? agentInputCoordinatorHolder.continueAfterUsageLimitReset(sessionId, token, info)
+      : 'superseded',
+  log: (message, fields) => log.info(message, fields),
+});
 
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
@@ -1491,6 +1588,8 @@ function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
 }
 
 function autoResumeAttemptToken(item: AgentInputQueuedMessage): number | null {
+  // 额度重置后的续跑不走中断自愈记账,它的 sessionTotal(0)不是令牌。
+  if (item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) return null;
   const value = item.autoResumeInfo?.sessionTotal;
   return item.autoResume === true && typeof value === 'number' ? value : null;
 }
@@ -1528,6 +1627,11 @@ function settleUndispatchedInterruptedAutoResume(
   sessionId: string,
   item: AgentInputQueuedMessage,
 ): boolean {
+  // 额度重置后的自动继续不走中断自愈记账(sessionTotal 刻意为 0),只需恢复原错误与手动重试入口。
+  if (item.autoResume === true && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) {
+    agentInputCoordinatorHolder?.restoreAutoResumeRecovery(sessionId, item.clientId, null);
+    return false;
+  }
   const attemptToken = autoResumeAttemptToken(item);
   if (attemptToken === null) return false;
   const ownsAttempt = autoResumeBookkeeping.hasPendingLifecycleForClient(
@@ -4774,6 +4878,7 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
         // from being resurrected or attaching recovery to a replacement runtime.
         interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
         autoResumeBookkeeping.teardown(session.id);
+        usageLimitAutoResume.noteSessionClosed(session.id);
       },
       // Read at the coordinator boundary, as before: only a close/rebuild window
       // preserves the signal currently driving that rebuild, not the old queue.
@@ -4914,6 +5019,9 @@ const sessionEventDependencies: SessionEventDependencies = {
   },
   get log() {
     return log;
+  },
+  get usageLimitAutoResume() {
+    return usageLimitAutoResume;
   },
   get interruptedTurnAutoResumeGuard() {
     return interruptedTurnAutoResumeGuard;
@@ -14156,7 +14264,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // hard upper bound.
       const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
       silentStopAutoResumeGuard.noteUserSend(sessionId);
-      if (!isAutomaticPrompt) interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+      if (!isAutomaticPrompt) {
+        interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+        usageLimitAutoResume.noteUserAction(sessionId);
+      }
     }
     // 落库失败 → 撤掉刚才那条待确认登记:那条消息压根不存在,留着会让后续事件去 patch
     // 一个不存在的 clientId,map 也一直脏着(copilot review)。登记刻意放在写之前(不能
@@ -15680,6 +15791,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 两处必须同判据 —— 否则会出现"按住了却永远不接管"或"没按住却接管"的错配。
     isResumableTurnErrorCandidate: canRecoverTurn,
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
+    onUsageLimitedTurnError: (sessionId, signals, _item, candidateToken) => {
+      usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+    },
     onResumableTurnErrorDiscarded: (
       sessionId: string,
       options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
@@ -16032,6 +16146,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // persistence/vendor await, so a failed manual retry still starts a fresh episode.
         silentStopAutoResumeGuard.noteUserSend(sessionId);
         interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+        usageLimitAutoResume.noteUserAction(sessionId);
       }
       publishUiContinuation(sessionId, clientId);
     },
@@ -17530,6 +17645,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
     return inputCoordinator.clearError(sid);
   });
+
+  ipcMain.handle(
+    MAKER_INVOKE.INPUT_CANCEL_USAGE_LIMIT_WAIT,
+    async (event, sessionId: unknown, opts?: unknown) => {
+      const remote = isDeviceLinkInvoke();
+      // 本机调用必须来自 Cindy 自己的 renderer;device-link 调用由隧道上下文与输入控制边界把关。
+      if (!remote) assertTrustedAppRendererEvent(event);
+      const sid = requireSessionId(sessionId);
+      await assertRemoteInputControlBoundary(sid, remote, opts);
+      usageLimitAutoResume.clear(sid);
+      return inputCoordinator.cancelUsageLimitWait(sid);
+    },
+  );
 
   // renderer auth-retry 放弃时（catch / guard fall-through）调回 main 补落持久化。
   // main 侧在 isRemoteAuthRetry 条件下跳过了 onTurnErrorEvent；此处覆盖"重试失败/不能重试"两路。
@@ -19702,8 +19830,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedSender: (event) => assertTrustedAppRendererEvent(
       event as Parameters<typeof assertTrustedAppRendererEvent>[0],
     ),
-    apply: (sessionId, model, providerId, revision, selection) =>
-      handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' }),
+    apply: (sessionId, model, providerId, revision, selection) => {
+      // 用户动手换模型或来源即视为接手:在进入切换(含等锁、重建会话)之前就撤销额度等待,
+      // 不让到点的续跑抢在切换期间派发。切换失败时错误与手动重试仍在,不恢复等待。
+      if (typeof sessionId === 'string') {
+        usageLimitAutoResume.noteUserAction(sessionId);
+        agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId);
+      }
+      return handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' });
+    },
   });
 
   const recoverRemoteRuntimeAxisPersistence = async (

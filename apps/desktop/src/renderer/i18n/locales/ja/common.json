@@ -9707,8 +9707,10 @@
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",
       "retry": "再試行",
-      "continueAfterReset": "リセット後に続行",
-      "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
+      "usageLimitAutoContinueAt": "{{time}} に自動で続行",
+      "usageLimitAutoContinueTitle": "使用量の上限がリセットされるまでに操作がなければ、このタスクを自動で続行します",
+      "usageLimitAutoContinueCancel": "キャンセル",
+      "usageLimitAutoContinueCancelTitle": "自動続行をキャンセル（エラーと再試行は残ります）",
       "codexOrganizationUsageLimitWithReset": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexOrganizationUsageLimit": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
@@ -10139,6 +10141,7 @@
         "label": "再接続しました",
         "labelFailed": "再接続できませんでした",
         "labelNeutral": "再接続",
+        "labelUsageReset": "使用量が回復したため自動で続行しました",
         "detail": {
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
@@ -11485,10 +11488,6 @@
     "empty": {
       "promptHeading": "自動化がまだありません",
       "promptDescription": "cron 自動化を作成して、プロンプトをスケジュール実行させましょう。"
-    },
-    "usageLimitRecovery": {
-      "name": "利用上限リセット後にタスクを続行",
-      "prompt": "中断したところから現在のタスクを続行してください。"
     },
     "template": {
       "useTemplate": "初心者ヘルプ",

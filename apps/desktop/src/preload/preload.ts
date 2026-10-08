@@ -7435,6 +7435,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         opts?: { expectedClearBoundaryMs?: number | null },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:clear-error', sessionId, opts),
+      cancelUsageLimitWait: (
+        sessionId: string,
+        opts?: { expectedClearBoundaryMs?: number | null },
+      ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
+        ipcRenderer.invoke('maker:input:cancel-usage-limit-wait', sessionId, opts),
       persistTurnErrorDeferred: (
         sessionId: string,
         errData: Record<string, unknown> | null,

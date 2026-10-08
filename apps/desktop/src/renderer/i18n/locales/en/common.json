@@ -9724,8 +9724,10 @@
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
-      "continueAfterReset": "Continue After Reset",
-      "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
+      "usageLimitAutoContinueAt": "Continues automatically at {{time}}",
+      "usageLimitAutoContinueTitle": "If you haven't acted by the time the usage limit resets, this task continues automatically",
+      "usageLimitAutoContinueCancel": "Cancel",
+      "usageLimitAutoContinueCancelTitle": "Cancel automatic continuation. The error and Retry stay available.",
       "codexOrganizationUsageLimitWithReset": "The connected Codex account is managed by your organization and has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
       "codexOrganizationUsageLimit": "The connected Codex account is managed by your organization and has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "codexUsageLimitWithReset": "The connected Codex account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
@@ -10156,6 +10158,7 @@
         "label": "Reconnected",
         "labelFailed": "Reconnect failed",
         "labelNeutral": "Reconnect",
+        "labelUsageReset": "Usage reset, continued automatically",
         "detail": {
           "reason": "Interruption reason",
           "attempt": "Attempt {{attempt}}/{{total}}",
@@ -11511,10 +11514,6 @@
     "empty": {
       "promptHeading": "No Automations yet",
       "promptDescription": "Create a cron Automation to run your prompt on a schedule."
-    },
-    "usageLimitRecovery": {
-      "name": "Continue Task After Usage Resets",
-      "prompt": "Continue the current task from where it stopped."
     },
     "template": {
       "useTemplate": "Getting Started",

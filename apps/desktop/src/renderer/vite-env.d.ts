@@ -6125,6 +6125,11 @@ interface ElectronAPI {
         sessionId: string,
         opts?: { expectedClearBoundaryMs?: number | null },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
+      /** 取消账号限额重置后的自动继续(错误与重试保留)。 */
+      cancelUsageLimitWait: (
+        sessionId: string,
+        opts?: { expectedClearBoundaryMs?: number | null },
+      ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       persistTurnErrorDeferred: (
         sessionId: string,
         errData: Record<string, unknown> | null,
