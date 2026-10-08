@@ -13904,6 +13904,7 @@
       "failedTitle": "套餐變更失敗",
       "failedBody": "套餐變更未完成，當前套餐保持不變。",
       "requestFailed": "套餐變更請求未完成，請重新整理訂閱狀態後重試。",
+      "renewalPrepaid": "下一期費用已提前支付，請等待本期結束後再進行升級。",
       "quoteRejected": "當前訂閱無法切換到這個套餐，請選擇其他套餐。",
       "chooseAnotherPlan": "選擇其他套餐",
       "resyncHint": "確認結果暫時無法核實，正在重新確認最新狀態…",
