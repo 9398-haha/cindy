@@ -6482,7 +6482,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ ok: true; runId: string; reviewerSessionId: string }> =>
       ipcRenderer.invoke('maker:review:start', input),
     listAgentCommands: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},
     ): Promise<{
       success: boolean;
@@ -6492,7 +6492,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind, params),
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       params: {
         workingDir?: string;
         remoteHostId?: string;
@@ -6611,7 +6611,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onGoalStatusChanged: fanOutGoalStatusChanged,
 
     scanAtResources: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       params: { workingDir: string; cap?: number; query?: string },
     ): Promise<{
       success: boolean;
@@ -6644,7 +6644,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */
       id?: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       workingDir: string;
       model: string;
       title?: string;
@@ -6754,7 +6754,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       message:
         string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> },
       createOpts?: {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         workingDir: string;
         model: string;
         orcaRole?: 'lead' | 'worker' | null;
@@ -6799,7 +6799,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getContextUsage: (
       sessionId: string,
       createOpts?: {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         workingDir: string;
         model: string;
         orcaRole?: 'lead' | 'worker' | null;
@@ -6841,7 +6841,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: (): Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -6921,7 +6921,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // switched=false 且无 deferred = 同引擎 no-op(用户选回当前引擎,意图已清)。
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -6930,7 +6930,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { agentDeviceId?: string | null },
     ): Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       model: string;
       engineReady: boolean;
       deferred?: boolean;
@@ -6962,7 +6962,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getSessionAgentSwitchIntent: (
       sessionId: string,
     ): Promise<{
-      targetAgentKind: 'claude-code' | 'codex' | 'pi';
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       model: string;
       providerId: string | null;
       effort?: string;
@@ -7542,7 +7542,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)
     generateTitle: (
       message: string,
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       sessionId?: string,
     ): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:generate-title', { message, agentKind, sessionId }),
@@ -7557,14 +7557,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
     predictNextPrompt: (request: {
       sessionId: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;

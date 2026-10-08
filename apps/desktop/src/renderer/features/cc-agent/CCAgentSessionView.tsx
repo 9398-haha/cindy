@@ -2173,12 +2173,13 @@ export function CCAgentSessionView({
   // device-link 与 SSH 都只在实际执行端明确声明 setter 能力后开放；ChatInput 另行按
   // 文件系统来源关闭远端“新增”，因此这里开放的远端 callback 只会用于撤销。
   const writableDirsChangeSupported =
-    canExposeWritableDirsChange({
+    (displayAgentKind !== 'cursor' || sessionCaps?.writableDirs?.supported === true) &&
+    (canExposeWritableDirsChange({
       capabilities: sessionCaps,
       deviceId: remoteDeviceId,
       remoteHostId: session?.remoteHostId,
     }) ||
-    (session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true);
+    (session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true));
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
@@ -2888,6 +2889,7 @@ export function CCAgentSessionView({
   // ChatInput「+」菜单启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
   const collabWorkspaceKind = session?.workspaceKind;
   const collabEntry = resolveCollabEntryPolicy({
+    agentKind: displayAgentKind,
     workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
@@ -5593,7 +5595,11 @@ export function CCAgentSessionView({
                   onComposerDropHandled={resetFullAreaDragState}
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
-                  onExtraDirsChange={handleExtraDirsChange}
+                  onExtraDirsChange={
+                    displayAgentKind !== 'cursor' || sessionCaps?.extraDirs?.supported === true
+                      ? handleExtraDirsChange
+                      : undefined
+                  }
                   writableDirs={session?.writableDirs ?? []}
                   writableGrantScope={sessionId}
                   onWritableDirsChange={

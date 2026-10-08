@@ -1032,6 +1032,7 @@ export function NewMakerDraftRoute() {
   // "有没有选项目目录" 给出 —— 与它提交给 createSession 的值同源,不让 helper 反推。
   const collabWorkspaceKind = effectiveWorkingDir ? 'project' : 'dialogue';
   const collabEntry = resolveCollabEntryPolicy({
+    agentKind: capabilityAgentKind,
     workspaceKind: collabWorkspaceKind,
     workingDir: effectiveWorkingDir,
     remoteHostId: effectiveRemoteHostId,
@@ -5681,9 +5682,15 @@ export function NewMakerDraftRoute() {
                     // 不传 onChange 时 ExtraDirsButton 直接不渲染引用目录段(「新建目标」/ 计划模式 /
                     // Plugin 入口不受影响)。进入远程设备时 extraDirs 已被清空,不会留下无法删除的残留。
                     // 恢复这个能力要把 picker 路由到对端(设备域浏览器已有 fs:list-dir),见 follow-up。
-                    onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}
+                    onExtraDirsChange={
+                      isDeviceLinkDraft ||
+                      (capabilityAgentKind === 'cursor' && capabilities?.extraDirs?.supported !== true)
+                        ? undefined
+                        : handleExtraDirsChange
+                    }
                     onWritableDirsChange={
-                      isDeviceLinkDraft || isRemoteProjectDraft
+                      isDeviceLinkDraft || isRemoteProjectDraft ||
+                      (capabilityAgentKind === 'cursor' && capabilities?.writableDirs?.supported !== true)
                         ? undefined
                         : handleWritableDirsChange
                     }

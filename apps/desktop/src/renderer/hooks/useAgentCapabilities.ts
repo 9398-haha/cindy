@@ -94,6 +94,8 @@ export interface AgentCapabilities {
    * device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
    */
   planMode?: CapabilityStatus;
+  /** Additional read-only directories mounted into the native task. */
+  extraDirs?: CapabilityStatus;
   /**
    * 会话级外部可写目录能力。device-link 老被控端无此字段 → undefined = 不支持，
    * 控制端必须隐藏会触发新 channel 的入口。
@@ -634,8 +636,8 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
             : typeof error === 'object' && error !== null && 'message' in error
               ? String(error.message)
               : String(error);
-        if (agent !== 'pi' || !message.includes("Agent 'pi' is not registered")) throw error;
-        log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
+        if (!['pi', 'cursor'].includes(agent) || !message.includes(`Agent '${agent}' is not registered`)) throw error;
+        log.warn(`optional ${agent} capabilities unavailable; continuing with core agents:`, error);
         return null;
       }
     }),
