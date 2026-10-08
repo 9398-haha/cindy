@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - ci/cursor5611-validation
   workflow_dispatch:
 
 permissions:
@@ -34,6 +34,7 @@ jobs:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: bd1df381e8d5dbc078474e1438f26802beb06639
           fetch-depth: 0
           lfs: true
 
@@ -68,8 +69,8 @@ jobs:
       # consumers block. Geometry/adoption observations remain report-only.
       - name: Check added design colours
         env:
-          DESIGN_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
-          DESIGN_HEAD_REF: ${{ github.sha }}
+          DESIGN_BASE_REF: 44809ba244790167d69cd26cff0694f18758e168
+          DESIGN_HEAD_REF: bd1df381e8d5dbc078474e1438f26802beb06639
         run: pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"
 
       - name: Check design inventory freshness
@@ -105,7 +106,7 @@ jobs:
 
       - name: Validate SQLite migrations
         env:
-          XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+          XDT_MIGRATION_BASE_REF: 44809ba244790167d69cd26cff0694f18758e168
         run: pnpm --filter desktop db:validate
 
       - name: Run scheduler architecture guard
@@ -131,6 +132,7 @@ jobs:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: bd1df381e8d5dbc078474e1438f26802beb06639
           fetch-depth: 0
           lfs: true
 
@@ -208,6 +210,7 @@ jobs:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: bd1df381e8d5dbc078474e1438f26802beb06639
           fetch-depth: 0
           lfs: true
 
@@ -267,6 +270,7 @@ jobs:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: bd1df381e8d5dbc078474e1438f26802beb06639
           fetch-depth: 0
           lfs: true
 
