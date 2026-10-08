@@ -181,4 +181,56 @@ describe('server group feature parity', () => {
     expect(input.message).toContain('file-0');
     expect(input.attachments![0].id).toBe(messages[0].content[0].mediaId);
   });
+  it('negotiates broadcast and cancels the server deferred source on stop', async () => {
+    arrange();
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => route === '/me' ? { body: { actor: { id: selfId }, capabilities: { groupDiscussionParity: 1 } } } : base(route, ...args));
+    let finish!: (value: unknown) => void;
+    deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; })) as typeof deps.decidePlan;
+    await send({ mentions: { all: true, botIds: [] } }); await flush();
+    expect(fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')?.[2].mentionsAll).toBe(true);
+    await service.stopRound(roomId);
+    expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/cancel-planning'))).toBe(true);
+    finish({ needsPlan: true, steps }); await flush();expect(planPosts()).toHaveLength(0);
+  });
+  it('reports forced planning failure without silently starting ordinary discussion', async () => {
+    arrange();
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => route === '/me' ? { body: { actor: { id: selfId }, capabilities: { groupDiscussionParity: 1 } } } : base(route, ...args));
+    deps.decidePlan = vi.fn(async () => null);
+    await send({ division: true });await flush();
+    expect(fixture.handle.mock.calls.find(([route]) => route.endsWith('/cancel-planning'))?.[2].failed).toBe(true);
+    expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/continue'))).toBe(false);
+  });
+  it('keeps legacy servers without a watermark on the bounded text page', async () => {
+    arrange();fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, ...args) => route.includes('/messages?') ? { body: Array.from({ length: 100 }, (_, n) => ({
+      id: `message-${n}`, seq: String(100-n), authorId: selfId, author: { kind: 'human', name: 'Me' }, deleted: false, content: [{ type: 'text', text: 'history' }],
+    })) } : base(route, ...args));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.handle.mock.calls.filter(([route]) => route.includes('/messages?'))).toHaveLength(1);
+  });
+  it('paginates unseen attachments before the text window and skips delivered files', async () => {
+    arrange();fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const base = fixture.handle.getMockImplementation()!;
+    const message = (seq: number, media = false) => ({ id: `message-${seq}`, seq: String(seq), authorId: selfId, author: { kind: 'human', name: 'Me' }, deleted: false,
+      content: media ? [{ type: 'media', mediaId: `60000000-0000-4000-8000-${String(seq).padStart(12,'0')}` }] : [{ type: 'text', text: 'text' }] });
+    fixture.handle.mockImplementation((route, ...args) => {
+      if (route === '/executions/claim' && !claimed) { claimed = true; return { body: { execution: { ...execution, context_seq: '350', attachment_after_seq: '100' } } }; }
+      if (route.includes('/messages?')) {
+        if (route.endsWith('before=351')) return { body: Array.from({ length: 100 }, (_, n) => message(350-n)) };
+        if (route.endsWith('before=251')) return { body: Array.from({ length: 100 }, (_, n) => message(250-n,n===99)) };
+        return { body: [message(150,true),message(100,true)] };
+      }
+      return base(route, ...args);
+    });
+    fixture.download.mockImplementation(async (_room, id) => ({ id, name: id, category: 'file', path: '/test/file', url: null }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const input = vi.mocked(deps.dispatch).mock.calls[0][0];
+    expect(input.attachments?.map(a => a.id)).toEqual([151,150].map(n => `60000000-0000-4000-8000-${String(n).padStart(12,'0')}`));
+    expect(fixture.urls.some(url => url.endsWith('before=151'))).toBe(true);
+  });
+
 });

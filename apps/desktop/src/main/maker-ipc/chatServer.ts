@@ -47,7 +47,7 @@ interface Snapshot { room: Room; members: Member[]; messages: Message[]; cursor:
 interface Execution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string;
   plan_id?: string | null; plan_step?: number | null;
-  context_seq: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
+  context_seq: string; attachment_after_seq?: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
 }
 interface ServerPlan {
   id: string; revision: number; source_message_id: string; request_text: string; organizer_id: string; creator_id: string;
@@ -129,14 +129,29 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const planning = new Map<string, { botId: string; controller: AbortController }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
-  const planIntents = new Map<string, object>();
-  function replacePlanIntent(roomId: string) {
+  type PlanIntent = { sourceId?: string };
+  const planIntents = new Map<string, PlanIntent>();
+  let groupDiscussionParity = false;
+  const pendingPlanCancels = new Map<string, Map<string, boolean>>();
+  async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
+    if (!groupDiscussionParity) return;
+    let pending = pendingPlanCancels.get(roomId);
+    if (!pending) { pending = new Map(); pendingPlanCancels.set(roomId, pending); }
+    pending.set(sourceId, failed);
+    await api(`/conversations/${roomId}/messages/${sourceId}/cancel-planning`, 'POST', { operationId: `cancel-plan:${sourceId}:${failed}`, failed });
+    pending.delete(sourceId);
+    if (!pending.size) pendingPlanCancels.delete(roomId);
+  }
+  async function replacePlanIntent(roomId: string) {
     const pending = planning.get(roomId);
     pending?.controller.abort();
     planning.delete(roomId);
     if (pending) changed(roomId);
-    const intent = {};
+    const previous = planIntents.get(roomId);
+    const intent: PlanIntent = {};
     planIntents.set(roomId, intent);
+    if (previous?.sourceId) await cancelPlanning(roomId, previous.sourceId);
+    for (const [sourceId, failed] of pendingPlanCancels.get(roomId) ?? []) await cancelPlanning(roomId, sourceId, failed);
     return intent;
   }
   let registeredAt = 0;
@@ -206,7 +221,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     });
   }
-  const media = createChatMedia(api, current, deps.log);
+  const media = createChatMedia(api, current, deps.log, { allowLoopback: !app.isPackaged && process.env.XDT_ISOLATED === '1' && config.baseUrl === 'http://127.0.0.1:3018' });
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
   const upgradeErrors = new Map<string, string>();
@@ -308,7 +323,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (Date.now() - registeredAt < 5000) return;
     refreshActors = (async () => {
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
-      const me = await api<{ actor: Actor }>('/me'); selfId = me.actor.id;
+      const me = await api<{ actor: Actor; capabilities?: { groupDiscussionParity?: number } }>('/me'); selfId = me.actor.id;
+      groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       // Refresh from the issuing auth server, never overwrite with a stale device cache.
       if (Date.now() - profileRefreshedAt > 60000) {
         await api('/profile/refresh', 'POST').then(() => { profileRefreshedAt = Date.now(); }).catch(() => undefined);
@@ -423,6 +439,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
         noticeCode: joined ? 'member-joined' : null, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
     }
+    const notice = m.origin === 'integration' && !m.deleted ? m.content.find(b => b.namespace === 'cindy.group-notice' && b.schemaRevision === 1) : undefined;
+    const noticeCode = notice?.data?.noticeCode;
+    if (noticeCode === 'member-failed' || noticeCode === 'member-timeout' || noticeCode === 'plan-failed') return {
+      id: m.id, sequence: Number(m.seq), kind: 'notice', authorKind: 'system', isSelf: false,
+      authorBotId: localBot(m.authorId)?.id ?? null, authorName: members.find(member => member.id === m.authorId)?.name ?? '',
+      content: bodyText(m), threadRootId: m.threadRootId, replyCount: 0, reactions: [], mentions: { all: false, botIds: [] },
+      noticeCode, planId: null, files: [], attachments: [], createdAt: Date.parse(m.createdAt),
+    };
     const member = members.find(member => member.id === m.authorId);
     const planCard = m.content.find(b => b.namespace === 'cindy.plan');
     const legacy = m.origin === 'import' ? m.content.find(b => b.namespace === 'cindy.local-history')?.data : undefined;
@@ -490,7 +514,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ? Math.max(latest, Date.parse(m.createdAt)) : latest, 0),
       createdAt: Date.parse(s.room.created_at), updatedAt: Date.parse(s.room.updated_at ?? s.room.created_at),
       messages, hasMoreBefore: page.length === (o.limit ?? 100), plans,
-      round: { status: executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers, canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id) || s.messages.some(m => !m.deleted && m.origin !== 'system' && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))) && !executions.some(e => ['queued','running','stopping','needs_input'].includes(e.status)) } };
+      round: { status: executions.some(e => ['queued', 'running'].includes(e.status)) ? 'running' : 'idle', speakers, canContinue: !open && !planning.has(roomId) && (executions.some(e => !e.plan_id) || s.messages.some(m => !m.deleted && m.origin !== 'system' && m.author.kind === 'human' && !m.content.some(b => b.namespace === 'cindy.plan'))) && !executions.some(e => ['queued','running','stopping'].includes(e.status)) } };
   }
   function planView(plan: ServerPlan, members: Member[], workspace: ReturnType<ReturnType<typeof chatServerWorkspaces>['read']>): BotGroupPlanView {
     return { id: plan.id, status: plan.status, organizerBotId: localBot(plan.organizer_id)?.id ?? plan.organizer_id,
@@ -503,7 +527,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const i = z.object({ groupId: id, planId: id, position: z.number().int().min(0).max(11).optional(),
       action: z.enum(['remove','reassign']).optional(), botId: z.string().optional() }).parse(input);
     const room = await resolveGroup(i.groupId);
-    replacePlanIntent(room);
+    await replacePlanIntent(room);
     const plans = await api<ServerPlan[]>(`/conversations/${room}/plans?ids=${i.planId}`);
     const plan = plans.find(p => p.id === i.planId); if (!plan) throw new Error('PLAN_CLOSED');
     const botId = i.botId ? actors.find(a => a.externalId === i.botId)?.id ?? id.parse(i.botId) : undefined;
@@ -511,7 +535,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       action: i.action ?? action, position: i.position, botId });
     changed(room); return { ok: true as const };
   }
-  async function decideArrangement(s: Snapshot, sourceId: string, text: string, forced: boolean, attachments: BotGroupAttachment[], intent: object) {
+  async function decideArrangement(s: Snapshot, sourceId: string, text: string, forced: boolean, attachments: BotGroupAttachment[], intent: PlanIntent) {
     if (!current() || planIntents.get(s.room.id) !== intent) return;
     const members = s.members.filter(m => m.kind === 'bot' && m.state === 'joined' && (!localBot(m.id) || localBot(m.id)?.status === 'active') && (m.ownerActorId === selfId || m.guestAccess !== 'none'));
     const organizer = members.find(m => m.id === s.room.organizer_id) ?? members[0];
@@ -520,10 +544,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const controller = new AbortController();
     const pending = { botId: localBot(organizer.id)?.id ?? organizer.id, controller };
     planning.set(s.room.id, pending); changed(s.room.id);
+    let explicit = forced;
     try {
       const plans = await api<ServerPlan[]>(`/conversations/${s.room.id}/plans`);
       if (!current() || controller.signal.aborted) return;
       const proposed = plans.find(p => p.status === 'proposed' && p.creator_id === selfId);
+      explicit ||= !!proposed;
       const decision = await deps.decidePlan({ mode: proposed ? 'revise' : forced ? 'forced' : 'auto', groupName: s.room.name,
         organizerName: organizer.name, members: members.map(m => ({ botId: m.id, name: m.name, description: localBot(m.id)?.description ?? '' })),
         recent: s.messages.slice(0, 12).reverse().map(m => ({ from: m.author.name, text: bodyText(m) })), request: text,
@@ -531,14 +557,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!current() || controller.signal.aborted || planIntents.get(s.room.id) !== intent) return;
       if (decision?.needsPlan) await api(`/conversations/${s.room.id}/plans`, 'POST', {
         operationId: `plan:${sourceId}`, sourceMessageId: sourceId, organizerId: organizer.id, request: text, steps: decision.steps });
-      else await api(`/conversations/${s.room.id}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}` });
+      else if (explicit) await cancelPlanning(s.room.id, sourceId, true);
+      else await api(`/conversations/${s.room.id}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}`, ...(groupDiscussionParity ? { automatic: true } : {}) });
     } catch (error) {
       if (current() && !controller.signal.aborted) {
         // An organizer failure must not swallow the user's posted request.
-        await api(`/conversations/${s.room.id}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}` });
+        if (explicit) await cancelPlanning(s.room.id, sourceId, true);
+        else await api(`/conversations/${s.room.id}/messages/${sourceId}/continue`, 'POST', { operationId: `discuss:${sourceId}`, ...(groupDiscussionParity ? { automatic: true } : {}) });
         deps.log?.warn('Group arrangement could not be prepared', { groupId: s.room.id });
       }
-    } finally { if (planning.get(s.room.id) === pending) { planning.delete(s.room.id); changed(s.room.id); } }
+    } finally { delete intent.sourceId; if (planning.get(s.room.id) === pending) { planning.delete(s.room.id); changed(s.room.id); } }
   }
   async function updateExecution(run: Running, action: string, extra: Record<string, unknown> = {}) {
     return api(`/conversations/${run.execution.conversation_id}/executions/${run.execution.id}`, 'POST', {
@@ -653,14 +681,26 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       await updateExecution(run, 'heartbeat');
       if (!current()) throw new Error('OWNER_CHANGED');
       const history = await api<Message[]>(`/conversations/${s.room.id}/messages?all=true&limit=100&before=${BigInt(execution.context_seq) + 1n}`);
+      let page = [...history];
       if (run.plan) for (const messageId of new Set([run.plan.source_message_id, ...run.plan.steps.flatMap(step => step.resultMessageId ? [step.resultMessageId] : []), ...(run.plan.note_message_ids ?? [])])) {
         if (!history.some(message => message.id === messageId)) history.push(await api<Message>(`/conversations/${s.room.id}/messages/${id.parse(messageId)}`));
+      }
+      // Text stays bounded, but unseen attachments may precede the latest text page.
+      // The server watermark is scoped to this bot/grant/plan step and advances only on success.
+      const attachmentHistory = [...history];
+      const after = BigInt(execution.attachment_after_seq ?? '0');
+      while (execution.attachment_after_seq !== undefined && page.length === 100) {
+        const before = page.reduce((min, m) => BigInt(m.seq) < min ? BigInt(m.seq) : min, BigInt(execution.context_seq) + 1n);
+        if (before <= after + 1n) break;
+        page = await api<Message[]>(`/conversations/${s.room.id}/messages?all=true&limit=100&before=${before}`);
+        attachmentHistory.push(...page);
       }
       const attachments: BotGroupAttachment[] = [];
       const missingAttachments: string[] = [];
       // Attach a bounded newest set, and retain the names of older files in context.
       const seenMedia = new Set<string>();
-      for (const message of [...history].sort((a, b) => Number(b.seq) - Number(a.seq))) for (const block of message.content) {
+      for (const message of attachmentHistory.sort((a, b) => BigInt(a.seq) < BigInt(b.seq) ? 1 : -1)) for (const block of message.content) {
+        if (BigInt(message.seq) <= after) continue;
         if (message.deleted || block.type !== 'media' || !block.mediaId || seenMedia.has(block.mediaId)) continue;
         seenMedia.add(block.mediaId);
         if (attachments.length >= 40) { missingAttachments.push(block.caption ?? block.mediaId); continue; }
@@ -830,7 +870,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(), attachments: z.array(z.unknown()).optional() }).parse(input);
     i.groupId = await resolveGroup(i.groupId);
     if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
-    const intent = replacePlanIntent(i.groupId);
+    const intent = await replacePlanIntent(i.groupId);
     const s = await snapshot(i.groupId);
     const plans = await api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
     const openPlan = plans.find(p => ['proposed','running','waiting'].includes(p.status));
@@ -850,14 +890,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const mentions = await mentionIds(i.groupId, i.mentions);
       result = await api<{ id: string }>(`/conversations/${i.groupId}/${commentPlan ? `plans/${commentPlan.id}/messages` : 'messages'}`, 'POST', {
         operationId: i.clientId, content: [ ...(i.text ? [{ type: 'text', text: i.text }] : []),
-          ...await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId) ], mentions, deferExecution: shouldPlan,
+          ...await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId) ], mentions, deferExecution: shouldPlan, ...(groupDiscussionParity ? { mentionsAll: i.mentions.all, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       });
     } catch (error) {
       if (prepared?.ok) await prepared.discard();
       throw error;
     }
     if (prepared?.ok) prepared.commit();
-    if (shouldPlan) void decideArrangement(s, result.id, i.text, i.division === true, prepared?.ok ? prepared.attachments : [], intent).catch(() => undefined);
+    if (shouldPlan) {
+      if (planIntents.get(i.groupId) !== intent) await cancelPlanning(i.groupId, result.id);
+      else {
+        intent.sourceId = result.id;
+        void decideArrangement(s, result.id, i.text, i.division === true, prepared?.ok ? prepared.attachments : [], intent).catch(() => undefined);
+      }
+    }
     deps.log?.info?.('Chat group send confirmed', { groupId: i.groupId, messageId: result.id,
       trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), durationMs: Date.now() - started });
     changed(i.groupId); return { ok: true as const, messageId: result.id };
@@ -922,7 +968,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     stopRound: roomId => safe(async () => {
       const room = await resolveGroup(id.parse(roomId));
-      replacePlanIntent(room);
+      await replacePlanIntent(room);
       const plans = await api<ServerPlan[]>(`/conversations/${room}/plans`);
       for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status))) await actPlan({ groupId: room, planId: plan.id }, 'stop');
       const executions = await api<Execution[]>(`/conversations/${room}/executions`);
