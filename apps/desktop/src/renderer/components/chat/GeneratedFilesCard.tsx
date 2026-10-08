@@ -769,6 +769,8 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   filesRef.current = files;
   const visibleRef = useRef<GeneratedFileRef[] | null>(initialVisible);
   // 首屏来自缓存的结论仍要整卡复核一次:缓存只负责不留空白帧,不替代本次 stat。
+  // 复核结果真正应用后才收起标记:检查中途被 checkKey 变化取消时,下一轮必须继续
+  // 整卡重查,否则缓存里已被删除的路径会被当成已确认而永远留在屏上。
   const seededRef = useRef(initialVisible !== null);
   const checkEnvRef = useRef({ remoteOrigin, workingDir: fileCtx.workingDir });
   const turnWindowRef = useRef({ turnStartMs, turnEndMs, turnSealed });
@@ -811,7 +813,6 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       turnWindowRef.current.turnEndMs !== turnEndMs ||
       turnWindowRef.current.turnSealed !== turnSealed;
     const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen || seededRef.current;
-    seededRef.current = false;
     checkEnvRef.current = { remoteOrigin, workingDir: fileCtx.workingDir };
     turnWindowRef.current = { turnStartMs, turnEndMs, turnSealed };
     remoteVerdictGenRef.current = remoteVerdictGen;
@@ -894,6 +895,9 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       visibleRef.current = merged;
       onVisibilityChange?.(checkKey, merged.length > 0);
       setExisting((prev) => reuseGeneratedFilesIfUnchanged(prev, merged));
+      // The seeded conclusion is now re-checked by real stats; only then does
+      // the pending-review mark go away.
+      seededRef.current = false;
     })();
 
     return () => {

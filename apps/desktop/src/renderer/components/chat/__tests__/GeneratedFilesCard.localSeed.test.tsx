@@ -34,20 +34,30 @@ function stubStat(statPath: ReturnType<typeof vi.fn>) {
 
 function renderCard(props: {
   renderItemKey: string;
+  files?: readonly GeneratedFileRef[];
   turnStartMs: number;
   turnEndMs?: number | null;
 }) {
-  return render(
+  return render(cardElement(props));
+}
+
+function cardElement(props: {
+  renderItemKey: string;
+  files?: readonly GeneratedFileRef[];
+  turnStartMs: number;
+  turnEndMs?: number | null;
+}) {
+  return (
     <ChatSessionFileProvider
       value={{ sessionId: 'local-task', workingDir: 'C:\\work', origin: { kind: 'local' } }}
     >
       <GeneratedFilesCard
         renderItemKey={props.renderItemKey}
-        files={[report]}
+        files={props.files ?? [report]}
         turnStartMs={props.turnStartMs}
         turnEndMs={props.turnEndMs ?? null}
       />
-    </ChatSessionFileProvider>,
+    </ChatSessionFileProvider>
   );
 }
 
@@ -97,6 +107,42 @@ describe('local generated files remount', () => {
     renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START });
     expect(screen.getByText('report.md')).toBeTruthy();
     await waitFor(() => expect(screen.queryByText('report.md')).toBeNull());
+  });
+
+  it('re-checks a seeded path when another file finishes during the first check', async () => {
+    const notes: GeneratedFileRef = {
+      path: 'C:\\work\\notes.md',
+      name: 'notes.md',
+      source: 'tool',
+      ready: true,
+    };
+    const pending: Array<(stat: unknown) => void> = [];
+    const statPath = vi.fn((path: string) =>
+      path === notes.path
+        ? Promise.resolve({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 })
+        : new Promise((resolve) => {
+            pending.push(resolve);
+          }),
+    );
+    stubStat(statPath);
+    const first = renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    pending[0]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() => expect(screen.getByText('report.md')).toBeTruthy());
+    first.unmount();
+
+    // Remount seeds report.md from the stat cache; its re-check hangs mid-turn.
+    const second = renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START });
+    expect(screen.getByText('report.md')).toBeTruthy();
+    await waitFor(() => expect(pending).toHaveLength(2));
+    // notes.md finishes while the seeded re-check is still in flight. The check
+    // fingerprint changes and cancels that run before its verdict can land.
+    second.rerender(cardElement({ renderItemKey: 'genfiles-a', turnStartMs: START, files: [report, notes] }));
+    await waitFor(() => expect(pending).toHaveLength(3));
+    // The replacement re-check still verifies the seeded path and finds it gone.
+    pending[2]({ kind: 'missing' });
+    await waitFor(() => expect(screen.queryByText('report.md')).toBeNull());
+    expect(screen.getByText('notes.md')).toBeTruthy();
   });
 
   it('applies the current turn window to cached stats', async () => {
