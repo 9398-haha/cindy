@@ -3600,6 +3600,7 @@ function extractErr(data: unknown): string {
  */
 type FireAbortStage =
   | 'runner entry'
+  | 'queue snapshot restore'
   | 'workspace allocation'
   | 'session creation'
   | 'agent turn dispatch'
