@@ -13721,6 +13721,7 @@
       "failedTitle": "Plan change failed",
       "failedBody": "The plan change did not complete. Your current plan is unchanged.",
       "requestFailed": "The plan change request couldn’t be completed. Refresh your subscription status and try again.",
+      "renewalPrepaid": "Your next billing period is already paid. Wait until the current period ends before upgrading.",
       "quoteRejected": "This plan isn’t available for your current subscription. Choose another plan.",
       "chooseAnotherPlan": "Choose Another Plan",
       "resyncHint": "The result could not be confirmed yet. Checking the latest status again…",
