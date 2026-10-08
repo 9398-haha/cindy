@@ -244,12 +244,6 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
   }
 }
 
-function parseContextRebuildReason(
-  content: string,
-): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | null {
-  return parseContextRebuildBoundary(content)?.reason ?? null;
-}
-
 function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;

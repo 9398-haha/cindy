@@ -65,7 +65,6 @@ import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
-import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId } from '../maker-host/model-context-settings.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
@@ -102,7 +101,6 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
-  isModelSelectableForNewRoute,
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
   findCatalogModel,
@@ -143,7 +141,7 @@ import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
 import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.js';
 import { getDeviceLinkStatus, getMobileNotifyGeneration, sendMobileBotGroupNotify } from '../device-link/index.js';
-import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
+import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
   isAutomaticInputOriginKind,
@@ -191,9 +189,6 @@ import {
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
-import { ingestMedia } from '../cindy-media/ingest.js';
-import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
-import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -439,7 +434,7 @@ import {
   orcaWorkerCreationReservations,
   sessions,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain } from '../../shared/botModelChain.js';
+import { nextBotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import { readEffectiveBotModelChain, readEffectiveBotModelSelection } from '../maker-host/bot-model-chain-settings-store.js';
 import {
@@ -894,17 +889,12 @@ import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger'
 import {
   createContextOverflowRollover,
   hasModelWindowContextToProtect,
-  isContextOverflowErrorData,
-  isOversizedHistoryErrorData,
   isPiPromptRpcTimeoutError,
   lookupVerifiedContextWindow,
   persistedUserContentToWireMessage,
   type ModelWindowSwitchPreparationResult,
 } from './contextOverflowRollover.js';
-import {
-  classifyCodexHistoryOversized,
-  reserveCodexForkCleanup,
-} from '../maker-host/codex-local-sessions.js';
+import { classifyCodexHistoryOversized } from '../maker-host/codex-local-sessions.js';
 import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
@@ -10829,7 +10819,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Bot group chat is local to this Desktop in phase 1; device-link does not route these channels.
   const botGroupNotReady = { ok: false as const, errorCode: 'HOST_NOT_READY' as const, message: '伙伴群聊服务尚未就绪' };
   // Narrow chat operations; credentials and transport stay in main.
-  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_STATUS, async (event, input) => {
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_STATUS, async (event) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.status() : { enabled: false, connected: false };
@@ -10869,12 +10859,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.manage(input) : { ok: false, errorCode: 'HOST_NOT_READY' };
   });
-  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_OWNEDBOTS, async (event, input) => {
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_OWNEDBOTS, async (event) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.ownedBots() : { ok: false, errorCode: 'HOST_NOT_READY' };
   });
-  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_REFRESHPROFILE, async (event, input) => {
+  ipcMain.handle(MAKER_INVOKE.CHAT_SERVER_REFRESHPROFILE, async (event) => {
     assertTrustedAppRendererEvent(event);
     const chat = botGroupChatServiceHolder?.chatServer;
     return chat ? chat.refreshProfile() : { ok: false, errorCode: 'HOST_NOT_READY' };

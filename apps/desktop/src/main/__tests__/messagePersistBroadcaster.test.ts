@@ -4009,7 +4009,12 @@ it('retains explicit commentary/final phases in durable assistant metadata for n
 });
 
 it('persists bound results with the final seal, and a failed result lookup cannot suppress the reply', async () => {
-  const results = [{ delegationId: 'job' }] as any;
+  const results: Awaited<ReturnType<typeof readTaskResultsForReply>> = [{
+    v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'owner-bot',
+    fromBotName: 'Owner', toBotId: null, toBotName: '', parentSessionId: SESSION,
+    childSessionId: 'child', objective: 'Test result',
+    result: { runSequence: 1, status: 'completed', text: 'done', artifacts: [] },
+  }];
   vi.mocked(readTaskResultsForReply).mockResolvedValueOnce(results);
   await markAssistantTurnCompleted(SESSION, 'summary', undefined, ['bot-delegation-completion:job']);
   expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'summary', { turnCompleted: true, botTaskResults: results });

@@ -1304,7 +1304,10 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
 
   it('不带位置(旧控制端 / 内部调用)保持原位置,同引擎仍走换模型', async () => {
     const h = relocationHarness();
-    const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    const withoutLocation: Omit<typeof backToTaskComputer, 'agentDeviceId'> & {
+      agentDeviceId?: typeof backToTaskComputer.agentDeviceId;
+    } = { ...backToTaskComputer };
+    delete withoutLocation.agentDeviceId;
     await performSessionAgentSwitch(h.deps, withoutLocation);
     expect(h.selectSameAgentModel).toHaveBeenCalledTimes(1);
     expect(h.pending.get('s1')?.targetAgentDeviceId).toBeUndefined();

@@ -101,7 +101,7 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
 
 describe('ImDefaultSettingsSection Pi channel warning', () => {
   it('saves the complete selection in one update while preserving permissions', async () => {
-    const save = vi.fn(async (_patch: unknown) => defaults('codex'));
+    const save = vi.fn<(patch: unknown) => Promise<ImDefaultSettingsState>>(async () => defaults('codex'));
     window.electronAPI.maker.imDefaultSettingsSet = save;
     render(<ImDefaultSettingsSection />);
     await screen.findByText('settings.imBot.defaults.modelLabel');

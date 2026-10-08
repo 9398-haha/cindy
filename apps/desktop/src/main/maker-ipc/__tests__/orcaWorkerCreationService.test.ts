@@ -3023,7 +3023,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
 
 it('applies plan limit in atomic reservation',async()=>{const {deps,service}=createDeps({validateCreationPlan:vi.fn(async()=>2)});await service.createWorker({leadSessionId:'lead-1',role:'eval',agent:'codex',label:'sample'});expect(deps.reserveWorkerCreation).toHaveBeenCalledWith(expect.objectContaining({hardLimit:2}));});
 it('uses one canonical label at every plan check without mutating the caller', async () => {
-  const validateCreationPlan = vi.fn(async (_params: OrcaWorkerCreateParams) => 2);
+  const validateCreationPlan = vi.fn<(params: OrcaWorkerCreateParams) => Promise<number>>(async () => 2);
   const { service } = createDeps({ validateCreationPlan });
   const params = Object.freeze({ leadSessionId: 'lead-1', teamId: 'team-1', role: 'eval', agent: 'codex' as const, label: ' SAMPLE ', workerPermissionMode: 'auto' as const });
   await expect(service.createWorkerInTeam(params)).resolves.toMatchObject({ ok: true });

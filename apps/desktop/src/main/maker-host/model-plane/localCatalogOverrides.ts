@@ -477,7 +477,7 @@ export function applyLocalOverridesToRoot(
   warnings: ModelPlaneWarning[] = [],
   policyProviderId = providerId,
 ): CatalogModel[] {
-  let out = [...models];
+  const out = [...models];
   for (const [key, entry] of Object.entries(overrides.additions)) {
     const parsed = parseKey(key);
     if (!parsed || parsed.providerId !== providerId) continue;

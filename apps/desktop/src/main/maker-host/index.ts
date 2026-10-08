@@ -144,12 +144,7 @@ import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
-import {
-  getVisionBridgeController,
-  setVisionBridgeController,
-} from '../vision-bridge/vision-bridge-controller.js';
-import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
-import * as blobStore from '../cindy-media/blobStore.js';
+import { setVisionBridgeController } from '../vision-bridge/vision-bridge-controller.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
 import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
@@ -2417,7 +2412,6 @@ export function getMaker(): Maker {
       getRemotePiTransport: async (
         remoteHostId,
         {
-          binaryPath: _localBinaryPath,
           remoteBinaryPath: providedRemoteBinaryPath,
           args,
           cwd,

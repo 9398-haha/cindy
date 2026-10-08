@@ -2517,16 +2517,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * fire-and-forget。
    */
   syncNewMakerDraft: (snapshot: {
+    appDefaultModelRequestId?: string;
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/appDefaultModelSelection').AppModelRoute;
     lastByVendor: Partial<
       Record<
-        'cc' | 'codex' | 'pi',
+        'cc' | 'codex' | 'pi' | 'cursor',
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
     /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
-    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi' | 'cursor', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     providerModelMemory?: Record<

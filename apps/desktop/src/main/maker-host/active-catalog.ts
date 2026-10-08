@@ -1094,8 +1094,9 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
     // A sibling Harness discovers membership, not Pi-specific thinking tiers.
     // Keep portable tiers as a fallback for unknown models; known models inherit
     // the Registry, and Codex-only labels cannot become Pi capabilities.
-    const { efforts: _efforts, defaultEffort: _defaultEffort, ...metadata } =
-      model.discoveredMetadata ?? catalogModelMetadata(model);
+    const metadata = { ...(model.discoveredMetadata ?? catalogModelMetadata(model)) };
+    delete metadata.efforts;
+    delete metadata.defaultEffort;
     const efforts = model.efforts.filter(effort => PI_REASONING_EFFORTS.some(level => level === effort));
     byId.set(id, {
       ...model, id, piApi, efforts,
