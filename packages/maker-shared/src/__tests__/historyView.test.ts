@@ -624,6 +624,31 @@ describe('locating folded history preserves display expansion', () => {
     view.setActive(false);
   });
 
+  it('keeps the previous running preview window while its advanced tail is still loading', async () => {
+    const rows = Array.from({ length: 8 }, (_, i) => row(i + 1, 'thinking', `detail-${i}`));
+    const items = projectHistoryView(rows, true);
+    if (items[0].type !== 'work') throw new Error('missing work');
+    const summary = items[0].summary;
+    // Three new activities moved the latest-five preview from rows[0..4] to rows[3..7].
+    summary.preview = { ...summary, key: 'preview', firstMessageId: rows[3].id, lastMessageId: rows[7].id };
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: () => new Promise(() => {}),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    view.setExpanded('preview', true);
+    const snapshot = view.getSnapshot();
+    const details = new Map(snapshot.details);
+    details.set('preview', { messages: rows.slice(0, 5), revision: 'previous', lastMessageId: rows[4].id,
+      loading: true, complete: false, error: null });
+    const rendered = renderHistoryView({ view, snapshot: { ...snapshot, details }, liveMessages: [], streaming: true,
+      build: messages => messages.map(message => message.clientId), structure: ungroupedStructure });
+    // Not the two-row overlap [rows[3], rows[4]]: the live list keeps its height until the read lands.
+    expect(rendered).toEqual(rows.slice(0, 5).map(message => message.clientId));
+    view.setActive(false);
+  });
+
   it('does not replace a located complete range with an in-flight partial expansion', async () => {
     const rows = [row(1, 'thinking', 'one'), row(2, 'thinking', 'two')];
     const items = projectHistoryView(rows, false);

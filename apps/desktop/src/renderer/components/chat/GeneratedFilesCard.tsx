@@ -18,8 +18,9 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * 存在性门槛(DESIGN.md §14.5「可点必存在」):本地会话渲染前 stat 过滤,不存在
  * 的文件不出 chip,整卡为空则不渲染。远程会话经 verifyRemotePathCached 远端 stat
  * 复核:仅在远端明确确认是普通文件后呈现；检查中、断链或限流都不先展示一张
- * 可能无法打开的完成卡。首屏等检查完成再出现。流式期间只 stat 已完成
- * (ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
+ * 可能无法打开的完成卡。首屏等检查完成再出现;本机路径若本次运行已 stat 过,重挂载时
+ * 按当前时间窗同步判定先出卡,再整卡复核(见 seedLocalGeneratedFilesFromStatCache)。
+ * 流式期间只 stat 已完成(ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
  * 已确认的 chip 留在原地,避免 messages 换引用把整页带着跳。
  *
  * 本地文件统一要求时间戳落在本轮 `[turnStartMs, turnEndMs)` 窗口内。tool 来源
@@ -470,6 +471,46 @@ interface GeneratedFileStat {
 }
 
 /**
+ * 本机最近一次 stat 结果(按绝对路径,有界)。卡片的 React 标识取本轮首条消息:运行中的
+ * 长轮次往上补历史时首条消息会变,切换任务也会整卡重挂载。新实例若从空白开始等 IPC,
+ * 贴底的消息区会先被拉下一截再弹回。挂载时用这里的 stat 按**当前**轮次时间窗同步判定,
+ * 判定口径与异步复核完全相同;首个 effect 仍会对全部候选重新 stat。远程会话不走这里,
+ * 渲染态以 remoteFileOpen 的结论缓存为唯一来源。
+ */
+const LOCAL_STAT_CACHE_LIMIT = 500;
+const localGeneratedFileStatCache = new Map<string, GeneratedFileStat>();
+
+function rememberLocalGeneratedFileStat(path: string, stat: GeneratedFileStat | null): void {
+  localGeneratedFileStatCache.delete(path);
+  if (!stat) return;
+  localGeneratedFileStatCache.set(path, stat);
+  if (localGeneratedFileStatCache.size > LOCAL_STAT_CACHE_LIMIT) {
+    const oldest = localGeneratedFileStatCache.keys().next().value;
+    if (oldest !== undefined) localGeneratedFileStatCache.delete(oldest);
+  }
+}
+
+/** 用已缓存的本机 stat 立即得出首屏可见文件;没有任何可确认的文件时保持 null。 */
+export function seedLocalGeneratedFilesFromStatCache(
+  files: readonly GeneratedFileRef[],
+  turnStartMs: number | null,
+  turnEndMs: number | null,
+  turnSealed = false,
+): GeneratedFileRef[] | null {
+  const seeded = files.filter((file) => {
+    if (!isGeneratedFileStatable(file, turnEndMs, turnSealed)) return false;
+    const stat = localGeneratedFileStatCache.get(file.path);
+    return stat !== undefined && isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs);
+  });
+  return seeded.length > 0 ? seeded : null;
+}
+
+/** Test-only reset for the module-level stat cache. */
+export function _clearLocalGeneratedFileStatCache(): void {
+  localGeneratedFileStatCache.clear();
+}
+
+/**
  * 本地文件是否有足够证据归属于该 turn。普通文件工具必须有真实创建时间；
  * 只有文档工具的结构化 ok:true 结果能证明 overwrite 是本轮成功交付，此时
  * 改用 mtime。command 来源为兼容不提供 birthtime 的 Linux FS,维持 mtime
@@ -711,16 +752,24 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
-  // 首屏保持 null。之后按内容指纹增量 stat:未完成的 tool_use 不查,
-  // 已确认的路径不重复 IPC,工作目录 / 远端来源变了才整卡重来。
-  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(null);
+  // 首屏保持 null(本机已 stat 过的路径例外,见 seedLocalGeneratedFilesFromStatCache)。
+  // 之后按内容指纹增量 stat:未完成的 tool_use 不查,已确认的路径不重复 IPC,
+  // 工作目录 / 远端来源变了才整卡重来。
+  const [initialVisible] = useState(() =>
+    remoteOrigin
+      ? null
+      : seedLocalGeneratedFilesFromStatCache(files, turnStartMs, turnEndMs, turnSealed),
+  );
+  const [existing, setExisting] = useState<GeneratedFileRef[] | null>(initialVisible);
   const [expanded, setExpanded] = useState(false);
   const [relatedExpanded, setRelatedExpanded] = useState(false);
   const [remoteVerdictGen, setRemoteVerdictGen] = useState(0);
   const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs, turnSealed);
   const filesRef = useRef(files);
   filesRef.current = files;
-  const visibleRef = useRef<GeneratedFileRef[] | null>(null);
+  const visibleRef = useRef<GeneratedFileRef[] | null>(initialVisible);
+  // 首屏来自缓存的结论仍要整卡复核一次:缓存只负责不留空白帧,不替代本次 stat。
+  const seededRef = useRef(initialVisible !== null);
   const checkEnvRef = useRef({ remoteOrigin, workingDir: fileCtx.workingDir });
   const turnWindowRef = useRef({ turnStartMs, turnEndMs, turnSealed });
   const remoteVerdictGenRef = useRef(remoteVerdictGen);
@@ -761,7 +810,8 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       turnWindowRef.current.turnStartMs !== turnStartMs ||
       turnWindowRef.current.turnEndMs !== turnEndMs ||
       turnWindowRef.current.turnSealed !== turnSealed;
-    const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen;
+    const forceRestat = remoteVerdictGenRef.current !== remoteVerdictGen || seededRef.current;
+    seededRef.current = false;
     checkEnvRef.current = { remoteOrigin, workingDir: fileCtx.workingDir };
     turnWindowRef.current = { turnStartMs, turnEndMs, turnSealed };
     remoteVerdictGenRef.current = remoteVerdictGen;
@@ -821,8 +871,10 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
           toStat.map(async (file) => {
             try {
               const stat = await window.electronAPI.fsBrowse.statPath(file.path);
+              rememberLocalGeneratedFileStat(file.path, stat);
               return isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs);
             } catch {
+              rememberLocalGeneratedFileStat(file.path, null);
               return false;
             }
           }),
