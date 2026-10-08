@@ -79,6 +79,8 @@ const catalogs = vi.hoisted(() => {
     ...extra,
   });
   return {
+    /** 读不到目录的电脑(离线)。 */
+    offline: new Set<string>(),
     /** A:本机(控制端)自己的目录。 */
     local: [provider('a-local', 'A Local', [['a-model', 'A Model']])] as unknown[],
     byDevice: {
@@ -106,19 +108,24 @@ vi.mock('@/hooks/useProviders', () => ({
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
-  useDeviceProviders: (deviceId?: string) => ({
-    providers: deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
-    loading: false,
-    error: null,
-    unsupported: false,
-  }),
+  useDeviceProviders: (deviceId?: string) =>
+    deviceId && catalogs.offline.has(deviceId)
+      ? { providers: [], loading: false, error: 'DEVICE_LINK_UNREACHABLE', unsupported: false }
+      : {
+          providers: deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
+          loading: false,
+          error: null,
+          unsupported: false,
+        },
 }));
 vi.mock('@/hooks/useDevicesProviders', () => ({
   useDevicesProviders: (deviceIds: readonly string[]) =>
     new Map(
       deviceIds.map((deviceId) => [
         deviceId,
-        { providers: catalogs.byDevice[deviceId] ?? [], loading: false, error: null },
+        catalogs.offline.has(deviceId)
+          ? { providers: [], loading: false, error: 'DEVICE_LINK_UNREACHABLE' }
+          : { providers: catalogs.byDevice[deviceId] ?? [], loading: false, error: null },
       ]),
     ),
 }));
@@ -239,6 +246,30 @@ describe('被控电脑上的任务:模型面板列出第三台电脑的远程供
     );
     expect(screen.getByRole('button', { name: 'B Main' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'A Local' })).toBeNull();
+  });
+
+  it('Agent 所在的第三台电脑离线:仍能回到被控电脑的目录,选中即改回被控电脑运行', async () => {
+    catalogs.offline.add('device-c');
+    try {
+      const { onRelocate } = renderControlledTaskPanel(
+        { selectedDeviceId: 'device-c' },
+        { deviceId: 'device-c', modelId: 'c-model', currentProviderId: 'c-open' },
+      );
+      // 那台的目录读不到:它的供应商格不出现,但被控电脑那一格还在。
+      expect(screen.queryByRole('button', { name: 'C Open · Studio' })).toBeNull();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'B Main' }));
+      });
+      const row = within(list()).getByText('B Model').closest('[data-unified-anchor]') as HTMLElement;
+      await act(async () => {
+        fireEvent.click(row);
+      });
+      expect(onRelocate).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'b-main', modelId: 'b-model', agentDevice: null }),
+      );
+    } finally {
+      catalogs.offline.clear();
+    }
   });
 });
 
