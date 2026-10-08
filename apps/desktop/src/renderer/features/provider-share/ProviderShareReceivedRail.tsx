@@ -20,9 +20,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { providerMonogram } from '@/lib/providerModels';
+import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { providerShareAgentDeviceId } from './providerShareFormat';
 import { useProviderShareReceived } from './providerShareStore';
@@ -128,7 +129,8 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
   const { confirm } = useConfirmDialog();
   const [leaving, setLeaving] = useState(false);
   const status = receivedStatus(share);
-  const catalog = useDeviceProviders(status === 'active' ? providerShareAgentDeviceId(share.shareId) : undefined);
+  const catalogDeviceId = providerShareAgentDeviceId(share.shareId);
+  const catalog = useDeviceProviders(status === 'active' ? catalogDeviceId : undefined);
   const provider = catalog.providers.find((entry) => entry.id === share.providerId) ?? catalog.providers[0] ?? null;
 
   const models = useMemo(
@@ -166,7 +168,14 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
   if (status === 'paused') body = t('providerShare.received.pausedNote');
   else if (status === 'offline') body = t('providerShare.received.offlineNote');
   else if (status === 'needs-update') body = t('providerShare.received.needsUpdateNote');
-  else if (catalog.error) body = t('providerShare.received.modelsFailed');
+  else if (catalog.error) {
+    // 分享者电脑拒绝(关了远程控制 / 允许被远程调用，或那边还没加载好分享)与连不上要分开说；
+    // 其余错误带上错误代码，截图就能看出卡在哪一步。
+    const code = extractIpcError(new Error(catalog.error))?.code ?? null;
+    body = code === 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+      ? t('providerShare.received.modelsRefused')
+      : t('providerShare.received.modelsFailedWithCode', { code: code ?? 'UNKNOWN' });
+  }
   else if (catalog.loading) body = t('providerShare.received.modelsLoading');
   else if (models.length === 0) body = t('providerShare.received.modelsEmpty');
 
@@ -239,6 +248,17 @@ export function ProviderShareReceivedDetail({ share }: { share: ProviderShareRec
         title={t('providerShare.received.modelsTitle')}
         models={models}
         note={body}
+        action={
+          status === 'active' && catalog.error ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void refreshRemoteCatalogSnapshot(catalogDeviceId).catch(() => undefined)}
+            >
+              {t('providerShare.received.retryModels')}
+            </Button>
+          ) : null
+        }
         testId="provider-share-received-models"
       />
     </div>

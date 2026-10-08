@@ -111,7 +111,7 @@ import {
   redactMessageRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
-import { isProviderSharePeer, isSharedTaskPeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
+import { isProviderSharePeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
@@ -339,6 +339,8 @@ export interface ProviderShareAccessPort {
   /** 不认识的受邀者连进来时按需刷新一次分享快照。 */
   ensureKnown(controller: string): Promise<void>;
   hasShares(): boolean;
+  /** 受邀者被拒的原因(只进本机日志)；放行时为 null。 */
+  denial?(controller: string): string | null;
 }
 let providerShareAccess: ProviderShareAccessPort | null = null;
 
@@ -348,6 +350,23 @@ export function setProviderShareAccess(port: ProviderShareAccessPort | null): vo
 
 function providerShareGuestAccess(controller: string): ReturnType<ProviderShareAccessPort['guestAccess']> {
   return providerShareAccess?.guestAccess(controller) ?? null;
+}
+
+/**
+ * 受邀者被拒时在本机日志记下原因(同一对端、同一位置、同一原因每分钟最多一条)。对方只收到
+ * 「暂时不可用」，排查「受邀者读不到模型」只能靠这里。
+ */
+const providerShareDenialLoggedAt = new Map<string, number>();
+function logProviderShareDenial(src: string, where: string, reason?: string): void {
+  const why = reason ?? (providerShareAccess ? providerShareAccess.denial?.(src) ?? 'unknown' : 'host-not-wired');
+  const key = `${src}\u0000${where}\u0000${why}`;
+  const now = Date.now();
+  if (now - (providerShareDenialLoggedAt.get(key) ?? 0) < 60_000) return;
+  if (providerShareDenialLoggedAt.size >= 256) providerShareDenialLoggedAt.clear();
+  providerShareDenialLoggedAt.set(key, now);
+  const peer = parseProviderSharePeer(src);
+  const who = peer?.role === 'guest' ? `share ${peer.shareId.slice(0, 8)} member ${peer.memberId.slice(0, 8)}` : shortId(src);
+  log.warn(`provider-share guest refused at ${where} from ${who}: ${why}`);
 }
 
 export interface RemoteAgentHandler {
@@ -2553,6 +2572,7 @@ function handleLinkOpen(
     }
     if (!providerShareGuestAccess(src)
       || !sanitizeControllerCapabilities(payload?.capabilities).includes(PROVIDER_SHARE_RELAY_CAPABILITY)) {
+      logProviderShareDenial(src, 'link-open', providerShareGuestAccess(src) ? 'missing-relay-capability' : undefined);
       client.closeLink(src, 'revoked', 'inbound');
       return;
     }
@@ -2992,7 +3012,11 @@ function settleRemoteInvokeWithOrphanDeadline(
 }
 
 function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload | null {
-  if (isProviderSharePeer(src)) return providerShareGuestAccess(src) ? null : PROVIDER_SHARE_ACCESS_FAILURE;
+  if (isProviderSharePeer(src)) {
+    if (providerShareGuestAccess(src)) return null;
+    logProviderShareDenial(src, 'admission');
+    return PROVIDER_SHARE_ACCESS_FAILURE;
+  }
   if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
@@ -4039,7 +4063,11 @@ async function runProviderShareInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
   const access = providerShareGuestAccess(src);
-  if (!access || !payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!access) {
+    logProviderShareDenial(src, `invoke ${typeof payload?.channel === 'string' ? payload.channel : '?'}`);
+    return PROVIDER_SHARE_ACCESS_FAILURE;
+  }
+  if (!payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
   if (!PROVIDER_SHARE_CHANNELS.has(payload.channel)) {
     log.warn(`blocked provider-share channel from ${shortId(src)}: ${payload.channel}`);
     return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed for shared providers` } };
@@ -4492,6 +4520,7 @@ export const __testing = {
     onRemoteInvokeBusyChanged = null;
     inFlightRemoteInvokeCount = 0;
     completedRemoteInvokeResults.clear();
+    providerShareDenialLoggedAt.clear();
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;

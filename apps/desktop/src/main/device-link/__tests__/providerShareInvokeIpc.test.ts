@@ -11,8 +11,9 @@ vi.mock('electron', () => ({
   powerSaveBlocker: { start: () => 0, stop: () => {}, isStarted: () => false },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
+const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
 const noteFailure = vi.hoisted(() => vi.fn());
 vi.mock('../providerShareGuest.js', async (importOriginal) => ({
@@ -51,6 +52,16 @@ describe('provider share renderer reads', () => {
   it('keeps only whether the agent is installed from the owner readiness', async () => {
     invoke.mockResolvedValue({ ok: true, result: { binaryReady: true, authReady: true, binaryPath: '/Users/alice/bin', identity: 'alice@corp.com' } });
     await expect(handleProviderShareInvoke(deps, 'share:s1', 'maker:agent:status', ['codex'])).resolves.toEqual({ binaryReady: true });
+  });
+
+  it('logs why a read failed, once a minute per error', async () => {
+    warn.mockClear();
+    invoke.mockResolvedValue({ ok: false, error: { code: 'DEVICE_OFFLINE', message: 'peer offline' } });
+    for (let i = 0; i < 2; i++) {
+      await expect(handleProviderShareInvoke(deps, 'share:s9', 'maker:provider:list', [])).rejects.toThrow();
+    }
+    const lines = warn.mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith('provider share read failed'));
+    expect(lines).toEqual(['provider share read failed: maker:provider:list on share:s9: DEVICE_OFFLINE peer offline']);
   });
 
   it('scrubs the owner identity from the provider list', async () => {

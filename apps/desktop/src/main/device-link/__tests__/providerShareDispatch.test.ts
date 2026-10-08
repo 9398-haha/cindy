@@ -13,8 +13,9 @@ vi.mock('electron', () => ({
   powerSaveBlocker: { start: () => 0, stop: () => {}, isStarted: () => false },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
+const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
 vi.mock('../settings-store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../settings-store')>()),
@@ -62,6 +63,20 @@ describe('provider share link admission', () => {
     expect(client.sendLinkAccept.mock.calls[0][2].capabilities).toContain(PROVIDER_SHARE_RELAY_CAPABILITY);
     expect(client.closeLink).not.toHaveBeenCalled();
     expect(__testing.getActiveControllers()).toEqual([]);
+  });
+
+  it('logs why a guest is refused, at most once a minute per reason', async () => {
+    warn.mockClear();
+    setProviderShareAccess({
+      guestAccess: () => null, ensureKnown: async () => undefined, hasShares: () => true,
+      denial: () => 'provider-not-remote',
+    });
+    await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] });
+    await runInvoke(GUEST, { channel: 'maker:provider:list', args: [] });
+    const refusals = warn.mock.calls.filter(([line]) => String(line).startsWith('provider-share guest refused'));
+    expect(refusals).toHaveLength(1);
+    expect(String(refusals[0][0])).toContain('invoke maker:provider:list');
+    expect(String(refusals[0][0])).toContain('provider-not-remote');
   });
 
   it('refuses guests without access or without the capability', () => {

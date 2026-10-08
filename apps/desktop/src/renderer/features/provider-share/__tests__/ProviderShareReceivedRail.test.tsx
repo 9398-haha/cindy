@@ -16,7 +16,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
-vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => undefined) }));
+const refreshCatalog = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: refreshCatalog }));
 const confirmSpy = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: confirmSpy }) }));
 const joinSpy = vi.hoisted(() => vi.fn());
@@ -139,9 +140,22 @@ describe('ProviderShareReceivedDetail', () => {
     expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5', 'GPT-5.5']);
   });
 
-  it('says when the models cannot be read', () => {
-    catalog.value = { providers: [], loading: false, error: 'boom', unsupported: false };
+  it('says why the models cannot be read and offers a reload', () => {
+    catalog.value = {
+      providers: [], loading: false, error: '[DEVICE_LINK_TIMEOUT] timed out', unsupported: false,
+    };
     render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />);
-    expect(screen.getByText('providerShare.received.modelsFailed')).toBeTruthy();
+    expect(screen.getByText('providerShare.received.modelsFailedWithCode:{"code":"DEVICE_LINK_TIMEOUT"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.retryModels' }));
+    expect(refreshCatalog).toHaveBeenCalledWith('share:share-1');
+  });
+
+  it('tells a refusal by the owner computer apart from a failed read', () => {
+    catalog.value = {
+      providers: [], loading: false,
+      error: 'Error invoking remote method: Error: [REMOTE_AGENT_SHARE_UNAVAILABLE] not available', unsupported: false,
+    };
+    render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />);
+    expect(screen.getByText('providerShare.received.modelsRefused')).toBeTruthy();
   });
 });

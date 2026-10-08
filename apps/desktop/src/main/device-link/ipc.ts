@@ -760,6 +760,20 @@ function projectProviderShareResult(channel: string, value: unknown): unknown {
   return value;
 }
 
+/**
+ * 分享来的供应商读不到时在本机日志记下错误(同一分享、同一请求、同一错误每分钟最多一条)。
+ * 界面只能说「暂时读不到」，排查要靠这里和分享者电脑上的拒绝原因。
+ */
+const providerShareReadFailureLoggedAt = new Map<string, number>();
+function logProviderShareReadFailure(agentDeviceId: string, channel: string, code: string, message: string): void {
+  const key = `${agentDeviceId}\u0000${channel}\u0000${code}`;
+  const now = Date.now();
+  if (now - (providerShareReadFailureLoggedAt.get(key) ?? 0) < 60_000) return;
+  if (providerShareReadFailureLoggedAt.size >= 256) providerShareReadFailureLoggedAt.clear();
+  providerShareReadFailureLoggedAt.set(key, now);
+  log.warn(`provider share read failed: ${channel} on ${agentDeviceId}: ${code} ${message.slice(0, 200)}`);
+}
+
 export async function handleProviderShareInvoke(
   deps: Pick<DeviceLinkIpcDeps, 'invoke'>,
   agentDeviceId: string,
@@ -769,7 +783,14 @@ export async function handleProviderShareInvoke(
   if (typeof channel !== 'string' || !PROVIDER_SHARE_RENDERER_CHANNELS.has(channel)) {
     throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Not available for shared providers');
   }
-  const target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  let target: string;
+  try {
+    target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logProviderShareReadFailure(agentDeviceId, channel, 'RESOLVE', message);
+    throw err;
+  }
   const callArgs = Array.isArray(args) ? args : [];
   let result: InvokeResultPayload;
   try {
@@ -777,10 +798,17 @@ export async function handleProviderShareInvoke(
       ? await crossRegionInvoke(target, channel, callArgs)
       : await deps.invoke(target, channel, callArgs);
   } catch (err) {
+    logProviderShareReadFailure(
+      agentDeviceId,
+      channel,
+      err instanceof DeviceLinkError ? err.code : 'THROWN',
+      err instanceof Error ? err.message : String(err),
+    );
     if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare();
     rethrowDeviceLinkError(err);
   }
   if (result.ok) return projectProviderShareResult(channel, result.result);
+  logProviderShareReadFailure(agentDeviceId, channel, result.error.code, result.error.message);
   // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
   if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare();
   if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
