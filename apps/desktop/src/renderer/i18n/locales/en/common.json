@@ -1232,7 +1232,7 @@
       "title": "App Behavior",
       "closeBehavior": {
         "label": "When closing the main window",
-        "hint": "Choose what happens the first time you close the window. You can change it here anytime.",
+        "hint": "Applies every time you close the main window. If no choice is saved, you’ll be asked the first time. Change it here anytime.",
         "aria": "Choose what happens when the main window closes",
         "tray": "Minimize to tray",
         "minimize": "Minimize window",
