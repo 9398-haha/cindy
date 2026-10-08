@@ -216,7 +216,7 @@ describe('bot group attachment store', () => {
       controllerDeviceId: 'phone-1',
       attachments: [{ id: 'p', name: 'x.pdf', path: 'upload://peer-x.pdf', category: 'pdf', mimeType: 'application/pdf' }],
     });
-    expect(result).toEqual({ ok: false, errorCode: 'INVALID_PARAMS', message: 'FILE_PEER_DENIED' });
+    expect(result).toEqual({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE', message: 'FILE_PEER_DENIED' });
   });
 
   it('turns any name into one safe path segment', () => {

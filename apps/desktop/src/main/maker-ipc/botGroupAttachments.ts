@@ -10,6 +10,7 @@
  *   folder (`bot-groups/<groupId>/attachments/`), which goes to the trash with the group.
  */
 
+import { chatErrorDiagnostic } from './chatServerErrors.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -194,8 +195,8 @@ export function createBotGroupAttachmentStore(deps: { ownerRoot: () => string })
     } catch (error) {
       await discard();
       // Transfer errors carry no host paths; anything else is reported generically.
-      const message = error instanceof Error && /^FILE_PEER_|DEVICE_LINK_/.test(error.message) ? error.message : '附件无效';
-      return { ok: false, errorCode: 'INVALID_PARAMS', message };
+      const { code } = chatErrorDiagnostic(error);
+      return { ok: false, errorCode: code.startsWith('FILE_PEER_') || code.startsWith('DEVICE_LINK_') ? 'ATTACHMENT_UNAVAILABLE' : 'INVALID_ATTACHMENT', message: code };
     }
     return {
       ok: true,

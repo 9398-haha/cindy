@@ -21,6 +21,20 @@ describe('chat private media', () => {
     expect(f.fetch).toHaveBeenLastCalledWith('https://upload.example.test/signed', expect.objectContaining({ redirect: 'error', headers: { 'Content-Type': 'image/png' } }));
     expect(vi.mocked(api).mock.calls.at(-1)?.[0]).toBe('/conversations/room/media/media/complete');
   });
+  it.each(['prepare', 'upload', 'complete'])('reports the failing %s stage without signed URLs or filenames', async (stage) => {
+    f.read.mockResolvedValue({ buffer: Buffer.from('png') });
+    const log = { warn: vi.fn() };
+    f.fetch.mockResolvedValue(new Response('', { status: stage === 'upload' ? 403 : 200 }));
+    const api = vi.fn(async (route: string) => {
+      if (stage === 'prepare' && route.endsWith('/media') || stage === 'complete' && route.endsWith('/complete'))
+        throw Object.assign(new Error('REQUEST_FAILED'), { status: 500 });
+      return { id: 'media', uploadUrl: 'https://upload.example.test/private?token=secret' };
+    }) as unknown as ChatApi;
+    await expect(createChatMedia(api, () => true, log).upload('room', 'operation', [attachment], 'actor')).rejects.toThrow();
+    expect(log.warn).toHaveBeenCalledWith('Chat media upload failed', expect.objectContaining({ stage, status: stage === 'upload' ? 403 : 500 }));
+    expect(JSON.stringify(log.warn.mock.calls)).not.toMatch(/secret|picture.png|https:/);
+  });
+
   it('does not upload bytes when the owner changes during local file reading', async () => {
     let current = true;
     f.fetch.mockClear();

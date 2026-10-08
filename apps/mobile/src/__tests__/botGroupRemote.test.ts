@@ -45,6 +45,13 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it('preserves server member identities and removal capability', () => {
+    const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsMemberRemoval: true,
+      members: [{ botId: 'human', actorId: 'actor', actorKind: 'human', isOwned: false, name: 'Person', status: 'active' }] }));
+    expect(parsed).toMatchObject({ serverBacked: true, supportsMemberRemoval: true,
+      members: [expect.objectContaining({ actorId: 'actor', actorKind: 'human', isOwned: false })] });
+  });
+
   it('preserves a server join notice through the phone projection', () => {
     const joined = { id: 'joined', sequence: 20, kind: 'notice', authorKind: 'system', authorBotId: null,
       authorName: 'Taylor', content: 'Taylor joined the group', noticeCode: 'member-joined',

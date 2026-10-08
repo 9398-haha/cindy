@@ -245,6 +245,17 @@ export interface BotGroupDetail extends BotGroupSummary {
 }
 
 export type BotGroupErrorCode =
+  | 'INVALID_ATTACHMENT'
+  | 'ATTACHMENT_UNAVAILABLE'
+  | 'ATTACHMENT_TOO_LARGE'
+  | 'MEDIA_UPLOAD_FAILED'
+  | 'AUTH_REQUIRED'
+  | 'CHAT_UNAVAILABLE'
+  | 'IMPORT_PENDING'
+  | 'REQUEST_TIMEOUT'
+  | 'PERMISSION_DENIED'
+  | 'SERVICE_ERROR'
+  | 'GROUP_ARCHIVED'
   | 'INVALID_PARAMS'
   | 'NOT_FOUND'
   | 'MEMBER_LIMIT'
@@ -357,7 +368,7 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
  * Remote actions. `create` is collection-level ({ name, botIds }); the others target a group:
  * `send` ({ text, mentions, clientId, division? }), `continue`, `stop`, `update`
  * ({ name?, replyMode?, speakingMode?, organizerBotId? } — never a host path),
- * `set-members` ({ botIds }), `delete`, `plan-start` / `plan-dismiss` / `plan-continue` /
+ * `set-members` ({ botIds }), `remove-member` ({ actorId }, capability-gated), `delete`, `plan-start` / `plan-dismiss` / `plan-continue` /
  * `plan-retry` ({ planId }) and `plan-edit` ({ planId, position, action, botId? }).
  * A refused action fails with the `BotGroupErrorCode` as its message.
  */
@@ -368,6 +379,7 @@ export type BotGroupRemoteActionId =
   | 'stop'
   | 'update'
   | 'set-members'
+  | 'remove-member'
   | 'delete'
   | 'plan-start'
   | 'plan-dismiss'
@@ -386,6 +398,8 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
    * drop them). Attachment `path`s are always null here.
    */
   supportsAttachments?: boolean;
+  /** Host supports removing one server actor, including a human. */
+  supportsMemberRemoval?: boolean;
 }
 
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';

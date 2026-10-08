@@ -114,6 +114,53 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+  it.each(['ATTACHMENT_UNAVAILABLE', 'INVALID_PARAMS'] as const)('keeps a useful reason for prepare %s', async (errorCode) => {
+    deps.prepareAttachments = vi.fn(async () => ({ ok: false, errorCode, message: 'private details' }));
+    deps.log = { warn: vi.fn() };
+    const result = await service.sendMessage({ groupId: roomId, text: '', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{}] }, { controllerDeviceId: 'phone' });
+    expect(result).toMatchObject({ ok: false, errorCode: errorCode === 'INVALID_PARAMS' ? 'INVALID_ATTACHMENT' : errorCode });
+    expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toContain('private details');
+  });
+
+  it('returns a slow send receipt to duplicate attempts without consuming the phone upload again', async () => {
+    const commit = vi.fn();
+    let release!: () => void;
+    deps.prepareAttachments = vi.fn(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return { ok: true as const, attachments: [], commit, discard: vi.fn() };
+    });
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'saved-message' } };
+      return response(route);
+    });
+    const input = { groupId: roomId, text: 'photo', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{}] };
+    const first = service.sendMessage(input, { controllerDeviceId: 'phone' });
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(release).toBeTypeOf('function');
+    const retry = service.sendMessage(input, { controllerDeviceId: 'phone' });
+    release();
+    expect(await first).toEqual({ ok: true, messageId: 'saved-message' });
+    expect(await retry).toEqual(await first);
+    expect(await service.sendMessage(input, { controllerDeviceId: 'phone' })).toEqual(await first);
+    expect(deps.prepareAttachments).toHaveBeenCalledTimes(1);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST')).toHaveLength(1);
+  });
+
+  it('reports an HTTP send failure with safe route, code and status', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { status: 500, body: { error: { code: 'UPSTREAM_FAILED', message: 'secret text' } } };
+      return response(route);
+    });
+    expect(await service.sendMessage({ groupId: roomId, text: 'private body', clientId: 'send-500-test', mentions: { all: false, botIds: [] } }))
+      .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
+    expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
+    expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+  });
+
   async function start() {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);

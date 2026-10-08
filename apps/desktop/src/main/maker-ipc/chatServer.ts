@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups } from './chatServerMigration.js';
+import { chatErrorDiagnostic, chatGroupFailure } from './chatServerErrors.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { buildPlanStepBrief } from './botGroupDivision.js';
@@ -68,7 +69,6 @@ class ChatResponseError extends Error {
 }
 const id = z.string().uuid();
 const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.array(z.string().min(1)).max(6) });
-const failure = (message: string): BotGroupFailure => ({ ok: false, errorCode: 'HOST_NOT_READY', message });
 const bodyText = (m: Message) => m.deleted ? '（消息已删除）' : m.content.filter(b => b.namespace !== 'cindy.local-history' || b.data?.activity === true).map(b => b.text ?? b.fallback ?? (b.type === 'media' ? `[附件: ${b.caption ?? '文件'}]` : '')).join('\n');
 // Presentation only: keep actor IDs and stored names independent of ownership labels.
 const memberName = (m: Member) => m.kind === 'bot' && m.ownerName.trim() ? `${m.name} (${m.ownerName.trim()})` : m.name;
@@ -153,7 +153,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (url.protocol !== 'https:' && (app.isPackaged || url.origin !== 'http://127.0.0.1:3018')) return Promise.reject(new Error('INVALID_CHAT_ENDPOINT'));
     const token = getAccessToken();
     if (!token) return Promise.reject(new Error('AUTH_REQUIRED'));
-    return new Promise((resolve, reject) => {
+    const started = Date.now();
+    return new Promise<T>((resolve, reject) => {
       const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
         method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
           ...(actorId ? { 'X-Chat-Actor': actorId } : {}) }, timeout: 15000,
@@ -173,7 +174,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               throw new Error('AUTH_REQUIRED');
             }
             if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
-            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            let value;
+            try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+            catch { throw new ChatResponseError('INVALID_RESPONSE', res.statusCode ?? 500); }
             if ((res.statusCode ?? 500) >= 400) throw new ChatResponseError(value.error?.code ?? 'REQUEST_FAILED', res.statusCode ?? 500);
             resolve(value);
           } catch (error) { reject(error); }
@@ -182,9 +185,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       req.on('timeout', () => req.destroy(new Error('REQUEST_TIMEOUT')));
       req.on('error', reject);
       req.end(data === undefined ? undefined : JSON.stringify(data));
+    }).catch(error => {
+      const routeTemplate = route.split('?')[0].split('/').map(part =>
+        ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions'].includes(part) || !part ? part : ':id').join('/');
+      const operation = data && typeof data === 'object' && 'operationId' in data ? data.operationId : null;
+      deps.log?.warn('Chat request failed', { route: routeTemplate, method, durationMs: Date.now() - started,
+        ...(typeof operation === 'string' ? { trace: createHash('sha256').update(operation).digest('hex').slice(0, 16) } : {}), ...chatErrorDiagnostic(error) });
+      throw error;
     });
   }
-  const media = createChatMedia(api, current);
+  const media = createChatMedia(api, current, deps.log);
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
   const upgradeErrors = new Map<string, string>();
@@ -223,7 +233,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       onError: (source, error) => {
         incomplete = true;
         upgradeErrors.set(source, error instanceof Error ? error.message : 'IMPORT_FAILED');
-        deps.log?.warn('Group history upgrade will retry', { groupId: source });
+        deps.log?.warn('Group history upgrade will retry', { groupId: source, ...chatErrorDiagnostic(error) });
         changed(upgradedGroups.get(source) ?? source);
       },
       receipts: chatMigrationReceipts(config.baseUrl, selfId, current),
@@ -718,13 +728,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const heartbeat = setInterval(() => { for (const run of running.values()) void checkLease(run); }, 15000);
   timer.unref(); heartbeat.unref();
   const safe = <T>(fn: () => Promise<T>): Promise<T | BotGroupFailure> => fn().catch(error => {
-    const code = error instanceof Error ? error.message : '';
-    if (['PLAN_OPEN','PLAN_CLOSED'].includes(code)) return { ok: false, errorCode: code as 'PLAN_OPEN' | 'PLAN_CLOSED', message: '分工状态已变化，请刷新后重试。' };
-    if (code === 'IMPORT_PENDING') return failure('这个群的历史记录尚未上传完成，稍后会自动重试，其他群可正常使用。');
-    if (code === 'CONVERSATION_NOT_FOUND') return { ok: false, errorCode: 'NOT_FOUND', message: '你已退出此群，或没有访问权限。' };
-    if (code === 'CONVERSATION_ARCHIVED') return { ok: false, errorCode: 'INVALID_PARAMS', message: '本群已归档，不能发送新消息。' };
-    if (['ROLE_REQUIRED', 'ACTOR_NOT_OWNED', 'OWNER_REQUIRED'].includes(code)) return { ok: false, errorCode: 'INVALID_PARAMS', message: '你没有执行此操作的权限。' };
-    return failure('聊天服务暂时无法连接，请稍后重试。');
+    deps.log?.warn('Chat group action failed', chatErrorDiagnostic(error));
+    return chatGroupFailure(error instanceof z.ZodError ? new Error('INVALID_PARAMS') : error);
   });
   async function mentionIds(roomId: string, mentions: { all: boolean; botIds: string[] }) {
     const members = await api<Member[]>(`/conversations/${roomId}/members`);
@@ -800,6 +805,43 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       rooms.delete(room.groupId); subscribe(room.groupId); changed(room.groupId); return room;
     }),
   };
+  const sendMessage: BotGroupChatService['sendMessage'] = (input, origin) => safe(async () => {
+    const started = Date.now();
+    const i = z.object({ groupId: id, text: z.string().max(8000), clientId: z.string().min(8).max(160),
+      mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(), attachments: z.array(z.unknown()).optional() }).parse(input);
+    i.groupId = await resolveGroup(i.groupId);
+    if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
+    const s = await snapshot(i.groupId);
+    const openPlan = (await api<ServerPlan[]>(`/conversations/${i.groupId}/plans`)).find(p => ['running','waiting'].includes(p.status));
+    if (i.division && openPlan) throw new Error('PLAN_OPEN');
+    const commentPlan = openPlan && !i.mentions.botIds.length && !i.mentions.all && (openPlan.creator_id === selfId || s.members.some(m => m.id === selfId && ['owner','admin'].includes(m.role))) ? openPlan : undefined;
+    const shouldPlan = !openPlan && !!deps.decidePlan && (i.division || !i.mentions.botIds.length && !i.mentions.all && s.members.filter(m => m.kind === 'bot' && m.state === 'joined').length >= 2);
+    const prepared = i.attachments?.length ? await deps.prepareAttachments?.({ groupId: i.groupId, attachments: i.attachments, controllerDeviceId: origin?.controllerDeviceId }) : undefined;
+    if (i.attachments?.length && (!prepared || !prepared.ok)) {
+      const error = new Error(prepared && !prepared.ok ? prepared.errorCode === 'INVALID_PARAMS' ? 'INVALID_ATTACHMENT' : prepared.errorCode : 'INVALID_ATTACHMENT');
+      deps.log?.warn('Chat attachment preparation failed', { groupId: i.groupId, trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), ...chatErrorDiagnostic(prepared && !prepared.ok ? new Error(prepared.message) : error) });
+      throw error;
+    }
+    let result: { id: string };
+    try {
+      const mentions = await mentionIds(i.groupId, i.mentions);
+      result = await api<{ id: string }>(`/conversations/${i.groupId}/${commentPlan ? `plans/${commentPlan.id}/messages` : 'messages'}`, 'POST', {
+        operationId: i.clientId, content: [ ...(i.text ? [{ type: 'text', text: i.text }] : []),
+          ...await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId) ], mentions, deferExecution: shouldPlan,
+      });
+    } catch (error) {
+      if (prepared?.ok) await prepared.discard();
+      throw error;
+    }
+    if (prepared?.ok) prepared.commit();
+    if (shouldPlan) void decideArrangement(s, result.id, i.text, i.division === true, prepared?.ok ? prepared.attachments : []).catch(() => undefined);
+    deps.log?.info?.('Chat group send confirmed', { groupId: i.groupId, messageId: result.id,
+      trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), durationMs: Date.now() - started });
+    changed(i.groupId); return { ok: true as const, messageId: result.id };
+  });
+  // A lost controller ACK must not consume the phone upload or submit the same message twice.
+  const pendingSends = new Map<string, ReturnType<BotGroupChatService['sendMessage']>>();
+  const sendReceipts = new Map<string, Awaited<ReturnType<BotGroupChatService['sendMessage']>>>();
   return {
     chatServer,
     listGroups: () => safe(async () => {
@@ -825,33 +867,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const room = await api<{ id: string }>('/conversations', 'POST', { operationId: randomUUID(), kind: 'group', name: i.name, participants });
       subscribe(room.id); changed(room.id); return { ok: true as const, groupId: room.id };
     }),
-    sendMessage: (input, origin) => safe(async () => {
-      const i = z.object({ groupId: id, text: z.string().max(8000), clientId: z.string().min(8).max(160),
-        mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(), attachments: z.array(z.unknown()).optional() }).parse(input);
-      i.groupId = await resolveGroup(i.groupId);
-      if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
-      const s = await snapshot(i.groupId);
-      const openPlan = (await api<ServerPlan[]>(`/conversations/${i.groupId}/plans`)).find(p => ['running','waiting'].includes(p.status));
-      if (i.division && openPlan) throw new Error('PLAN_OPEN');
-      const commentPlan = openPlan && !i.mentions.botIds.length && !i.mentions.all && (openPlan.creator_id === selfId || s.members.some(m => m.id === selfId && ['owner','admin'].includes(m.role))) ? openPlan : undefined;
-      const shouldPlan = !openPlan && !!deps.decidePlan && (i.division || !i.mentions.botIds.length && !i.mentions.all && s.members.filter(m => m.kind === 'bot' && m.state === 'joined').length >= 2);
-      const prepared = i.attachments?.length ? await deps.prepareAttachments?.({ groupId: i.groupId, attachments: i.attachments, controllerDeviceId: origin?.controllerDeviceId }) : undefined;
-      if (i.attachments?.length && (!prepared || !prepared.ok)) throw new Error('INVALID_ATTACHMENT');
-      let result: { id: string };
-      try {
-        const mentions = await mentionIds(i.groupId, i.mentions);
-        result = await api<{ id: string }>(`/conversations/${i.groupId}/${commentPlan ? `plans/${commentPlan.id}/messages` : 'messages'}`, 'POST', {
-          operationId: i.clientId, content: [ ...(i.text ? [{ type: 'text', text: i.text }] : []),
-            ...await media.upload(i.groupId, i.clientId, prepared?.ok ? prepared.attachments : [], selfId) ], mentions, deferExecution: shouldPlan,
-        });
-      } catch (error) {
-        if (prepared?.ok) await prepared.discard();
-        throw error;
-      }
-      if (prepared?.ok) prepared.commit();
-      if (shouldPlan) void decideArrangement(s, result.id, i.text, i.division === true, prepared?.ok ? prepared.attachments : []).catch(() => undefined);
-      changed(i.groupId); return { ok: true as const, messageId: result.id };
-    }),
+    sendMessage: (input, origin) => {
+      if (!current()) return Promise.resolve(chatGroupFailure(new Error('OWNER_CHANGED')));
+      const key = createHash('sha256').update(JSON.stringify([input, origin?.controllerDeviceId ?? null])).digest('hex');
+      const receipt = sendReceipts.get(key);
+      if (receipt) return Promise.resolve(receipt);
+      const pending = pendingSends.get(key);
+      if (pending) return pending;
+      const attempt = sendMessage(input, origin).then(result => {
+        if (result.ok && current()) {
+          sendReceipts.set(key, result);
+          if (sendReceipts.size > 128) sendReceipts.delete(sendReceipts.keys().next().value!);
+        }
+        return result;
+      }).finally(() => pendingSends.delete(key));
+      pendingSends.set(key, attempt);
+      return attempt;
+    },
     updateGroup: input => safe(async () => {
       const i = z.object({ groupId: id, name: z.string().min(1).max(40).optional(), replyMode: z.enum(['all', 'mentioned']).optional(),
         speakingMode: z.enum(['auto', 'sequential']).optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional() }).parse(input);
