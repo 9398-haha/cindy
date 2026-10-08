@@ -21,8 +21,10 @@ import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLla
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getHostSourceDevice, getSelfDeviceId, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { describeProviderShareDevice } from '../device-link/providerShareGuest.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import {
   isRemoteProviderInvocationAllowed,
   setRemoteProviderInvocationEnabled,
@@ -7193,14 +7195,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     model: string,
     providerId: string | null,
   ): Promise<void> {
-    const rejection = await checkDeviceRoute(
+    const checked = await checkDeviceRoute(
       () => readDeviceProviderViews(remoteBackgroundInvoke, deviceId),
       agent,
       providerId,
       model,
     );
-    if (!rejection) return;
+    if (!checked) return;
+    // 分享来的供应商连不上(分享者电脑离线，或分享在服务端已暂停而 relay 只回离线)：用分享专属
+    // 文案，不让受邀者去「那台电脑」上操作。
+    const rejection = checked === 'unreachable' && isProviderShareAgentDeviceId(deviceId)
+      ? 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+      : checked;
     log.warn('remote agent selection rejected', { agent, model, providerId, rejection });
+    if (rejection.startsWith('REMOTE_AGENT_SHARE_')) {
+      // 分享来的供应商：给出分享专属原因(device-link 控制端同样降级为 PRECONDITION_FAILED)。
+      throwIpcError(
+        isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : rejection as 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE',
+        'the shared provider is not available; the model was not changed',
+      );
+    }
     // device-link 控制端降级为 PRECONDITION_FAILED(不把新 code 变成跨版本 wire 契约)。
     const code = rejection === 'unreachable' ? 'REMOTE_AGENT_DEVICE_UNREACHABLE' : 'REMOTE_AGENT_MODEL_UNAVAILABLE';
     throwIpcError(
@@ -7214,6 +7228,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   /** 分隔条展示用的电脑名：null = 任务所在电脑(本机)，其他按设备目录最近一次的名字。 */
   function describeAgentDevice(deviceId: string | null): string | null {
     if (!deviceId) return getHostSourceDevice().name ?? null;
+    const shared = describeProviderShareDevice(deviceId);
+    if (shared) return shared;
     try {
       return readLastKnownDeviceNames()[deviceId] ?? null;
     } catch {

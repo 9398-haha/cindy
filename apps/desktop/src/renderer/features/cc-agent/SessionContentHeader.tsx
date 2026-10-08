@@ -79,6 +79,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 
 const log = createLogger('SessionContentHeader');
 
@@ -95,8 +96,10 @@ function AgentDeviceIndicator({
 }) {
   const { t } = useTranslation();
   const devices = useDeviceLinkDeviceList();
+  // 分享来的供应商(`share:<id>`)不在同账号设备列表里，名字取自已收到的分享。
+  const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
   const device = devices?.find((item) => item.deviceId === deviceId);
-  const name = device?.name || deviceId;
+  const name = device?.name || providerShareDeviceName(deviceId) || deviceId;
   const offline = device ? !device.online : false;
   const vendor = agentKindToVendor(agentKind);
   return (

@@ -475,6 +475,26 @@ describe('normalizeTaskSource', () => {
     fr.finish();
   });
 
+  it('takes the Auto-review reply target from the raw chain before display bounding', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    // A 21-ancestor X chain ending in the current request: display keeps the oldest 20.
+    const threadContext = [
+      ...Array.from({ length: 21 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
+      { messageId: 'current', author: '@user', text: '@bot is this true?' },
+    ];
+    d.handleDispatch('conn-1', dispatch({
+      source: { im: 'x', triggerMessageId: 'current', userText: 'is this true?', threadContext },
+    }), c.send);
+    await tick();
+
+    expect(fr.calls[0]?.source?.threadContext).toHaveLength(20);
+    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 19');
+    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a20', text: 'ancestor 20' });
+    fr.finish();
+  });
+
   // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
   // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
   it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
