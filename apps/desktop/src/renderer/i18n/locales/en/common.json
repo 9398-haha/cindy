@@ -13445,6 +13445,7 @@
     "addUnavailable": "This session can’t be opened in the current split. Open a session in the main area and try again."
   },
   "extraDirs": {
+    "retryRemotePlugins": "Remote plugins failed to load. Retry",
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",
     "tooltipCount": "{{count}} additional directories",
