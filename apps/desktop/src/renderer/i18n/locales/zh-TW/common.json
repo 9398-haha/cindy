@@ -4374,7 +4374,7 @@
             "riskPublicBody": "我們的回覆是一條公開推文，任何人都能看到。這個功能適合公開地找答案、解決問題，不適合處理私事 —— 那會有隱私暴露的風險。",
             "riskWorkdirBody": "X 任務都落在 X 連線設定裡的預設工作目錄，Agent 能讀寫其中檔案，而結論會公開回帖 —— 預設目錄指到私密倉庫時，檔案內容可能隨之公開。",
             "withdrawLabel": "想撤回",
-            "withdrawBody": "提問者對著那條回答回覆「/delete」（或「/刪除」）就能刪掉它。只刪公開那條，本地任務記錄照舊保留。",
+            "withdrawBody": "提問者在要刪除的回答下回覆「@askmycindy /delete」（或「@askmycindy /删除」），正文中必須手動帶上 @askmycindy。只刪公開回帖，本地任務記錄保留。",
             "ackTitle": "X 已關聯，先看一下用法與風險",
             "ackConfirm": "我已瞭解風險"
           },

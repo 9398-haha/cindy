@@ -4375,7 +4375,7 @@
             "riskPublicBody": "Our reply is a public post that anyone can read. This suits questions and problems you are happy to work through in the open — not private matters, where it risks exposing them.",
             "riskWorkdirBody": "Every X task runs in the default working directory set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that directory points at a private repository, file contents may become public with it.",
             "withdrawLabel": "To Withdraw a Reply",
-            "withdrawBody": "Whoever asked can delete a reply by replying \"/delete\" to it. Only the public reply is deleted — the local task record is kept.",
+            "withdrawBody": "The person who asked can delete the answer by replying “@askmycindy /delete” to it. Include @askmycindy in the reply text. Only the public reply is deleted; the local task record is kept.",
             "ackTitle": "X Is Linked — How It Works and What to Watch For",
             "ackConfirm": "I Understand the Risks"
           },
