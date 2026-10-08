@@ -351,8 +351,7 @@
     },
     "received": {
       "title": "Providers Shared with Me",
-      "empty": "No one has shared a provider with you yet. When you get a share link, open it or paste it here.",
-      "paste": "Paste Share Link",
+      "enterLink": "Enter Share Link…",
       "fromOwner": "Shared by {{name}}",
       "providerOnDevice": "{{provider}} · {{device}}",
       "statusActive": "Active",
@@ -368,7 +367,7 @@
       },
       "left": "Left {{provider}} shared by {{name}}",
       "pasteDialog": {
-        "title": "Paste Share Link",
+        "title": "Enter Share Link",
         "description": "Paste the provider share link you received. You’ll see the details before deciding whether to send a request.",
         "label": "Share link",
         "placeholder": "Paste the link here",
@@ -387,7 +386,8 @@
     },
     "picker": {
       "deviceName": "{{device}} · Shared by {{owner}}",
-      "unavailable": "Unavailable share"
+      "unavailable": "Unavailable share",
+      "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again."
     },
     "notification": {
       "requestTitle": "New Share Request",
@@ -2713,6 +2713,13 @@
           "reset": "Restore default selection",
           "connectionRequired": "Connect to use these models. Your selections are saved."
         }
+      },
+      "remote": {
+        "rowLabel": "{{provider}} · {{device}}",
+        "statusReady": "Available",
+        "detailNote": "The agent runs on {{device}}, using that computer’s sign-in and quota. To use it, choose it in the model list when you start a task. To change this provider, go to Settings → Providers on that computer.",
+        "modelsTitle": "Available Models",
+        "modelsEmpty": "This provider has no models available on that computer yet."
       },
       "genericOAuth": {
         "subtitle": "Subscription account",

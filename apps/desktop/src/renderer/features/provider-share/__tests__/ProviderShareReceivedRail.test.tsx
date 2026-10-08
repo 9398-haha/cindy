@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 
+import { ProviderSharePasteButton } from '../ProviderSharePasteDialog';
 import { ProviderShareReceivedDetail, ProviderShareReceivedRailGroup } from '../ProviderShareReceivedRail';
 import { resetProviderShareStoreForTests } from '../providerShareStore';
 
@@ -67,13 +68,10 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe('ProviderShareReceivedRailGroup', () => {
-  it('stays visible when empty and hands a pasted link to the apply dialog', async () => {
-    render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={() => undefined} />);
-    expect(screen.getByText('providerShare.received.title')).toBeTruthy();
-    expect(screen.getByText('providerShare.received.empty')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.paste' }));
+describe('ProviderSharePasteButton', () => {
+  it('hands an entered link to the apply dialog', async () => {
+    render(<ProviderSharePasteButton />);
+    fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.enterLink' }));
     const dialog = await screen.findByTestId('provider-share-paste-dialog');
     fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.pasteDialog.open' }));
     expect(joinSpy).not.toHaveBeenCalled();
@@ -86,12 +84,22 @@ describe('ProviderShareReceivedRailGroup', () => {
     expect(joinSpy).toHaveBeenCalledWith('see https://x.test/provider-share/join#abc');
     await waitFor(() => expect(screen.queryByTestId('provider-share-paste-dialog')).toBeNull());
   });
+});
+
+describe('ProviderShareReceivedRailGroup', () => {
+  it('is hidden while nothing is shared with me', async () => {
+    render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={() => undefined} />);
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'received' }));
+    expect(screen.queryByTestId('provider-share-received')).toBeNull();
+    expect(screen.queryByText('providerShare.received.title')).toBeNull();
+  });
 
   it('lists received shares next to the providers and selects one', async () => {
     received = [share];
     const onSelect = vi.fn();
     render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={onSelect} />);
     const row = await screen.findByTestId('provider-share-received-row');
+    expect(screen.getByText('providerShare.received.title')).toBeTruthy();
     expect(row.textContent).toContain('Cindy AI');
     expect(row.getAttribute('aria-label')).toContain('providerShare.received.statusPaused');
     fireEvent.click(row);

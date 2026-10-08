@@ -1,6 +1,6 @@
 /**
- * 粘贴分享链接：网页唤起 Cindy 失败时，加入页会让用户把链接粘贴到「设置 → 模型供应商」里，
- * 交给同一个申请弹窗。
+ * 输入分享链接：「设置 → 模型供应商」右上角的入口。网页唤起 Cindy 失败时，加入页会让用户
+ * 到这里粘贴链接，交给同一个申请弹窗。
  */
 import { useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -16,7 +16,36 @@ import {
   ProviderShareDialogTitle,
 } from './ProviderShareDialog';
 
-/** 粘贴分享链接：交给全局申请弹窗读取(链接带前后文字也可以，main 会从中找出链接)。 */
+/** 设置页右上角的「输入分享链接…」：点开输入弹窗，关闭后焦点回到按钮。 */
+export function ProviderSharePasteButton() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <Button
+        ref={buttonRef}
+        variant="secondary"
+        size="md"
+        className="shrink-0"
+        data-testid="provider-share-paste-button"
+        onClick={() => setOpen(true)}
+      >
+        {t('providerShare.received.enterLink')}
+      </Button>
+      {open && (
+        <ProviderSharePasteDialog
+          onClose={() => {
+            setOpen(false);
+            buttonRef.current?.focus();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/** 输入分享链接：交给全局申请弹窗读取(链接带前后文字也可以，main 会从中找出链接)。 */
 export function ProviderSharePasteDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState('');

@@ -88,6 +88,11 @@ import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
+import {
+  OwnRemoteProviderDetail,
+  OwnRemoteProviderRows,
+  useOwnRemoteProviders,
+} from './OwnRemoteProviders';
 import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import {
@@ -106,6 +111,7 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
+import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
@@ -2409,16 +2415,32 @@ export function ProvidersSection() {
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // 左栏「分享给我的」里选中的一条；选中自己的供应商或登录引导时清空。
+  // 左栏里选中的另一台电脑上的供应商：「分享给我的」一条，或自己其他电脑上的一个(两者互斥)；
+  // 选中本机供应商或登录引导时清空。
   const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
+  const [selectedRemoteKey, setSelectedRemoteKey] = useState<string | null>(null);
   const { received: receivedShares } = useProviderShareReceived();
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
+  const ownRemoteProviders = useOwnRemoteProviders();
+  const selectedRemote = selectedRemoteKey
+    ? ownRemoteProviders.find((entry) => entry.key === selectedRemoteKey) ?? null
+    : null;
+  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
     setSelectedShareId(null);
+    setSelectedRemoteKey(null);
     setSelectedId(providerId);
+  }, []);
+  const selectShare = useCallback((shareId: string) => {
+    setSelectedRemoteKey(null);
+    setSelectedShareId(shareId);
+  }, []);
+  const selectRemote = useCallback((key: string) => {
+    setSelectedShareId(null);
+    setSelectedRemoteKey(key);
   }, []);
   const [pendingProviderOrder, setPendingProviderOrder] = useState<{
     dataOwnerId: string | null;
@@ -3011,16 +3033,20 @@ export function ProvidersSection() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-[14px]">
       {shareManagePage ?? (<>
-      <div className="flex shrink-0 flex-col gap-1">
-        <h2
-          className="text-16 font-medium leading-[1.2]"
-          style={{ color: 'var(--settings-section-title)' }}
-        >
-          {t('settings.providers.title')}
-        </h2>
-        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-          {t('settings.providers.subtitle')}
-        </p>
+      <div className="flex shrink-0 items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h2
+            className="text-16 font-medium leading-[1.2]"
+            style={{ color: 'var(--settings-section-title)' }}
+          >
+            {t('settings.providers.title')}
+          </h2>
+          <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
+            {t('settings.providers.subtitle')}
+          </p>
+        </div>
+        {/* 收到别人的供应商分享链接时从这里输入(加入网页唤起 Cindy 失败时也指引到这里)。 */}
+        <ProviderSharePasteButton />
       </div>
 
       {/* 先取数据再渲染卡片(规则 7:首帧即终态高度,不出现连接态翻转的跳变帧)。
@@ -3046,7 +3072,7 @@ export function ProvidersSection() {
             <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
               {showCindySignin && (
                 <CindySigninRow
-                  selected={cindySigninActive && !selectedShare}
+                  selected={cindySigninActive && !otherDeviceSelected}
                   onSelect={() => {
                     selectProvider(CINDY_SIGNIN_ID);
                   }}
@@ -3066,7 +3092,7 @@ export function ProvidersSection() {
                 renderItem={(provider, index) => (
                   <ListRow
                     provider={provider}
-                    selected={!selectedShare && !cindySigninActive && effectiveSelected?.id === provider.id}
+                    selected={!otherDeviceSelected && !cindySigninActive && effectiveSelected?.id === provider.id}
                     reconnectRequired={
                       (provider.id === 'openai' && openaiReconnectRequired) ||
                       provider.openAiAccount?.reconnectRequired === true
@@ -3090,12 +3116,21 @@ export function ProvidersSection() {
               <span className="sr-only" aria-live="polite" aria-atomic="true">
                 {orderAnnouncement}
               </span>
-              {/* 分享给我的供应商(受邀者)：与自己的供应商同列，单独成组。 */}
+              {/* 自己其他电脑上能用的供应商：接在本机供应商后面，图标带远程角标。 */}
+              <OwnRemoteProviderRows
+                entries={ownRemoteProviders}
+                selectedKey={selectedRemote?.key ?? null}
+                onSelect={(key) => {
+                  setFocusedModel(null);
+                  selectRemote(key);
+                }}
+              />
+              {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
                 selectedShareId={selectedShare?.shareId ?? null}
                 onSelect={(shareId) => {
                   setFocusedModel(null);
-                  setSelectedShareId(shareId);
+                  selectShare(shareId);
                 }}
               />
               {suggestions.length > 0 && (
@@ -3139,11 +3174,19 @@ export function ProvidersSection() {
 
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
           <div
-            key={selectedShare ? `share:${selectedShare.shareId}` : effectiveSelected?.id}
+            key={
+              selectedShare
+                ? `share:${selectedShare.shareId}`
+                : selectedRemote
+                  ? `remote:${selectedRemote.key}`
+                  : effectiveSelected?.id
+            }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
+            ) : selectedRemote ? (
+              <OwnRemoteProviderDetail entry={selectedRemote} />
             ) : cindySigninActive ? (
               /* 登录引导是 brand-scale surface(DESIGN §3):48px 标识 → 24px 名字 →
                  一行价值主张 → 赠送余额徽标 → 黑 CTA,间距走 8px 系统。底部留白比

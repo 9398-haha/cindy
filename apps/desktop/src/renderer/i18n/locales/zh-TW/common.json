@@ -349,8 +349,7 @@
     },
     "received": {
       "title": "分享給我的供應商",
-      "empty": "還沒有人分享供應商給你。收到分享連結後，點開它或貼到這裡。",
-      "paste": "貼上分享連結",
+      "enterLink": "輸入分享連結…",
       "fromOwner": "來自 {{name}} 的分享",
       "providerOnDevice": "{{provider}} · {{device}}",
       "statusActive": "正常",
@@ -366,7 +365,7 @@
       },
       "left": "已退出 {{name}} 分享的 {{provider}}",
       "pasteDialog": {
-        "title": "貼上分享連結",
+        "title": "輸入分享連結",
         "description": "把對方傳給你的供應商分享連結貼到這裡，看過說明後再決定是否申請。",
         "label": "分享連結",
         "placeholder": "在這裡貼上連結",
@@ -385,7 +384,8 @@
     },
     "picker": {
       "deviceName": "{{device}} · 來自 {{owner}} 的分享",
-      "unavailable": "已無法使用的分享"
+      "unavailable": "已無法使用的分享",
+      "hostOutdated": "分享者電腦上的 Cindy 版本太舊，讀不到這些模型。請讓對方更新 Cindy 後再試。"
     },
     "notification": {
       "requestTitle": "新的分享申請",
@@ -2710,6 +2710,13 @@
           "reset": "恢復預設選擇",
           "connectionRequired": "連線後可用，已選模型會保留。"
         }
+      },
+      "remote": {
+        "rowLabel": "{{provider}} · {{device}}",
+        "statusReady": "可用",
+        "detailNote": "Agent 在 {{device}} 上執行，使用的是那台電腦的登入和配額。新建任務時在模型列表裡選擇它就能用；要修改這個供應商，請到那台電腦的「設定 → 模型供應商」。",
+        "modelsTitle": "可用的模型",
+        "modelsEmpty": "這個供應商在那台電腦上還沒有開放可用的模型。"
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
