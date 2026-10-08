@@ -67,9 +67,24 @@ vi.mock('../../device-link/remoteAttachment.js', () => ({
 }));
 
 import { createBotGroupAttachmentStore, safeAttachmentFileName } from '../botGroupAttachments.js';
+import { materializeRemoteAttachment } from '../../device-link/remoteAttachment.js';
 
 let root: string;
 const hash = 'a'.repeat(64);
+
+it.each([403, 500])('classifies OSS HTTP %s as unavailable and logs only safe diagnostics', async (status) => {
+  const warn = vi.fn();
+  vi.mocked(materializeRemoteAttachment).mockRejectedValueOnce(Object.assign(new Error('private signed URL and path'), { code: 'OSS_DOWNLOAD_FAILED', status }));
+  const result = await createBotGroupAttachmentStore({ ownerRoot: () => path.join(root, 'owner'), log: { warn } }).prepare({
+    groupId: 'g1', controllerDeviceId: 'phone-1',
+    attachments: [{ id: 'p1', name: 'private.pdf', path: 'upload://oss-brief.pdf', category: 'pdf', mimeType: 'application/pdf' }],
+  });
+  expect(result).toEqual({ ok: false, errorCode: 'ATTACHMENT_UNAVAILABLE', message: 'OSS_DOWNLOAD_FAILED' });
+  expect(warn).toHaveBeenCalledWith('Chat attachment preparation failed', { groupId: 'g1', stage: 'prepare', code: 'OSS_DOWNLOAD_FAILED', status });
+  expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private|upload:\/\//);
+  expect(h.removed).toEqual([]);
+  expect(await fs.readdir(path.join(root, 'owner', 'bot-groups', 'g1', 'attachments'))).toEqual([]);
+});
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'bot-group-attachments-'));

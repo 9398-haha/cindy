@@ -115,7 +115,7 @@ describe('Chat Server result delivery and refresh', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
   it.each(['ATTACHMENT_UNAVAILABLE', 'INVALID_PARAMS'] as const)('keeps a useful reason for prepare %s', async (errorCode) => {
-    deps.prepareAttachments = vi.fn(async () => ({ ok: false, errorCode, message: 'private details' }));
+    deps.prepareAttachments = vi.fn(async () => ({ ok: false as const, errorCode, message: 'private details' }));
     deps.log = { warn: vi.fn() };
     const result = await service.sendMessage({ groupId: roomId, text: '', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{}] }, { controllerDeviceId: 'phone' });
     expect(result).toMatchObject({ ok: false, errorCode: errorCode === 'INVALID_PARAMS' ? 'INVALID_ATTACHMENT' : errorCode });

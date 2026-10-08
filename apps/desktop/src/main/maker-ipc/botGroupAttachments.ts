@@ -104,7 +104,10 @@ export interface BotGroupAttachmentStore {
   }) => Promise<BotGroupPreparedAttachments | BotGroupFailure>;
 }
 
-export function createBotGroupAttachmentStore(deps: { ownerRoot: () => string }): BotGroupAttachmentStore {
+export function createBotGroupAttachmentStore(deps: {
+  ownerRoot: () => string;
+  log?: { warn: (message: string, fields: Record<string, unknown>) => void };
+}): BotGroupAttachmentStore {
   const prepare: BotGroupAttachmentStore['prepare'] = async (input) => {
     if (input.attachments.length > BOT_GROUP_ATTACHMENTS_MAX) return invalid();
     // One account for the whole batch: an account switch while a phone upload is fetched must
@@ -195,8 +198,10 @@ export function createBotGroupAttachmentStore(deps: { ownerRoot: () => string })
     } catch (error) {
       await discard();
       // Transfer errors carry no host paths; anything else is reported generically.
-      const { code } = chatErrorDiagnostic(error);
-      return { ok: false, errorCode: code.startsWith('FILE_PEER_') || code.startsWith('DEVICE_LINK_') ? 'ATTACHMENT_UNAVAILABLE' : 'INVALID_ATTACHMENT', message: code };
+      const diagnostic = chatErrorDiagnostic(error);
+      const { code } = diagnostic;
+      deps.log?.warn('Chat attachment preparation failed', { groupId: input.groupId, stage: 'prepare', ...diagnostic });
+      return { ok: false, errorCode: code.startsWith('FILE_PEER_') || code.startsWith('DEVICE_LINK_') || code.startsWith('OSS_DOWNLOAD_') ? 'ATTACHMENT_UNAVAILABLE' : 'INVALID_ATTACHMENT', message: code };
     }
     return {
       ok: true,
