@@ -592,6 +592,37 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     runner = null;
   });
 
+  it('keeps child events out of personal IM streaming, attachments and completion', async () => {
+    const handle = { messageId: 'stream-parent', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const complete = vi.fn();
+    await runDefaultTurn(complete);
+    h.emit({ type: 'text', data: { text: '主代理前半', isFinal: false } });
+    await flushMicrotasks();
+    handle.replace.mockClear();
+    const events: AgentEvent[] = [
+      { type: 'text', data: { text: '内部增量', isFinal: false } },
+      { type: 'text', data: { text: '内部报告', isFinal: true } },
+      { type: 'tool_use', data: { toolName: 'Bash', toolUseId: 'child-tool', input: { command: 'private' } } },
+      { type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://private"}' } },
+      { type: 'error', data: { message: 'child failed', isTerminal: true } },
+      { type: 'done', data: {} },
+    ];
+    for (const event of events) h.emit({ ...event, agentMeta: { parentUuid: 'toolu_child' } });
+    await flushMicrotasks();
+    expect(handle.replace).not.toHaveBeenCalled();
+    expect(handle.finalize).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    h.emit({ type: 'text', data: { text: '和最终结论', isFinal: false } });
+    await flushMicrotasks();
+    expect(handle.replace).toHaveBeenLastCalledWith('主代理前半和最终结论');
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledWith('主代理前半和最终结论'));
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps IM persistence, ack, card, and completion exactly-once when Maker recovery is transparent', async () => {
     const streamingHandle = {
       messageId: 'stream-recovered',

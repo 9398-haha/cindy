@@ -55,6 +55,7 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 
 | 能力 | 单一真相源 | 共享到什么程度 |
 |---|---|---|
+| 子代理输出隔离 | `im/shared/agentEventScope.ts` + `maker-core/agents/claude-code/translator.ts` | 官方 `hook-control/turnObserver` 与个人 `im/shared/turnRunner` 在消费实时事件前过滤带 `agentMeta.parentUuid` 的子代理事件。内部正文、工具/思考、媒体旁路和终态不进入主任务的 IM 回帖，也不影响主任务收口；个人侧自动任务转播同样适用。Claude translator 为子代理工具结果保留归属，主代理流式事件不继承子代理元数据；主任务正文统计和最后消息的实质内容判定只消费主代理，子代理完整消息与流式增量都不阻断主任务 result 截断补发，也不覆盖 silent-stop 判定。整轮失败即使由子代理 API 错误引起，仍按主任务失败收口。主代理主动引用的成果正常发送，桌面完整记录不变。 |
 | 普通工具权限的多处确认 | `maker-ipc/interactionRouter.ts` + `sharedPermission.ts` | IM 与 Cindy 共用一个决定，首次有效回答生效，桌面/手机与渠道同步收口。来源正文由 `im/shared/interactionSource.ts` 构造；个人富卡与官方 Hook 分别负责各自载体更新。未来渠道复用同一注册接口，详见 [共享合同](im-permission-confirmation.md)。 |
 | 模型列表的开关就绪 | `maker-host/model-visibility-mirror.ts` | 个人 `/model` 与官方 `listAgentModels` 均等待当前账号配置同步；超时返回错误，不把未同步当成全部关闭或回退出厂开关。 |
 | 过程区与正文的**文本合成** | `im/shared/turnPresenter.ts` + `turnActivity.ts` | 过程区怎么排（工具步骤、思考步骤、耗时行）、过程区与正文怎么拼（`composeProgressView`）。**正文累积不算**——见第三节：`createTurnPresenter` 按 `mode` 实例化两个独立引擎，累积、消息投影、`finalText()` 判据都不同，改一个引擎不影响另一个 |
@@ -73,6 +74,7 @@ App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` �
 |---|---|
 | `im/shared/channelToolPolicy.ts` 的 `channelForceConfirmToolCall` | 只被个人 Telegram / 微信 / 钉钉的权限策略引用。**官方 bot 不挂**——见第三节的裁决。放在 `shared/` 下是因为个人侧三个渠道共用，不代表两个 bot 共用 |
 | `packages/lizi-im/src/telegram/presentationCapabilities.ts` | 只导出并由**个人 driver** 消费 `TELEGRAM_PERSONAL_CAPABILITIES`，没有官方 bot 共用的契约数据。它的作用是把车道差异写在一处，不是让两侧取同一份值。官方侧同名策略在另一个仓各写一套——具体到链接预览见第四节 2c |
+| `packages/lizi-im/src/discord/chunk.ts` 的长消息分段 | 个人 Telegram、Discord、企业微信复用：优先换行、超长单行优先空格，硬切保留 UTF-16 代理对，代码围栏跨段闭合/重开。企业微信长回复用每 UTF-16 单元至多 3 字节的保守预算守住 18 KiB；短回复保留原样。官方 Telegram 在服务端独立实现围栏与 HTML 长度预算，不因个人侧修改而改变。 |
 | `PresenterPolicy.intermediateMaxRenderedChars`（长度上限） | **只有官方那条路消费**（`createProgressEmitter`）。个人侧用自己的私有常量 `INTERMEDIATE_EDIT_LIMIT = 3800`（`streamingText.ts`）判断何时停止编辑。**改共享的长度策略只会改到官方 bot**——两处独立维护，改一处必须核对另一处 |
 | `PresenterPolicy.intermediateThrottleMs`（节流间隔） | 个人路径是**双层节流**：`turnRunner` 的 `CARD_PATCH_THROTTLE_MS` 确实读共享值，但真正出站的 `streamingText.ts` 还有一份写死的 `TELEGRAM_UPDATE_THROTTLE_MS = 1500`（注释称「双层节流冗余但无害」）。**改共享值只改得动 runner 那层，driver 那层不跟**——所以这个值也不是同源，改它要连 driver 的常量一起核对 |
 | `im/shared/botCommands.ts` 的**官方那一半** | 官方 bot 的命令**仍由服务端 `TELEGRAM_COMMANDS` 下发**，本表对官方侧是「声明性镜像、不接线」。测试只用内联清单核对镜像，**服务端改了命令这边完全可能不同步**。个人侧那一半是真的单一真相源（菜单与分发直接读它）；官方那一半是跨仓镜像，**改命令要两个仓一起核对** |

@@ -35,6 +35,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
+import { isImSubagentEvent } from './agentEventScope';
 import { isExpiredPermissionDecision, type SharedPermission } from '../../maker-ipc/sharedPermission';
 import { presentSharedPermissionCard } from './permissionPresentation';
 import { describeInteractionSource } from './interactionSource';
@@ -2366,6 +2367,7 @@ export function createTurnRunner(
 
   function handleEventFor(localSessionId: string, userId: string) {
     return (event: AgentEvent) => {
+      if (isImSubagentEvent(event)) return;
       const state = sessionStates.get(localSessionId);
       if (!state) return;
       const turn = state.queue[0];

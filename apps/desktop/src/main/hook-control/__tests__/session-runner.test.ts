@@ -3151,6 +3151,42 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
+  it.each([false, true])('isolates child events before root completion (isFinal=%s)', async (isFinal) => {
+    const session = makeManualSession('sess-subagent-output');
+    const onProgress = vi.fn();
+    const onToolResult = vi.fn();
+    const onTurnTerminal = vi.fn();
+    const observer = observeHookTurn(session as never, {
+      onProgress, onToolResult, onTurnTerminal,
+      onSilentStopSettled: () => () => {},
+      log,
+    });
+    const emit = h.eventCbs.get('sess-subagent-output')!;
+    emit({ type: 'text', source: 'claude-code', data: { text: '主代理前半', isFinal: false } });
+    onProgress.mockClear();
+    const child = { parentUuid: 'toolu_child', uuid: 'child-message' };
+    const events: AgentEvent[] = [
+      { type: 'text', data: { text: '内部增量', isFinal: false } },
+      { type: 'text', data: { text: '内部调查报告'.repeat(1000), isFinal: true } },
+      { type: 'tool_use', data: { toolName: 'Bash', toolUseId: 'child-tool', input: { command: 'private' } } },
+      { type: 'thinking', data: { text: '内部思考', stage: 'delta', blockId: 'child-thinking' } },
+      { type: 'tool_result_full', data: { fullText: '内部媒体结果' } },
+      { type: 'error', data: { message: 'child failed', isTerminal: true } },
+      { type: 'done', data: {} },
+    ];
+    for (const event of events) emit({ ...event, source: 'claude-code', agentMeta: child });
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onTurnTerminal).not.toHaveBeenCalled();
+    expect(observer.text()).toBe('主代理前半');
+    // A recovered result tail is an unanchored delta, not a final envelope.
+    emit({ type: 'text', source: 'claude-code', ...(isFinal ? { agentMeta: { uuid: 'main-message' } } : {}), data: { text: isFinal ? '主代理前半和最终结论' : '和最终结论', isFinal } });
+    emit({ type: 'done', data: {} });
+    await observer.finished;
+    expect(observer.finalText()).toBe('主代理前半和最终结论');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it('终态回调抛错时仍拆监听并 settle finished', async () => {
     const session = makeManualSession('sess-terminal-callback');
     const observer = observeHookTurn(session as never, {
