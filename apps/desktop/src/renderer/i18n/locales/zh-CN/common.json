@@ -8559,6 +8559,7 @@
         "copied": "邀请链接已复制",
         "createLink": "生成邀请链接",
         "accept": "接受并加入",
+        "openGroup": "打开群聊",
         "previewInvite": "查看邀请",
         "invalidInvite": "邀请无效、已使用或已过期，请获取新的邀请链接。",
         "notAllowed": "当前账号没有权限，请检查账号或联系群主。",

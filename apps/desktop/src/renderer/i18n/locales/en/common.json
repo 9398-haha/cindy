@@ -8574,6 +8574,7 @@
         "copied": "Invitation link copied",
         "createLink": "Create invitation link",
         "accept": "Accept and join",
+        "openGroup": "Open group",
         "previewInvite": "Preview invitation",
         "invalidInvite": "This invitation is invalid, used or expired. Request a new link.",
         "notAllowed": "This account does not have permission. Check your account or contact the group owner.",
