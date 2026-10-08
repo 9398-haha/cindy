@@ -636,6 +636,24 @@ function projectInvokeResultForTunnel(
   if (channel === 'maker:schedule:list-sidebar-index-runs') {
     return capScheduleSidebarIndexForTunnel(result);
   }
+  // Opt-in projection before tunnel serialization: binding badges never need prompts,
+  // scripts or execution config. Calls without this option keep the full list contract.
+  const scheduleOptions = args[1];
+  if (channel === 'maker:schedule:list'
+    && scheduleOptions && typeof scheduleOptions === 'object'
+    && (scheduleOptions as { sessionBindings?: unknown }).sessionBindings === true
+    && Array.isArray(result)) {
+    return result.filter((row) => row.targetSessionId && row.status !== 'expired').map((row) => ({
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      targetSessionId: row.targetSessionId,
+      cronExpr: row.cronExpr,
+      manual: row.manual,
+      recurring: row.recurring,
+      intervalMs: row.intervalMs,
+    }));
+  }
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown };
   if (!Array.isArray(r.providers)) return result;
