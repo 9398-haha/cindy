@@ -129,6 +129,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const planning = new Map<string, { botId: string; controller: AbortController }>();
   // Invalidate even a send still preparing/uploading its attachments. Its delayed
   // receipt must not start an arrangement after a newer message or control action.
+  let nextIntentVersion = 0;
+  const acceptedIntentVersions = new Map<string, number>();
   type PlanIntent = { sourceId?: string };
   const planIntents = new Map<string, PlanIntent>();
   let groupDiscussionParity = false;
@@ -142,7 +144,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     pending.delete(sourceId);
     if (!pending.size) pendingPlanCancels.delete(roomId);
   }
-  async function replacePlanIntent(roomId: string) {
+  async function replacePlanIntent(roomId: string, version = ++nextIntentVersion) {
+    acceptedIntentVersions.set(roomId, version);
     const pending = planning.get(roomId);
     pending?.controller.abort();
     planning.delete(roomId);
@@ -870,7 +873,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       mentions: z.object({ all: z.boolean(), botIds: z.array(z.string()) }), division: z.boolean().optional(), attachments: z.array(z.unknown()).optional() }).parse(input);
     i.groupId = await resolveGroup(i.groupId);
     if (!i.text.trim() && !i.attachments?.length) throw new Error('INVALID_INPUT');
-    const intent = await replacePlanIntent(i.groupId);
+    // An attempted send must not cancel a valid decision until its message exists.
+    const intentVersion = ++nextIntentVersion;
     const s = await snapshot(i.groupId);
     const plans = await api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
     const openPlan = plans.find(p => ['proposed','running','waiting'].includes(p.status));
@@ -897,8 +901,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     }
     if (prepared?.ok) prepared.commit();
+    const intent = intentVersion > (acceptedIntentVersions.get(i.groupId) ?? 0)
+      ? await replacePlanIntent(i.groupId, intentVersion) : null;
     if (shouldPlan) {
-      if (planIntents.get(i.groupId) !== intent) await cancelPlanning(i.groupId, result.id);
+      if (!intent || planIntents.get(i.groupId) !== intent) await cancelPlanning(i.groupId, result.id);
       else {
         intent.sourceId = result.id;
         void decideArrangement(s, result.id, i.text, i.division === true, prepared?.ok ? prepared.attachments : [], intent).catch(() => undefined);

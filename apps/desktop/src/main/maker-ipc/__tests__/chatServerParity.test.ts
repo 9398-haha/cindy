@@ -105,7 +105,6 @@ describe('server group feature parity', () => {
   it.each([
     ['ordinary request', {}, undefined],
     ['@all', { mentions: { all: true, botIds: [] } }, undefined],
-    ['one available member', {}, members.slice(0, 1)],
   ])('asks the organizer for %s without changing server mentions', async (_name, input, roster) => {
     arrange(undefined, roster);
     expect((await send(input)).ok).toBe(true); await flush();
@@ -114,6 +113,36 @@ describe('server group feature parity', () => {
     const posted = fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')![2];
     expect(posted.deferExecution).toBe(true);
     expect(posted.mentions).toEqual(_name === '@all' ? [botId, secondBotId] : []);
+  });
+  it('returns one available member to ordinary discussion using the real decision parser', async () => {
+    arrange(undefined, members.slice(0, 1));
+    const { parsePlanDecision } = await import('../botGroupDivision.js');
+    deps.decidePlan = vi.fn(async input => parsePlanDecision(JSON.stringify({ needsPlan: true, steps: [{ botId, task: 'Make a draft' }] }), input.mode, new Set(input.members.map(m => m.botId))));
+    expect((await send()).ok).toBe(true); await flush();
+    expect(deps.decidePlan).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto' }), expect.any(AbortSignal));
+    expect(planPosts()).toHaveLength(0);
+    expect(fixture.handle.mock.calls.some(([route]) => route.endsWith('/continue'))).toBe(true);
+  });
+  it.each(['prepare', 'upload', 'submit'])('preserves the pending decision when a later send fails at %s', async stage => {
+    arrange();
+    let finish!: (value: { needsPlan: true; steps: typeof steps }) => void;
+    const decide = vi.fn<NonNullable<BotGroupChatServiceDeps['decidePlan']>>(() => new Promise(resolve => { finish = resolve; }));
+    deps.decidePlan = decide;
+    await send(); await flush();
+    const signal = decide.mock.calls[0]![1];
+    deps.prepareAttachments = vi.fn(async () => stage === 'prepare'
+      ? { ok: false as const, errorCode: 'INVALID_PARAMS' as const, message: 'invalid' }
+      : { ok: true as const, attachments: [], commit: vi.fn(), discard: vi.fn(async () => {}) });
+    if (stage === 'upload') fixture.upload.mockRejectedValueOnce(new Error('MEDIA_UPLOAD_FAILED'));
+    if (stage === 'submit') {
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, data) => route.endsWith('/messages') && method === 'POST'
+        ? { status: 500, body: { error: { code: 'INTERNAL' } } } : base(route, method, data));
+    }
+    expect((await send({ clientId: `failed-${stage}`, attachments: [{}] })).ok).toBe(false);
+    expect(signal.aborted).toBe(false);
+    finish({ needsPlan: true, steps }); await flush();
+    expect(planPosts()).toHaveLength(1);
   });
   it.each([false, true])('revises a proposed plan, including forced=%s, without losing its steps', async division => {
     arrange(proposed);
