@@ -11233,7 +11233,7 @@ function retryInvalidatedInitialHistoryFetchIfNeeded(
 }
 
 /**
- * DB sessions.agent_kind('cc' / 'codex' / 'pi')→ maker-core AgentKind 的唯一映射点。
+ * DB sessions.agent_kind('cc' / 'codex' / 'pi' / 'cursor')→ maker-core AgentKind 的唯一映射点。
  * 缺失 / 异常值走 fallback(默认 'claude-code',老 row 兼容)。所有从 session
  * row 派生 agentKind 的地方必须走这里,不要在调用点手写三元(历史上多处各写
  * 一份,遗漏 fallback 语义差异被 review 逐个揪出)。
@@ -11243,6 +11243,7 @@ function dbAgentKindToMakerKind(
   fallback: 'claude-code' | 'codex' | 'pi' | 'cursor' = 'claude-code',
 ): 'claude-code' | 'codex' | 'pi' | 'cursor' {
   if (dbKind === 'codex') return 'codex';
+  if (dbKind === 'cursor') return 'cursor';
   if (dbKind === 'cc') return 'claude-code';
   if (dbKind === 'pi') return 'pi';
   return fallback;

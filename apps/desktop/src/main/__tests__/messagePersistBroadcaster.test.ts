@@ -1406,12 +1406,12 @@ describe('agent_kind enqueue snapshot', () => {
     expect(result).toEqual({ committed: true });
   });
 
-  it('writeChain 延迟期间切换引擎,消息仍使用事件入队时的 agent_kind', async () => {
+  it.each(['cc', 'cursor'] as const)('writeChain 延迟期间切换引擎,消息仍使用事件入队时的 %s', async (agentKind) => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const blocker = enqueueDurableWrite('agent-kind-test-blocker', () => gate);
 
-    noteSessionAgentKind(SESSION, 'cc');
+    noteSessionAgentKind(SESSION, agentKind);
     onToolUseEvent(
       SESSION,
       { toolUseId: 'before-switch', toolName: 'Read', input: { file_path: '/tmp/a' } },
@@ -1424,7 +1424,7 @@ describe('agent_kind enqueue snapshot', () => {
 
     expect(createMessage).toHaveBeenCalledWith(
       SESSION,
-      expect.objectContaining({ role: 'tool_use', agentKind: 'cc' }),
+      expect.objectContaining({ role: 'tool_use', agentKind }),
       broadcastGuard(),
     );
   });

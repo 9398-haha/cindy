@@ -5341,7 +5341,7 @@ export function CCAgentSessionView({
               session?.remoteHostId && (
                 <UpgradeBanner
                   hostId={session.remoteHostId}
-                  agent={session.agentKind === 'cursor' ? 'cursor' : session.agentKind === 'pi' ? 'pi' : 'cc'}
+                  agent={session.agentKind === 'pi' ? 'pi' : 'cc'}
                   sessionId={session.id}
                   style={{ width: inputWidth }}
                   className="py-1"

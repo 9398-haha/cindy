@@ -7983,11 +7983,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
-    await ensureRemoteHostReady(remoteHostIdToEnsure);
     const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor' | null =
       session?.agentKind === 'codex' ||
       session?.agentKind === 'claude-code' ||
-      session?.agentKind === 'pi'
+      session?.agentKind === 'pi' ||
+      session?.agentKind === 'cursor'
         ? session.agentKind
         : createOpts && typeof createOpts === 'object'
           ? (() => {
@@ -7996,6 +7996,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             })()
           : null;
     if (!ensureAgentKind) return;
+    if (ensureAgentKind === 'cursor') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not support SSH execution');
+    }
+    await ensureRemoteHostReady(remoteHostIdToEnsure);
 
     // claude-code 远端走 cc-mgr.mjs daemon。首次 /context 也必须像 send 一样
     // 触发 cc-manager 安装/升级, 否则 query/getContextUsage 可能因旧 bundle 不存在而失败。
@@ -8457,6 +8461,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (source.source === 'review') {
         throwIpcError('INVALID_PARAMS', 'A review task cannot start another review');
       }
+      if (source.agentKind === 'cursor') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not support read-only review');
+      }
       if (source.remoteHostId) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Review is local-only in this version');
       }
@@ -8577,7 +8584,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
 
       return {
-        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi' | 'cursor',
+        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi',
         prompt: builtPrompt.prompt,
         targetKind: builtPrompt.targetKind,
         onAccepted: () => acceptRemoteAttachments?.(),

@@ -65,7 +65,7 @@ function normalizePositiveInt(value: unknown): number {
 
 const messageRowid = sql<number>`rowid`;
 
-type DbAgentKind = 'cc' | 'codex' | 'pi';
+type DbAgentKind = 'cc' | 'codex' | 'pi' | 'cursor';
 
 interface MessagePosition {
   createdAt: number;

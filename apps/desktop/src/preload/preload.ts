@@ -2518,7 +2518,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   syncNewMakerDraft: (snapshot: {
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
-    selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedRoute?: import('../shared/appDefaultModelSelection').AppModelRoute;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -2542,7 +2542,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
   syncWorkerCreationPrefs: (snapshot: {
-    workerPermissionMode: 'auto' | 'bypassPermissions';
+    workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
   }): void => ipcRenderer.send('maker:sync-worker-creation-prefs', snapshot),
 
   /**
@@ -6706,7 +6706,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
-        workerPermissionMode?: 'auto' | 'bypassPermissions';
+        workerPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
         /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
         deferDelegateTask?: boolean;
       },
@@ -6716,7 +6716,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workerSessionId: string;
       workerId: string;
       dispatched: boolean;
-      workerPermissionMode: 'auto' | 'bypassPermissions';
+      workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
       uiAssignmentSnapshotBeforeMs: number;
     }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
 

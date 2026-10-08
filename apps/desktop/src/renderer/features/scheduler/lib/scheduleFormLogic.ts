@@ -381,6 +381,7 @@ export function sessionAgentKindToScheduleAgentKind(
   kind: 'cc' | 'codex' | 'pi' | 'cursor',
 ): ScheduleFormState['agentKind'] {
   if (kind === 'codex') return 'codex';
+  if (kind === 'cursor') return 'cursor';
   if (kind === 'pi') return 'pi';
   return 'claude-code';
 }

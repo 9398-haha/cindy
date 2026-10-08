@@ -55,7 +55,14 @@ export class CursorAgent extends BaseAgent {
     memory: { supported: no }, extraDirs: no, writableDirs: no,
   };
   private sessions = new Set<AgentSessionHandle>();
-  private startups = new Set<AbortController>();
+  private startups = new Map<AbortController, Promise<void>>();
+  private failedStartupCleanups = new Map<string, {
+    close: () => Promise<void>;
+    pendingError: AgentStartupCleanupPendingError;
+    confirmStopped: () => void;
+    promise?: Promise<void>;
+  }>();
+  private discoveryDirectories = new Map<AgentSessionHandle, string>();
   private disposed = false;
 
   constructor(protected override deps: CursorAgentDeps) { super(deps); }
@@ -67,6 +74,7 @@ export class CursorAgent extends BaseAgent {
     try {
       handle = await this.startSession({ workingDir: workingDir ?? temporary!, model: CURSOR_DEFAULT_MODEL,
         permissionMode: 'ask', makerMemoryEnabled: false, vendorOptions: { cursorDiscoveryOnly: true } });
+      if (temporary) this.discoveryDirectories.set(handle, temporary);
       return this.capabilities.availableModels.map(model => ({ ...model }));
     } catch (error) {
       if (error instanceof AgentStartupCleanupPendingError) {
@@ -77,17 +85,58 @@ export class CursorAgent extends BaseAgent {
       throw error;
     } finally {
       await handle?.close();
-      if (temporary && cleanupConfirmed) await rm(temporary, { recursive: true, force: true });
+      if (!handle && temporary && cleanupConfirmed) await rm(temporary, { recursive: true, force: true });
     }
   }
 
-  override async dispose(): Promise<void> { this.disposed = true; for (const startup of this.startups) startup.abort(); await Promise.all([...this.sessions].map(session => session.close())); }
+  private async retryFailedStartupCleanup(key: string): Promise<void> {
+    const entry = this.failedStartupCleanups.get(key);
+    if (!entry) return;
+    const cleanup = entry.promise ?? entry.close();
+    entry.promise = cleanup;
+    try { await cleanup; }
+    catch {
+      if (entry.promise === cleanup) entry.promise = undefined;
+      throw entry.pendingError;
+    }
+    if (this.failedStartupCleanups.get(key) === entry) {
+      this.failedStartupCleanups.delete(key);
+      entry.confirmStopped();
+    }
+  }
+
+  override async dispose(): Promise<void> {
+    this.disposed = true;
+    for (const startup of this.startups.keys()) startup.abort();
+    // Startup can enter quarantine after abort; wait before taking the cleanup snapshot.
+    await Promise.allSettled([...this.startups.values()]);
+    const results = await Promise.allSettled([
+      ...[...this.failedStartupCleanups.keys()].map(key => this.retryFailedStartupCleanup(key)),
+      ...[...this.sessions].map(session => session.close()),
+    ]);
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, 'Cursor process cleanup is not confirmed');
+  }
 
   override async refreshLocalModels(): Promise<boolean> { await this.discoverModels(); return true; }
 
   async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     const startup = new AbortController();
-    this.startups.add(startup);
+    let finish!: () => void;
+    this.startups.set(startup, new Promise<void>(resolve => { finish = resolve; }));
+    const cleanupKey = opts.sessionId ?? opts.resumeSessionId ?? opts.workingDir;
+    try {
+      if (this.disposed) throw new AgentStartupStoppedError(new Error('Cursor agent has been disposed'));
+      // Keep the previous native writer outside the new startup's stopped-error boundary.
+      await this.retryFailedStartupCleanup(cleanupKey);
+      return await this.startSessionNow(opts, startup, cleanupKey);
+    } finally {
+      this.startups.delete(startup);
+      finish();
+    }
+  }
+
+  private async startSessionNow(opts: StartSessionOptions, startup: AbortController, cleanupKey: string): Promise<AgentSessionHandle> {
     const assertCurrent = () => { if (this.disposed || startup.signal.aborted) throw new Error('Cursor agent has been disposed'); };
     let client: AcpClient | undefined;
     let bridge: PiExtraSpawnConfig | null = null;
@@ -199,6 +248,7 @@ export class CursorAgent extends BaseAgent {
       sessionState = { ...sessionState, ...record(raw) };
       const catalog = readCursorModels(sessionState);
       const modes = record(sessionState.modes);
+      if (typeof modes.currentModeId === 'string') planMode = modes.currentModeId === 'plan';
       this.capabilities.planMode = Array.isArray(modes.availableModes) && modes.availableModes.some(mode => record(mode).id === 'plan') ? yes : no;
       this.capabilities.switchModel = catalog.configId ? yes : no;
       this.capabilities.availableModels = catalog.models.length
@@ -252,13 +302,20 @@ export class CursorAgent extends BaseAgent {
         if (running && sessionId) await client?.notify('session/cancel', { sessionId }).catch(() => {});
         await client?.close(); // Exit proof comes before releasing host MCP/working-dir ownership.
         await active?.catch(() => {});
+        if (!closed) {
+          unregisterProcess?.();
+          bridge?.disposeSessionCtx?.();
+          queue.end();
+        }
         closed = true;
         running = false;
         active = undefined;
-        unregisterProcess?.();
-        bridge?.disposeSessionCtx?.();
-        queue.end();
-        if (handle) this.sessions.delete(handle);
+        if (handle) {
+          const directory = this.discoveryDirectories.get(handle);
+          if (directory) await rm(directory, { recursive: true, force: true });
+          this.discoveryDirectories.delete(handle);
+          this.sessions.delete(handle);
+        }
       })().catch(error => { closePromise = undefined; throw error; });
       return closePromise;
     };
@@ -302,16 +359,17 @@ export class CursorAgent extends BaseAgent {
         onNotification: (method, raw) => {
           const params = record(raw);
           if (method === 'session/update') {
-            if (loading || params.sessionId !== sessionId) return;
+            if (params.sessionId !== sessionId) return;
             const update = record(params.update);
             if (update.sessionUpdate === 'config_option_update') updateCatalog({ configOptions: update.configOptions });
             else if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string') {
-              planMode = update.currentModeId === 'plan';
-              emit({ type: 'plan_mode_changed', data: { enabled: planMode } });
+              updateCatalog({ modes: { ...record(sessionState.modes), currentModeId: update.currentModeId } });
+              if (!loading) emit({ type: 'plan_mode_changed', data: { enabled: planMode } });
             }
             if (running) translator.update(update);
           } else if (!loading && running && method === 'cursor/update_todos') {
-            translator.update({ sessionUpdate: 'plan', entries: params.todos });
+            if (typeof params.sessionId === 'string' && params.sessionId !== sessionId) return;
+            translator.updateTodos(params.todos, params.merge === true);
           } else if (!loading && running && method === 'cursor/task') {
             // This extension is a completion notice, not a controllable durable
             // child session. Do not invent start/resume/stop handles.
@@ -370,8 +428,9 @@ export class CursorAgent extends BaseAgent {
       const requestedModel = model;
       model = CURSOR_DEFAULT_MODEL;
       if (requestedModel !== CURSOR_DEFAULT_MODEL) await setModel(requestedModel);
-      if (opts.planMode) await setPlanMode(true);
+      if (opts.planMode !== undefined) await setPlanMode(opts.planMode);
       emit({ type: 'session_id', data: sessionId });
+      if (planMode) emit({ type: 'plan_mode_changed', data: { enabled: true } });
       const validateSend = (options: SendOptions = {}) => {
         if (closed || fenced) throw new Error('Cursor session is closed');
         if (running || configuring) throw new Error('Cursor already has an active turn or configuration');
@@ -492,26 +551,25 @@ export class CursorAgent extends BaseAgent {
       return handle;
     } catch (error) {
       try {
-        await client?.close();
-        unregisterProcess?.();
-        bridge?.disposeSessionCtx?.();
-        queue.end();
+        await close();
       } catch {
-        const whenStopped = client!.close().then(() => { unregisterProcess?.(); bridge?.disposeSessionCtx?.(); queue.end(); });
-        // The rejected cleanup promise is observed by Maker's quarantine path.
-        throw new AgentStartupCleanupPendingError('Cursor startup cleanup has not confirmed process exit', { cause: error, whenStopped });
+        let confirmStopped!: () => void;
+        const whenStopped = new Promise<void>(resolve => { confirmStopped = resolve; });
+        const pendingError = new AgentStartupCleanupPendingError('Cursor startup cleanup has not confirmed process exit', { cause: error, whenStopped });
+        this.failedStartupCleanups.set(cleanupKey, { close, pendingError, confirmStopped });
+        throw pendingError;
       }
       if (error instanceof AgentNotAuthenticatedError) throw error;
       if (error instanceof AcpRpcError && error.code === -32000) {
         throw new AgentNotAuthenticatedError('cursor', 'Cursor Agent authentication expired. Run agent login on the task host computer.');
       }
       throw new AgentStartupStoppedError(error instanceof AcpRpcError ? new AcpRpcError(error.code, safeError(error)) : error);
-    } finally { this.startups.delete(startup); }
+    }
   }
 }
 
 function validateSessionId(id: unknown): string {
-  if (typeof id !== 'string' || !id.trim() || id.length > 4096 || /[\x00-\x1f]/.test(id)) {
+  if (typeof id !== 'string' || !id.trim() || id.length > 4096 || [...id].some(char => char.charCodeAt(0) < 32)) {
     throw new Error('Cursor ACP returned an invalid session identity');
   }
   return id;

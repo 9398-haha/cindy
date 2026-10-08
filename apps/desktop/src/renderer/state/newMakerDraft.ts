@@ -20,8 +20,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
-import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
-import type { BotModelRoute } from '../../shared/botModelChain';
+import { sameModelRoute, type AppDefaultModelSelection, type AppModelRoute } from '../../shared/appDefaultModelSelection';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
@@ -940,7 +939,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const stored = readStoredDraftRecord();
   const base = stored ? sanitize(stored) : currentDraft;
   const prefs = base.lastByVendor[base.vendor];
-  const current: BotModelRoute | null = prefs.model ? {
+  const current: AppModelRoute | null = prefs.model ? {
     harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
     model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
     fastMode: base.fastModeByModel[prefs.model] === true,

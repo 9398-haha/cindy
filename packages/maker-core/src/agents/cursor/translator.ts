@@ -5,6 +5,8 @@ import { record, type AcpRecord } from './models.js';
 export class CursorTranslator {
   private tools = new Map<string, AcpRecord>();
   private completedTools = new Set<string>();
+  // Cursor todo patches are session state and survive individual prompt turns.
+  private todos = new Map<string, AcpRecord>();
   readonly usage: UsageSnapshot = { tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 };
 
   constructor(private emit: (event: AgentEvent) => void) {}
@@ -13,6 +15,17 @@ export class CursorTranslator {
     this.tools.clear();
     this.completedTools.clear();
     this.usage.tokenUsage = 0;
+  }
+
+  updateTodos(raw: unknown, merge: boolean): void {
+    if (!Array.isArray(raw)) return;
+    if (!merge) this.todos.clear();
+    for (const item of raw) {
+      const todo = record(item);
+      if (typeof todo.id !== 'string' || !todo.id) continue;
+      this.todos.set(todo.id, { ...this.todos.get(todo.id), ...todo });
+    }
+    this.update({ sessionUpdate: 'plan', entries: [...this.todos.values()] });
   }
 
   update(raw: unknown): void {

@@ -39,7 +39,6 @@ import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -2602,8 +2601,10 @@ export function getMaker(): Maker {
       },
       makerMemory: makerMemoryManager,
       mcpProviders: piMcpProviders,
-      preparePiExtraSpawnConfig: (providers, ctx) =>
-        getPiExtraSpawnConfig(providers, desktopMakerLogger, { ...ctx, agentKind: 'cursor' }),
+      preparePiExtraSpawnConfig: (providers, ctx) => {
+        if (!ctx?.workingDir) throw new Error('Cursor MCP requires a task working directory');
+        return getPiExtraSpawnConfig(providers, desktopMakerLogger, { ...ctx, workingDir: ctx.workingDir, agentKind: 'cursor' });
+      },
       registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
     }) : null;
@@ -3000,9 +3001,9 @@ export function getMaker(): Maker {
         if (!force && Date.now() - lastAttempt < 30_000) return Promise.resolve();
         lastAttempt = Date.now();
         pending = (async () => {
-          const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-cursor-models-'));
           try {
-            const models = await cursorAgent.discoverModels(directory);
+            // The adapter owns the probe directory until native exit is confirmed.
+            const models = await cursorAgent.discoverModels();
             if (_maker !== makerRef || activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) return;
             setCursorDiscoveredModels(models, owner);
             refreshSelectableModelsAndBroadcast({ agentKind: 'cursor' });
@@ -3012,8 +3013,6 @@ export function getMaker(): Maker {
               refreshSelectableModelsAndBroadcast({ agentKind: 'cursor' });
             }
             desktopMakerLogger.info('Cursor model discovery unavailable; sign in with cursor-agent login');
-          } finally {
-            await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
           }
         })().catch(() => {
           desktopMakerLogger.warn('Cursor model discovery could not prepare its workspace');

@@ -16,11 +16,11 @@ import {
 import { getEffectiveBotModelSettings } from './botStore';
 import { useBotTranslation } from './botPronounContext';
 
-function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' | 'cursor' {
+function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
   return harness === 'claude' ? 'cc' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): BotHarness {
+function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
@@ -28,7 +28,7 @@ function agentKindFor(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): AgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor;
 }
 
-function defaultRoute(vendor: 'cc' | 'codex' | 'pi' | 'cursor'): BotModelRoute {
+function defaultRoute(vendor: 'cc' | 'codex' | 'pi'): BotModelRoute {
   return { harness: harnessFor(vendor), ...getEffectiveBotModelSettings(vendor, null) };
 }
 
@@ -140,7 +140,7 @@ export function BotModelChainEditor({
         unifiedPanel
         unifiedAgents={unifiedAgents}
         onUnifiedSelect={(selection) => {
-          if (!visibleVendors.includes(selection.engine)) return;
+          if (selection.engine === 'cursor' || !visibleVendors.includes(selection.engine)) return;
           replace(index, {
             harness: harnessFor(selection.engine),
             providerId: selection.providerId,

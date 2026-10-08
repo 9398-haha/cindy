@@ -646,6 +646,7 @@ describe('hasRealBinding / agentKind 映射', () => {
   it('sessionAgentKindToScheduleAgentKind 映射', () => {
     expect(sessionAgentKindToScheduleAgentKind('cc')).toBe('claude-code');
     expect(sessionAgentKindToScheduleAgentKind('codex')).toBe('codex');
+    expect(sessionAgentKindToScheduleAgentKind('cursor')).toBe('cursor');
   });
 });
 

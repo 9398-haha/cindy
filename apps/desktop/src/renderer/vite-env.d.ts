@@ -608,7 +608,7 @@ interface OrcaTeamRecord {
   id: string;
   leadSessionId: string;
   status: 'active' | 'completed' | 'cancelled' | 'failed';
-  workerPermissionMode: 'auto' | 'bypassPermissions';
+  workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -2417,7 +2417,7 @@ interface ElectronAPI {
   syncNewMakerDraft: (snapshot: {
     appDefaultModelRequestId?: string;
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
-    selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedRoute?: import('../shared/appDefaultModelSelection').AppModelRoute;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi' | 'cursor',
@@ -2441,7 +2441,7 @@ interface ElectronAPI {
 
   /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
   syncWorkerCreationPrefs: (snapshot: {
-    workerPermissionMode: 'auto' | 'bypassPermissions';
+    workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
   }) => void;
 
   /** 被控端 renderer → 自身 main:providerModelMemory 全量快照镜像(草稿列表行真实读源)。 */
@@ -2498,7 +2498,7 @@ interface ElectronAPI {
 
   /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
   onWorkerCreationPrefsApply: (
-    cb: (payload: { workerPermissionMode: 'auto' | 'bypassPermissions' }) => void,
+    cb: (payload: { workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions' }) => void,
   ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */
@@ -5970,7 +5970,7 @@ interface ElectronAPI {
         /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
-        workerPermissionMode?: 'auto' | 'bypassPermissions';
+        workerPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
         /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
         deferDelegateTask?: boolean;
       },
@@ -5979,7 +5979,7 @@ interface ElectronAPI {
       workerSessionId: string;
       workerId: string;
       dispatched: boolean;
-      workerPermissionMode: 'auto' | 'bypassPermissions';
+      workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
       uiAssignmentSnapshotBeforeMs: number;
     }>;
 

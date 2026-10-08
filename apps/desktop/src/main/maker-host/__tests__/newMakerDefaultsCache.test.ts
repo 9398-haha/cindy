@@ -215,6 +215,15 @@ it('reads remembered tuning only from the matching owner snapshot, with source/e
 
 
 describe('Cursor draft identity', () => {
+  it('retains a Cursor application default in the owner-fenced mirror', () => {
+    const owner = { dataOwnerId: 'cursor-owner', ownerGeneration: 1 };
+    const selectedRoute = { harness: 'cursor', model: 'native', providerId: 'cursor', effort: '', fastMode: false };
+    expect(syncNewMakerDraftCache({ ownerStamp: owner, selectedRoute, lastByVendor: {},
+      fastModeByModel: {}, effortByModel: {} }, owner, 'cursor-owner:1', false)).toBe(true);
+    expect(getSelectedNewMakerRoute('cursor-owner:1')).toEqual(selectedRoute);
+    expect(getSelectedNewMakerRoute('other-owner:1')).toBeUndefined();
+  });
+
   it('keeps Cursor selection separate from Codex and Pi', () => {
     seed({ lastByVendor: {
       cursor: { model: 'cursor-native', providerId: 'cursor' },

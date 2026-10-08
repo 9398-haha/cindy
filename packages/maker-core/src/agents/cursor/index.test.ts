@@ -1,18 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CursorAgent, CURSOR_DEFAULT_MODEL, type CursorAgentDeps } from './index.js';
-import { PINNED_SKILL_INVOCATION } from '../base-agent.js';
+import { AgentStartupCleanupPendingError, PINNED_SKILL_INVOCATION } from '../base-agent.js';
 import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
 import type { AcpTransport } from '../acp/transport.js';
-import type { AgentEvent } from '../../types/events.js';
+import type { InteractionDecision, AgentEvent } from '../../types/events.js';
 import { readCursorModels } from './models.js';
 import { cursorAnswers } from './questions.js';
 import { createConsoleLogger } from '../../interfaces/logger.js';
 import { CursorTranslator } from './translator.js';
+import { access, rm } from 'node:fs/promises';
+
+interface FakeMessage {
+  id?: string | number;
+  method?: string;
+  params: Record<string, unknown> & { prompt: Array<{ type: string; text?: string }> };
+  result: unknown;
+  error: { code: number };
+}
 
 class FakeTransport implements AcpTransport {
   lines = new Set<(line: string) => void>();
   closes = new Set<(info: { reason: string }) => void>();
-  written: any[] = [];
+  written: FakeMessage[] = [];
   failClose = false;
   closeCount = 0;
   session = { sessionId: 'native-1', modes: { availableModes: [{ id: 'agent' }, { id: 'plan' }] },
@@ -20,9 +29,9 @@ class FakeTransport implements AcpTransport {
       options: [{ value: 'auto-native', name: 'Auto' }, { value: 'model-b', name: 'Model B' }] }] };
   held = new Set<string>(['session/prompt']);
   loadReplay = false;
-  onWrite?: (message: any) => void;
+  onWrite?: (message: FakeMessage) => void;
   async writeLine(line: string) {
-    const message = JSON.parse(line);
+    const message: FakeMessage = JSON.parse(line);
     this.written.push(message);
     this.onWrite?.(message);
     if (!message.method || message.id === undefined || this.held.has(message.method)) return;
@@ -38,7 +47,7 @@ class FakeTransport implements AcpTransport {
   emit(message: unknown) { for (const listener of this.lines) listener(JSON.stringify(message)); }
   update(sessionUpdate: string, data = {}) { this.emit({ jsonrpc: '2.0', method: 'session/update',
     params: { sessionId: 'native-1', update: { sessionUpdate, ...data } } }); }
-  finish() { const request = this.written.filter(item => item.method === 'session/prompt').at(-1);
+  finish() { const request = this.written.filter(item => item.method === 'session/prompt').at(-1)!;
     this.emit({ jsonrpc: '2.0', id: request.id, result: { stopReason: 'end_turn' } }); }
   onLine(handler: (line: string) => void) { this.lines.add(handler); return () => { this.lines.delete(handler); }; }
   onClose(handler: (info: { reason: string }) => void) { this.closes.add(handler); return () => { this.closes.delete(handler); }; }
@@ -95,12 +104,85 @@ describe('Cursor native ACP lifecycle', () => {
     expect((await iterator.next()).done).toBe(true);
     expect(fake.written.some(item => item.method === 'session/new')).toBe(false);
   });
+  it('preserves a loaded native plan mode and switches it off before sending', async () => {
+    const { fake, start } = create();
+    Object.assign(fake.session.modes, { currentModeId: 'plan' });
+    const handle = await start({ resumeSessionId: 'native-1' });
+    expect(handle.getPlanMode!()).toBe(true);
+    await handle.send({ type: 'user', content: 'execute' }, { planMode: false });
+    expect(fake.written.find(item => item.method === 'session/set_mode')?.params)
+      .toEqual({ sessionId: 'native-1', modeId: 'agent' });
+    expect(handle.getPlanMode!()).toBe(false);
+    await handle.close();
+  });
+  it('applies an explicit startup mode after loading the native mode', async () => {
+    const { fake, start } = create();
+    Object.assign(fake.session.modes, { currentModeId: 'plan' });
+    const handle = await start({ resumeSessionId: 'native-1', planMode: false });
+    expect(fake.written.find(item => item.method === 'session/set_mode')?.params.modeId).toBe('agent');
+    expect(handle.getPlanMode!()).toBe(false);
+    await handle.close();
+  });
+  it('keeps mode notifications during load while suppressing transcript replay', async () => {
+    const { fake, start } = create();
+    fake.loadReplay = true;
+    fake.onWrite = message => {
+      if (message.method === 'session/load') fake.update('current_mode_update', { currentModeId: 'plan' });
+    };
+    const handle = await start({ resumeSessionId: 'native-1' });
+    expect(handle.getPlanMode!()).toBe(true);
+    await handle.close();
+  });
+  it('retains failed startup cleanup across retries and resolves exit proof only after close succeeds', async () => {
+    const dispose = vi.fn();
+    const { fake, agent, start } = create(undefined, { preparePiExtraSpawnConfig: async () => ({ disposeSessionCtx: dispose }) });
+    fake.failClose = true;
+    fake.onWrite = message => {
+      if (message.method === 'initialize') fake.emit({ jsonrpc: '2.0', id: message.id, error: { code: -32099, message: 'startup failed' } });
+    };
+    const failure = await start({ sessionId: 'failed-task' }).catch(error => error);
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    let stopped = false;
+    void failure.whenStopped.then(() => { stopped = true; });
+    await expect(start({ sessionId: 'failed-task' })).rejects.toBeInstanceOf(AgentStartupCleanupPendingError);
+    await expect(agent.dispose()).rejects.toThrow();
+    expect(fake.written.filter(item => item.method === 'initialize')).toHaveLength(1);
+    expect(stopped).toBe(false);
+    expect(dispose).not.toHaveBeenCalled();
+    fake.failClose = false;
+    await agent.dispose();
+    await failure.whenStopped;
+    expect(stopped).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+  it.each(['startup', 'probe-close'])('retains its model probe directory until %s cleanup is confirmed', async failurePoint => {
+    const fake = new FakeTransport();
+    let directory = '';
+    const { agent } = create(fake, { createCursorTransport: options => { directory = options.cwd; return fake; } });
+    fake.failClose = true;
+    if (failurePoint === 'startup') fake.onWrite = message => {
+      if (message.method === 'initialize') fake.emit({ jsonrpc: '2.0', id: message.id, error: { code: -32099, message: 'startup failed' } });
+    };
+    try {
+      await expect(agent.discoverModels()).rejects.toThrow();
+      await expect(access(directory)).resolves.toBeUndefined();
+      await expect(agent.dispose()).rejects.toThrow();
+      await expect(access(directory)).resolves.toBeUndefined();
+      fake.failClose = false;
+      await agent.dispose();
+      await vi.waitFor(async () => { await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' }); });
+    } finally {
+      fake.failClose = false;
+      await agent.dispose();
+      if (directory) await rm(directory, { recursive: true, force: true });
+    }
+  });
   it('selects exact advertised config id/value and never sends default sentinel', async () => {
     const { fake, start } = create(); const handle = await start({ model: 'model-b' });
-    expect(fake.written.find(item => item.method === 'session/set_config_option').params)
+    expect(fake.written.find(item => item.method === 'session/set_config_option')!.params)
       .toEqual({ sessionId: 'native-1', configId: 'native-model-picker', value: 'model-b' });
     await handle.setModel!(CURSOR_DEFAULT_MODEL);
-    expect(fake.written.filter(item => item.method === 'session/set_config_option').at(-1).params.value).toBe('auto-native');
+    expect(fake.written.filter(item => item.method === 'session/set_config_option').at(-1)!.params.value).toBe('auto-native');
     await handle.close();
   });
   it('answers approval with opaque allow_once ID, never grants always', async () => {
@@ -112,7 +194,7 @@ describe('Cursor native ACP lifecycle', () => {
       options: [{ kind: 'allow_always', optionId: 'global' }, { kind: 'allow_once', optionId: 'one-opaque' }],
     } });
     await tick();
-    expect(fake.written.find(item => item.id === 'permission-1').result).toEqual({ outcome: { outcome: 'selected', optionId: 'one-opaque' } });
+    expect(fake.written.find(item => item.id === 'permission-1')!.result).toEqual({ outcome: { outcome: 'selected', optionId: 'one-opaque' } });
     await handle.close();
   });
   it('cancels pending permissions and waits for prompt completion', async () => {
@@ -122,8 +204,8 @@ describe('Cursor native ACP lifecycle', () => {
     fake.emit({ jsonrpc: '2.0', id: 'p', method: 'session/request_permission', params: { sessionId: 'native-1', toolCall: {}, options: [] } });
     await tick();
     const abort = handle.abort(); await tick();
-    expect(fake.written.find(item => item.id === 'p').result).toEqual({ outcome: { outcome: 'cancelled' } });
-    expect(fake.written.find(item => item.method === 'session/cancel').id).toBeUndefined();
+    expect(fake.written.find(item => item.id === 'p')!.result).toEqual({ outcome: { outcome: 'cancelled' } });
+    expect(fake.written.find(item => item.method === 'session/cancel')!.id).toBeUndefined();
     fake.finish(); await abort; await handle.close();
   });
   it('keeps reservation and aborts preparation before any prompt is dispatched', async () => {
@@ -145,13 +227,13 @@ describe('Cursor native ACP lifecycle', () => {
     fake.failClose = false; await handle.close(); expect(dispose).toHaveBeenCalledTimes(1);
   });
   it('keeps native instructions intact and passes scoped Memory/context and MCP identity once', async () => {
-    const prepare = vi.fn(async (..._args: unknown[]) => ({ mcpBridge: { token: 'fake-test-token', servers: [{ name: 'memory', url: 'http://127.0.0.1/mcp' }] }, disposeSessionCtx: vi.fn() }));
+    const prepare = vi.fn<NonNullable<CursorAgentDeps['preparePiExtraSpawnConfig']>>(async () => ({ mcpBridge: { token: 'fake-test-token', servers: [{ name: 'memory', url: 'http://127.0.0.1/mcp' }] }, disposeSessionCtx: vi.fn() }));
     const { fake, start } = create(undefined, { preparePiExtraSpawnConfig: prepare });
     const handle = await start({ sessionId: 'cindy-1', sessionInstanceId: 'instance-1', makerMemoryEnabled: true,
       makerMemoryScopeKey: 'bot:example', makerMemoryIndexSnapshot: 'Remembered context', userPrompt: 'User preference', vendorOptions: { orcaRole: 'lead' } });
     expect(prepare.mock.calls[0][1]).toMatchObject({ agentKind: 'cursor', sessionId: 'cindy-1', sessionInstanceId: 'instance-1',
       memoryScopeKey: 'bot:example', memoryEnabled: true, mcpCallerAttested: false, mcpCallerKind: 'unknown', vendorOptions: { orcaRole: 'lead' } });
-    expect(fake.written.find(item => item.method === 'session/new').params.mcpServers).toEqual([
+    expect(fake.written.find(item => item.method === 'session/new')!.params.mcpServers).toEqual([
       { type: 'http', name: 'memory', url: 'http://127.0.0.1/mcp', headers: [{ name: 'Authorization', value: 'Bearer fake-test-token' }] },
     ]);
     await handle.send({ type: 'user', content: 'one' }); fake.finish(); await tick();
@@ -165,7 +247,7 @@ describe('Cursor native ACP lifecycle', () => {
     const { fake, start } = create(); const handle = await start(); const events: AgentEvent[] = [];
     const consume = (async () => { for await (const event of handle.events()) events.push(event); })();
     await handle.send({ type: 'user', content: 'one' });
-    const prompt = fake.written.find(item => item.method === 'session/prompt');
+    const prompt = fake.written.find(item => item.method === 'session/prompt')!;
     fake.emit({ jsonrpc: '2.0', id: prompt.id, result: {} }); await tick();
     await handle.close(); await consume;
     expect(events.some(event => event.type === 'done')).toBe(false);
@@ -174,18 +256,18 @@ describe('Cursor native ACP lifecycle', () => {
   it('returns method-not-found for unsupported client requests even while idle', async () => {
     const { fake, start } = create(); const handle = await start();
     fake.emit({ jsonrpc: '2.0', id: 'unknown', method: 'fs/write_text_file', params: {} }); await tick();
-    expect(fake.written.find(item => item.id === 'unknown').error.code).toBe(-32601);
+    expect(fake.written.find(item => item.id === 'unknown')!.error.code).toBe(-32601);
     await handle.close();
   });
   it('does not auto-approve a pending plan when permission mode changes', async () => {
-    const { fake, start } = create(); const handle = await start(); let answer: ((value: any) => void) | undefined;
+    const { fake, start } = create(); const handle = await start(); let answer: ((value: InteractionDecision) => void) | undefined;
     handle.setInteractionResolver(() => new Promise(resolve => { answer = resolve; }));
     await handle.send({ type: 'user', content: 'plan' });
     fake.emit({ jsonrpc: '2.0', id: 'plan', method: 'cursor/create_plan', params: { plan: 'Proposed changes' } }); await tick();
     await handle.setPermissionMode!('default');
     expect(fake.written.some(item => item.id === 'plan')).toBe(false);
     answer!({ kind: 'plan_review', behavior: 'deny', reason: 'Revise' }); await tick();
-    expect(fake.written.find(item => item.id === 'plan').result).toEqual({ outcome: { outcome: 'rejected', reason: 'Revise' } });
+    expect(fake.written.find(item => item.id === 'plan')!.result).toEqual({ outcome: { outcome: 'rejected', reason: 'Revise' } });
     await handle.close();
   });
   it('cancels in-flight native startup when the owning agent is disposed', async () => {
@@ -236,6 +318,31 @@ describe('Cursor native ACP lifecycle', () => {
 });
 
 describe('Cursor model and event contracts', () => {
+  it('merges todo patches across turns and replaces the snapshot only when merge is false', async () => {
+    const { fake, start } = create();
+    const handle = await start();
+    const events: AgentEvent[] = [];
+    const consume = (async () => { for await (const event of handle.events()) events.push(event); })();
+    const todos = (items: unknown[], merge: boolean) => fake.emit({ jsonrpc: '2.0', method: 'cursor/update_todos', params: { todos: items, merge } });
+    await handle.send({ type: 'user', content: 'plan' });
+    todos([{ id: 'a', content: 'A', status: 'pending' }, { id: 'b', content: 'B', status: 'pending' }, { id: 'c', content: 'C', status: 'pending' }], false);
+    fake.finish(); await tick();
+    await handle.send({ type: 'user', content: 'continue' });
+    todos([{ id: 'b', status: 'completed' }], true);
+    todos([{ id: 'd', content: 'D', status: 'in_progress' }], true);
+    todos([], true);
+    todos([{ id: 'e', content: 'E', status: 'pending' }], false);
+    todos([], false);
+    await handle.close(); await consume;
+    const plans = events.filter(event => event.type === 'tool_use').map(event => event.data);
+    expect(plans[1]).toMatchObject({ input: { plan: [
+      { step: 'A', status: 'pending' }, { step: 'B', status: 'completed' }, { step: 'C', status: 'pending' },
+    ] } });
+    expect(plans[2]).toMatchObject({ input: { plan: [{ step: 'A' }, { step: 'B' }, { step: 'C' }, { step: 'D' }] } });
+    expect(plans[3]).toEqual(plans[2]);
+    expect(plans[4]).toMatchObject({ input: { plan: [{ step: 'E', status: 'pending' }] } });
+    expect(plans[5]).toMatchObject({ input: { plan: [] } });
+  });
   it('does not invent a model catalog or context size', () => {
     expect(readCursorModels({}).models).toEqual([]);
     const catalog = readCursorModels({ configOptions: [{ id: 'x', category: 'model', currentValue: 'runtime',

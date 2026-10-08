@@ -21,7 +21,7 @@ export function withCursorDiscoveredModels(catalog: Catalog): Catalog {
     ...provider,
     models: { ...provider.models, cursor: models.map(model => ({
       id: model.id, name: model.displayName, contextWindow: model.contextWindow,
-      efforts: model.efforts, defaultEffort: model.defaultEffort,
+      efforts: [...model.efforts], defaultEffort: model.defaultEffort,
       ...(model.newSessionDefault ? { newSessionDefault: model.newSessionDefault } : {}),
       ...(model.description ? { description: model.description } : {}),
       ...(model.supportsImageInput !== undefined ? { supportsImageInput: model.supportsImageInput } : {}),

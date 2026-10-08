@@ -1118,7 +1118,7 @@ export function resolveRemoteModelListStatus({
 }): RemoteModelListStatus {
   if (!deviceId) return 'idle';
   const required = agentKind
-    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : agentKind === 'cursor' ? (cursor ?? { error: 'unsupported' }) : pi]
+    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : agentKind === 'cursor' ? (cursor ?? { loading: false, capabilities: null, error: 'unsupported' }) : pi]
     : [cc, codex, pi];
   if (required.some((state) => !!state.error)) return 'error';
   if (providers.error && !providers.unsupported) return 'error';
