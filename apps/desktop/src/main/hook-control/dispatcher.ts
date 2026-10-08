@@ -70,10 +70,12 @@ import {
   makeProviderCommandsSet,
 } from '@cindy/slack-hook-protocol';
 import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
+import type { AutoReviewQuotedMessage } from '@cindy/maker-shared/auto-review-intent';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
+import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
 import { createAckReactions, type AckReactionTask } from './ackReactions.js';
@@ -221,6 +223,11 @@ export interface HookRunRequest {
   origin: { connectionId: string; connectionName: string; externalKey: string };
   /** IM 来源元数据(平台 + thread 上下文); 省略 = 旧 server 不发。 */
   source?: TaskSource;
+  /**
+   * 本条消息回复的那条消息, 在展示截短前从 server 原始 source 取出(见 hookReplyTarget)。
+   * 只作 Auto 审阅的引用证据, 不进 prompt、不落库。
+   */
+  autoReviewReplyTarget?: AutoReviewQuotedMessage;
   /** 官方 Telegram 群轮次的 lane-only 群历史检索作用域。 */
   groupHistoryAccess?: GroupHistoryAccessScope;
   /**
@@ -2529,6 +2536,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (!accountActive) return;
     const admittedGeneration = accountGeneration;
     const source = payload.source === undefined ? undefined : normalizeTaskSource(payload.source);
+    // Display bounding drops the newest chain entries; the review target is read first.
+    const autoReviewReplyTarget = hookReplyTarget(payload.source);
     const dispatchPayload = {
       ...payload,
       ...(source === undefined ? {} : { source }),
@@ -2668,6 +2677,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
               groupMessageCount,
             }),
             ...(source ? { source } : {}),
+            ...(autoReviewReplyTarget ? { autoReviewReplyTarget } : {}),
             ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
           },
           accountGeneration: admittedGeneration,
