@@ -462,7 +462,7 @@ export class CursorAgent extends BaseAgent {
             const blocks = await promptBlocks(message, promptCapabilities);
             if (closed || cancelled || options.signal?.aborted) throw new Error('Cursor send cancelled before dispatch');
             if (firstPrompt && context) blocks.unshift({ type: 'text', text: context });
-            emit({ type: 'status', data: { ...translator.usage, isRunning: true } });
+            emit({ type: 'status', data: { ...translator.usage, isRunning: true, status: 'Working' } });
             // ACP prompt returns only at the END of the turn. Dispatch promptly;
             // never await completion from Session.send (which would block UI).
             active = client!.request('session/prompt', { sessionId, prompt: blocks }, { timeoutMs: 24 * 60 * 60 * 1000 });

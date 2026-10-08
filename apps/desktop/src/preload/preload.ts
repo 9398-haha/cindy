@@ -5925,12 +5925,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 详见下方 maker 块的 auth / agent / usage 三个子对象。
 
   // ─── Maker Core IPC ─────────────────────────────────────────────────────
-  // renderer 通过统一 maker API 按 agentKind 调用 Claude Code / Codex / Pi。
+  // renderer 通过统一 maker API 按 agentKind 调用 Claude Code / Codex / Pi / Cursor。
   maker: {
-    listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi'>> =>
+    listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi' | 'cursor'>> =>
       ipcRenderer.invoke('maker:list-available-agents'),
     onAgentsChanged: fanOutMakerAgentsChanged,
-    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
     listBotDelegations: (
       parentSessionId: string,
@@ -7632,18 +7632,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 鉴权 (取代老 electronAPI.codex.auth.*) ────────────────────────
     auth: {
-      getState: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getState: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
       ): Promise<unknown> => ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
       cancelLogin: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         options?: { releaseOwner?: boolean; ownerId?: string },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:cancel-login', agentKind, options),
       logout: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         ownerScope?: { dataOwnerId: string | null; ownerGeneration: number },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:logout', agentKind, ownerScope),
       onStateChanged: fanOutMakerAuthStateChanged,
@@ -7661,7 +7661,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 联合状态 (取代老 electronAPI.codex.binary.getStatus) ──────────
     agent: {
-      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
         ipcRenderer.invoke('maker:agent:status', agentKind),
       /** spawn 当前应用使用的 binary `--version`, 进程内缓存。About 面板用。 */
       getBinaryVersion: (
@@ -7680,10 +7680,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 今日累计 (取代老 electronAPI.codex.usage.* + electronAPI.onUsageTodaySpendChanged) ─
     usage: {
-      getToday: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getToday: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:today', agentKind),
       getAccount: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         providerId?: string,
       ): Promise<unknown> => ipcRenderer.invoke('maker:usage:account', agentKind, providerId),
       /** Codex app-server authoritative windows and banked reset-credit metadata. */

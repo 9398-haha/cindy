@@ -318,6 +318,25 @@ describe('Cursor native ACP lifecycle', () => {
 });
 
 describe('Cursor model and event contracts', () => {
+  it('includes renderable status text on turn start and context usage updates', async () => {
+    const { fake, start } = create();
+    const handle = await start();
+    const events: AgentEvent[] = [];
+    const consume = (async () => { for await (const event of handle.events()) events.push(event); })();
+    await handle.send({ type: 'user', content: 'hello' });
+    fake.update('usage_update', { used: 100, size: 200 });
+    fake.finish();
+    await tick();
+    await handle.close();
+    await consume;
+    const statuses = events.filter(event => event.type === 'status').map(event => event.data);
+    expect(statuses).toHaveLength(2);
+    for (const status of statuses) {
+      expect(status).toMatchObject({ isRunning: true, status: expect.stringMatching(/\S/) });
+    }
+    expect(statuses[1]).toMatchObject({ contextTokens: 100, contextWindow: 200, tokenUsage: 0 });
+  });
+
   it('merges todo patches across turns and replaces the snapshot only when merge is false', async () => {
     const { fake, start } = create();
     const handle = await start();

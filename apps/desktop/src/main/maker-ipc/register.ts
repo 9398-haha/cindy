@@ -16850,7 +16850,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       msg.createOpts.agentKind !== 'claude-code' &&
       msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
+      msg.createOpts.agentKind !== 'pi' &&
+      msg.createOpts.agentKind !== 'cursor'
     ) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }

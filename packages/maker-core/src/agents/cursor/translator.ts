@@ -77,7 +77,7 @@ export class CursorTranslator {
         // ACP used/size describe context occupancy, never per-request billable usage.
         if (finite(update.used)) this.usage.contextTokens = update.used;
         if (finite(update.size)) this.usage.contextWindow = update.size;
-        event('status', { ...this.usage, isRunning: true });
+        event('status', { ...this.usage, isRunning: true, status: 'Working' });
         break;
       }
     }
