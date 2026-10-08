@@ -92,12 +92,14 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('marks the row as remote, names the computer and selects it', () => {
+  it('marks the row as remote, names the computer only in the tip and selects it', () => {
     const onSelect = vi.fn();
     render(<OwnRemoteProviderRows entries={[entry]} selectedKey={null} onSelect={onSelect} />);
     const row = screen.getByTestId('own-remote-provider-row');
     expect(row.textContent).toContain('Anthropic');
-    expect(row.textContent).toContain("Magi's Mac Mini");
+    expect(row.textContent).not.toContain("Magi's Mac Mini");
+    expect(row.getAttribute('aria-label')).toContain("Magi's Mac Mini");
+    expect(row.textContent).toContain('settings.providers.models.modelCount:{"count":1}');
     expect(row.querySelector('[data-remote-source-mark]')).not.toBeNull();
     fireEvent.click(row);
     expect(onSelect).toHaveBeenCalledWith(entry.key);

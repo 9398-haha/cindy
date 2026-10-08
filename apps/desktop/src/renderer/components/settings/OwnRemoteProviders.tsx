@@ -73,7 +73,7 @@ function RemoteProviderIcon({ provider, size }: { provider: ProviderView; size: 
   );
 }
 
-/** 左栏里的远程供应商行：接在本机供应商下面，不参与拖动排序。 */
+/** 左栏里的远程供应商行：与本机供应商同一行式，接在它们下面、不参与拖动排序；所在电脑只写在悬停提示里。 */
 export function OwnRemoteProviderRows({
   entries,
   selectedKey,
@@ -116,16 +116,16 @@ export function OwnRemoteProviderRows({
               >
                 <RemoteProviderIcon provider={entry.provider} size={14} />
               </span>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span
-                  className="truncate text-13 font-medium"
-                  style={{ color: 'var(--settings-section-title)' }}
-                >
-                  {name}
-                </span>
-                <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
-                  {entry.deviceName}
-                </span>
+              <span
+                className="min-w-0 flex-1 truncate text-13 font-medium"
+                style={{ color: 'var(--settings-section-title)' }}
+              >
+                {name}
+              </span>
+              <span className="shrink-0 select-none text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+                {t('settings.providers.models.modelCount', {
+                  count: readOnlyProviderModels(entry.provider, entry.modelVisibilityOverrides).length,
+                })}
               </span>
               <span
                 aria-hidden="true"
