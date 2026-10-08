@@ -58,12 +58,12 @@ export function MobileVendorIcon({ color: colorOverride, running = false, size =
   return (
     <Animated.View
       accessible
-      accessibilityLabel={vendor === 'codex' ? 'Codex' : vendor === 'pi' ? 'Pi' : 'Claude Code'}
+      accessibilityLabel={vendor === 'codex' ? 'Codex' : vendor === 'cursor' ? 'Cursor' : vendor === 'pi' ? 'Pi' : 'Claude Code'}
       accessibilityRole="image"
       style={{ alignItems: 'center', height: size, justifyContent: 'center', opacity, width: size }}
     >
       <MobileAgentMark
-        agentKind={vendor === 'codex' || vendor === 'pi' ? vendor : 'claude-code'}
+        agentKind={vendor === 'codex' || vendor === 'pi' || vendor === 'cursor' ? vendor : 'claude-code'}
         color={color}
         size={size}
       />

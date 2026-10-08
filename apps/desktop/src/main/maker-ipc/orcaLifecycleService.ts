@@ -193,9 +193,10 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   function workerPermissionModeForCreate(
     explicitMode: OrcaWorkerPermissionMode | undefined,
     override: Awaited<ReturnType<NonNullable<OrcaLifecycleDeps['getWorkerPermissionModeOverride']>>> | undefined,
+    agent?: AgentKind,
   ): { workerPermissionMode: OrcaWorkerPermissionMode; assertCurrent?: () => Promise<void> } {
     if (override?.permissionMode !== undefined) return { workerPermissionMode: override.permissionMode, assertCurrent: override.assertCurrent };
-    if (explicitMode === undefined) return { workerPermissionMode: deps.getWorkerPermissionMode(), assertCurrent: override?.assertCurrent };
+    if (explicitMode === undefined) return { workerPermissionMode: agent === 'cursor' ? 'ask' : deps.getWorkerPermissionMode(), assertCurrent: override?.assertCurrent };
     const resolved = resolveOrcaWorkerPermissionMode(explicitMode);
     deps.setWorkerPermissionMode(resolved);
     return { workerPermissionMode: resolved, assertCurrent: override?.assertCurrent };
@@ -247,13 +248,16 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   }
 
   async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+    if (params.agent === 'cursor' && params.workerPermissionMode !== undefined && params.workerPermissionMode !== 'ask') {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require Ask permission mode' };
+    }
     const override = await deps.getWorkerPermissionModeOverride?.(params.leadSessionId);
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     await override?.assertCurrent();
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
     }
-    const { workerPermissionMode, assertCurrent } = workerPermissionModeForCreate(params.workerPermissionMode, override);
+    const { workerPermissionMode, assertCurrent } = workerPermissionModeForCreate(params.workerPermissionMode, override, params.agent);
     const initialTask = hasNonEmptyInitialTask(params.initialTask) ? params.initialTask : undefined;
     let assertCreatedCurrent = assertCurrent;
     const created = await deps.createWorkerInTeam({
@@ -379,7 +383,10 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   }
 
   async function enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult> {
-    const { workerPermissionMode, assertCurrent } = workerPermissionModeForCreate(params.workerPermissionMode, await deps.getWorkerPermissionModeOverride?.(params.leadSessionId));
+    if (params.workerAgent === 'cursor' && params.workerPermissionMode !== undefined && params.workerPermissionMode !== 'ask') {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require Ask permission mode' };
+    }
+    const { workerPermissionMode, assertCurrent } = workerPermissionModeForCreate(params.workerPermissionMode, await deps.getWorkerPermissionModeOverride?.(params.leadSessionId), params.workerAgent);
     let assertCreatedCurrent = assertCurrent;
     const normalized = normalizeEnableParams(params);
     const validationFailure = validateEnableParams(normalized);

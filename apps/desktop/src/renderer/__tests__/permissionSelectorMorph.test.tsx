@@ -29,7 +29,9 @@ const PERMISSION_MODES = [
 let mockPermissionModes = PERMISSION_MODES;
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: { permissionModes: mockPermissionModes } }),
+  useAgentCapabilities: (agent: string) => ({ capabilities: { permissionModes: agent === 'cursor'
+    ? [{ id: 'ask', displayName: '默认权限', description: 'Cursor native policy' }]
+    : mockPermissionModes } }),
 }));
 
 import { PermissionSelector } from '../components/new-chat/PermissionSelector';
@@ -53,6 +55,16 @@ function getTrigger(): HTMLElement {
 }
 
 describe('PermissionSelector (MorphPopover pilot)', () => {
+  it('uses Cursor capabilities and never offers Claude auto or bypass modes', async () => {
+    renderSelector({ vendorKey: 'cursor' });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    expect(screen.queryByRole('option', { name: '自动审批' })).toBeNull();
+    expect(screen.queryByRole('option', { name: '完全访问' })).toBeNull();
+    expect(screen.getByRole('option', { name: '默认权限' })).toBeTruthy();
+  });
+
   // 2026-07-22:PermissionSelector 只在 composer 使用,已统一为「恒走脱身上浮 morph」——
   // 移除 origin/main 的 useMorphPopover opt-in/Radix 回退开关,故删去原「默认用 Radix」用例。
   it('点击 trigger 打开 listbox,四档选项齐全,aria-expanded 同步', async () => {

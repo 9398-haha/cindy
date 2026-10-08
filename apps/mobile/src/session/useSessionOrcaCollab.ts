@@ -68,7 +68,9 @@ import type { RemoteSession } from '@/session/types';
 
 export type CollabSheetView = 'collab' | 'collab-create';
 
-const ALL_AGENTS: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'];
+const ALL_AGENTS: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi', 'cursor'];
+// Cursor is optional and must be confirmed by the execution host before display.
+const LEGACY_AGENT_FALLBACK: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'];
 const EMPTY_MODEL_OPTIONS: readonly MobileModelOption[] = [];
 
 // ─── 团队状态 ────────────────────────────────────────────────────────────────
@@ -285,7 +287,7 @@ export function useOrcaWorkerForm(params: {
     return orcaWorkerFormFromPrefs(defaults, defaults.lastAgent);
   });
   const [customRoleMode, setCustomRoleMode] = useState(false);
-  const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(ALL_AGENTS);
+  const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(LEGACY_AGENT_FALLBACK);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelsByAgent, setModelsByAgent] = useState<Partial<Record<OrcaWorkerAgentKind, readonly MobileModelOption[]>>>({});
   const makerRef = useRef(maker);
@@ -362,8 +364,8 @@ export function useOrcaWorkerForm(params: {
   useEffect(() => {
     if (rosterMakerRef.current === maker) return;
     rosterMakerRef.current = maker;
-    agentsRef.current = ALL_AGENTS;
-    setAgents(ALL_AGENTS);
+    agentsRef.current = LEGACY_AGENT_FALLBACK;
+    setAgents(LEGACY_AGENT_FALLBACK);
     setModelsByAgent({});
   }, [maker]);
 
@@ -395,6 +397,7 @@ export function useOrcaWorkerForm(params: {
         setForm((value) => ({
           ...value,
           agent: switched,
+          permissionMode: switched === 'cursor' ? 'ask' : value.permissionMode,
           model: { id: agentPrefs.model, providerId: null, effort: agentPrefs.effort, fast: agentPrefs.fast },
         }));
         converge(switched);
@@ -410,7 +413,7 @@ export function useOrcaWorkerForm(params: {
     convergeGenRef.current += 1;
     touchedRef.current = true;
     setCustomRoleMode(!isPredefinedOrcaRole(value.role.trim().toLowerCase()));
-    setForm(value);
+    setForm(value.agent === 'cursor' ? { ...value, permissionMode: 'ask' } : value);
   }, []);
 
   /** 恢复记忆(上次的 Agent 不在当前电脑上时取第一个可用 Agent)。初始任务不记忆。 */
@@ -447,6 +450,7 @@ export function useOrcaWorkerForm(params: {
     setForm((current) => ({
       ...current,
       agent,
+      permissionMode: agent === 'cursor' ? 'ask' : current.permissionMode,
       model: { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
     }));
     converge(agent);
@@ -489,6 +493,7 @@ export function useOrcaWorkerForm(params: {
     setForm((current) => ({
       ...current,
       agent: config.agent as OrcaWorkerAgentKind,
+      permissionMode: config.agent === 'cursor' ? 'ask' : current.permissionMode,
       model: {
         id: config.modelId,
         providerId: config.providerId || null,

@@ -2734,7 +2734,7 @@ export function CCAgentSessionView({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi' | 'cursor'>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
@@ -3828,7 +3828,7 @@ export function CCAgentSessionView({
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
       if (!remoteDeviceId) {
-        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+        const authVendor = displayAgentKind === 'cursor' ? 'cursor' : displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
           // PR #744 review 第十七轮)。
@@ -4326,7 +4326,7 @@ export function CCAgentSessionView({
     // 用三值化后的 agent 映射选默认模型:Pi 会话必须回退到 Pi 目录默认,而不是被
     // `isCodex ? 'codex' : 'cc'` 误写成 CC 首选(可能是更贵的 Opus)(codex review)。
     const defaultModel = getDefaultModelForVendor(
-      agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : 'cc',
+      agent === 'cursor' ? 'cursor' : agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : 'cc',
     );
     sessionService
       .update(sessionId, { model: defaultModel.id })
@@ -6362,7 +6362,7 @@ function formatTokenCount(n: number): string {
  */
 function getModelContextWindow(
   model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'cursor',
   deviceId?: string,
 ): number | undefined {
   const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
@@ -6386,7 +6386,7 @@ function ContextCapacityRing({
   providerId?: string | null;
   contextTokens: number;
   model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: 'cc' | 'codex' | 'pi' | 'cursor';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
   verifiedContextWindow?: number | null;

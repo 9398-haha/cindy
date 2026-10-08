@@ -1249,7 +1249,7 @@ function originLabel(origin: string, t: Translate): string {
       ? 'delegated'
       : origin === 'claude-code'
         ? 'claudeCode'
-        : origin === 'codex' || origin === 'pi'
+        : origin === 'codex' || origin === 'pi' || origin === 'cursor'
           ? origin
           : 'existing';
   return t(`bots.workbench.kind.${key}`);

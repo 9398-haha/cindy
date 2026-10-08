@@ -381,12 +381,14 @@ function selectWorkerModel(params: {
   input: OrcaWorkerCreateParams;
   lead: OrcaLeadSessionSnapshot;
   defaults: OrcaWorkerDefaultsSnapshot;
+  availableModels: OrcaWorkerModelCapabilities[];
 }): string {
   const { input, lead, defaults } = params;
   return input.model
     ?? defaults.model
     // pi 显式列出(与 model-defaults.ts 对齐,避免将来改 cc 默认时 pi 静默跟随)。
     ?? (input.agent === lead.agentKind ? lead.model
+        : input.agent === 'cursor' ? params.availableModels[0]?.id ?? ''
         : input.agent === 'codex' ? 'gpt-5.5'
         : input.agent === 'pi' ? 'claude-sonnet-4-6'
         : 'claude-sonnet-4-6');
@@ -562,7 +564,7 @@ export function budgetModelRequiresApiKeyMessage(model: string): string {
 
 /** agent 的人类可读名,用于 preflight 失败信息。 */
 function agentDisplayName(agent: AgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+  return agent === 'cursor' ? 'Cursor' : agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
 }
 
 /**
@@ -638,13 +640,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       teamId: team.id,
       workerPermissionMode:
         params.workerPermissionMode === undefined
-          ? deps.getWorkerPermissionMode()
+          ? params.agent === 'cursor' ? 'ask' : deps.getWorkerPermissionMode()
           : resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
     }, assertCurrent);
   }
 
   async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
+    if (params.agent === 'cursor' && params.workerPermissionMode !== 'ask') {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require Ask permission mode' };
+    }
     const role = normalizeRequiredText(params.role, 'role');
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     if (role.value.length > 32) {
@@ -680,6 +685,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const lead = await deps.getLeadSessionRow(params.leadSessionId);
     if (!lead) {
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
+    }
+    if (params.agent === 'cursor' && (lead.remoteHostId || lead.agentDeviceId)) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require a local workspace' };
     }
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
     // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
@@ -770,6 +778,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       input: params,
       lead,
       defaults,
+      availableModels,
     });
     const leadProviderId =
       params.agent === lead.agentKind && typeof lead.providerId === 'string' && lead.providerId.trim()

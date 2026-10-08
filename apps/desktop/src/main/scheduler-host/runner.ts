@@ -206,9 +206,9 @@ const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
  * codex 支持子集 ask/auto/bypassPermissions）—— 调度本质是 unattended，bypass 是
  * 既有独立调度策略。绑定任务的心跳与伙伴例行任务不使用此默认值，继承原任务的权限与计划模式。
  */
-function defaultPermissionModeForSchedule(): PermissionMode {
-  // 两个 agent 都支持 bypassPermissions（types/common.ts:23），暂不按 agentKind 分支
-  return 'bypassPermissions';
+function defaultPermissionModeForSchedule(agentKind: AgentKind): PermissionMode {
+  // Cursor preserves native ACP permission prompts; other harness defaults are unchanged.
+  return agentKind === 'cursor' ? 'ask' : 'bypassPermissions';
 }
 
 /**
@@ -1357,7 +1357,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       permissionMode:
         routinePermissions?.permissionMode ??
         heartbeatPermissions?.permissionMode ??
-        defaultPermissionModeForSchedule(),
+        defaultPermissionModeForSchedule(effectiveAgentKind),
       ...((routinePermissions ?? heartbeatPermissions)
         ? { planMode: (routinePermissions ?? heartbeatPermissions)!.planMode }
         : {}),

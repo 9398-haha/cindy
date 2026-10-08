@@ -2146,7 +2146,7 @@ export default function NewRemoteSessionScreen() {
         setAvailableAgentKinds(
           new Set(
             (Array.isArray(agents) ? agents : []).filter(
-              (a): a is NewSessionAgentKind => a === 'claude-code' || a === 'codex' || a === 'pi',
+              (a): a is NewSessionAgentKind => a === 'claude-code' || a === 'codex' || a === 'pi' || a === 'cursor',
             ),
           ),
         );
@@ -2536,7 +2536,7 @@ export default function NewRemoteSessionScreen() {
     const targetCapabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(config.agent));
     if (!targetCapabilities) return false;
     const storedPermission = newSessionPreferences?.permissionModeByAgent[config.agent];
-    const permission = config.agent === draft.agentKind ? draft.permissionMode
+    const permission = config.agent === 'cursor' ? 'ask' : config.agent === draft.agentKind ? draft.permissionMode
       : storedPermission ?? defaultPermissionModeForNewSessionAgent(config.agent);
     if (config.agent !== draft.agentKind && !await confirmFullAccessChange(draft.permissionMode, permission, {
       restoringRememberedChoice: storedPermission !== undefined,

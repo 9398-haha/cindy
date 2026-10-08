@@ -557,7 +557,7 @@ describe('deferred switch (turn running)', () => {
     const store = new Map<
       string,
       {
-        targetAgentKind: 'claude-code' | 'codex' | 'pi';
+        targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         model: string;
         providerId: string | null | undefined;
         effort?: string;
@@ -1304,7 +1304,10 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
 
   it('不带位置(旧控制端 / 内部调用)保持原位置,同引擎仍走换模型', async () => {
     const h = relocationHarness();
-    const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    const withoutLocation: Omit<typeof backToTaskComputer, 'agentDeviceId'> & {
+      agentDeviceId?: typeof backToTaskComputer.agentDeviceId;
+    } = { ...backToTaskComputer };
+    delete withoutLocation.agentDeviceId;
     await performSessionAgentSwitch(h.deps, withoutLocation);
     expect(h.selectSameAgentModel).toHaveBeenCalledTimes(1);
     expect(h.pending.get('s1')?.targetAgentDeviceId).toBeUndefined();
@@ -1340,5 +1343,22 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       model: 'anthropic/claude-opus-5-5[1m]',
       agentDeviceId: null,
     });
+  });
+});
+
+
+describe('Cursor switch capability normalization', () => {
+  it('commits native Ask and disables Fast instead of inheriting the previous harness permission', async () => {
+    const { deps } = makeDeps();
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', providerId: 'cursor', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cursor', model: 'native', permissionMode: 'ask', fastMode: false,
+    }));
+  });
+  it('rejects unsupported explicit tuning before closing the previous session', async () => {
+    const { deps } = makeDeps();
+    await expect(performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', effort: 'high', applyNow: true })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
 });

@@ -9273,6 +9273,16 @@
       "listAria": "权限模式",
       "autoFallback": "自动审批暂时不可用，已切换为默认权限；需要时会询问你。",
       "modes": {
+        "cursor": {
+          "ask": {
+            "label": "默认权限",
+            "description": "Cursor 遵循其原生配置的权限策略。Cindy 只展示 Cursor 发来的授权请求；工作区内的编辑可能无需确认便直接执行。"
+          },
+          "default": {
+            "label": "默认权限",
+            "description": "Cursor 遵循其原生配置的权限策略。Cindy 只展示 Cursor 发来的授权请求；工作区内的编辑可能无需确认便直接执行。"
+          }
+        },
         "claude-code": {
           "ask": {
             "label": "默认权限",
@@ -13321,6 +13331,7 @@
       "codexVoiceAuthDescription": "语音输入需要使用已连接的 ChatGPT 账号调用 GPT 实时语音识别。当前账号尚未连接或需要更新，是否前往「模型供应商」连接 ChatGPT？",
       "codexBinaryMissingTitle": "Codex 组件未就绪",
       "codexBinaryMissingDescription": "Codex 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Codex 连接状态。",
+      "cursorSetupDescription": "请在运行任务的电脑上安装 Cursor CLI 并重启 Cindy，然后在终端运行 cursor-agent login，登录后刷新模型列表。",
       "piBinaryMissingTitle": "Pi 组件未就绪",
       "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Pi 连接状态。",
       "goToSettings": "前往设置",
