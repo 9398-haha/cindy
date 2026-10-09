@@ -468,7 +468,7 @@ function BotGroupTimelineItem({
     return <View style={styles.userRow} testID="botGroup.message.user">
       <View style={styles.userColumn}>
         {attachments.length > 0
-          ? <BotGroupMessageAttachments messageId={message.id} attachments={attachments} onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
+          ? <BotGroupMessageAttachments messageId={message.id} attachments={attachments} align="right" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
           : null}
         {bubble ? <View style={[styles.userBubble, compact && styles.userBubbleCompact]} testID="botGroup.message.userBubble">
           <BotGroupUserText content={message.content} mentionLabels={mentionLabels} />
@@ -493,7 +493,7 @@ function BotGroupTimelineItem({
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
           onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
         : <>
-          {message.attachments?.length ? <BotGroupMessageAttachments messageId={message.id} attachments={message.attachments} onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
+          {message.attachments?.length ? <BotGroupMessageAttachments messageId={message.id} attachments={message.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
           {message.content.trim() ? <BotGroupMarkdownText content={message.content} /> : null}
           <BotGroupHandoffFiles files={message.files} />
         </>}

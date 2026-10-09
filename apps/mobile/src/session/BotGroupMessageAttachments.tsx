@@ -37,9 +37,10 @@ export function botGroupAttachmentGallery(messageId: string, attachments: readon
   });
 }
 
-export function BotGroupMessageAttachments({ messageId, attachments, onResolveRemoteMedia, resolveServerMedia }: {
+export function BotGroupMessageAttachments({ messageId, attachments, align, onResolveRemoteMedia, resolveServerMedia }: {
   messageId: string;
   attachments: readonly BotGroupAttachment[];
+  align: 'left' | 'right';
   onResolveRemoteMedia: ResolveRemoteMediaFn;
   resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
 }) {
@@ -49,7 +50,7 @@ export function BotGroupMessageAttachments({ messageId, attachments, onResolveRe
   const items = useMemo(() => attachments.map(botGroupAttachmentForDisplay), [attachments]);
   const gallery = useMemo(() => botGroupAttachmentGallery(messageId, items), [items, messageId]);
   const [openUrl, setOpenUrl] = useState<string | null>(null);
-  if (resolveServerMedia) return <ServerAttachments attachments={attachments} resolve={resolveServerMedia} />;
+  if (resolveServerMedia) return <ServerAttachments attachments={attachments} align={align} resolve={resolveServerMedia} />;
   const open = (payload: MessagePayload) => {
     if (payload.kind === 'media' && payload.media.kind === 'image') {
       setOpenUrl(payload.media.url);
@@ -58,7 +59,7 @@ export function BotGroupMessageAttachments({ messageId, attachments, onResolveRe
     Alert.alert(payload.kind === 'file' ? payload.title : '', t('groupChat.files.onComputer'));
   };
   return <>
-    <AttachmentStrip attachments={items} messageKey={messageId} align="right" layout={layout} onOpen={open}
+    <AttachmentStrip attachments={items} messageKey={messageId} align={align} layout={layout} onOpen={open}
       onResolveRemoteMedia={onResolveRemoteMedia} usePreviewState={useState} />
     {openUrl ? <ImageLightbox images={gallery} initialUrl={openUrl} onClose={() => setOpenUrl(null)}
       onResolveRemoteMedia={onResolveRemoteMedia} /> : null}
@@ -66,7 +67,8 @@ export function BotGroupMessageAttachments({ messageId, attachments, onResolveRe
 }
 
 /** Signed download URLs are acquired on tap and kept only in the open viewer. */
-function ServerAttachments({ attachments, resolve }: {
+function ServerAttachments({ attachments, align, resolve }: {
+  align: 'left' | 'right';
   attachments: readonly BotGroupAttachment[]; resolve(id: string): Promise<BotGroupAttachment>;
 }) {
   const { t } = useTranslation();
@@ -93,7 +95,7 @@ function ServerAttachments({ attachments, resolve }: {
   return <>
     {attachments.map(attachment => <View key={attachment.id}>
       <AttachmentStrip attachments={[{ kind: 'file', name: attachment.name, previewable: false }]}
-        messageKey={attachment.id} align="right" layout={layout} onOpen={() => { void open(attachment.id); }} usePreviewState={useState} />
+        messageKey={attachment.id} align={align} layout={layout} onOpen={() => { void open(attachment.id); }} usePreviewState={useState} />
       {busy === attachment.id ? <ActivityIndicator color={colors.textSecondary} /> : null}
     </View>)}
     {image?.url ? <ImageLightbox images={botGroupAttachmentGallery(image.id, [botGroupAttachmentForDisplay(image)])}

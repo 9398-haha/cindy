@@ -773,6 +773,18 @@ describe('offline computer', () => {
 
 
 describe('direct server group presentation', () => {
+  it.each([true, false])('aligns attachments with their message author (server=%s)', async (server) => {
+    h.chat = { ...h.chat, server, ...(server ? { media: vi.fn() } : {}) };
+    const attachment = { id: 'media', name: 'brief.pdf', mimeType: 'application/pdf', size: 10, category: 'pdf' as const, url: null, path: null };
+    await render(group({ messages: [
+      message('mine', 1, { authorKind: 'user', isSelf: true, attachments: [attachment] }),
+      message('other', 2, { authorKind: 'user', isSelf: false, authorName: 'Other member', attachments: [attachment] }),
+      message('bot', 3, { authorBotId: 'mimi', authorName: '咪咪', attachments: [attachment] }),
+    ], plans: [], openPlan: null }));
+    expect(all('botGroup.message.user')).toHaveLength(1);
+    expect(all('botGroup.message.bot')).toHaveLength(2);
+    expect(all('attachmentStrip').map(strip => strip.getAttribute('data-align'))).toEqual(['right', 'left', 'left']);
+  });
   it('uses server failure copy, keeps other humans incoming and loads older history', async () => {
     h.chat = { ...h.chat, server: true, online: false, loadOlder: vi.fn(async () => {}) };
     await render(null, 'error');

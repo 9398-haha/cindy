@@ -98,6 +98,7 @@ async function renderAttachment(messageId: string) {
   root = createRoot(host);
   await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
     messageId,
+    align: 'right',
     attachments: [{ id: 'attachment', size: 10, path: null, category: 'image', name: 'group-picture.png', url: imageUrl, mimeType: 'image/png' }],
     onResolveRemoteMedia: resolveMedia,
   })));
