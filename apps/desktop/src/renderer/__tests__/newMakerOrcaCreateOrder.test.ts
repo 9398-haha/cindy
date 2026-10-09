@@ -222,6 +222,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // 未选择远程 Agent 时用被控电脑目录；选择后用运行 Agent 的电脑开放远程调用的目录。
     // 两条 device-link 路径必须用 agentCatalogProviders,不能改用控制端 localProviders。
     const collapsed = source.replace(/\s+/g, ' ');
+    expect(source).toMatch(
+      /const agentCatalogProviders = useMemo\(\s*\(\) => \(effectiveAgentDeviceId \? remoteAgentProviders\(deviceProviders\) : deviceProviders\)/,
+    );
     expect(
       collapsed.match(
         /draftEnableOrcaOptions\( effectiveCollab, agentCatalogProviders, !deviceProvidersLoading, true, \)/g,

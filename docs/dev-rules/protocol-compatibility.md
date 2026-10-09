@@ -577,6 +577,12 @@ handler 无 sender 依赖；不加入共享任务访客白名单，不进入自�
   `agentDeviceId`(与桌面新建同一参数，A 已接受)；只有 A 的 `maker:provider:list` 带 `remoteInvocationEnabled`
   布尔标记时才提供(该标记与远程 Agent 同一版加入，旧 A 不列)。手机不按 A 的目录与登录校准这份选择，由运行 Agent
   的那台在首条消息时核对；协同草稿与之互斥。
+- **账号余量**(2026-10-09)：这一轮消耗的是 Agent 所在那台(B)的账号，桌面底部用量 chip 与手机任务菜单都改读 B 的
+  余量，不读任务所在电脑(本机或被控电脑)的同名账号。直接经 device-link 调 B 已有的 `maker:usage:*` 读取与推送
+  (与模型选择器读 B 的余量同一份镜像)，不新增 channel；任务价值与上下文仍读任务所在电脑。远程控制的任务把 Agent
+  放在第三台电脑时读第三台，放在控制端自己时读本机；挂着换位置意图时桌面 chip 按意图里的电脑显示。分享来的供应商、
+  共享任务访客与没指定来源的远程 Agent 读不到那份账号，只显示任务价值。桌面判定见
+  `apps/desktop/src/renderer/lib/usageAccountLocation.ts`，手机见 `apps/mobile/src/session/sessionUsageAccount.ts`。
 - **供应商分享(另一个账号用 B 的供应商)**：契约见 `docs/provider-sharing-contract.md`，产品规则见
   `docs/product-rules/provider-sharing.md`。relay 新增 `Envelope.providerShare` 范围与能力 `provider-share-v1`
   (`packages/device-link-protocol/src/providerShare.ts`，两仓同文件)，与 `sharedTask` 并列、同一帧不能同时带两种范围；
@@ -1039,3 +1045,19 @@ Chat Server `/me` 追加 `capabilities.groupDiscussionParity: 1`。Desktop 只�
 缺字段时沿用旧读取范围；新客户端以此翻页收集未见附件，保留每轮 40 个上限及缺失名称提示。
 `cindy.group-notice` v1 的 integration 卡映射到已有 plan-failed/member-failed/member-timeout
 展示提示，仅承担文案，不授予执行权限。Mobile 继续消费主机既有群资源投影，无新增原生能力。
+
+## 委派任务的完成通知归属
+
+既有 `SessionActivityPayload` 可选字段 `completionNotification` 影响远端桌面、手机与飞书完成通知：
+`pending` 表示该轮终态回传正在判定，`teammate` 表示同一委派执行结果已成功交回伙伴；
+缺省或未知值按普通任务完成通知处理。完成 phase、摘要和 attention 在 pending 阶段照常发送，
+回传决定通过同一活动通道更新；执行宿主等到真实 `done` 的回传边界再决定，前置
+`status: Done` 不能提前消费归属。本机外部通知共用这一决定；控制端的手机/飞书调用
+在活动仍运行或 `pending` 时等待同一活动通道更新，已回传伙伴则取消调用。已读、断开、
+新一轮运行、报错或待交互使旧完成调用失效，不延迟错误与待答通知，也不更改任何未读。
+控制端桌面仅对已观察运行的任务补发必要 fallback 一次，重连的
+基线终态不补发历史提醒。错误与待交互不受此字段影响。
+
+新控制端连接旧执行端沿用原通知；旧控制端忽略该字段，仍可能发独立完成外部通知，完整远端
+去重需要两端更新。手机外部推送在执行端及远控 Desktop 的通知出口完成去重，手机无需新增协议处理；
+移动列表继续原 phase/attention 语义。无需服务端、数据库 migration 或 Mobile fingerprint 改动。
