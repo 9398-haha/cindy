@@ -37,6 +37,7 @@ function renderCard(props: {
   files?: readonly GeneratedFileRef[];
   turnStartMs: number;
   turnEndMs?: number | null;
+  botArtifacts?: boolean;
 }) {
   return render(cardElement(props));
 }
@@ -46,6 +47,7 @@ function cardElement(props: {
   files?: readonly GeneratedFileRef[];
   turnStartMs: number;
   turnEndMs?: number | null;
+  botArtifacts?: boolean;
 }) {
   return (
     <ChatSessionFileProvider
@@ -56,6 +58,7 @@ function cardElement(props: {
         files={props.files ?? [report]}
         turnStartMs={props.turnStartMs}
         turnEndMs={props.turnEndMs ?? null}
+        botArtifacts={props.botArtifacts}
       />
     </ChatSessionFileProvider>
   );
@@ -135,6 +138,48 @@ describe('local generated files remount', () => {
     await waitFor(() =>
       expect(screen.getByText('report.md').closest('button')!.disabled).toBe(false),
     );
+  });
+
+  it('does not render a stale bot image thumbnail while its seeded chip is pending', async () => {
+    const picture: GeneratedFileRef = {
+      path: 'C:\\work\\pic.png',
+      name: 'pic.png',
+      source: 'tool',
+      ready: true,
+    };
+    const pendingStat: Array<(stat: unknown) => void> = [];
+    const statPath = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingStat.push(resolve);
+        }),
+    );
+    stubStat(statPath);
+    const first = renderCard({
+      renderItemKey: 'genfiles-a',
+      files: [picture],
+      turnStartMs: START,
+      botArtifacts: true,
+    });
+    await waitFor(() => expect(pendingStat).toHaveLength(1));
+    pendingStat[0]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() => expect(screen.getByText('pic.png')).toBeTruthy());
+    first.unmount();
+
+    // A re-mounted seeded chip is disabled, but DESIGN.md §14.5 also bars
+    // loading the file's content before the recheck lands: a deleted or
+    // replaced image at the same path must not flash through <img src>.
+    renderCard({
+      renderItemKey: 'genfiles-a',
+      files: [picture],
+      turnStartMs: START,
+      botArtifacts: true,
+    });
+    expect(screen.getByText('pic.png')).toBeTruthy();
+    expect(document.querySelector('img')).toBeNull();
+    await waitFor(() => expect(pendingStat).toHaveLength(2));
+    pendingStat[1]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() => expect(document.querySelector('img')).not.toBeNull());
   });
 
   it('re-checks a seeded path when another file finishes during the first check', async () => {

@@ -21,7 +21,9 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * 可能无法打开的完成卡。首屏等检查完成再出现;本机路径若本次运行已 stat 过,重挂载时
  * 按当前时间窗同步判定先出卡,再整卡复核(见 seedLocalGeneratedFilesFromStatCache);
  * 复核落地前该 chip 不可交互 —— 历史 stat 不充当当前可点结论(同 §14.5:本机
- * 会话以真实存在性检查决定可点态)。
+ * 会话以真实存在性检查决定可点态)。伙伴成果图片同理:pending 期间占位但不挂
+ * 真实 src,避免复核落地前把旧/替换文件的内容短暂加载出来,也不让这次预取失败
+ * 提前锁死 thumbnailFailed。
  * 流式期间只 stat 已完成(ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
  * 已确认的 chip 留在原地,避免 messages 换引用把整页带着跳。
  *
@@ -400,7 +402,10 @@ function GeneratedFileChip({
           </>
         ) : botImage ? (
           <>
-            {botThumbnail && !thumbnailFailed ? (
+            {/* pending 期间不挂 src:复核落地前这路径的内容未经确认,先出
+                占位(与真实图片同高,避免复核落地时再跳一次),不预取可能已
+                不属于本轮的旧/替换文件,也不让这次失败预支 thumbnailFailed。 */}
+            {!pending && botThumbnail && !thumbnailFailed ? (
               <img
                 src={botThumbnail}
                 alt={file.name}
@@ -408,7 +413,12 @@ function GeneratedFileChip({
                 className="h-[148px] w-full border-b border-[var(--border-default)] bg-[var(--surface-hover)] object-contain"
               />
             ) : (
-              <span className="flex h-[104px] w-full items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface-hover)] text-[var(--text-tertiary)]">
+              <span
+                className={cn(
+                  'flex w-full items-center justify-center border-b border-[var(--border-default)] bg-[var(--surface-hover)] text-[var(--text-tertiary)]',
+                  pending ? 'h-[148px]' : 'h-[104px]',
+                )}
+              >
                 <FileTypeIcon name={file.name} size={24} aria-hidden="true" />
               </span>
             )}
