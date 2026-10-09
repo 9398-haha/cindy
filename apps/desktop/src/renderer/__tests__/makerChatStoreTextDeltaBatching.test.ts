@@ -699,6 +699,15 @@ describe('makerChatStore text delta batching', () => {
     assertRows();
   });
 
+  it('preserves provider final phase through text batching before a turn completes', () => {
+    for (const text of ['First ', 'words']) onEvent?.({ sessionId: SESSION_ID, persistId: 'phase-answer',
+      event: { type: 'text', source: 'codex', data: { text, isFinal: false, phase: 'final_answer' } } });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toContainEqual(expect.objectContaining({
+      content: 'First words', assistantPhase: 'final_answer', isStreaming: true,
+    }));
+  });
+
   it('coalesces consecutive text deltas into one store notification', () => {
     let notifyCount = 0;
     const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {

@@ -223,3 +223,33 @@ it('keeps explicitly delivered group private messages while the private model is
   expect(proseIds(project(input, true))).toEqual(['group']);
   expect(proseIds(project([...input, message('final', 'assistant', 'Result', { turnCompleted: true })], false))).toEqual(['group', 'final']);
 });
+
+
+describe('provider final streaming', () => {
+  it('keeps incremental final text visible before and after the seal, excluding commentary', () => {
+    const prefix = [message('u', 'user'), message('process', 'assistant', 'Internal', { assistantPhase: 'commentary' })];
+    for (const text of ['A', 'Answer', 'Answer with a reference']) {
+      const final = message('answer', 'assistant', text, { assistantPhase: 'final_answer', isStreaming: true });
+      expect(proseIds(project([...prefix, final], true))).toEqual(['answer']);
+      expect(proseIds(project([...prefix, { ...final, message: { ...final.message, isStreaming: false } }], true))).toEqual(['answer']);
+    }
+    expect(proseIds(project([...prefix, message('answer', 'assistant', 'Answer', { assistantPhase: 'final_answer', turnCompleted: true })], false))).toEqual(['answer']);
+  });
+});
+
+it('does not insert interleaved valid receipts ahead of live final prose and preserves exact host bindings', () => {
+  const card = (id: string) => ({ v: 1 as const, role: 'delegation-result' as const, delegationId: id, fromBotId: 'bot',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: id, objective: id,
+    result: { runSequence: 1, status: 'completed' as const, text: 'Report', artifacts: [] } });
+  const a = card('a'), b = card('b');
+  const receipt = (id: string, data: ReturnType<typeof card>) => message(id, 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: data });
+  const streaming = message('answer', 'assistant', 'First words', { assistantPhase: 'final_answer', isStreaming: true });
+  const input = [message('u', 'user'), streaming, receipt('b-result', b), receipt('a-result', a)];
+  expect(allKeys(project(input, true))).toEqual(['msg-u', 'msg-answer']);
+  const ended = { ...streaming, message: { ...streaming.message, isStreaming: false, turnCompleted: true, botTaskResults: [a] } };
+  const visible = project([input[0], ended, ...input.slice(2)], false);
+  expect(allKeys(visible)).toEqual(['msg-u', 'msg-answer', 'msg-b-result']);
+  expect(ended.message.botTaskResults.map(value => value.childSessionId)).toEqual(['a']);
+  // No final reply: every frozen result has a lightweight fallback once execution settles.
+  expect(allKeys(project(input.slice(2), false))).toEqual(['msg-b-result', 'msg-a-result']);
+});
