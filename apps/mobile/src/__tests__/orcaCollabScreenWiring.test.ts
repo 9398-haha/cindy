@@ -20,6 +20,8 @@ describe('mobile Orca collaboration wiring', () => {
     const collabView = read('src/session/ContextSheetCollabView.tsx');
     expect(collabView).not.toMatch(/\.focused\b/);
     expect(collabView).not.toContain('session.collab.focused');
+    // 运行设备不可达时状态未知:行内写「暂时无法获取状态」,右侧不再同时显示「空闲」。
+    expect(collabView).toContain("trailing={worker.executionDevice?.reachable === false ? undefined : (");
   });
 
   it('keeps the Worker model picker separate from the task model', () => {

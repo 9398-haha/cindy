@@ -259,7 +259,7 @@ export function OrcaTeamPanelView({
             onLongPress={() => onWorkerLongPress(worker)}
             onPress={() => onWorkerPress(worker)}
             testID={`collab.worker.${worker.workerId}`}
-            trailing={(
+            trailing={worker.executionDevice?.reachable === false ? undefined : (
               <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
                 {orcaWorkerStatusLabel(worker.status)}
               </Text>
