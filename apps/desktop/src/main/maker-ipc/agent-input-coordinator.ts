@@ -1216,7 +1216,9 @@ export class AgentInputCoordinator {
   /** Only a main-owned accepted receipt can silence this turn. Human steering restores visibility. */
   isActiveTaskCoordination(sessionId: string, vendorGeneration?: number): boolean {
     const active = this.states.get(sessionId)?.activeTurn;
-    return !!active?.item?.botTaskCoordination && !active.latestSteeringClientId
+    // Pending steering attribution precedes policy/attachment/provider acceptance.
+    // Only replacement of active.item after acceptance may release this silence.
+    return !!active?.item?.botTaskCoordination
       && (vendorGeneration === undefined || active.vendorTurnGeneration === null
         || vendorGeneration === active.vendorTurnGeneration);
   }
@@ -2260,6 +2262,10 @@ export class AgentInputCoordinator {
           typeof item.hostAcceptedAtMs === 'number' && Number.isFinite(item.hostAcceptedAtMs);
       }
     }
+    // Coordination must wait for its own turn and the normal dispatch-time
+    // relationship check. Read the host-owned row first: UI projections omit
+    // the receipt, and queue-to-steer must not silence an existing user turn.
+    if (item.botTaskCoordination) return false;
     if (state.steeringQueueClientIds.includes(item.clientId)) {
       log.info('steer ignored: duplicate in-flight clientId (control-side resend)', {
         sessionId,
