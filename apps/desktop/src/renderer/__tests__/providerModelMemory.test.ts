@@ -937,6 +937,75 @@ describe('providerModelMemory —— clear:恢复推荐删键(不写默认快照
     expect('gpt-5.5' in (persisted['codex:xd']?.fastByModel ?? {})).toBe(false);
   });
 
+  it('全来源清除写盘失败后,只有权威槽变化也让旧清除退休', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+    // 权威槽 high,两个来源都是 low;清除失败后另一窗口写成「权威 high / 来源仍 low」——
+    // 每个来源槽的值都没变,只有权威槽变。基线必须能发现它(clearedSlots 只扫来源副本,
+    // 权威槽的变化只能靠 presetValue 这一项)。
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'claude-code:*': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'high' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'claude-code:xd': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+
+    memStorage.setWritesFail(true);
+    m.clearProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8');
+
+    memStorage.setWritesFail(false);
+    // 权威槽仍是 high,但两个来源槽的值都没动 —— 只有权威槽这次真的被改过。
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'claude-code:*': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'max' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'claude-code:anthropic': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'claude-code:xd': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    m.setProviderModelThinking('pi', 'xd', 'glm-5.3-flash', true);
+
+    const persisted = JSON.parse(memStorage.getItem(ownerAKey) ?? '{}') as Record<
+      string,
+      { effortByModel: Record<string, string> } | undefined
+    >;
+    expect(persisted['claude-code:*']?.effortByModel['claude-opus-4-8']).toBe('max');
+    expect(persisted['claude-code:xd']?.effortByModel['claude-opus-4-8']).toBe('low');
+  });
+
   it('clearFast 的写盘失败重放,同样不删别的来源刚设的新值', async () => {
     const m = await loadModule();
     m.setProviderModelMemoryOwner('owner-a');

@@ -525,7 +525,12 @@ function captureOpConflictBaseline(
     return {
       providerValue: undefined,
       lastModel: provider?.lastModel ?? '',
-      presetValue: undefined,
+      // 权威槽的值仍要单独比:clearedSourceValues 为保持「只扫来源副本」的语义刻意跳过
+      // 权威槽,所以它的变化只能在这里被发现。少了这一项,另一窗口写权威槽、来源值都没
+      // 变时,旧清除会按陈旧快照重放,把那个新预设删回默认值(Greptile 三审 finding)。
+      presetValue: op.kind === 'clear-fast'
+        ? preset?.fastByModel[op.model]
+        : preset?.effortByModel[op.model],
       clearedSlots: clearedSourceValues(map, op).values,
     };
   }
