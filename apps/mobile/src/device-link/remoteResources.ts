@@ -462,6 +462,8 @@ export interface HostedRemoteCollectionItem {
   key: string;
   host: RemoteResourceHostTarget;
   item: RemoteCollectionItem;
+  /** Local direct Chat Server projection; never changes the device-link wire display. */
+  lastReplySequence?: string;
 }
 
 /** Replace successful host shards while retaining stale rows for transiently failed hosts. */

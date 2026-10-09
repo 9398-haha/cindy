@@ -8,7 +8,7 @@ import { getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpo
 import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, createChatServerClient, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
 
 function useChatClient() {
@@ -84,7 +84,7 @@ export function useChatServerRoster(enabled: boolean) {
         // or making a server read-state mutation just because the roster was fetched.
         for (const [id, snapshot] of fresh) {
           if (run.isStale() || !api.current()) return;
-          await markRemoteResourceRead(api.userId, '', id, chatReadAt(snapshot.value, self));
+          await markRemoteResourceRead(api.userId, '', id, chatReadAt(snapshot.value, self), chatReadSequence(snapshot.value));
         }
         if (run.isStale() || !api.current()) return;
         snapshots.current = fresh;
@@ -250,6 +250,14 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
       throw error;
     }
   };
+  const markRead = useCallback(async (messageIds: readonly string[]) => {
+    const latest = page.current;
+    if (!api.current() || active.current !== identity || !latest || latest.identity !== identity) return;
+    // Only the measured UI's messages are acknowledged, even if a newer read is settling.
+    const seen = new Set(messageIds);
+    const messages = latest.page.messages.filter(message => seen.has(message.id));
+    await markRemoteResourceRead(api.userId, '', groupId, chatLastReplyAt(messages, latest.self), chatLastReplySequence(messages, latest.self));
+  }, [api, groupId, identity]);
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
-    online: state.identity === identity && state.online, reload, act, loadOlder, loadingOlder: state.loadingOlder, media };
+    online: state.identity === identity && state.online, reload, act, loadOlder, loadingOlder: state.loadingOlder, media, markRead };
 }

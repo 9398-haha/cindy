@@ -826,12 +826,15 @@ describe('direct server group presentation', () => {
 
 it('acknowledges other humans only once their messages reach the measured visible tail', async () => {
   h.chat.server = true;
+  h.chat.markRead = vi.fn(async () => {});
   await render(group({ messages: [message('incoming-human', 12, { authorKind: 'user', isSelf: false, content: 'hello' }),
     message('mine', 13, { authorKind: 'user', isSelf: true, content: 'reply' })], plans: [], openPlan: null }));
   expect(h.markRead).not.toHaveBeenCalled();
+  expect(h.chat.markRead).not.toHaveBeenCalled();
   await act(async () => {
     h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
     h.scroll.onContentSizeChange(400, 400);
   });
-  expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'g1', 12000);
+  expect(h.chat.markRead).toHaveBeenLastCalledWith(['incoming-human']);
+  expect(h.markRead).not.toHaveBeenCalled();
 });

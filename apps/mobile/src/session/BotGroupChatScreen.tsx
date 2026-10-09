@@ -142,11 +142,13 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     if (measured.owner !== viewportOwner || measured.measuredGroup !== group
       || measured.viewportHeight <= 0 || measured.contentHeight <= 0
       || measured.contentHeight - measured.offsetY - measured.viewportHeight >= STICK_TO_BOTTOM_PX) return;
-    const at = group.messages.reduce((latest, message) => message.kind === 'message' && message.isSelf !== true
+    const incoming = group.messages.filter(message => message.kind === 'message' && message.isSelf !== true
       && (message.authorKind === 'bot' || (message.authorKind === 'user' && message.isSelf === false))
-      ? Math.max(latest, message.createdAt) : latest, 0);
+    );
+    if (chat.server && chat.markRead) { void chat.markRead(incoming.map(message => message.id)); return; }
+    const at = incoming.reduce((latest, message) => Math.max(latest, message.createdAt), 0);
     if (at > 0) void markRemoteResourceRead(user?.id ?? '', deviceId, groupId, at);
-  }, [focused, group, user?.id, deviceId, groupId, viewportOwner]);
+  }, [focused, group, user?.id, deviceId, groupId, viewportOwner, chat.server, chat.markRead]);
   useEffect(() => {
     const frame = requestAnimationFrame(acknowledge);
     const subscription = AppState.addEventListener('change', state => { if (state === 'active') acknowledge(); });

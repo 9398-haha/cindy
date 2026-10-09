@@ -30,7 +30,7 @@ export function BotGroupListRow({ row, online, last = false, onPress }: {
   const { user } = useAuth();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   const display = row.item.display;
-  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt);
+  const unread = isRemoteResourceUnread(user?.id ?? '', row.host.deviceId, row.item.ref.id, display.lastReplyAt, row.lastReplySequence);
   const title = resolveRemoteText(display.title, i18n.language);
   const preview = display.preview ? parseMobileMarkdownInlines(resolveRemoteText(display.preview, i18n.language))
     .map((inline) => inline.type === 'image' ? inline.alt : inline.text).join('').replace(/\s+/g, ' ').trim() : '';

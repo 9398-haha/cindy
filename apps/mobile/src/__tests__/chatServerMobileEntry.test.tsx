@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
   targets: [] as { deviceId: string; deviceName: string }[],
   foreground: new Set<(state: string) => void>(),
 }));
-vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}) } }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}), getAllKeys: vi.fn(async () => []), multiRemove: vi.fn(async () => {}) } }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
@@ -23,6 +23,7 @@ vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
 import { useBotGroupChat } from '@/session/useBotGroupChat';
 import { useBotGroupRoster } from '@/session/useBotGroupRoster';
 import { botGroupRoute } from '@/session/botGroupNavigation';
+import { isRemoteResourceUnread, clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 const id = '00000000-0000-4000-8000-000000000001';
 const self = '00000000-0000-4000-8000-000000000002';
 const room = { id, name: 'Discussion', kind: 'group', state: 'joined', revision: 1, archived: false,
@@ -75,6 +76,29 @@ it('never includes the current human actor in explicit or everyone server mentio
     await act(async () => { await chat.act('send', { text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
     expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
   }
+});
+it('imports read_seq and acknowledges only displayed incoming messages with their exact sequences', async () => {
+  await clearRemoteResourceCache();
+  const first = '9007199254740992', second = '9007199254740993';
+  const messages = [first, second].map((seq, index) => ({ id: `incoming-${index}`, seq, authorId: id,
+    author: { kind: 'human', name: 'Other' }, content: [{ type: 'text', text: 'hello' }],
+    createdAt: '2026-10-09T10:00:00.123Z', deleted: false, threadRootId: null }));
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/messages?')) return messages;
+    const value = await original(path, options);
+    return path.endsWith('/snapshot') ? { ...value, messages, cursor: second, reads: [{ thread_key: 'main', read_seq: first }] } : value;
+  });
+  await render();
+  const row = roster.items[0];
+  const unread = () => isRemoteResourceUnread('owner', '', id, row.item.display.lastReplyAt, row.lastReplySequence);
+  expect(unread()).toBe(true);
+  showChat = true; await render();
+  await act(async () => { await chat.markRead!(['incoming-0', 'unseen-id']); });
+  expect(unread()).toBe(true);
+  await act(async () => { await chat.markRead!(['incoming-0', 'incoming-1']); });
+  expect(unread()).toBe(false);
+  expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
 });
 it('resolves everyone using authorized members at send time instead of the displayed snapshot', async () => {
   const joined = '00000000-0000-4000-8000-000000000003';

@@ -48,7 +48,8 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
   const members = snapshot?.members.filter(member => member.state === 'joined') ?? [];
   const last = snapshot?.messages.filter(message => !message.threadRootId && !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? 1 : -1)[0];
-  return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' }, item: {
+  return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
+    lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined, item: {
     ref: { collectionId: 'bot-groups', kind: 'bot-group', id: room.id },
     revision: String(room.head ?? room.revision), display: { title: room.name,
       subtitle: members.map(memberName).join(' · '),
@@ -61,15 +62,26 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
 }
 
 /** Only incoming main-timeline messages count; a system notice or our own send is not a reply. */
+const incomingReply = (message: ChatMessage, selfId: string) => !message.deleted && !message.threadRootId
+  && message.origin !== 'system' && message.authorId !== selfId;
+
 export function chatLastReplyAt(messages: readonly ChatMessage[], selfId: string): number {
-  return messages.reduce((latest, message) => !message.deleted && !message.threadRootId
-    && message.origin !== 'system' && message.authorId !== selfId
+  return messages.reduce((latest, message) => incomingReply(message, selfId)
     ? Math.max(latest, Date.parse(message.createdAt)) : latest, 0);
+}
+
+export function chatLastReplySequence(messages: readonly ChatMessage[], selfId: string): string {
+  return messages.reduce((latest, message) => incomingReply(message, selfId) && BigInt(chatCursor(message.seq)) > BigInt(latest)
+    ? message.seq : latest, '0');
+}
+
+export function chatReadSequence(snapshot: ChatSnapshot): string {
+  return chatCursor(snapshot.reads?.find(read => read.thread_key === 'main')?.read_seq ?? '0');
 }
 
 /** Import only the server's acknowledged position, never mark an unseen reply as read. */
 export function chatReadAt(snapshot: ChatSnapshot, selfId: string): number {
-  const sequence = snapshot.reads?.find(read => read.thread_key === 'main')?.read_seq ?? '0';
+  const sequence = chatReadSequence(snapshot);
   return chatLastReplyAt(snapshot.messages.filter(message => BigInt(chatCursor(message.seq)) <= BigInt(chatCursor(sequence))), selfId);
 }
 

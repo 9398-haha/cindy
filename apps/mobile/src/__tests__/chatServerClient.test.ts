@@ -94,6 +94,7 @@ describe('direct Chat Server client', () => {
     const notice = { ...message(103), origin: 'system', createdAt: '2026-10-09T03:00:00Z' };
     const value = { ...snapshot(), messages: [notice, mine, incoming], reads: [{ thread_key: 'main', read_seq: message(100).seq }] };
     expect(chatRoomRow(value.room, value, id(11)).item.display.lastReplyAt).toBe(Date.parse(incoming.createdAt));
+    expect(chatRoomRow(value.room, value, id(11)).lastReplySequence).toBe(incoming.seq);
     expect(chatReadAt(value, id(11))).toBe(0);
     value.reads[0].read_seq = incoming.seq;
     expect(chatReadAt(value, id(11))).toBe(Date.parse(incoming.createdAt));
