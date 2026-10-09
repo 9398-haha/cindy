@@ -1752,6 +1752,44 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toBeNull();
   });
 
+  it('restores internal coordination through the durable queue and gives accepted human steering ownership', async () => {
+    const h = createHarness();
+    const sid = 'coordination';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const receipt = { delegationId: 'delegation', senderSessionId: 'child', runSequence: 1 };
+    h.coordinator.enqueue(sid, makeItem('internal', '[UI_ACTION_TRIGGER]File agreement', {
+      botTaskCoordination: receipt, agentOmitsTriggerPrefix: true,
+      autoReviewUserText: { kind: 'delegated-continuation' },
+    }));
+    await flush();
+    const snapshot = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? []));
+    expect(snapshot[0].botTaskCoordination).toEqual(receipt);
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]).not.toHaveProperty('botTaskCoordination');
+    const restarted = createHarness();
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored(sid);
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+    restarted.sendToAgent.mockImplementationOnce(async (_id, message, _create, opts) => {
+      expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+      expect(message).toMatchObject({ content: expect.stringContaining('Internal task coordination') });
+      expect(message).toMatchObject({ content: expect.stringContaining('File agreement') });
+      expect(opts?.persistUserMessage?.content).toBe('[UI_ACTION_TRIGGER]File agreement');
+      expect(opts?.persistUserMessage?.botTaskCoordination).toEqual(receipt);
+      restarted.setRunning(true);
+      return sendSuccess();
+    });
+    restarted.coordinator.resume(sid);
+    await flush();
+    expect(restarted.sendToAgent).toHaveBeenCalledOnce();
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(true);
+    await restarted.coordinator.steer(sid, makeItem('human', 'Please explain the result'));
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+    restarted.setRunning(false);
+    restarted.coordinator.onTurnEvent(sid, 'done');
+    expect(restarted.coordinator.isActiveTaskCoordination(sid)).toBe(false);
+  });
+
   it('attributes synchronous provider output to its active input and clears after completion', async () => {
     const h = createHarness();
     const sid = 'private-reply-attribution';
