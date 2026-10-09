@@ -13407,7 +13407,7 @@
       "remoteDirLabel": "{{device}} 上的工作目錄",
       "remoteDirChat": "對話",
       "remoteDirPath": "指定目錄",
-      "remoteDirChatHint": "在 {{device}} 上建立對話任務，不綁定專案。",
+      "remoteDirChatHint": "在 {{device}} 上建立對話任務，不連結專案。",
       "remoteDirPathHint": "在 {{device}} 上檢查；不存在時報錯，不會換成這台電腦的目錄。",
       "remoteDirInvalid": "請輸入 {{device}} 上的絕對路徑。",
       "errors": {
