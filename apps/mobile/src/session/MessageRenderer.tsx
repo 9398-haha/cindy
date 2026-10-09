@@ -5335,7 +5335,12 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = info.usageLimitReset
+  const label = info.agentSwitch
+    ? t(`message.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
+        from: info.agentSwitch.from,
+        to: info.agentSwitch.to,
+      })
+    : info.usageLimitReset
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'
     ? hasProgress

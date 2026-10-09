@@ -52,6 +52,11 @@ transport 与 device-link 的 core / review-input / mobile allowlist 均已登�
 该调用。自动继续复用既有 `CONTINUE_AFTER_ERROR_PROMPT` 与 `agentMeta.autoResume`，
 `autoResumeInfo.reason` 新值 `usage-limit-reset`，旧客户端按普通自动续跑行显示。
 Claude Code 终态 error 事件可带 `usageResetAt`（unix ms）。服务端无需改动。
+供应商组自动换电脑(2026-10-09，`docs/product-rules/provider-groups.md` §6.1)复用同一条续跑路径，
+`autoResumeInfo` 新增可选字段 `agentSwitch: { from, to, cause }`(cause 为 `usage-limit` / `auth` /
+`unavailable` / `overload`)，Desktop 与 Mobile 据此显示「{from} {原因}，已换到 {to} 继续」；字段缺失或
+不合法时照常显示 `usage-limit-reset` 的文案，旧客户端忽略该字段。P1 不改远程 Agent 协议：被分配到别的电脑的
+任务就是普通的远程 Agent 任务。
 
 ## Agent 跨设备历史发现与搜索
 
@@ -194,6 +199,18 @@ relay 类型、allowlist 或持久化 schema，服务端无需改动；Mobile �
 
 标签的可选 `nameCustomized` 标记区分显式改名与预设本地化。新版更新请求仅在明确改名时
 提交 `nameCustomized: true`；旧端换色时携带相同原名不会误置标记。缺省字段沿用旧显示规则。
+
+## 远程桌面退出与断线锁屏
+
+远程桌面的 `start` / `heartbeat` 可追加布尔 `lockOnExit`。新版 Desktop 与 Mobile
+提前同步退出锁屏策略，被控端在本机断开、信令断开或现有心跳过期时本地执行锁屏；
+存活连接的 resume / takeover 和显示器切换不触发。锁屏期间重复断开或心跳过期
+不能取消锁屏，撤权与认证身份变化仍可取消。旧请求缺少字段时保留原行为（旧手机的
+`privacyScreen.lockOnExit` 继续兼容），新字段优先于该隐私屏幕附带偏好。
+旧被控端忽略新字段，主动退出仍发送原 `stop.lockScreen`；断网兜底需要被控端升级。
+不带 `lockScreen` 的协议 `stop` 仍用于重连和切显示器的清理，不执行锁屏。
+Desktop 本地关窗不等待远端停止回执，后台清理只作用于原 peer / lease，不重置共享链路。
+此扩展沿用已有业务通道，不改变 relay、服务端协议或权限范围。
 
 ## 远程桌面临时分辨率
 
@@ -1050,3 +1067,47 @@ Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原�
 这是执行主机的投影修复，旧 Mobile 和远控 Desktop 无需新增能力协商即可接收。
 不增加分页、客户端重组或重试，不提高传输大小上限；本机 Desktop 设置仍读取完整目录。
 “关闭后必须重选”的提示与发送前检查随 Mobile 更新；旧版控制端仍沿用各自既有选择处理。
+
+### 伙伴群聊成员操作与发送错误（#5604–#5606）
+
+`bot-group-chat` 数据追加可选 `supportsMemberRemoval`；仅为 true 时手机调用
+`remove-member({ actorId })`，主机复用现有 Chat Server 单成员 remove 与管理权限校验。
+成员投影中的 actorId/actorKind 在手机保留，真人不作为分工负责人/步骤候选；缺字段的
+旧本地伙伴保持原行为。旧手机继续用 `set-members`，新主机只校验其中新增的本机伙伴，
+不丢弃既有真人/外来伙伴 ID。新版手机连旧主机时不调用新动作，伙伴管理沿用旧入口；
+真人移出需升级主机，不能用整份伙伴名单差分假报成功。
+
+群错误仍以稳定码作为 Remote Resource 错误 message，新增附件、鉴权、群服务不可达、
+历史迁移、权限、归档及结果未确认等分类；新版双端本地化，旧端遇到未知码保留原通用失败提示。
+不透传服务器正文或异常文本。仅群 send 的 invoke 预算增加到 180 秒，不改变其他动作、
+共享连接、自动重试或授权。超时不能证明操作未执行，重试沿用 clientId；当前账号主机进程
+合并相同在途请求并缓存最近成功回执，服务器 operationId 仍是最终幂等依据。
+不新增 IPC channel、数据库迁移或 Mobile 原生指纹输入。
+
+### 服务器伙伴群讨论与分工补全
+
+Chat Server `/me` 追加 `capabilities.groupDiscussionParity: 1`。Desktop 只在该能力存在时发送
+可选 `mentionsAll`、`planningMode`，辅助判断后用 `continue({automatic:true})`，停止判断用
+`messages/:id/cancel-planning`。旧服务器继续收到旧形状；能力协商并不恢复旧服务端缺失的行为。
+整个服务端集群升级后再发布客户端，不能在新旧副本混用时提前承诺该能力。
+
+领取执行追加可选 `attachment_after_seq`，按伙伴/群/授权版本/分工步骤隔离成功投递水位。
+缺字段时沿用旧读取范围；新客户端以此翻页收集未见附件，保留每轮 40 个上限及缺失名称提示。
+`cindy.group-notice` v1 的 integration 卡映射到已有 plan-failed/member-failed/member-timeout
+展示提示，仅承担文案，不授予执行权限。Mobile 继续消费主机既有群资源投影，无新增原生能力。
+
+## 委派任务的完成通知归属
+
+既有 `SessionActivityPayload` 可选字段 `completionNotification` 影响远端桌面、手机与飞书完成通知：
+`pending` 表示该轮终态回传正在判定，`teammate` 表示同一委派执行结果已成功交回伙伴；
+缺省或未知值按普通任务完成通知处理。完成 phase、摘要和 attention 在 pending 阶段照常发送，
+回传决定通过同一活动通道更新；执行宿主等到真实 `done` 的回传边界再决定，前置
+`status: Done` 不能提前消费归属。本机外部通知共用这一决定；控制端的手机/飞书调用
+在活动仍运行或 `pending` 时等待同一活动通道更新，已回传伙伴则取消调用。已读、断开、
+新一轮运行、报错或待交互使旧完成调用失效，不延迟错误与待答通知，也不更改任何未读。
+控制端桌面仅对已观察运行的任务补发必要 fallback 一次，重连的
+基线终态不补发历史提醒。错误与待交互不受此字段影响。
+
+新控制端连接旧执行端沿用原通知；旧控制端忽略该字段，仍可能发独立完成外部通知，完整远端
+去重需要两端更新。手机外部推送在执行端及远控 Desktop 的通知出口完成去重，手机无需新增协议处理；
+移动列表继续原 phase/attention 语义。无需服务端、数据库 migration 或 Mobile fingerprint 改动。

@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
@@ -755,7 +755,9 @@ export function CreateWorkerPopover({
       <Dialog.Portal>
       <Dialog.Overlay
         className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
-        style={WINDOW_DRAG_STYLE}
+        // 遮罩不是拖拽区:标 drag 会把整块视口变成拖拽命中区,只给 500px 的 Content 挖洞,
+        // 探出洞的浮层(模型面板)左侧就被吞掉 —— 与其它 modal 弹窗同口径(windowDrag.tsx)。
+        style={WINDOW_NO_DRAG_STYLE}
       >
       <Dialog.Content
         className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"

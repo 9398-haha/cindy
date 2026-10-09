@@ -1,3 +1,4 @@
+import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
  *
@@ -203,6 +204,21 @@ export interface AutoResumeInfo {
   maxAttempts: number;
   /** 本会话累计自动重连次数（不设上限，纯展示）。 */
   sessionTotal: number;
+  /**
+   * 供应商组自动换电脑后的续跑(reason 仍为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON，记账与额度重置
+   * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
+   */
+  agentSwitch?: AutoResumeAgentSwitch;
+}
+
+export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload';
+
+export interface AutoResumeAgentSwitch {
+  /** 原电脑的显示名。 */
+  from: string;
+  /** 换到的电脑的显示名。 */
+  to: string;
+  cause: AutoResumeAgentSwitchCause;
 }
 
 /** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
@@ -248,6 +264,8 @@ export interface RecoveryCheckpoint {
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
 
 export interface AgentInputQueuedMessage {
+  /** Main-owned delegation receipt; stripped from renderer/device-link input. */
+  botTaskCoordination?: BotTaskCoordination;
   [HOST_ONLY_AGENT_PREFIX]?: string;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
@@ -1110,7 +1128,8 @@ export function buildMakerUserMessage(
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
     : facingText;
   // Combine the host source with the latest body, including any Ghost rewrite.
-  const agentFacingText = (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
+  const agentFacingText = (queued.botTaskCoordination ? coordinationModelPrefix(queued.botTaskCoordination) : '')
+    + (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }
