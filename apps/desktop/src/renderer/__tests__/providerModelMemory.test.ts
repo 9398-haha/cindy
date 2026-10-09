@@ -826,6 +826,31 @@ describe('providerModelMemory —— clear:恢复推荐删键(不写默认快照
     ).toBeUndefined();
   });
 
+  it('clearEffort 之后,别的来源留下的副本不会把旧值回填回权威槽', async () => {
+    const m = await loadModule();
+    // 同一模型在来源 A、B 各留一份预设(用户先后在两个来源上调过它)。
+    m.setProviderModelChoice('claude-code', 'anthropic', 'claude-opus-4-8', 'low');
+    m.setProviderModelChoice('claude-code', 'xd', 'claude-opus-4-8', 'high');
+    // 从 A 点「恢复默认」= 删记忆键(跟随当前版本的目录默认)。
+    m.clearProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8');
+    // B 的来源副本必须一起删:backfillGlobalPresets 只补空缺不覆盖,但只要 B 的副本还在,
+    // 下一次 readMap 就会把它填回刚清空的权威槽 —— 用户的「恢复默认」被悄悄撤销。
+    const persisted = JSON.parse(memStorage.getItem(m.__STORAGE_KEY) ?? '{}') as Record<
+      string,
+      { effortByModel: Record<string, string> }
+    >;
+    expect(persisted['claude-code:*']?.effortByModel['claude-opus-4-8']).toBeUndefined();
+    expect(persisted['claude-code:anthropic']?.effortByModel['claude-opus-4-8']).toBeUndefined();
+    expect(persisted['claude-code:xd']?.effortByModel['claude-opus-4-8']).toBeUndefined();
+    // 重启后(重新走 readMap 回填)仍然没有记录 ⇒ 跟随目录默认。
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(
+      m2.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8'),
+    ).toBeUndefined();
+    expect(m2.snapshotForSeed()['claude-code:*']?.effortByModel['claude-opus-4-8']).toBeUndefined();
+  });
+
   it('clearFast 同理;删的是键而不是写一份显式 false', async () => {
     const m = await loadModule();
     m.setProviderModelFast('codex', 'xd', 'gpt-5.5', true);

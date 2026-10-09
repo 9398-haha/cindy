@@ -439,9 +439,21 @@ function applyProviderMemoryOp(
   const presetKey = presetKeyOf(op.agent);
   const nextProvider = withoutModelKey(provider, field, op.model);
   const nextPreset = withoutModelKey(map[presetKey], field, op.model);
-  if (!nextProvider && !nextPreset) return map;
+  // 清除是**全局**语义(「没有该键 ⇒ 跟随当前版本的目录默认」),所以同一个模型在**所有**
+  // 来源槽里的副本都要删。只删当前来源的话,别的来源那份会被 backfillGlobalPresets
+  // 补回刚清空的权威槽 —— 用户的「恢复默认」被悄悄撤销(且不需要新旧版本混跑)。
+  const cleared: Record<string, ProviderMemory> = {};
+  for (const [key, slot] of Object.entries(map)) {
+    if (key === presetKey) continue;
+    if (agentOfSlotKey(key) !== op.agent) continue;
+    const nextSlot = withoutModelKey(slot, field, op.model);
+    if (nextSlot) cleared[key] = nextSlot;
+  }
+  const clearedAny = Object.keys(cleared).length > 0;
+  if (!nextProvider && !nextPreset && !clearedAny) return map;
   return {
     ...map,
+    ...cleared,
     ...(nextProvider ? { [providerKey]: nextProvider } : {}),
     ...(nextPreset ? { [presetKey]: nextPreset } : {}),
   };
