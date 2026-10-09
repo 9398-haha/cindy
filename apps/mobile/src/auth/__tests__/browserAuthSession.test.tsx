@@ -239,6 +239,39 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.storage.has(pendingKey)).toBe(false);
   });
 
+  it('retains in-flight deduplication for reset outside browser authorization', async () => {
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    await act(async () => {
+      first = auth.dispatchLoginAction({ type: 'reset' });
+      second = auth.dispatchLoginAction({ type: 'reset' });
+      expect(second).toBe(first);
+      await first;
+    });
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(auth.isBusy).toBe(false);
+    expect(native.exchange).not.toHaveBeenCalled();
+  });
+
+  it('invalidates an iOS browser callback on explicit reset without changing successful return handling', async () => {
+    native.platform = 'ios';
+    let complete!: (value: typeof verifiedOutcome) => void;
+    native.exchange.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    native.open.mockImplementation(async () => ({ type: 'success', url: callbackUrl() }));
+    let cancelled!: Promise<unknown>;
+    await act(async () => {
+      cancelled = auth.dispatchLoginAction({ type: 'discover-sso-org', org: 'example.invalid' })
+        .catch(error => error);
+    });
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    await act(async () => { complete(verifiedOutcome); await cancelled; });
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(auth.authError).toBeNull();
+    expect(auth.isBusy).toBe(false);
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
   it('keeps callback busy when Android dismiss arrives after the exchange has started', async () => {
     let dismiss!: (value: { type: string }) => void;
     let complete!: (value: typeof verifiedOutcome) => void;
