@@ -56,6 +56,10 @@ function fakeMaker(opts: {
 }
 
 const project = { orcaRole: null, workspaceKind: 'project' as const, workingDir: '/repo', remoteHostId: null };
+const remoteLead = {
+  leadDeviceId: 'lead-device', leadDeviceName: 'Lead computer', leadSessionId: 'lead-1',
+  leadTitle: 'Lead task', workerLabel: 'tester',
+};
 
 describe('mobile Orca collaboration entry', () => {
   it('only offers collaboration to Lead-capable tasks', () => {
@@ -142,6 +146,19 @@ describe('mobile Orca collaboration mutations', () => {
       await expect(createOrcaWorker(maker, 'lead-1', { ...path, remoteDir }, [])).rejects.toThrow('INVALID_PARAMS');
     }
     expect(maker.orca.createWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['project', 'dialogue'] as const)('hides collaboration for a real remote Worker in a %s workspace', async (workspaceKind) => {
+    const maker = fakeMaker({});
+    const session = { ...project, workspaceKind, orcaRemoteLead: remoteLead };
+    expect(isOrcaCollabEligible(session)).toBe(false);
+    await expect(readOrcaCollabEntryStatus(maker, session, 'codex')).resolves.toBe('ineligible');
+    expect(maker.getCapabilities).not.toHaveBeenCalled();
+    expect(maker.orca.getCollabPolicy).not.toHaveBeenCalled();
+    // 与桌面一致：解除协同仍保留来源标记，不把历史 Worker 当作新的 Lead。
+    expect(isOrcaCollabEligible({ ...session, orcaRemoteLead: { ...remoteLead, releasedAt: 1 } })).toBe(false);
+    expect(isOrcaCollabEligible({ ...session, orcaRole: 'lead' })).toBe(false);
+    expect(isOrcaCollabEligible({ ...session, orcaRemoteLead: null })).toBe(true);
   });
 
   it('parses device versions conservatively and recognizes cross-platform absolute folders', () => {

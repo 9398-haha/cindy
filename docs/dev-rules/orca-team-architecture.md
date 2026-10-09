@@ -401,6 +401,10 @@ open 成功后未关联即退出时，本机没有半成品代理，仅按持久
 不得按缺失的运行期路由回退到本机，读取失败或 owner 改变时应拒绝继续。
 创建回滚原子归档代理并释放名称与名额，未确认释放的 Worker 行保留供重启补发；正常
 结束协同仍保留历史 link，回滚行只在 stop/release 已确认后删除。
+运行设备上的真实任务通过 `orcaRemoteLead` 识别，不伪装为本机 `orcaRole='worker'`；
+Desktop 和 Mobile 均隐藏协同入口，保留 `releasedAt` 的历史来源标记也不允许嵌套协同。
+Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐标记后返回主面板；
+回归见 `apps/mobile/src/__tests__/orcaTeam.test.ts` 与 `useOrcaWorkerForm.test.tsx`。
 
 当前文档要求保留以下回归方向：
 

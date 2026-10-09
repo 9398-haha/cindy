@@ -112,6 +112,97 @@ beforeEach(() => {
 });
 afterEach(() => act(() => root.unmount()));
 
+const remoteLead = {
+  leadDeviceId: 'lead-device', leadDeviceName: 'Lead computer', leadSessionId: 'lead-1',
+  leadTitle: 'Lead task', workerLabel: 'tester',
+};
+
+it.each([
+  { workspaceKind: 'project', orcaRole: null },
+  { workspaceKind: 'dialogue', orcaRole: null },
+  { workspaceKind: 'project', orcaRole: 'lead' },
+] as const)('keeps a real remote Worker out of collaboration ($workspaceKind, role=$orcaRole)', async (identity) => {
+  const { useSessionOrcaCollab } = await import('@/session/useSessionOrcaCollab');
+  const ref: { current: ReturnType<typeof useSessionOrcaCollab> | null } = { current: null };
+  const maker = {
+    ...fakeMaker(),
+    orca: {
+      listWorkers: vi.fn(async () => []),
+      getTeamByWorkerSession: vi.fn(async () => null),
+      getCollabPolicy: vi.fn(async () => ({ effectiveEnabled: true })),
+      enable: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+      createWorker: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+    },
+  } as unknown as MobileMakerTransport;
+  const setSheetView = vi.fn();
+  function Host() {
+    ref.current = useSessionOrcaCollab({
+      maker, deviceId: 'run-device', sessionId: 'real-worker', prefsScope: 'user-1', enabled: true,
+      session: { id: 'real-worker', ...identity, workingDir: '/repo', agentKind: 'codex', orcaRemoteLead: remoteLead } as RemoteSession,
+      sheetView: 'collab', sheetOpen: true, setSheetView, setSheetOpen: vi.fn(), openSession: vi.fn(),
+    });
+    return null;
+  }
+  await act(async () => { root.render(<Host />); await flush(); });
+  expect(ref.current!.eligible).toBe(false);
+  expect(ref.current!.entryBlocked).toBe(true);
+  expect(ref.current!.canSubmit).toBe(false);
+  expect(ref.current!.isLead).toBe(false);
+  expect(ref.current!.workerLeadSessionId).toBeNull();
+  expect(setSheetView).toHaveBeenCalledWith('main');
+  setSheetView.mockClear();
+  await act(async () => {
+    ref.current!.openFromMain(); ref.current!.openCreateWorker();
+    await ref.current!.submitEnable(); await ref.current!.submitCreate();
+  });
+  expect(setSheetView).not.toHaveBeenCalled();
+  expect(maker.orca.enable).not.toHaveBeenCalled();
+  expect(maker.orca.createWorker).not.toHaveBeenCalled();
+  expect(maker.orca.listWorkers).not.toHaveBeenCalled();
+  expect(maker.orca.getTeamByWorkerSession).not.toHaveBeenCalled();
+  expect(maker.getCapabilities).not.toHaveBeenCalled();
+});
+
+it('rejects callbacks captured before fresh metadata identifies a remote Worker', async () => {
+  const { useSessionOrcaCollab } = await import('@/session/useSessionOrcaCollab');
+  const ref: { current: ReturnType<typeof useSessionOrcaCollab> | null } = { current: null };
+  const maker = {
+    ...fakeMaker(),
+    getCapabilities: vi.fn(async () => ({ supportsOrcaWorkerPermissionMode: true })),
+    orca: {
+      listExecutionDevices: vi.fn(async () => ({ devices: [] })),
+      getCollabPolicy: vi.fn(async () => ({ effectiveEnabled: true })),
+      enable: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+      createWorker: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+    },
+  } as unknown as MobileMakerTransport;
+  const setSheetView = vi.fn();
+  function Host({ marked }: { marked: boolean }) {
+    ref.current = useSessionOrcaCollab({
+      maker, deviceId: 'run-device', sessionId: 'real-worker', prefsScope: 'user-1', enabled: true,
+      session: { id: 'real-worker', orcaRole: null, workspaceKind: 'project', workingDir: '/repo',
+        agentKind: 'codex', orcaRemoteLead: marked ? remoteLead : null } as RemoteSession,
+      sheetView: 'collab', sheetOpen: true, setSheetView, setSheetOpen: vi.fn(), openSession: vi.fn(),
+    });
+    return null;
+  }
+  await act(async () => { root.render(<Host marked={false} />); await flush(); });
+  expect(ref.current!.eligible).toBe(true);
+  expect(ref.current!.entryBlocked).toBe(false);
+  expect(ref.current!.canSubmit).toBe(true);
+  const stale = ref.current!;
+  await act(async () => { root.render(<Host marked />); await flush(); });
+  expect(setSheetView).toHaveBeenCalledWith('main');
+  setSheetView.mockClear();
+  await act(async () => {
+    stale.openFromMain(); stale.openCreateWorker();
+    await stale.submitEnable(); await stale.submitCreate();
+  });
+  expect(setSheetView).not.toHaveBeenCalled();
+  expect(maker.orca.enable).not.toHaveBeenCalled();
+  expect(maker.orca.createWorker).not.toHaveBeenCalled();
+});
+
 it('restores the last Agent and its remembered model, and drops models the computer cannot run', async () => {
   saveOrcaWorkerCreationPrefs('user-1', {
     ...defaultOrcaWorkerCreationPrefs(),

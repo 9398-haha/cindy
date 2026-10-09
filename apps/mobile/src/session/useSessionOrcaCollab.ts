@@ -621,7 +621,8 @@ export function useSessionOrcaCollab(params: {
   openSession(sessionId: string, target?: { deviceId: string; deviceName?: string | null }): void;
 }) {
   const { maker, deviceId, sessionId, session, prefsScope, connectionEpoch, getProviders, enabled, sheetView, sheetOpen, setSheetView, setSheetOpen, openSession } = params;
-  const role = enabled ? session?.orcaRole ?? null : null;
+  // 远端真实任务的团队在另一台电脑，不能走本机团队查询或嵌套开启协同。
+  const role = enabled && !session?.orcaRemoteLead ? session?.orcaRole ?? null : null;
   const isLead = role === 'lead';
   const isWorker = role === 'worker';
   const eligible = enabled && (isLead || isOrcaCollabEligible(session));
@@ -646,7 +647,7 @@ export function useSessionOrcaCollab(params: {
     executionMakerForDevice: params.executionMakerForDevice,
     executionDevicesEnabled: eligible && !session?.remoteHostId && !session?.agentDeviceId,
     prefsScope,
-    active: sheetOpen && sheetView !== null,
+    active: eligible && sheetOpen && sheetView !== null,
     setSheetOpen,
     connectionEpoch,
   });
@@ -658,6 +659,11 @@ export function useSessionOrcaCollab(params: {
   makerRef.current = maker;
   const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  // 权威元数据补齐 Worker 身份时收起之前的协同表单。
+  useEffect(() => {
+    if (!eligible && (sheetView === 'collab' || sheetView === 'collab-create')) setSheetView('main');
+  }, [eligible, sheetView, setSheetView]);
 
   // 换任务:错误与入口状态都属于上一个任务,整体复位。
   useEffect(() => {
@@ -689,16 +695,18 @@ export function useSessionOrcaCollab(params: {
   const rememberWorkerForm = workerForm.remember;
   /** + 面板主视图的「协同模式」行:Lead 进团队面板,其它进开启表单。 */
   const openFromMain = useCallback(() => {
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current)) return;
     setError(null);
     if (!isLead) resetWorkerForm();
     setSheetView('collab');
-  }, [isLead, resetWorkerForm, setSheetView]);
+  }, [eligible, isLead, resetWorkerForm, setSheetView]);
 
   const openCreateWorker = useCallback(() => {
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current)) return;
     setError(null);
     resetWorkerForm();
     setSheetView('collab-create');
-  }, [resetWorkerForm, setSheetView]);
+  }, [eligible, resetWorkerForm, setSheetView]);
 
   const form = workerForm.form;
   const formValid = workerForm.valid;
@@ -706,7 +714,7 @@ export function useSessionOrcaCollab(params: {
   getProvidersRef.current = getProviders;
 
   const submitEnable = useCallback(async () => {
-    if (!deviceId || !formValid || busy) return;
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current) || !deviceId || !formValid || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -721,10 +729,10 @@ export function useSessionOrcaCollab(params: {
     } finally {
       setBusy(false);
     }
-  }, [busy, deviceId, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView]);
+  }, [busy, deviceId, eligible, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView]);
 
   const submitCreate = useCallback(async () => {
-    if (!formValid || busy) return;
+    if (!eligible || !isOrcaCollabEligible(sessionRef.current) || !formValid || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -738,7 +746,7 @@ export function useSessionOrcaCollab(params: {
     } finally {
       setBusy(false);
     }
-  }, [busy, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView, team.workers]);
+  }, [busy, eligible, form, formValid, refreshTeam, rememberWorkerForm, sessionId, setSheetView, team.workers]);
 
   const runTeamAction = useCallback(async (action: () => Promise<unknown>, fallbackKey: string) => {
     setBusy(true);
@@ -911,8 +919,8 @@ export function useSessionOrcaCollab(params: {
     eligible,
     isLead,
     isWorker,
-    entryHint: isLead ? null : orcaCollabEntryHint(entryStatus),
-    entryBlocked: !isLead && entryStatus !== 'ready',
+    entryHint: !eligible || isLead ? null : orcaCollabEntryHint(entryStatus),
+    entryBlocked: !eligible || (!isLead && entryStatus !== 'ready'),
     team,
     workerLeadSessionId,
     openLead,
@@ -923,7 +931,7 @@ export function useSessionOrcaCollab(params: {
     workerForm,
     busy,
     error,
-    canSubmit: workerForm.valid && !busy,
+    canSubmit: eligible && workerForm.valid && !busy,
     openFromMain,
     openCreateWorker,
     submitEnable,
