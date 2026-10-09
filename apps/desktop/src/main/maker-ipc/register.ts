@@ -7427,9 +7427,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }> {
     assertAccess?.();
     // 协同远端 Worker 的代理任务行只承接计槽与回报，真实任务在运行设备上，绝不在本机起 Agent。
-    if (o.id && orcaRemoteWorkersForHost?.runtime.isRemote(o.id)) {
+    if (o.id && await orcaRemoteWorkersForHost?.isRemoteWorker(o.id)) {
       throw new Error('[PRECONDITION_FAILED] this Worker runs on another device and cannot start locally');
     }
+    assertAccess?.();
     // Agent 在另一台电脑上运行的任务：恢复时调用方可能没带设备，以任务记录为准。
     if (o.id && o.agentDeviceId === undefined && !o.remoteHostId) {
       const agentDeviceId = await readSessionAgentDeviceId(o.id);
@@ -13181,11 +13182,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
-      if (orcaRemoteWorkers.runtime.isRemote(workerSessionId)) {
-        await orcaRemoteWorkers.archive(workerSessionId).catch(() => undefined);
-        await removeWorker(workerId);
-        return;
-      }
+      if (await orcaRemoteWorkers.rollbackCreatedWorker(workerSessionId)) return;
       const workerSession = maker.getSession(workerSessionId);
       if (workerSession) {
         await maker.closeSession(workerSessionId).catch(() => undefined);

@@ -18,7 +18,8 @@ const store = vi.hoisted(() => ({
   saveRemoteWorkerOpen: vi.fn(async () => undefined),
   removeRemoteWorkerOpen: vi.fn(async () => undefined),
   listOrphanRemoteWorkerOpens: vi.fn(async (_sessionId?: string) => []),
-  setWorkerRemoteExecution: vi.fn(async () => undefined),
+  addRemoteWorker: vi.fn(async () => undefined),
+  removeWorker: vi.fn(async () => undefined),
 }));
 vi.mock('../../localDb/orcaTeamStore.js', () => store);
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
@@ -257,6 +258,8 @@ describe('start', () => {
       proxySessionId: 'proxy-1',
       deviceId: 'mac-mini',
       remoteSessionId: 'remote-1',
+      label: 'transcriber',
+      role: 'developer',
       lastBridgedMessageId: null,
     };
     let owner = {};
@@ -317,6 +320,96 @@ describe('start', () => {
 });
 
 describe('wrapTeamDeps', () => {
+  const restoredRow = { workerId: 'w-1', teamId: 'team-1', leadSessionId: 'lead-1',
+    proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1', lastBridgedMessageId: null };
+
+  it('blocks resume, dispatch and local bootstrap detection until routing has restored', async () => {
+    let restoreRows!: (rows: never[]) => void;
+    store.listActiveRemoteWorkers.mockImplementationOnce(() => new Promise(resolve => { restoreRows = resolve; }));
+    const { workers, remoteInvoke } = setup();
+    const base = baseDeps();
+    base.resumeWorkerSession = vi.fn(async () => undefined);
+    const wrapped = workers.wrapTeamDeps(base);
+    const starting = workers.start();
+    const detecting = workers.isRemoteWorker('proxy-1');
+    const resuming = wrapped.resumeWorkerSession({ sessionId: 'proxy-1' } as never, {} as never);
+    const sending = wrapped.dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'work', workerId: 'w-1',
+      dispatchMeta: { source: 'mcp', context: 'send_to_worker' } } as never);
+    expect(base.resumeWorkerSession).not.toHaveBeenCalled();
+    expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+    restoreRows([restoredRow] as never[]);
+    try {
+      await starting;
+      await expect(detecting).resolves.toBe(true);
+      await resuming;
+      await expect(sending).resolves.toMatchObject({ ok: true });
+      expect(base.resumeWorkerSession).not.toHaveBeenCalled();
+      expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(true);
+    } finally { workers.stop(); }
+  });
+
+  it('does not fall back locally when restoring routes fails', async () => {
+    store.listActiveRemoteWorkers.mockRejectedValueOnce(new Error('database unavailable'));
+    const { workers } = setup();
+    const base = baseDeps();
+    try {
+      await expect(workers.wrapTeamDeps(base).dispatchWorkerMessage({ targetSessionId: 'proxy-1' } as never))
+        .rejects.toThrow('database unavailable');
+      expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+    } finally { workers.stop(); }
+  });
+
+  it('rejects a pending dispatch when the database owner changes during restore', async () => {
+    let owner = {};
+    let restoreRows!: (rows: never[]) => void;
+    store.listActiveRemoteWorkers.mockImplementationOnce(() => new Promise(resolve => { restoreRows = resolve; }));
+    const { workers, remoteInvoke } = setup({ getOwnerToken: () => owner });
+    const base = baseDeps();
+    const sending = workers.wrapTeamDeps(base).dispatchWorkerMessage({ targetSessionId: 'proxy-1' } as never);
+    const rejected = expect(sending).rejects.toThrow('owner changed');
+    owner = {};
+    restoreRows([restoredRow] as never[]);
+    try {
+      await rejected;
+      expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+      expect(remoteInvoke).not.toHaveBeenCalled();
+    } finally { workers.stop(); }
+  });
+
+  it('recognizes an archived durable route even though it is not polled', async () => {
+    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never);
+    const { workers } = setup();
+    try {
+      await expect(workers.isRemoteWorker('proxy-1')).resolves.toBe(true);
+      expect(workers.runtime.isRemote('proxy-1')).toBe(false);
+    } finally { workers.stop(); }
+  });
+
+  it('retries an offline rollback after restart and only then deletes the cleanup row', async () => {
+    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never);
+    store.getWorkerRemoteReleaseState.mockResolvedValueOnce({ remoteStopConfirmedAt: null, remoteReleasedAt: null,
+      removeAfterRelease: true } as never);
+    const first = setup({ handle: (_device, channel) => channel === 'maker:abort-session'
+      ? fail('DEVICE_OFFLINE', 'offline') : undefined });
+    await expect(first.workers.rollbackCreatedWorker('proxy-1')).resolves.toBe(true);
+    expect(store.removeWorker).toHaveBeenCalledOnce();
+    expect(store.markWorkerRemoteReleased).not.toHaveBeenCalled();
+    first.workers.stop();
+    store.listUnreleasedEndedRemoteWorkers.mockResolvedValueOnce([restoredRow] as never);
+    store.getWorkerRemoteReleaseState.mockResolvedValueOnce({ remoteStopConfirmedAt: null, remoteReleasedAt: null,
+      removeAfterRelease: true } as never);
+    const second = setup();
+    try {
+      await second.workers.releaseEnded([]);
+      expect(store.markWorkerRemoteStopConfirmed).toHaveBeenCalledOnce();
+      expect(store.markWorkerRemoteReleased).toHaveBeenCalledOnce();
+      expect(store.removeWorker).toHaveBeenCalledTimes(2);
+      expect(second.remoteInvoke.mock.calls.map(([, channel]) => channel))
+        .toEqual(['maker:abort-session', 'maker:orca:remote-worker:release']);
+    } finally { second.workers.stop(); }
+  });
+
   async function trackedWorker(setupOpts?: Parameters<typeof setup>[0]) {
     const ctx = setup(setupOpts);
     await ctx.workers.recordRemoteWorker({
@@ -326,6 +419,8 @@ describe('wrapTeamDeps', () => {
       proxySessionId: 'proxy-1',
       deviceId: 'mac-mini',
       remoteSessionId: 'remote-1',
+      label: 'transcriber',
+      role: 'developer',
       workingDir: '/Users/demo/Interviews',
     });
     return ctx;
@@ -691,7 +786,7 @@ describe('remote open recovery', () => {
     const record = { ...openInput, proxySessionId: opened.proxySessionId, remoteSessionId: opened.remoteSessionId };
     await expect(workers.recordRemoteWorker(record)).rejects.toThrow('owner changed');
     await workers.discardRemoteWorker(record);
-    expect(store.setWorkerRemoteExecution).not.toHaveBeenCalled();
+    expect(store.addRemoteWorker).not.toHaveBeenCalled();
     expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(false);
     workers.stop();
   });

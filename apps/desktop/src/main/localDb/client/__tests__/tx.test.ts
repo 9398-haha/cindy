@@ -147,6 +147,11 @@ CREATE TABLE orca_workers (
   updated_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX uniq_orca_workers_team_label ON orca_workers (team_id, lower(label));
+CREATE TABLE orca_remote_opens (
+  remote_session_id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE orca_worker_creation_reservations (
   id TEXT PRIMARY KEY,
   team_id TEXT NOT NULL,
@@ -3345,6 +3350,52 @@ describe('db worker tx handlers', () => {
         { source_id: 'm2', chunk_index: 1, scheduled_at: 123 },
       ]);
     });
+  });
+
+
+  it.each([false, true])('commits remote Worker routing and the open receipt atomically (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'proxy');
+      await client.exec("INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES ('t', 'lead', 'active', 1, 1)");
+      await client.exec("INSERT INTO orca_remote_opens VALUES ('remote', 'device', 1)");
+      const args = { id: 'w', teamId: 't', sessionId: 'proxy', label: 'dev', role: 'developer',
+        remoteExecution: { deviceId: 'device', remoteSessionId: 'remote' }, now: 2 };
+      // Force a failure after the Worker and route writes. None of them may survive.
+      await client.exec("CREATE TRIGGER fail_receipt BEFORE DELETE ON orca_remote_opens BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
+      await expect(client.tx('orca.upsertWorker', args)).rejects.toThrow('receipt failure');
+      await expect(client.query('SELECT * FROM orca_workers')).resolves.toEqual([]);
+      await expect(client.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['proxy'])).resolves.toEqual({ orca_role: null });
+      await expect(client.query('SELECT remote_session_id FROM orca_remote_opens')).resolves.toEqual([{ remote_session_id: 'remote' }]);
+      await client.exec('DROP TRIGGER fail_receipt');
+      await client.tx('orca.upsertWorker', args);
+      await expect(client.queryOne('SELECT execution_device_id, remote_session_id FROM orca_workers WHERE id = ?', ['w']))
+        .resolves.toEqual({ execution_device_id: 'device', remote_session_id: 'remote' });
+      await expect(client.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['proxy'])).resolves.toEqual({ orca_role: 'worker' });
+      await expect(client.query('SELECT * FROM orca_remote_opens')).resolves.toEqual([]);
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('retains rollback cleanup routing until remote release is confirmed (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'lead');
+      await seedSession(client, 'proxy');
+      await client.exec("INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES ('t', 'lead', 'active', 1, 1)");
+      await client.tx('orca.upsertWorker', { id: 'w', teamId: 't', sessionId: 'proxy', label: 'dev',
+        remoteExecution: { deviceId: 'device', remoteSessionId: 'remote' }, now: 2 });
+      await client.tx('orca.removeWorker', { workerId: 'w', now: 3 });
+      await expect(client.queryOne('SELECT execution_device_id, remote_session_id, label FROM orca_workers WHERE id = ?', ['w']))
+        .resolves.toEqual({ execution_device_id: 'device', remote_session_id: 'remote', label: null });
+      await expect(client.queryOne('SELECT status, orca_role FROM sessions WHERE id = ?', ['proxy']))
+        .resolves.toEqual({ status: 'archived', orca_role: null });
+      // A failed create no longer consumes a label; its cleanup survives restarting the client.
+      await seedSession(client, 'proxy2');
+      await client.tx('orca.upsertWorker', { id: 'w2', teamId: 't', sessionId: 'proxy2', label: 'dev', now: 4 });
+      await client.exec('UPDATE orca_workers SET remote_released_at = ? WHERE id = ?', [5, 'w']);
+      await client.tx('orca.removeWorker', { workerId: 'w', now: 6 });
+      await expect(client.queryOne('SELECT id FROM orca_workers WHERE id = ?', ['w'])).resolves.toBeUndefined();
+      await expect(client.queryOne('SELECT label FROM orca_workers WHERE id = ?', ['w2'])).resolves.toEqual({ label: 'dev' });
+    }, { useInlineWorker });
   });
 
   it('orca.removeWorker deletes the worker and archives its session atomically', async () => {

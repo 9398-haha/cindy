@@ -352,7 +352,7 @@ export interface OrcaWorkerCreationDeps {
     workingDir?: string;
     title: string;
   }): Promise<OrcaRemoteWorkerOpenResult>;
-  /** 写入 Worker 记录后登记运行设备，开始轮询。 */
+  /** 原子写入 Worker 与运行设备路由，再开始轮询。 */
   recordRemoteWorker?(input: {
     workerId: string;
     teamId: string;
@@ -360,6 +360,8 @@ export interface OrcaWorkerCreationDeps {
     proxySessionId: string;
     deviceId: string;
     remoteSessionId: string;
+    label: string;
+    role: string;
     /** 运行设备上实际使用的工作目录，只做展示。 */
     workingDir?: string;
   }): Promise<void>;
@@ -846,15 +848,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           await discard();
           return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
         }
-        await deps.addOrUpdateWorker({
-          id: workerId,
-          teamId: params.teamId,
-          sessionId: opened.proxySessionId,
-          status: 'idle',
-          label,
-          role,
-          focused: false,
-        });
         await deps.recordRemoteWorker({
           workerId,
           teamId: params.teamId,
@@ -862,11 +855,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           proxySessionId: opened.proxySessionId,
           deviceId,
           remoteSessionId: opened.remoteSessionId,
+          label,
+          role,
           ...(opened.workingDir ? { workingDir: opened.workingDir } : {}),
         });
       } catch (err) {
         await discard();
-        await deps.removeWorker(workerId).catch(() => undefined);
         if (isWorkerLabelConstraintError(err)) {
           return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label}" already used in this team` };
         }

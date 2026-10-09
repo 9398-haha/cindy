@@ -129,6 +129,29 @@ describe('orcaTeamStore', () => {
     expect(await store.listOrphanRemoteWorkerOpens()).toEqual([expect.objectContaining({ remoteSessionId: 'orphan-1' })]);
   });
 
+  it('keeps a rolled-back remote Worker available for cleanup across database rereads', async () => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await store.saveRemoteWorkerOpen('device-b', 'remote-1');
+    await store.addRemoteWorker({ workerId: 'worker-1', teamId: 'team-1', proxySessionId: 'worker-session-1',
+      deviceId: 'device-b', remoteSessionId: 'remote-1', label: 'dev', role: 'developer' });
+    expect(await store.listOrphanRemoteWorkerOpens()).toEqual([]);
+    await store.removeWorker('worker-1');
+    expect(await store.listActiveRemoteWorkers()).toEqual([]);
+    expect(await store.listWorkersByLead('lead-session-1')).toHaveLength(1);
+    expect(await store.listUnreleasedEndedRemoteWorkers()).toEqual([
+      expect.objectContaining({ workerId: 'worker-1', deviceId: 'device-b', remoteSessionId: 'remote-1' }),
+    ]);
+    expect(await store.getWorkerRemoteReleaseState('worker-1')).toMatchObject({ removeAfterRelease: true });
+    await store.markWorkerRemoteStopConfirmed('worker-1');
+    await store.markWorkerRemoteReleased('worker-1');
+    await store.removeWorker('worker-1');
+    expect(await store.getRemoteWorkerByProxySession('worker-session-1')).toBeNull();
+    expect(await store.listUnreleasedEndedRemoteWorkers()).toEqual([]);
+  });
+
   it('notifies Agent Island when Orca archives worker sessions', async () => {
     const { archiveWorkersByTeam } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();

@@ -34,7 +34,8 @@ import {
   saveRemoteWorkerOpen,
   removeRemoteWorkerOpen,
   listOrphanRemoteWorkerOpens,
-  setWorkerRemoteExecution,
+  addRemoteWorker,
+  removeWorker,
 } from '../localDb/orcaTeamStore.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import type {
@@ -231,7 +232,10 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       }
       if (owner !== ownerToken()) return;
       if (await runtime.release(row)) {
-        if (owner === ownerToken()) await markWorkerRemoteReleased(row.workerId);
+        if (owner === ownerToken()) {
+          await markWorkerRemoteReleased(row.workerId);
+          if (phase.removeAfterRelease && owner === ownerToken()) await removeWorker(row.workerId);
+        }
       }
     })();
     releases.set(row.workerId, operation);
@@ -294,7 +298,6 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     runtime.reset();
     if (releaseRetryTimer) clearInterval(releaseRetryTimer);
     releaseRetryTimer = null;
-    await refreshDeviceNames().catch(() => undefined);
     const rows = await listActiveRemoteWorkers();
     if (owner !== ownerToken() || owner !== activeOwner) return;
     for (const row of rows) {
@@ -302,6 +305,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         deps.getTeamService()?.restoreWorkerPendingReport(row.proxySessionId, row);
       runtime.track(row);
     }
+    void refreshDeviceNames().catch(() => undefined);
     void retryPendingReleases();
     // 结束通知在运行设备离线时发不出去；低频补发，送达即记账，不重复。
     releaseRetryTimer = setInterval(() => void retryPendingReleases(), RELEASE_RETRY_MS);
@@ -314,18 +318,8 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     /**
      * 按当前账号恢复待回报与结束通知；同一数据库 owner 重入不清除现有派活。
      */
-    async start(): Promise<void> {
-      const owner = ownerToken();
-      if (startInFlight && startInFlight.owner === owner) return startInFlight.promise;
-      if (releaseRetryTimer && owner === activeOwner) return;
-      const promise = restore(owner);
-      startInFlight = { owner, promise };
-      try {
-        await promise;
-      } finally {
-        if (startInFlight?.promise === promise) startInFlight = null;
-      }
-    },
+    start,
+    isRemoteWorker,
 
     stop(): void {
       activeOwner = Symbol('stopped');
@@ -532,16 +526,13 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : ownerToken();
       await withOpenLock(input.remoteSessionId, async () => {
         assertOwner(owner);
-        await setWorkerRemoteExecution(input.workerId, {
-          deviceId: input.deviceId,
-          remoteSessionId: input.remoteSessionId,
-        });
+        await addRemoteWorker(input);
         assertOwner(owner);
-        creationOwners.delete(input.proxySessionId);
         opening.delete(input.remoteSessionId);
-        const { workingDir, ...ref } = input;
+        const { workingDir, label: _label, role: _role, ...ref } = input;
         runtime.track({ ...ref, lastBridgedMessageId: null }, { workingDir });
         deps.broadcastOrcaWorkerChanged(input.leadSessionId);
+        creationOwners.delete(input.proxySessionId);
       });
     },
 
@@ -559,6 +550,16 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       await withOpenLock(input.remoteSessionId, async () => {
         assertOwner(owner);
         opening.delete(input.remoteSessionId);
+        const row = await getRemoteWorkerByProxySession(input.proxySessionId);
+        assertOwner(owner);
+        if (row) {
+          await removeWorker(row.workerId);
+          assertOwner(owner);
+          runtime.untrack(input.proxySessionId);
+          await releaseAndMark(row);
+          creationOwners.delete(input.proxySessionId);
+          return;
+        }
         runtime.untrack(input.proxySessionId);
         if (await runtime.release(input)) {
           assertOwner(owner);
@@ -572,6 +573,19 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
 
     archive,
     wrapTeamDeps,
+    async rollbackCreatedWorker(proxySessionId: string): Promise<boolean> {
+      const owner = ownerToken();
+      assertOwner(owner);
+      const row = await getRemoteWorkerByProxySession(proxySessionId);
+      assertOwner(owner);
+      if (!row) return false;
+      // removeWorker 的事务保留未释放路由；重连补发成功后才删除回滚行。
+      await removeWorker(row.workerId);
+      assertOwner(owner);
+      runtime.untrack(proxySessionId);
+      await releaseAndMark(row);
+      return true;
+    },
 
     /** 团队结束后：停掉仍在跑的远端 Worker，并补发全部未送达的结束通知。 */
     async releaseEnded(proxySessionIds: readonly string[]): Promise<void> {
@@ -580,6 +594,30 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       await retryPendingReleases();
     },
   };
+
+  async function start(): Promise<void> {
+    const owner = ownerToken();
+    if (startInFlight && startInFlight.owner === owner) return startInFlight.promise;
+    if (releaseRetryTimer && owner === activeOwner) return;
+    const promise = restore(owner);
+    startInFlight = { owner, promise };
+    try {
+      await promise;
+    } finally {
+      if (startInFlight?.promise === promise) startInFlight = null;
+    }
+  }
+
+  /** 恢复尚未完成或查询失败时不得把未知代理回退到本机。 */
+  async function isRemoteWorker(sessionId: string): Promise<boolean> {
+    const owner = ownerToken();
+    if (!runtime.isRemote(sessionId) || !ownerCurrent()) await start();
+    assertOwner(owner);
+    if (runtime.isRemote(sessionId)) return true;
+    const row = await getRemoteWorkerByProxySession(sessionId);
+    assertOwner(owner);
+    return row !== null;
+  }
 
   /** 归档或结束团队：通知运行设备结束协同(任务保留)，本机归档代理行。 */
   async function archive(
@@ -616,31 +654,28 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             : null
           : base.getLiveSession(sessionId),
       resumeWorkerSession: async (worker, link) => {
-        if (remote(worker.sessionId)) return;
+        if (await isRemoteWorker(worker.sessionId)) return;
         await base.resumeWorkerSession(worker, link);
       },
       closeWorkerSession: async (sessionId, beforeClose) => {
-        if (!remote(sessionId)) return base.closeWorkerSession(sessionId, beforeClose);
+        if (!(await isRemoteWorker(sessionId))) return base.closeWorkerSession(sessionId, beforeClose);
         await beforeClose?.();
         await runtime.abort(sessionId);
       },
       closeWorkerSessionIfIdle: async (sessionId, sendLockHeld) =>
-        remote(sessionId)
+        (await isRemoteWorker(sessionId))
           ? !runtime.isTurnRunning(sessionId)
           : base.closeWorkerSessionIfIdle(sessionId, sendLockHeld),
       hasPendingWorkerInput: async (sessionId) =>
-        remote(sessionId)
+        (await isRemoteWorker(sessionId))
           ? runtime.hasPendingReport(sessionId)
           : base.hasPendingWorkerInput(sessionId),
       archiveWorkerSession: async (sessionId, beforeMutation) => {
-        if (!remote(sessionId)) {
-          const row = await getRemoteWorkerByProxySession(sessionId).catch(() => null);
-          if (!row) return base.archiveWorkerSession(sessionId, beforeMutation);
-        }
+        if (!(await isRemoteWorker(sessionId))) return base.archiveWorkerSession(sessionId, beforeMutation);
         await archive(sessionId, beforeMutation);
       },
       dispatchWorkerMessage: async (params) => {
-        if (!remote(params.targetSessionId)) return base.dispatchWorkerMessage(params);
+        if (!(await isRemoteWorker(params.targetSessionId))) return base.dispatchWorkerMessage(params);
         // 与本机派发复用同一会话锁，保持 enqueue 与 accepted/commit 身份的顺序一致。
         return base.withSessionSendLock(params.targetSessionId, async () => {
           const clientId = createId();
@@ -693,7 +728,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         });
       },
       reserveWorkerMessage: async (params) => {
-        if (!remote(params.targetSessionId)) return base.reserveWorkerMessage(params);
+        if (!(await isRemoteWorker(params.targetSessionId))) return base.reserveWorkerMessage(params);
         // 打断改派：先停远端当前一轮，再把新指令作为下一条派过去。
         await params.beforeReserve?.();
         params.onReserved?.();
@@ -709,14 +744,14 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         });
       },
       requestWorkerInterrupt: async (sessionId) => {
-        if (!remote(sessionId)) return base.requestWorkerInterrupt(sessionId);
+        if (!(await isRemoteWorker(sessionId))) return base.requestWorkerInterrupt(sessionId);
         const requested = await runtime.abort(sessionId);
         return { stopOutcome: requested ? 'requested' : 'unconfirmed', queuePaused: false };
       },
       getWorkerQueuePaused: (sessionId) =>
         remote(sessionId) ? false : base.getWorkerQueuePaused(sessionId),
       getSessionQueueSnapshot: async (sessionId) =>
-        remote(sessionId)
+        (await isRemoteWorker(sessionId))
           ? {
               pendingQueue: [],
               steeringClientIds: [],
@@ -728,13 +763,13 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             }
           : base.getSessionQueueSnapshot(sessionId),
       ensureWorkerQueueRestored: async (sessionId) =>
-        remote(sessionId) ? false : base.ensureWorkerQueueRestored(sessionId),
+        (await isRemoteWorker(sessionId)) ? false : base.ensureWorkerQueueRestored(sessionId),
       removeQueuedMessage: (sessionId, clientId, expected) =>
         remote(sessionId) ? false : base.removeQueuedMessage(sessionId, clientId, expected),
       replaceQueuedMessage: (sessionId, clientId, next, expected) =>
         remote(sessionId) ? false : base.replaceQueuedMessage(sessionId, clientId, next, expected),
       steerStoredQueuedMessage: async (sessionId, clientId) =>
-        remote(sessionId)
+        (await isRemoteWorker(sessionId))
           ? { kind: 'queued', reason: 'STEER_UNSUPPORTED' }
           : base.steerStoredQueuedMessage(sessionId, clientId),
       moveQueuedMessage: (sessionId, clientId, position) =>

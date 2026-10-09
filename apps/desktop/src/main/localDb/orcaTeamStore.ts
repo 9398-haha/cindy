@@ -574,7 +574,8 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
 }
 
 /**
- * create_worker 派发失败补偿：移除尚未成功 dispatch 的 worker link，并归档对应 session。
+ * create_worker 派发失败补偿：归档代理并移除 worker link；未释放的远端路由留待补发，
+ * 通过已归档 session 的空 orcaRole 区分回滚清理与正常保留历史的协同结束。
  * 这条路径只服务失败清理，不影响正常协同结束时保留历史 worker link 的语义。
  */
 export async function removeWorker(workerId: string): Promise<void> {
@@ -768,6 +769,19 @@ export async function insertRemoteWorkerProxySession(input: {
     });
 }
 
+/** Worker、远端路由、代理身份和 open 收据在同一事务内提交。 */
+export async function addRemoteWorker(input: {
+  workerId: string; teamId: string; proxySessionId: string;
+  deviceId: string; remoteSessionId: string; label: string; role: string;
+}): Promise<void> {
+  await getDbClient().tx('orca.upsertWorker', {
+    id: input.workerId, teamId: input.teamId, sessionId: input.proxySessionId,
+    label: input.label, role: input.role, status: 'idle', focused: false,
+    remoteExecution: { deviceId: input.deviceId, remoteSessionId: input.remoteSessionId },
+    now: Date.now(),
+  });
+}
+
 export async function setWorkerRemoteExecution(
   workerId: string,
   input: { deviceId: string; remoteSessionId: string },
@@ -819,8 +833,11 @@ export async function markWorkerRemoteStopConfirmed(workerId: string, at = Date.
 export async function getWorkerRemoteReleaseState(workerId: string) {
   const [row] = await getDbClient().drizzle.select({
     remoteStopConfirmedAt: orcaWorkers.remoteStopConfirmedAt, remoteReleasedAt: orcaWorkers.remoteReleasedAt,
-  }).from(orcaWorkers).where(eq(orcaWorkers.id, workerId)).limit(1);
-  return row ?? null;
+    sessionStatus: sessions.status, orcaRole: sessions.orcaRole,
+  }).from(orcaWorkers).innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(eq(orcaWorkers.id, workerId)).limit(1);
+  return row ? { remoteStopConfirmedAt: row.remoteStopConfirmedAt, remoteReleasedAt: row.remoteReleasedAt,
+    removeAfterRelease: row.sessionStatus !== 'active' && row.orcaRole === null } : null;
 }
 
 function parsePendingReport(raw: string | null): OrcaRemotePendingReport | null {

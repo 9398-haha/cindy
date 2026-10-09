@@ -271,6 +271,7 @@ export interface OrcaUpsertWorkerArgs {
   role?: string;
   focused?: boolean;
   idleSince?: number | null;
+  remoteExecution?: { deviceId: string; remoteSessionId: string };
   now: number;
 }
 

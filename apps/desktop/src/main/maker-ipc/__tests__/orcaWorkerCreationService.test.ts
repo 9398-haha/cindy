@@ -281,12 +281,11 @@ describe('Worker running on another device (execution device)', () => {
       label: 'transcribe', role: '转写', agent: 'claude-code', model: 'only-on-device',
       permissionMode: 'auto', workingDir: '/Users/demo/Interviews', title: 'Worker · 转写 · transcribe',
     }));
-    expect(deps.addOrUpdateWorker).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'worker-1', sessionId: 'proxy-1', status: 'idle',
-    }));
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
     expect(deps.recordRemoteWorker).toHaveBeenCalledWith({
       workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
       proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+      label: 'transcribe', role: '转写',
       workingDir: '/Users/demo/Interviews',
     });
     expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
@@ -355,7 +354,7 @@ describe('Worker running on another device (execution device)', () => {
 
   it('discards the device task when persisting the worker fails', async () => {
     const { deps, service } = remoteDeps({
-      addOrUpdateWorker: vi.fn(async () => { throw new Error('disk full'); }),
+      recordRemoteWorker: vi.fn(async () => { throw new Error('disk full'); }),
     });
     const result = await service.createWorker({
       leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
@@ -364,7 +363,9 @@ describe('Worker running on another device (execution device)', () => {
     expect(deps.discardRemoteWorker).toHaveBeenCalledWith({
       proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
     });
-    expect(deps.recordRemoteWorker).not.toHaveBeenCalled();
+    expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.removeWorker).not.toHaveBeenCalled();
   });
 
   it('reports remote workers as unsupported when the host did not wire them', async () => {

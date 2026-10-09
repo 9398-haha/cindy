@@ -1373,13 +1373,18 @@ function orcaRemoveWorker(readyDb, args) {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ?');
   const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   return readyDb.transaction(() => {
     const row = selectWorker.get(workerId);
     if (!row) return null;
-    deleteWorker.run(workerId);
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      readyDb.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
   })();
@@ -1454,6 +1459,15 @@ function orcaUpsertWorker(readyDb, args) {
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      readyDb.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      readyDb.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      readyDb.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = readyDb.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id);
     if (existing) {
       readyDb.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -1468,6 +1482,7 @@ function orcaUpsertWorker(readyDb, args) {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = readyDb.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId);
@@ -1483,6 +1498,7 @@ function orcaUpsertWorker(readyDb, args) {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     readyDb.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -1498,6 +1514,7 @@ function orcaUpsertWorker(readyDb, args) {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 
