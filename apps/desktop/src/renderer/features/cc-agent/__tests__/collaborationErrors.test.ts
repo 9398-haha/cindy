@@ -1,7 +1,10 @@
 import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 
-import { getCollaborationStartErrorMessage } from '../collaborationErrors';
+import {
+  executionDeviceErrorMessage,
+  getCollaborationStartErrorMessage,
+} from '../collaborationErrors';
 
 const t = ((key: string) => key) as unknown as TFunction;
 
@@ -45,5 +48,24 @@ describe('getCollaborationStartErrorMessage', () => {
         { remoteDevice: true },
       ),
     ).toBe('newChat.collaboration.unsupportedRemoteHint');
+  });
+});
+
+describe('executionDeviceErrorMessage', () => {
+  it('explains why a Worker could not be created on another computer', () => {
+    expect(
+      executionDeviceErrorMessage(new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] x'), t, 'Mac mini', false),
+    ).toBe('orca.createWorker.errors.deviceUnreachable');
+    expect(
+      executionDeviceErrorMessage(new Error('[UNSUPPORTED_CAPABILITY] x'), t, 'Mac mini', false),
+    ).toBe('orca.createWorker.errors.deviceOutdated');
+    expect(
+      executionDeviceErrorMessage(new Error('[INVALID_PARAMS] x'), t, 'Mac mini', true),
+    ).toBe('orca.createWorker.errors.dirRejected');
+  });
+
+  it('falls back to the generic collaboration message for anything else', () => {
+    expect(executionDeviceErrorMessage(new Error('[INVALID_PARAMS] x'), t, 'Mac mini', false)).toBeNull();
+    expect(executionDeviceErrorMessage(new Error('[INTERNAL] x'), t, undefined, true)).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ import { toast } from '@/lib/toast';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { CreateWorkerPopover } from './CreateWorkerPopover';
+import { RemoteWorkerSessionPane } from './RemoteWorkerSessionPane';
 import { WorkerListToolbar } from './RolePillDropdown';
 import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
 import { subscribeNewWorkerShortcut } from './lib/newWorkerShortcut';
@@ -93,6 +94,12 @@ export function OrcaWorkerPanel({
     onSelectionIntentCleared,
   });
   const lastAgentIslandPayloadRef = useRef<string | string[] | null>(null);
+  const shownWorker = selectedWorkerRecord ?? focusedWorker;
+  // 在另一台电脑运行的 Worker：本机代理任务不跑 Agent，展示运行设备上的真实任务。
+  const remoteDevice =
+    shownWorker && shownWorker.sessionId === workerSessionId
+      ? shownWorker.executionDevice
+      : undefined;
 
   const handleOpenCreate = useCallback(async () => {
     const result = await refreshCreationState();
@@ -185,7 +192,15 @@ export function OrcaWorkerPanel({
         />
       </div>
       <div className="chat-rail-compact min-h-0 flex-1">
-        {workerSessionId ? (
+        {workerSessionId && remoteDevice ? (
+          <RemoteWorkerSessionPane
+            key={workerSessionId}
+            leadSessionId={leadSessionId}
+            device={remoteDevice}
+            viewVisible={viewVisible}
+            chatRealtime={chatRealtime}
+          />
+        ) : workerSessionId ? (
           <CCAgentSessionView
             key={workerSessionId}
             sessionIdProp={workerSessionId}
@@ -211,6 +226,8 @@ export function OrcaWorkerPanel({
         onCreate={handleCreateWorker}
         deviceId={deviceId ?? undefined}
         sshRemote={sshRemote}
+        // 运行设备只在本机 Lead 上可选：远程控制或 SSH 的 Lead 由所在电脑自己决定。
+        executionDevicesEnabled={deviceId === null && !sshRemote}
       />
     </div>
   );

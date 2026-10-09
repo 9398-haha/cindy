@@ -13397,7 +13397,24 @@
       "optional": "（可選）",
       "initialTaskPlaceholder": "給這個 Worker 的可選第一條任務",
       "enableCollabTitle": "開啟協同",
-      "enableCollabSubmit": "開啟協同"
+      "enableCollabSubmit": "開啟協同",
+      "executionDeviceLabel": "執行裝置",
+      "thisComputer": "這台電腦",
+      "deviceOnline": "線上",
+      "deviceNeedsUpdate": "版本過舊，需更新",
+      "executionDeviceHint": "只列出同帳號、線上並開啟遠端控制的電腦。",
+      "executionDeviceRemoteHint": "Worker 的任務、目錄和指令都在 {{device}}。",
+      "remoteDirLabel": "{{device}} 上的工作目錄",
+      "remoteDirAuto": "自動分配",
+      "remoteDirPath": "指定目錄",
+      "remoteDirAutoHint": "由 {{device}} 依自己的設定分配任務目錄。",
+      "remoteDirPathHint": "在 {{device}} 上檢查；不存在時報錯，不會換成這台電腦的目錄。",
+      "remoteDirInvalid": "請輸入 {{device}} 上的絕對路徑。",
+      "errors": {
+        "deviceUnreachable": "{{device}} 目前無法使用：需要在線並開啟遠端控制。Worker 沒有建立。",
+        "deviceOutdated": "{{device}} 的 Cindy 版本過舊，更新後才能執行 Worker。",
+        "dirRejected": "{{device}} 上找不到這個目錄或不允許使用。Worker 沒有建立。"
+      }
     },
     "rolePill": {
       "unread": "未讀更新",
@@ -13419,13 +13436,18 @@
       "scrollWorkersLeftEdge": "已是最左側的 Worker",
       "scrollWorkersRightEdge": "已是最右側的 Worker",
       "errorBadge": "錯誤",
-      "errorBadgeAria": "有 Worker 出錯"
+      "errorBadgeAria": "有 Worker 出錯",
+      "executionDevice": "在 {{device}} 執行",
+      "deviceUnreachable": "暫時無法取得狀態",
+      "unknownDevice": "另一台電腦"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "找不到 Orca lead 任務",
       "waitingForWorker": "等待 Worker",
+      "remoteWorkerLoading": "正在讀取 {{device}} 上的任務…",
+      "remoteWorkerUnreachable": "{{device}} 目前無法連線，恢復後會自動顯示這個 Worker 的任務。",
       "closeAria": "關閉"
     }
   },

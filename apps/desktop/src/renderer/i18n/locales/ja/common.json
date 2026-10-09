@@ -13397,7 +13397,24 @@
       "optional": "（任意）",
       "initialTaskPlaceholder": "この Worker に渡す任意の最初のタスク",
       "enableCollabTitle": "コラボレーションを開始",
-      "enableCollabSubmit": "コラボレーションを開始"
+      "enableCollabSubmit": "コラボレーションを開始",
+      "executionDeviceLabel": "実行デバイス",
+      "thisComputer": "このコンピューター",
+      "deviceOnline": "オンライン",
+      "deviceNeedsUpdate": "要アップデート",
+      "executionDeviceHint": "同じアカウントで、オンラインかつリモート操作が有効なコンピューターのみ表示します。",
+      "executionDeviceRemoteHint": "Worker のタスク、フォルダー、コマンドはすべて {{device}} 上にあります。",
+      "remoteDirLabel": "{{device}} 上の作業フォルダー",
+      "remoteDirAuto": "自動で割り当て",
+      "remoteDirPath": "フォルダーを指定",
+      "remoteDirAutoHint": "{{device}} が自身の設定でタスクのフォルダーを割り当てます。",
+      "remoteDirPathHint": "{{device}} 上で確認します。存在しない場合はエラーになり、このコンピューターのフォルダーに置き換えることはありません。",
+      "remoteDirInvalid": "{{device}} 上の絶対パスを入力してください。",
+      "errors": {
+        "deviceUnreachable": "{{device}} は現在使用できません。オンラインでリモート操作が有効になっている必要があります。Worker は作成されていません。",
+        "deviceOutdated": "{{device}} の Cindy が古いため、アップデートすると Worker を実行できます。",
+        "dirRejected": "{{device}} 上にこのフォルダーが見つからないか、使用できません。Worker は作成されていません。"
+      }
     },
     "rolePill": {
       "unread": "未読の更新",
@@ -13419,13 +13436,18 @@
       "scrollWorkersLeftEdge": "すでに先頭の Worker を表示しています",
       "scrollWorkersRightEdge": "すでに末尾の Worker を表示しています",
       "errorBadge": "エラー",
-      "errorBadgeAria": "エラーが発生した Worker があります"
+      "errorBadgeAria": "エラーが発生した Worker があります",
+      "executionDevice": "{{device}} で実行",
+      "deviceUnreachable": "状態を取得できません",
+      "unknownDevice": "別のコンピューター"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
       "leadNotFound": "Orca lead session が見つかりません",
       "waitingForWorker": "Worker を待機中",
+      "remoteWorkerLoading": "{{device}} 上のタスクを読み込み中…",
+      "remoteWorkerUnreachable": "{{device}} に現在接続できません。再接続すると、この Worker のタスクが再び表示されます。",
       "closeAria": "閉じる"
     }
   },

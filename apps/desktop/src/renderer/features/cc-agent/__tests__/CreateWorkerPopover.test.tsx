@@ -13,7 +13,11 @@ import {
   setProviderModelChoice,
   setProviderModelFast,
 } from '@/state/providerModelMemory';
-import { CreateWorkerPopover } from '../CreateWorkerPopover';
+import {
+  CreateWorkerPopover,
+  isAbsoluteRemoteDir,
+  parseExecutionDevices,
+} from '../CreateWorkerPopover';
 
 const mocks = vi.hoisted(() => ({
   modelsByAgent: {
@@ -1598,5 +1602,115 @@ describe('CreateWorkerPopover', () => {
         expect.objectContaining({ model: 'gpt-5.5', effort: 'low' }),
       ),
     );
+  });
+});
+
+describe('CreateWorkerPopover execution device', () => {
+  const listExecutionDevices = vi.fn();
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetProviderModelMemoryForTest();
+    mocks.modelsByAgent.codex = [model('codex/gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
+    mocks.localProviders = [];
+    mocks.remoteProviders = [];
+    mocks.remoteUnsupported = false;
+    listExecutionDevices.mockReset();
+    listExecutionDevices.mockResolvedValue({
+      devices: [
+        { deviceId: 'mac-mini', name: 'Mac mini', platform: 'darwin', supported: true },
+        { deviceId: 'old-pc', name: 'Old PC', platform: 'win32', supported: false },
+      ],
+    });
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localDb: { orcaWorkflows: { listExecutionDevices } },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('offers other computers only when enabled and the list is not empty', async () => {
+    const { unmount } = render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    expect(listExecutionDevices).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('worker-execution-device')).toBeNull();
+    unmount();
+
+    listExecutionDevices.mockResolvedValueOnce({ devices: [] });
+    render(<CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={vi.fn()} />);
+    await waitFor(() => expect(listExecutionDevices).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('worker-execution-device')).toBeNull();
+  });
+
+  it('creates on the chosen computer with its folder and leaves outdated computers unselectable', async () => {
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+
+    const thisComputer = await screen.findByRole('radio', { name: 'orca.createWorker.thisComputer' });
+    expect(thisComputer.getAttribute('aria-checked')).toBe('true');
+    expect((screen.getByRole('radio', { name: /Old PC/ }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: /Mac mini/ }));
+    // 另一台电脑的模型目录：不接本机来源记忆，也不跳本机供应商设置。
+    expect(screen.getByTestId('model-selector').dataset.memoryWired).toBe('false');
+    expect(screen.getByTestId('model-selector').dataset.navigateWired).toBe('false');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    const dirInput = screen.getByRole('textbox', { name: 'orca.createWorker.remoteDirLabel' });
+    const submit = screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement;
+    fireEvent.change(dirInput, { target: { value: 'Interviews' } });
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByText('orca.createWorker.remoteDirInvalid')).toBeTruthy();
+
+    fireEvent.change(dirInput, { target: { value: ' /Users/demo/Interviews ' } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionDeviceId: 'mac-mini',
+          executionDeviceName: 'Mac mini',
+          workingDir: '/Users/demo/Interviews',
+        }),
+      ),
+    );
+  });
+
+  it('lets the device assign the folder and keeps local workers unchanged', async () => {
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(await screen.findByRole('radio', { name: /Mac mini/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'mac-mini' });
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.thisComputer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    expect(onCreate.mock.calls[1]![0]).not.toHaveProperty('executionDeviceId');
+  });
+});
+
+describe('execution device helpers', () => {
+  it('parses the device list defensively', () => {
+    expect(parseExecutionDevices(null)).toEqual([]);
+    expect(
+      parseExecutionDevices({
+        devices: [{ deviceId: 'a', name: '', platform: 1, supported: 'yes' }, { name: 'no id' }],
+      }),
+    ).toEqual([{ deviceId: 'a', name: 'a', platform: null, supported: false }]);
+  });
+
+  it('accepts absolute paths for any operating system', () => {
+    expect(isAbsoluteRemoteDir('/Users/demo')).toBe(true);
+    expect(isAbsoluteRemoteDir('D:\\work')).toBe(true);
+    expect(isAbsoluteRemoteDir('C:/work')).toBe(true);
+    expect(isAbsoluteRemoteDir('\\\\nas\\share')).toBe(true);
+    expect(isAbsoluteRemoteDir('~/work')).toBe(false);
+    expect(isAbsoluteRemoteDir('work')).toBe(false);
   });
 });

@@ -5,7 +5,7 @@ import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Info, TriangleAlert, X } from 'lucide-react';
+import { Info, Laptop, Monitor, TriangleAlert, X } from 'lucide-react';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import {
   connectedProvidersForAgent,
@@ -66,6 +66,43 @@ export interface CreateWorkerForm {
   initialTask: string;
   /** 本次 Worker 权限；提交后同时成为下一次创建 Worker 的默认值。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /** 运行设备(同账号另一台电脑)；缺省 = 这台电脑。 */
+  executionDeviceId?: string;
+  /** 运行设备名，只用于失败提示。 */
+  executionDeviceName?: string;
+  /** 运行设备上的工作目录；缺省由那台电脑分配。只在指定运行设备时有意义。 */
+  workingDir?: string;
+}
+
+/** 可放 Worker 的同账号其他电脑(`maker:orca:execution-devices`)。 */
+export interface ExecutionDeviceOption {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  /** false = 版本过旧，不可选。 */
+  supported: boolean;
+}
+
+export function parseExecutionDevices(value: unknown): ExecutionDeviceOption[] {
+  const devices = (value as { devices?: unknown } | null)?.devices;
+  if (!Array.isArray(devices)) return [];
+  return devices.flatMap((item) => {
+    const row = item as Record<string, unknown> | null;
+    if (!row || typeof row.deviceId !== 'string' || !row.deviceId) return [];
+    return [
+      {
+        deviceId: row.deviceId,
+        name: typeof row.name === 'string' && row.name ? row.name : row.deviceId,
+        platform: typeof row.platform === 'string' ? row.platform : null,
+        supported: row.supported === true,
+      },
+    ];
+  });
+}
+
+/** 运行设备的系统未知：接受 POSIX、Windows 盘符与 UNC 绝对路径，是否存在由那台检查。 */
+export function isAbsoluteRemoteDir(value: string): boolean {
+  return /^(\/|[a-zA-Z]:[\\/]|\\\\)/.test(value);
 }
 
 export interface CreateWorkerPopoverProps {
@@ -86,6 +123,8 @@ export interface CreateWorkerPopoverProps {
   sshRemote?: boolean;
   /** 开启新协同时必须确认执行端支持权限偏好；已有旧版远程 Team 创建 Worker 仍兼容旧行为。 */
   requireWorkerPermissionModeSupport?: boolean;
+  /** 允许把 Worker 放到同账号另一台电脑运行(仅本机 Lead)。 */
+  executionDevicesEnabled?: boolean;
 }
 
 export function CreateWorkerPopover({
@@ -95,9 +134,10 @@ export function CreateWorkerPopover({
   title,
   submitLabel,
   className,
-  deviceId,
+  deviceId: leadDeviceId,
   sshRemote,
   requireWorkerPermissionModeSupport = false,
+  executionDevicesEnabled = false,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -118,6 +158,17 @@ export function CreateWorkerPopover({
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const [executionDevices, setExecutionDevices] = useState<ExecutionDeviceOption[]>([]);
+  const [executionDeviceId, setExecutionDeviceId] = useState<string | null>(null);
+  const [remoteDirMode, setRemoteDirMode] = useState<'auto' | 'path'>('auto');
+  const [remoteDir, setRemoteDir] = useState('');
+  // 模型、供应商与能力按 Worker 实际运行的电脑读取：远程控制的 Lead 读它所在的电脑，
+  // 选了运行设备则读运行设备。权限档始终跟 Lead 所在电脑的创建偏好走。
+  const deviceId = leadDeviceId ?? executionDeviceId ?? undefined;
+  const executionDevice = executionDevices.find((d) => d.deviceId === executionDeviceId) ?? null;
+  const trimmedRemoteDir = remoteDir.trim();
+  const remoteDirInvalid =
+    !!executionDevice && remoteDirMode === 'path' && !isAbsoluteRemoteDir(trimmedRemoteDir);
 
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
@@ -132,9 +183,9 @@ export function CreateWorkerPopover({
   const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   const supportsWorkerPermissionModeSelection =
-    !deviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
+    !leadDeviceId || activeCaps?.supportsOrcaWorkerPermissionMode === true;
   const remoteWorkerPermissionModeUnsupported =
-    !!deviceId
+    !!leadDeviceId
     && activeCaps !== null
     && activeCaps?.supportsOrcaWorkerPermissionMode !== true;
   const activeModels = useMemo(() => {
@@ -284,11 +335,43 @@ export function CreateWorkerPopover({
     setModel(agentPrefs.model);
     setEffort(agentPrefs.effort);
     setFast(agentPrefs.fast);
-    setProviderSource(deviceId ? null : agentPrefs.providerId);
+    setProviderSource(leadDeviceId ? null : agentPrefs.providerId);
     setInitialTask('');
     setSelectedWorkerPermissionMode(stored.workerPermissionMode);
+    setExecutionDeviceId(null);
+    setRemoteDirMode('auto');
+    setRemoteDir('');
     setPrefsRestored(true);
-  }, [deviceId, open]);
+  }, [leadDeviceId, open]);
+
+  // 可选运行设备：每次打开读一次；读不到就只有这台电脑，不提示错误。
+  useEffect(() => {
+    if (!open || !executionDevicesEnabled) {
+      setExecutionDevices([]);
+      return;
+    }
+    let disposed = false;
+    void Promise.resolve(window.electronAPI?.localDb?.orcaWorkflows?.listExecutionDevices?.())
+      .then((value) => {
+        if (!disposed) setExecutionDevices(parseExecutionDevices(value));
+      })
+      .catch(() => {
+        if (!disposed) setExecutionDevices([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [executionDevicesEnabled, open]);
+
+  const selectExecutionDevice = useCallback(
+    (next: string | null) => {
+      if (next === executionDeviceId) return;
+      setExecutionDeviceId(next);
+      // 另一台电脑的模型目录没有本机的来源维度；回到这台电脑时恢复本机记忆的来源。
+      setProviderSource(next || leadDeviceId ? null : prefs[agent].providerId);
+    },
+    [agent, executionDeviceId, leadDeviceId, prefs],
+  );
 
   useEffect(() => {
     if (
@@ -545,6 +628,7 @@ export function CreateWorkerPopover({
     activeRole.length <= 32 &&
     !customRoleError &&
     !remoteModelListBlocked &&
+    !remoteDirInvalid &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
     !!currentModel;
   const resolvedTitle = title ?? t('orca.createWorker.title');
@@ -617,6 +701,13 @@ export function CreateWorkerPopover({
         ...(supportsWorkerPermissionModeSelection
           ? { workerPermissionMode: selectedWorkerPermissionMode }
           : {}),
+        ...(executionDevice
+          ? {
+              executionDeviceId: executionDevice.deviceId,
+              executionDeviceName: executionDevice.name,
+              ...(remoteDirMode === 'path' ? { workingDir: trimmedRemoteDir } : {}),
+            }
+          : {}),
       });
     } finally {
       submittingRef.current = false;
@@ -640,6 +731,9 @@ export function CreateWorkerPopover({
     routeEffortMetaFor,
     selectedWorkerPermissionMode,
     supportsWorkerPermissionModeSelection,
+    executionDevice,
+    remoteDirMode,
+    trimmedRemoteDir,
   ]);
 
   const roleInputRef = useRef<HTMLInputElement>(null);
@@ -746,6 +840,19 @@ export function CreateWorkerPopover({
             <div className="mt-1 text-11 text-[var(--error-fg)]">{customRoleError}</div>
           )}
         </div>
+
+        {executionDevices.length > 0 ? (
+          <ExecutionDeviceField
+            devices={executionDevices}
+            selectedId={executionDevice?.deviceId ?? null}
+            onSelect={selectExecutionDevice}
+            dirMode={remoteDirMode}
+            onDirModeChange={setRemoteDirMode}
+            dir={remoteDir}
+            onDirChange={setRemoteDir}
+            dirInvalid={remoteDirInvalid && trimmedRemoteDir.length > 0}
+          />
+        ) : null}
 
         <div className="mb-4 grid gap-4">
           {deviceId && remoteProviders.unsupported && (
@@ -858,7 +965,7 @@ export function CreateWorkerPopover({
                 void updateWorkerPermissionMode(mode as OrcaWorkerPermissionMode)
               }
               vendorKey={vendorKey}
-              deviceId={deviceId}
+              deviceId={leadDeviceId}
               triggerVariant="field"
               dense
               ariaContext={t('orca.createWorker.permissionLabel')}
@@ -903,5 +1010,155 @@ export function CreateWorkerPopover({
       </Dialog.Overlay>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+const FIELD_LABEL_CLASS =
+  'mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]';
+
+/** 运行设备单选 + 选了其他电脑时的工作目录(自动分配 / 指定目录)。 */
+function ExecutionDeviceField({
+  devices,
+  selectedId,
+  onSelect,
+  dirMode,
+  onDirModeChange,
+  dir,
+  onDirChange,
+  dirInvalid,
+}: {
+  devices: ExecutionDeviceOption[];
+  selectedId: string | null;
+  onSelect: (deviceId: string | null) => void;
+  dirMode: 'auto' | 'path';
+  onDirModeChange: (mode: 'auto' | 'path') => void;
+  dir: string;
+  onDirChange: (dir: string) => void;
+  dirInvalid: boolean;
+}) {
+  const { t } = useTranslation();
+  const selected = devices.find((d) => d.deviceId === selectedId) ?? null;
+  const optionClass = (checked: boolean) =>
+    cn(
+      'flex w-full items-center gap-2.5 rounded-full border px-3 py-1.5 text-left text-13 leading-snug transition-colors',
+      'disabled:cursor-not-allowed disabled:opacity-50',
+      checked
+        ? 'border-[var(--text-secondary)] bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
+        : 'border-[var(--border-default)] text-[var(--text-secondary)] enabled:hover:bg-[var(--surface-chip)]',
+    );
+  const segmentClass = (checked: boolean) =>
+    cn(
+      'rounded-full border px-3 py-1.5 text-13 leading-none transition-colors',
+      checked
+        ? 'border-[var(--text-secondary)] bg-[var(--surface-chip)] font-medium text-[var(--text-primary)]'
+        : 'border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]',
+    );
+  return (
+    <div className="mb-4 grid gap-3" data-testid="worker-execution-device">
+      <div>
+        <div className={FIELD_LABEL_CLASS}>{t('orca.createWorker.executionDeviceLabel')}</div>
+        <div
+          className="grid gap-1"
+          role="radiogroup"
+          aria-label={t('orca.createWorker.executionDeviceLabel')}
+        >
+          <button
+            type="button"
+            role="radio"
+            aria-checked={selected === null}
+            className={optionClass(selected === null)}
+            onClick={() => onSelect(null)}
+          >
+            <Laptop size={14} aria-hidden className="shrink-0" />
+            <span className="min-w-0 truncate">{t('orca.createWorker.thisComputer')}</span>
+          </button>
+          {devices.map((device) => (
+            <button
+              key={device.deviceId}
+              type="button"
+              role="radio"
+              aria-checked={selected?.deviceId === device.deviceId}
+              disabled={!device.supported}
+              className={optionClass(selected?.deviceId === device.deviceId)}
+              onClick={() => onSelect(device.deviceId)}
+            >
+              <Monitor size={14} aria-hidden className="shrink-0" />
+              <span className="min-w-0 truncate">{device.name}</span>
+              <span className="ml-auto shrink-0 text-11 font-normal text-[var(--text-secondary)]">
+                {device.supported
+                  ? t('orca.createWorker.deviceOnline')
+                  : t('orca.createWorker.deviceNeedsUpdate')}
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-11 leading-snug text-[var(--text-secondary)]">
+          {t('orca.createWorker.executionDeviceHint')}
+          {selected
+            ? ` ${t('orca.createWorker.executionDeviceRemoteHint', { device: selected.name })}`
+            : ''}
+        </p>
+      </div>
+      {selected ? (
+        <div>
+          <div className={FIELD_LABEL_CLASS}>
+            {t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          </div>
+          <div
+            className="flex flex-wrap gap-2"
+            role="radiogroup"
+            aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'auto'}
+              className={segmentClass(dirMode === 'auto')}
+              onClick={() => onDirModeChange('auto')}
+            >
+              {t('orca.createWorker.remoteDirAuto')}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={dirMode === 'path'}
+              className={segmentClass(dirMode === 'path')}
+              onClick={() => onDirModeChange('path')}
+            >
+              {t('orca.createWorker.remoteDirPath')}
+            </button>
+          </div>
+          {dirMode === 'path' ? (
+            <input
+              type="text"
+              className={cn(
+                'mt-2 w-full rounded-full border bg-transparent px-3 py-1.5 font-mono text-13 leading-none text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] outline-none',
+                dirInvalid
+                  ? 'border-[var(--error-fg)]'
+                  : 'border-[var(--border-default)] focus:border-[var(--text-secondary)]',
+              )}
+              placeholder="/Users/…/project"
+              aria-label={t('orca.createWorker.remoteDirLabel', { device: selected.name })}
+              aria-invalid={dirInvalid}
+              value={dir}
+              onChange={(e) => onDirChange(e.target.value)}
+            />
+          ) : null}
+          <p
+            className={cn(
+              'mt-1.5 text-11 leading-snug',
+              dirInvalid ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
+            )}
+            role={dirInvalid ? 'status' : undefined}
+          >
+            {dirInvalid
+              ? t('orca.createWorker.remoteDirInvalid', { device: selected.name })
+              : dirMode === 'auto'
+                ? t('orca.createWorker.remoteDirAutoHint', { device: selected.name })
+                : t('orca.createWorker.remoteDirPathHint', { device: selected.name })}
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }

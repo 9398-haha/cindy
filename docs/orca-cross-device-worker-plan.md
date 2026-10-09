@@ -1,9 +1,10 @@
 # 协同扩展：Worker 在另一台电脑运行
 
 > 状态：产品决策已定（2026-10-09，见 §5），分三步实现，不是产品规则。
-> 第一步（运行设备侧支持与 schema）与第二步（Lead 侧编排、Agent 工具）已落地，协议见
-> `docs/dev-rules/protocol-compatibility.md`「协同远端 Worker」，运行时契约见
-> `docs/dev-rules/orca-team-architecture.md`「远端 Worker」；第三步（协同面板界面）进行中。
+> 三步均已实现，待验收：运行设备侧支持与 schema、Lead 侧编排与 Agent 工具、协同面板界面。
+> 协议见 `docs/dev-rules/protocol-compatibility.md`「协同远端 Worker」，运行时契约见
+> `docs/dev-rules/orca-team-architecture.md`「远端 Worker」。界面首版只在本机 Lead 上提供「运行设备」；
+> 被远程控制的 Lead 仍可由它自己的 Agent 经 `execution_device_id` 创建；SSH 主机上的 Lead 不支持。
 > 来源讨论：issue #5620「远程控制功能疑问」→ 跨设备派活。
 
 ## 1. 结论
