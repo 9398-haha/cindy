@@ -49,6 +49,7 @@ vi.mock('expo-web-browser', () => ({
 vi.mock('expo-modules-core', () => ({ requireNativeModule: () => ({ addCustomField() {} }) }));
 vi.mock('@/config/env', () => ({
   BUILD_AUTH_REGION: 'cn', MOBILE_REDIRECT_URL: 'cindycn://auth',
+  WECHAT_APP_ID: '', WECHAT_UNIVERSAL_LINK: '',
   IS_OTA_SELFHOST: false, MOBILE_VISUAL_MOCK_ENABLED: false,
   OAUTH_BROKER_API_BASE_URL: 'https://auth.example.invalid',
   getMobileEndpointForRealm: () => 'https://auth.example.invalid',
@@ -115,6 +116,7 @@ vi.mock('@/update/fetchLatestRelease', () => ({}));
 
 import { AuthProvider, useAuth } from '../AuthContext';
 import AddAccountScreen from '../../../app/add-account';
+import { redirectSystemPath } from '../../../app/+native-intent';
 
 const pendingKey = 'cindy.mobile.auth.pendingOAuth';
 const verifiedOutcome = {
@@ -465,6 +467,46 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.deleteSecure.mockImplementation(async (key: string) => { native.storage.delete(key); });
     await restartProvider();
     expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it('keeps the add-account route mounted for a delayed warm auth link', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await act(async () => { root.render(<AuthProvider><Probe /><AddAccountScreen /></AuthProvider>); });
+    const url = callbackUrl();
+    const target = redirectSystemPath({path: url, initial: false});
+    // Expo Router only navigates for a truthy redirectSystemPath result.
+    if (target) await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
+    await emitLink(url);
+    expect(target).toBeNull();
+    expect(native.exchange).toHaveBeenCalledExactlyOnceWith('fixture-code', 'fixture-verifier');
+    expect(auth.loginState?.step).toBe('sso-verification');
+    expect(native.replaceRoute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {outcome: verifiedOutcome, action: {type: 'request-sso-verification-code'}, request: native.requestVerification},
+    {outcome: {status: 'select_account', loginTicket: 'fixture-ticket', accounts: []}, action: {type: 'select-account', accountId: 'fixture-account'}, request: native.selectAccount},
+    {outcome: {status: 'binding_required', bindType: 'email', bindTicket: 'fixture-ticket'}, action: {type: 'request-binding-code', contact: 'user@example.invalid'}, request: native.requestBinding},
+  ] as const)('blocks $action.type while add-account cancellation is persisting', async fixture => {
+    native.exchange.mockResolvedValueOnce(fixture.outcome);
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await emitLink(callbackUrl());
+    let finishDelete!: () => void;
+    native.deleteSecure.mockImplementationOnce(() => new Promise<void>(resolve => {
+      finishDelete = () => { native.storage.delete(pendingKey); resolve(); };
+    }));
+    let closing!: Promise<void>;
+    await act(async () => { closing = auth.cancelAddAccount(); });
+    expect(auth.isBusy).toBe(true);
+    await act(async () => {
+      expect(await auth.dispatchLoginAction(fixture.action)).toBe(false);
+    });
+    expect(fixture.request).not.toHaveBeenCalled();
+    await act(async () => { finishDelete(); await closing; });
+    expect(auth.loginState).toBeNull();
+    expect(auth.isBusy).toBe(false);
   });
 
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {

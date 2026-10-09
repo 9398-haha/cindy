@@ -401,6 +401,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pendingAccountRefreshTokenRef = useRef<string | null>(null);
   const pendingAccountMembershipsRef = useRef<AuthMembership[]>([]);
   const additionalLoginRef = useRef(false);
+  const addAccountCancellationEpochRef = useRef<number | null>(null);
   const [accountGeneration, setAccountGeneration] = useState(0);
   const [savedAccounts, setSavedAccounts] = useState<MobileSavedAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
@@ -1890,6 +1891,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const dispatchLoginAction = useCallback(
     (action: MobileLoginAction): Promise<boolean> => {
+      if (addAccountCancellationEpochRef.current === loginFlowEpochRef.current) {
+        return Promise.resolve(false);
+      }
       if (action.type === 'initialize') {
         const epoch = loginFlowEpochRef.current;
         // Initialization has its own deduplication slot. A callback or explicit
@@ -2831,7 +2835,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     oauthCancelledRef.current = true;
     loginFlowEpochRef.current += 1;
     const cancelledEpoch = loginFlowEpochRef.current;
-    setIsBusy(false);
+    addAccountCancellationEpochRef.current = cancelledEpoch;
+    setIsBusy(true);
     try {
       await persistPendingOAuth(null);
     } catch (error) {
@@ -2840,6 +2845,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       updateLoginState({ step: 'error', code, recoverTo: 'identifier' });
       setAuthError(code);
       throw error;
+    } finally {
+      if (addAccountCancellationEpochRef.current === cancelledEpoch) {
+        addAccountCancellationEpochRef.current = null;
+      }
+      if (loginFlowEpochRef.current === cancelledEpoch) setIsBusy(false);
     }
     if (loginFlowEpochRef.current !== cancelledEpoch) return;
     pendingAccountTokenRef.current = null;
