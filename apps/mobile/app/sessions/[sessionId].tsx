@@ -9568,7 +9568,7 @@ export default function SessionScreen() {
             unified={{
               currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: !!currentSession.fastMode },
               scope: JSON.stringify([auth.user?.id, deviceId]),
-              agents: sessionAgentSwitchSupported ? ['claude-code','codex','pi'] : [sessionAgentKind],
+              agents: sessionAgentSwitchSupported ? ['claude-code','codex','pi','cursor'] : [sessionAgentKind],
               loadCapabilities: async agent => {
                 const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
                 if (!result) throw new Error('Capabilities unavailable');

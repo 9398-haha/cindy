@@ -9,6 +9,7 @@ import {
   Check,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { deduplicateDefaultPermissionOptions } from '@cindy/maker-shared/permission-mode';
 
 import { cn } from '@/lib/utils';
 import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
@@ -141,8 +142,11 @@ export function PermissionSelector({
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
 
-  const options: PermissionModeDescriptor[] = (capabilities?.permissionModes ?? []).filter(
-    (option) => allowedModes === undefined || allowedModes.includes(option.id),
+  const options: PermissionModeDescriptor[] = deduplicateDefaultPermissionOptions(
+    (capabilities?.permissionModes ?? []).filter(
+      (option) => allowedModes === undefined || allowedModes.includes(option.id),
+    ),
+    permissionMode,
   );
   const effectiveMode =
     options.length > 0 && !fallbackModeLabel ? normalizeMode(permissionMode, options) : permissionMode;

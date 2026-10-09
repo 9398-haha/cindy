@@ -30,7 +30,10 @@ let mockPermissionModes = PERMISSION_MODES;
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   useAgentCapabilities: (agent: string) => ({ capabilities: { permissionModes: agent === 'cursor'
-    ? [{ id: 'ask', displayName: '默认权限', description: 'Cursor native policy' }]
+    ? [
+      { id: 'ask', displayName: '默认权限', description: 'Cursor native policy' },
+      { id: 'default', displayName: '默认权限', description: 'Cursor native policy' },
+    ]
     : mockPermissionModes } }),
 }));
 
@@ -55,6 +58,18 @@ function getTrigger(): HTMLElement {
 }
 
 describe('PermissionSelector (MorphPopover pilot)', () => {
+  it.each(['ask', 'default'] as const)('merges Cursor permission aliases while retaining the active %s id', async permissionMode => {
+    const { onChange } = renderSelector({ vendorKey: 'cursor', permissionMode });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    const options = screen.getAllByRole('option');
+    expect(options).toHaveLength(1);
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+    expect(options[0].getAttribute('data-permission-mode')).toBe(permissionMode);
+    fireEvent.click(options[0]);
+    expect(onChange).toHaveBeenCalledWith(permissionMode);
+  });
+
   it('uses Cursor capabilities and never offers Claude auto or bypass modes', async () => {
     renderSelector({ vendorKey: 'cursor' });
     fireEvent.click(getTrigger());
