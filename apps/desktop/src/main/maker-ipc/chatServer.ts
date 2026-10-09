@@ -927,8 +927,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   });
   async function mentionIds(roomId: string, mentions: { all: boolean; botIds: string[] }) {
     const members = await api<Member[]>(`/conversations/${roomId}/members`);
-    return members.filter(m => m.state === 'joined' && m.id !== selfId && (mentions.all ||
-      mentions.botIds.includes(m.id) || mentions.botIds.includes(localBot(m.id)?.id ?? ''))).map(m => m.id);
+    const joined = members.filter(m => m.state === 'joined');
+    // A stale explicit target must never become an unaddressed message. Check
+    // every pick, including mixed valid/stale picks, before expanding Everyone.
+    const named = mentions.botIds.map(target => {
+      const member = joined.find(m => m.id === target || localBot(m.id)?.id === target);
+      if (!member) throw new Error('MENTION_UNAVAILABLE');
+      return member.id;
+    });
+    const recipients = mentions.all ? [...joined.map(m => m.id), ...named] : named;
+    return [...new Set(recipients.filter(target => target !== selfId))];
   }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }
