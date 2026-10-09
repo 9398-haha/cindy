@@ -7,7 +7,6 @@ import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { sessionsStore } from '@/lib/sessionsStore';
-import { onPatch } from '@/lib/sessionsBus';
 import { projectSidebarSessionActivity } from '@/features/cc-agent/sidebar/sidebarRightStatus';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionDisplayRunningState } from '@/features/cc-agent/hooks/useSessionDisplayRunningState';
@@ -59,14 +58,42 @@ export function BotSessionTaskLink({
     const existingOrigin = remoteProjectsStore.getSessionDeviceId(targetId);
     if (existingOrigin && existingOrigin !== sourceDeviceId) return;
     if (sourceDeviceId) remoteProjectsStore.pinSessionOrigin(sourceDeviceId, targetId);
-    void sessionService
-      .get(targetId)
+    const remoteRead = sourceDeviceId
+      ? remoteProjectsStore.captureSessionRead(sourceDeviceId, targetId)
+      : null;
+    const read = sourceDeviceId
+      ? window.electronAPI.deviceLink.invoke(sourceDeviceId, 'local-db:sessions:get', [targetId])
+      : sessionService.get(targetId);
+    const syncRemote = () => {
+      if (alive && sourceDeviceId && isDataOwnerGenerationCurrent(owner))
+        setSession(
+          remoteProjectsStore
+            .getDeviceSessions(sourceDeviceId)
+            .find((value) => value.id === targetId) ?? null,
+        );
+    };
+    const offRemote = sourceDeviceId ? remoteProjectsStore.subscribe(syncRemote) : () => {};
+    void read
       .then((value) => {
-        if (alive && isDataOwnerGenerationCurrent(owner)) setSession(value);
+        if (!alive || !isDataOwnerGenerationCurrent(owner)) return;
+        if (sourceDeviceId && remoteRead) {
+          const remote = value as Session | null;
+          if (remoteRead() && remote?.id === targetId) {
+            remoteProjectsStore.mergeDeviceSessions(
+              sourceDeviceId,
+              remoteProjectsStore.getDeviceName(sourceDeviceId) ?? sourceDeviceId,
+              [remoteRead.mergeActivity(remote)],
+              remote.status === 'archived' ? 'archived' : 'active',
+            );
+          }
+          syncRemote();
+        } else {
+          setSession(value as Session);
+        }
       })
       .catch(() => {});
-    const offPatch = onPatch((id, patch) => {
-      if (id === targetId && isDataOwnerGenerationCurrent(owner))
+    const offPatch = sessionsStore.subscribePatches((id, patch) => {
+      if (!sourceDeviceId && id === targetId && isDataOwnerGenerationCurrent(owner))
         setSession((current) => (current ? { ...current, ...patch } : current));
     });
     const refreshAttached = () => {
@@ -91,6 +118,7 @@ export function BotSessionTaskLink({
     return () => {
       alive = false;
       offPatch();
+      offRemote();
       offBinding();
       offReset();
     };

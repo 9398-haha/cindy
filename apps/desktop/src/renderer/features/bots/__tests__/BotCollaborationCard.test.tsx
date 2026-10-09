@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BotSessionTaskCard, BotSessionTaskMessageTrace } from '../BotCollaborationCard';
 import type { BotCollaborationMeta } from '../../../../shared/botCollaboration';
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  remoteGet: vi.fn(),
+  remoteRows: [] as any[],
+  remoteChanged: null as any,
+  remoteReadCurrent: true,
   navigate: vi.fn(),
   route: vi.fn(),
   row: null as any,
@@ -19,7 +23,9 @@ vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('../botDelegationLive', () => ({ useBotDelegation: () => ({ row: mocks.row }) }));
 vi.mock('@/lib/sessionService', () => ({ get: mocks.get }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ resolveSessionRoute: mocks.route }));
-vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { subscribe: () => () => {} } }));
+vi.mock('@/lib/sessionsStore', () => ({
+  sessionsStore: { subscribe: () => () => {}, subscribePatches: () => () => {} },
+}));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: any) => children }));
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => mocks.activity }));
 vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
@@ -35,7 +41,26 @@ vi.mock('@/features/cc-agent/hooks/useSessionDisplayRunningState', () => ({
   }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { getSessionDeviceId: mocks.origin, pinSessionOrigin: mocks.pin },
+  remoteProjectsStore: {
+    getSessionDeviceId: mocks.origin,
+    pinSessionOrigin: mocks.pin,
+    getDeviceName: () => 'Remote Mac',
+    getDeviceSessions: () => mocks.remoteRows,
+    captureSessionRead: () =>
+      Object.assign(() => mocks.remoteReadCurrent, { mergeActivity: (row: any) => row }),
+    subscribe: (cb: any) => {
+      mocks.remoteChanged = cb;
+      return () => {};
+    },
+    mergeDeviceSessions: (device: string, name: string, rows: any[]) => {
+      mocks.remoteRows = rows.map((row) => ({
+        ...row,
+        deviceLinkDeviceId: device,
+        deviceLinkDeviceName: name,
+      }));
+      mocks.remoteChanged?.();
+    },
+  },
 }));
 vi.mock('@/features/cc-agent/sidebar/SessionStatusIcon', () => ({
   SessionStatusIcon: ({ session, isRunning, isAttached }: any) => (
@@ -63,6 +88,14 @@ const data = (value = card) => ({ ...value });
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.row = null;
+  mocks.remoteRows = [];
+  mocks.remoteReadCurrent = true;
+  mocks.remoteGet.mockResolvedValue({
+    id: 'child',
+    title: 'Remote title',
+    agentKind: 'pi',
+    status: 'active',
+  });
   mocks.activity = null;
   mocks.running = new Map();
   mocks.origin.mockReturnValue(undefined);
@@ -76,6 +109,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
+      deviceLink: { invoke: mocks.remoteGet },
       binding: {
         resolveSession: vi.fn(async () => ({ attached: false })),
         onChanged: () => () => {},
@@ -134,7 +168,15 @@ it('keeps a readable fallback when metadata is unavailable without inventing a h
 it('pins remote child reads and navigation to the parent device', async () => {
   mocks.origin.mockImplementation((id: string) => (id === 'parent' ? 'mac-a' : undefined));
   render(<BotSessionTaskCard data={data()} />);
-  await screen.findByRole('button', { name: 'Current title' });
+  await screen.findByRole('button', { name: 'Remote title' });
+  expect(mocks.remoteGet).toHaveBeenCalledWith('mac-a', 'local-db:sessions:get', ['child']);
+  expect(mocks.get).not.toHaveBeenCalled();
+  expect(screen.getByTestId('original-harness').getAttribute('data-kind')).toBe('pi');
+  act(() => {
+    mocks.remoteRows = [{ ...mocks.remoteRows[0], title: 'Remote renamed' }];
+    mocks.remoteChanged();
+  });
+  expect(screen.getByRole('button', { name: 'Remote renamed' })).toBeTruthy();
   expect(mocks.pin).toHaveBeenCalledWith('mac-a', 'child');
 });
 it('does not read a conflicting child origin', () => {
@@ -146,4 +188,26 @@ it('keeps interjections as quiet traces', () => {
   render(<BotSessionTaskMessageTrace data={data({ ...card, role: 'interjection' })} />);
   expect(screen.getByText('bots.collab.messageSent')).toBeTruthy();
   expect(screen.queryByRole('button')).toBeNull();
+});
+
+it('keeps a newer remote mirror instead of publishing a stale GET', async () => {
+  let resolve!: (row: any) => void;
+  mocks.origin.mockImplementation((id: string) => (id === 'parent' ? 'mac-a' : undefined));
+  mocks.remoteGet.mockImplementationOnce(
+    () =>
+      new Promise((r) => {
+        resolve = r;
+      }),
+  );
+  render(<BotSessionTaskCard data={data()} />);
+  act(() => {
+    mocks.remoteReadCurrent = false;
+    mocks.remoteRows = [
+      { id: 'child', title: 'New remote title', agentKind: 'codex', deviceLinkDeviceId: 'mac-a' },
+    ];
+    mocks.remoteChanged();
+  });
+  await act(async () => resolve({ id: 'child', title: 'Stale title', agentKind: 'pi' }));
+  expect(screen.getByRole('button', { name: 'New remote title' })).toBeTruthy();
+  expect(screen.getByTestId('original-harness').getAttribute('data-kind')).toBe('codex');
 });

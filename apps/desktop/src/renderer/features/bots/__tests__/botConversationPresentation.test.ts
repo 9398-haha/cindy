@@ -253,3 +253,15 @@ it('does not insert interleaved valid receipts ahead of live final prose and pre
   // No final reply: every frozen result has a lightweight fallback once execution settles.
   expect(allKeys(project(input.slice(2), false))).toEqual(['msg-b-result', 'msg-a-result']);
 });
+
+it('keeps an unanswered historical receipt visible while the next user turn streams', () => {
+  const data = { v: 1, role: 'delegation-result', delegationId: 'd', fromBotId: 'b',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Task',
+    result: { runSequence: 1, status: 'completed', text: 'Report', artifacts: [] } };
+  const receipt = message('receipt', 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: data });
+  const history = [message('old-user', 'user'), receipt];
+  expect(allKeys(project(history, false))).toContain('msg-receipt');
+  const next = [...history, message('next-user', 'user'),
+    message('next-answer', 'assistant', 'First words', { assistantPhase: 'final_answer', isStreaming: true })];
+  expect(allKeys(project(next, true))).toEqual(['msg-old-user', 'msg-receipt', 'msg-next-user', 'msg-next-answer']);
+});

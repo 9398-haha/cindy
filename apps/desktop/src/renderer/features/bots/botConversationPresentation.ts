@@ -71,6 +71,8 @@ export function simplifyBotRenderItems(
     && item.message.role === 'assistant' && item.message.turnCompleted === true && item.message.content.trim()
     ? (item.message.botTaskResults ?? []).map(botTaskResultKey) : []));
   const lastSealedIndex = result.findLastIndex(item => isProse(item) && isCompletedAssistantMessage(item.message));
+  const lastUserIndex = result.findLastIndex(item => item.type === 'message'
+    && item.message.role === 'user' && item.message.delivery !== 'steer');
   const fallbackReceipts: RenderItem[] = [];
   const visible = result.filter((item, index) => {
     if (item.type !== 'message' || item.message.systemCardType !== 'bot-session-task-result') return true;
@@ -78,7 +80,7 @@ export function simplifyBotRenderItems(
     if (!card?.result) return true;
     if (attached.has(botTaskResultKey(card))) return false;
     // An unrelated later turn must not erase an already historical fallback link.
-    if (index < lastSealedIndex) return true;
+    if (index < Math.max(lastSealedIndex, lastUserIndex)) return true;
     if (!isStreaming) fallbackReceipts.push(item);
     return false;
   });
