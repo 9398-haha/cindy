@@ -30,6 +30,7 @@ export default function AddAccountScreen() {
     <LoginScreen
       additionalAccount
       onClose={() => {
+        if (closeStartedRef.current) return;
         closeStartedRef.current = true;
         void auth.cancelAddAccount().then(
           () => router.replace('/devices'),

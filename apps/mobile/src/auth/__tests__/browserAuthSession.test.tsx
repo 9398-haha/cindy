@@ -292,6 +292,29 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.storage.has(pendingKey)).toBe(false);
   });
 
+  it('ignores repeated close taps while cancellation is pending, including storage failure', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const pending = native.storage.get(pendingKey);
+    const url = callbackUrl();
+    await act(async () => { root.render(<AuthProvider><Probe /><AddAccountScreen /></AuthProvider>); });
+    native.writeSecure.mockRejectedValue(new Error('fixture storage unavailable'));
+    native.deleteSecure.mockRejectedValue(new Error('fixture storage unavailable'));
+    const writes = native.writeSecure.mock.calls.length;
+    await act(async () => { native.closeAccount!(); native.closeAccount!(); });
+    expect(native.replaceRoute).not.toHaveBeenCalled();
+    expect(native.writeSecure.mock.calls.length - writes).toBe(1);
+    expect(auth.loginState?.step).toBe('error');
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+    native.writeSecure.mockImplementation(async (key: string, value: string) => { native.storage.set(key, value); });
+    native.deleteSecure.mockImplementation(async (key: string) => { native.storage.delete(key); });
+    await act(async () => { native.closeAccount!(); });
+    expect(native.replaceRoute).toHaveBeenCalledExactlyOnceWith('/devices');
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
   it('surfaces a failed unmount cancellation without an unhandled rejection', async () => {
     await act(async () => { await auth.beginAddAccount(); });
     await start();
