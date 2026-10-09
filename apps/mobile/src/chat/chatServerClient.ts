@@ -49,7 +49,8 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
   const last = snapshot?.messages.filter(message => !message.threadRootId && !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? 1 : -1)[0];
   return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
-    lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined, item: {
+    lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined,
+    groupMembers: snapshot ? members.map(chatMemberIdentity) : undefined, item: {
     ref: { collectionId: 'bot-groups', kind: 'bot-group', id: room.id },
     revision: String(room.head ?? room.revision), display: { title: room.name,
       subtitle: members.map(memberName).join(' · '),
@@ -95,14 +96,18 @@ function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView, 'avata
   return { avatar, avatarUrl: null };
 }
 
+function chatMemberIdentity(member: ChatMember) {
+  return { botId: member.id, name: memberName(member), ...chatMemberAvatar(member.avatar), avatarColor: '' };
+}
+
 /** Sequence strings stay on the wire; numeric positions below are presentation order only. */
 export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
-    botId: member.id, actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
+    ...chatMemberIdentity(member), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role,
-    name: memberName(member), ...chatMemberAvatar(member.avatar), avatarColor: '', status: 'active',
+    status: 'active',
   }));
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);

@@ -54,6 +54,7 @@ describe('direct Chat Server client', () => {
       'http://avatars.example.invalid/a.png', 'https://user:secret@avatars.example.invalid/a.png', 'cindy-media://avatar/a.png'];
     data.members = avatars.map((avatar, index) => ({ ...data.members[0], id: id(index + 10), avatar }));
     const members = chatGroupView({ snapshot: data, messages: [], before: null }, id(1)).members;
+    expect(chatRoomRow(data.room, data, id(1)).groupMembers).toEqual(members.map(({ botId, name, avatar, avatarUrl, avatarColor }) => ({ botId, name, avatar, avatarUrl, avatarColor })));
     expect(members.map(member => ({ avatar: member.avatar, avatarUrl: member.avatarUrl }))).toEqual([
       { avatar: '', avatarUrl: avatars[0] }, { avatar: avatars[1], avatarUrl: null }, { avatar: '🐱', avatarUrl: null },
       ...Array.from({ length: 3 }, () => ({ avatar: '', avatarUrl: null })),

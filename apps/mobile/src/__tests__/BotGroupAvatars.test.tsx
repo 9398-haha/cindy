@@ -11,7 +11,7 @@ const h = vi.hoisted(() => {
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
   return { View: ({ children }: any) => createElement('div', null, children),
-    Image: ({ source, onError }: any) => { h.failImage = onError; return createElement('img', { src: source.uri }); },
+    Image: ({ source, onError }: any) => { h.failImage = onError; return createElement('img', { src: source.uri, 'data-asset': typeof source === 'string' ? source : undefined }); },
     StyleSheet: { create: (value: any) => value } };
 });
 vi.mock('@/components/AppText', async () => {
@@ -25,12 +25,16 @@ vi.mock('@/session/remoteMedia', () => ({ resolveMobileRemoteMedia: h.remoteMedi
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid' }));
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('lucide-react-native', () => ({ Users: () => null }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
+vi.mock('@/session/messageMarkdown', () => ({ parseMobileMarkdownInlines: () => [] }));
+vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
+vi.mock('@/session/CompanionListRow', () => ({ CompanionListRow: ({ avatar }: any) => avatar }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ cachedBotItem: () => null, readRemoteResourceSnapshot: async () => ({}),
-  remoteResourceCacheRevision: () => 0, subscribeRemoteResourceCache: () => () => {} }));
-import { chatGroupView, type ChatSnapshot } from '@/chat/chatServerClient';
+  remoteResourceCacheRevision: () => 0, subscribeRemoteResourceCache: () => () => {}, isRemoteResourceUnread: () => false }));
+import { chatGroupView, chatRoomRow, type ChatSnapshot } from '@/chat/chatServerClient';
 import { BotGroupAvatar, useBotGroupIdentities } from '@/session/BotGroupAvatars';
+import { BotGroupListRow } from '@/session/BotGroupList';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -66,4 +70,22 @@ it('keeps computer local media avatars on the existing resolver', async () => {
   })));
   expect(h.remoteMedia).toHaveBeenCalledExactlyOnceWith({ kind: 'image', url: 'cindy-media://avatar/a.png' }, expect.anything(), { thumbnail: true });
   expect(host.querySelector('img')?.getAttribute('src')).toBe('https://media.example.invalid/thumbnail.png');
+});
+
+it.each(['https://avatars.example.invalid/bot.png', 'cindy://avatar/preset/cindy', '🦊'])('preserves %s in the actual direct group roster avatar', async (avatar) => {
+  const snapshot: ChatSnapshot = { room: { id: 'group', name: 'Discussion', kind: 'group', archived: false, revision: 1,
+    created_at: '', updated_at: '', response_mode: 'all', speaking_mode: 'auto' }, cursor: '1', messages: [], members: [
+    { id: 'bot', kind: 'bot', name: 'Teammate', state: 'joined', ownerActorId: 'owner', ownerName: '', avatar, role: 'member' },
+    { id: 'left', kind: 'bot', name: 'Former', state: 'left', ownerActorId: 'owner', ownerName: '', avatar: 'https://avatars.example.invalid/left.png', role: 'member' },
+  ] };
+  const host = document.createElement('div'); root = createRoot(host);
+  await act(async () => root!.render(createElement(BotGroupListRow, {
+    row: chatRoomRow(snapshot.room, snapshot, 'owner'), online: true, onPress: () => {},
+  })));
+  if (avatar.startsWith('https:')) expect(host.querySelector('img')?.getAttribute('src')).toBe(avatar);
+  // The Vitest native-asset transform exposes the bundled file path instead of Metro's numeric asset ID.
+  else if (avatar.startsWith('cindy:')) expect(host.querySelector('img')?.getAttribute('data-asset')).toMatch(/[\\/]bot-presets[\\/]cindy\.png$/);
+  else { expect(host.querySelector('img')).toBeNull(); expect(host.textContent).toBe(avatar); }
+  expect(h.remoteMedia).not.toHaveBeenCalled(); expect(h.invoke).not.toHaveBeenCalled();
+  expect(host.querySelectorAll('img').length).toBe(avatar === '🦊' ? 0 : 1);
 });
