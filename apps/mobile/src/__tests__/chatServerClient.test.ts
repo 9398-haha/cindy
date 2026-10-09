@@ -11,6 +11,14 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('direct Chat Server client', () => {
+  it('uses the account human actor and rejects a companion identity', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ actor: { id: id(10), kind: 'human' } })
+      .mockResolvedValueOnce({ actor: { id: id(11), kind: 'bot' } });
+    const client = createChatServerClient(request);
+    expect(await client.me()).toBe(id(10));
+    await expect(client.me()).rejects.toThrow('INVALID_CHAT_IDENTITY');
+    expect(request.mock.calls.every(([path]) => path === '/me')).toBe(true);
+  });
   it('pages joined groups without devices, local bots, registration, imports or duplicated host copies', async () => {
     const first = Array.from({ length: 100 }, (_, n) => room(n + 1, n === 0 ? 'invited' : 'joined'));
     const request = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce([room(101)]);

@@ -272,10 +272,13 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     body = <View style={styles.center}><ActivityIndicator color={colors.textSecondary} /></View>;
   } else if (chat.state.kind !== 'ready' || !group) {
     const failed = chat.state.kind === 'error';
+    const errorCopyKey = !failed ? 'groupChat.unavailableDescription'
+      : !chat.server ? 'groupChat.loadFailedDescription'
+      : chat.state.kind === 'error' && chat.state.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? 'groupChat.server.endpointUnavailable' : 'groupChat.server.loadFailed';
     body = <View style={styles.center}>
       <MainWindowEmptyState centered testID={failed ? 'botGroup.loadFailed' : 'botGroup.unavailable'}
         title={t(failed ? 'groupChat.loadFailedTitle' : 'groupChat.unavailableTitle')}
-        copy={t(failed ? (chat.server ? 'groupChat.server.loadFailed' : 'groupChat.loadFailedDescription') : 'groupChat.unavailableDescription')}>
+        copy={t(errorCopyKey)}>
         <View style={styles.emptyActions}>
           <MainWindowActionButton action={{ label: t('shared.back'), onPress: leave, testID: 'botGroup.leave' }} />
           {failed ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), tone: 'primary', onPress: chat.reload, testID: 'botGroup.retry' }} /> : null}

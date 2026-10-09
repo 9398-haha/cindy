@@ -129,7 +129,11 @@ export function createChatServerClient(request: ChatRequest) {
       } while (after);
       return [...rooms.values()];
     },
-    async me(): Promise<string> { return chatId((await request<{ actor: { id: string } }>('/me')).actor.id); },
+    async me(): Promise<string> {
+      const { actor } = await request<{ actor: { id: string; kind: string } }>('/me');
+      if (actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
+      return chatId(actor.id);
+    },
     async snapshot(roomId: string): Promise<ChatSnapshot> {
       return request(`/conversations/${chatId(roomId)}/snapshot`);
     },

@@ -15,7 +15,7 @@ vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventLis
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid' }));
+vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => new Set() }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
@@ -41,7 +41,7 @@ beforeEach(() => {
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     options.assertCurrent();
     if (path.startsWith('/v1/conversations?')) return [room];
-    if (path === '/v1/me') return { actor: { id: self } };
+    if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
@@ -68,14 +68,14 @@ it('deduplicates server copies from multiple computers while retaining a local l
   h.legacy.items.push({ ...h.legacy.items[0], key: 'local', item: { ...h.legacy.items[0].item, ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'old-local-group' } } });
   await render(); expect(roster.items.map(row => row.item.ref.id)).toEqual([id, 'old-local-group']);
   expect(roster.items[0].host.deviceId).toBe('');
-  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self } } : []);
+  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self, kind: 'human' } } : []);
   await act(async () => { await roster.refresh(); });
   expect(roster.items.map(row => row.item.ref.id)).toEqual(['old-local-group']);
 });
 it('clears removed membership, exposes first-read failures and recovers on foreground', async () => {
   showChat = true; h.auth.apiFetch.mockRejectedValue(new Error('offline'));
   await render(); expect(chat.state.kind).toBe('error');
-  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self } } : path.endsWith('/snapshot') ? { room, members: [], messages: [], cursor: '1' } : []);
+  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self, kind: 'human' } } : path.endsWith('/snapshot') ? { room, members: [], messages: [], cursor: '1' } : []);
   await act(async () => h.foreground.forEach(fn => fn('active')));
   expect(chat.state.kind).toBe('ready');
   h.auth.apiFetch.mockRejectedValue(Object.assign(new Error('NOT_MEMBER'), { status: 403 }));
@@ -92,7 +92,7 @@ it('ignores an old account response after switching accounts', async () => {
 it('does not restore unverified computer cache rows on a cold offline mount', async () => {
   h.targets = [{ deviceId: 'mac', deviceName: 'Mac' }];
   h.legacy.items = [{ key: 'cached', host: h.targets[0], item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Removed' }, links: [] } }];
-  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self } } : []);
+  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self, kind: 'human' } } : []);
   await render(); expect(roster.items).toEqual([]);
 });
 
