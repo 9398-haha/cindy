@@ -462,13 +462,17 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     });
   });
 
-  it('不同来源的同 model id effort 互不串', async () => {
+  it('同一 agent/model 的 effort 跨来源共享(切来源不再换回旧档位)', async () => {
     const m = await loadModule();
     m.setProviderModelChoice('claude-code', 'anthropic', 'claude-opus-4-8', 'high');
-    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
+    // 权威槽已由 anthropic 那笔写入播种,xd 读到同一份 —— 这正是「同模型换来源不变低」。
+    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBe('high');
+    // 另一个来源再选一次 = 覆盖权威值,两个来源一起变(单一真相)。
     m.setProviderModelChoice('claude-code', 'xd', 'claude-opus-4-8', 'medium');
-    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('medium');
     expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBe('medium');
+    // agent 之间仍隔离:codex 的同名模型不吃 claude-code 的预设。
+    expect(m.getProviderModelEffort('codex', 'openai', 'claude-opus-4-8')).toBeUndefined();
   });
 
   it('只编辑非选中模型的 effort 不会篡改该来源 lastModel', async () => {
@@ -480,20 +484,97 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
       effort: 'medium',
     });
     expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
-    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
+    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBe('high');
   });
 
-  it('getProviderModelEffort:未记录模型 / 空参 / 其它来源 → undefined', async () => {
+  it('getProviderModelEffort:未记录模型 / 空参 → undefined,其它来源读到同一份', async () => {
     const m = await loadModule();
     m.setProviderModelChoice('codex', 'openai', 'gpt-5.5', 'high');
     expect(m.getProviderModelEffort('codex', 'openai', 'gpt-5.5')).toBe('high');
     expect(m.getProviderModelEffort('codex', 'openai', 'unknown-model')).toBeUndefined();
-    expect(m.getProviderModelEffort('codex', 'xd', 'gpt-5.5')).toBeUndefined();
+    expect(m.getProviderModelEffort('codex', 'xd', 'gpt-5.5')).toBe('high');
     expect(m.getProviderModelEffort('codex', '', 'gpt-5.5')).toBeUndefined();
     expect(m.getProviderModelEffort('codex', 'openai', '')).toBeUndefined();
   });
 
-  it('snapshot 只含真实 provider 槽', async () => {
+  it('权威槽优先于来源兼容副本(两处分歧时读权威)', async () => {
+    // 直接构造「权威槽 vs 来源副本」分歧的旧表:读路径必须取权威槽。
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'claude-code:anthropic': {
+          lastModel: 'claude-opus-4-8',
+          effortByModel: { 'claude-opus-4-8': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'claude-code:*': {
+          lastModel: '',
+          effortByModel: { 'claude-opus-4-8': 'max' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    const m = await loadModule();
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('max');
+    expect(m.getProviderModelChoice('claude-code', 'anthropic')).toEqual({
+      model: 'claude-opus-4-8',
+      effort: 'max',
+    });
+    // 权威槽里没有的模型仍按来源副本兜底(旧数据只写过来源槽的情形)。
+    // 换表后必须重置模块缓存,否则读到的是上一张表的进程内 snapshot。
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'claude-code:xd': {
+          lastModel: '',
+          effortByModel: { 'gpt-5.5': 'xhigh' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    vi.resetModules();
+    const fallback = await loadModule();
+    expect(fallback.getProviderModelEffort('claude-code', 'xd', 'gpt-5.5')).toBe('xhigh');
+  });
+
+  it('v2 历史数据(只有来源槽)首次读取即回填权威槽,不丢任何既有预设', async () => {
+    // 这正是用户机器上的真实形状:`*` 槽从未被写过,偏好全在来源槽里。
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'pi:glm-coding-plan': {
+          lastModel: 'glm-5.3-flash',
+          effortByModel: { 'glm-5.3-flash': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'codex:openai': {
+          lastModel: '',
+          effortByModel: { 'gpt-5.5': 'max' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    const m = await loadModule();
+    // 读路径立即按「全局优先」看到回填值:换来源不再掉回默认档。
+    expect(m.getProviderModelEffort('pi', 'zhipu-coding-plan-cn', 'glm-5.3-flash')).toBe('low');
+    expect(m.getProviderModelEffort('codex', 'xd', 'gpt-5.5')).toBe('max');
+    // 快照(镜像给 main / device-link 控制端)也带上权威槽。
+    expect(m.snapshotForSeed()['pi:*']?.effortByModel).toEqual({ 'glm-5.3-flash': 'low' });
+    expect(m.snapshotForSeed()['codex:*']?.effortByModel).toEqual({ 'gpt-5.5': 'max' });
+    // 一次真实写入把回填结果带出内存,落盘后重启仍生效。
+    m.setProviderModelEffort('pi', 'opencode-go', 'glm-5.3-flash', 'max');
+    const persisted = JSON.parse(
+      memStorage.getItem('xdt:providerModelMemory:v2') as string,
+    ) as Record<string, { effortByModel: Record<string, string> }>;
+    expect(persisted['pi:*'].effortByModel['glm-5.3-flash']).toBe('max');
+  });
+
+  it('snapshot 同时含权威槽与来源兼容副本', async () => {
     const m = await loadModule();
     m.setProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8', 'xhigh');
     m.setProviderModelFast('claude-code', 'xd', 'claude-opus-4-8', true);
@@ -503,7 +584,12 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     expect(m.snapshotForSeed()['claude-code:xd']?.fastByModel).toEqual({
       'claude-opus-4-8': true,
     });
-    expect(m.snapshotForSeed()['claude-code:*']).toBeUndefined();
+    // 权威槽把两个来源写进来的值汇总(供 main / 控制端按「全局优先」读)。
+    expect(m.snapshotForSeed()['claude-code:*']).toEqual({
+      effortByModel: { 'claude-opus-4-8': 'xhigh' },
+      fastByModel: { 'claude-opus-4-8': true },
+      thinkingByModel: {},
+    });
   });
 
   it('snapshot 带上思考开关', async () => {
@@ -590,12 +676,13 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
 // fast 与 effort 同维度:per-(agent, model) 全局共享。providerId 只保留 capability / 旧 v2 回退用途。
 // ---------------------------------------------------------------------------
 describe('providerModelMemory —— (agent, model) fast 全局预设', () => {
-  it('同一 model id 的 fast 按来源隔离', async () => {
+  it('同一 model id 的 fast 跨来源共享(显式 false 也是有效值)', async () => {
     const m = await loadModule();
     m.setProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8', true);
-    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
+    // fast 与 effort 同一口径:权威槽优先,来源副本同步。
+    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBe(true);
     m.setProviderModelFast('claude-code', 'xd', 'claude-opus-4-8', false);
-    expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(true);
+    expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(false);
     expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBe(false);
   });
 
@@ -616,7 +703,8 @@ describe('providerModelMemory —— (agent, model) fast 全局预设', () => {
     m.setProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8', false);
     expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(false);
     expect(m.getProviderModelFast('claude-code', 'anthropic', 'unknown-model')).toBeUndefined();
-    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
+    // 显式 false 不因为是 false 就被当成「没记过」:另一个来源同样读到 false。
+    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBe(false);
     expect(m.getProviderModelFast('claude-code', '', 'claude-opus-4-8')).toBeUndefined();
     expect(m.getProviderModelFast('claude-code', 'anthropic', '')).toBeUndefined();
   });

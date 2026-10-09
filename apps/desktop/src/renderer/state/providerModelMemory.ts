@@ -84,6 +84,92 @@ function presetKeyOf(agent: AgentKind): string {
   return keyOf(agent, MODEL_PRESET_SLOT_ID);
 }
 
+/** `${agent}` → 该 agent 的 slot key(反推用;agent 名本身不含 `:`)。 */
+function agentOfSlotKey(key: string): AgentKind | undefined {
+  const sep = key.indexOf(':');
+  if (sep <= 0) return undefined;
+  const agent = key.slice(0, sep);
+  return agent === 'claude-code' || agent === 'codex' || agent === 'pi' ? agent : undefined;
+}
+
+/**
+ * **v2 历史数据回填**:`set-effort` 在旧版本只写来源槽,`*` 权威槽从来没被写过。
+ * 若直接把读路径改成「全局优先」,老用户的全部预设会一次性消失 —— 所以首次读到旧表时,
+ * 把各来源槽里已有的值合并进对应的 `${agent}:*` 槽(只补空缺,不覆盖已存在的全局值)。
+ *
+ * 冲突时取**首见**值:历史数据无法回溯哪一笔是用户最后一次选择,而来源槽的键序只反映
+ * 「哪个来源先被写过」,不反映操作时序,取末见反而更随意。用户之后任何一次显式调档都会
+ * 用真实选择覆盖它,一次性成本可接受。
+ *
+ * 只在内存里补,**不主动落盘**:读路径立即看到权威值,下一次真实写入会自然把它带出去;
+ * 落盘失败 / 只读场景也不会因此产生写副作用。
+ */
+function backfillGlobalPresets(map: Record<string, ProviderMemory>): Record<string, ProviderMemory> {
+  const presetEffort = new Map<string, Record<string, Effort>>();
+  const presetFast = new Map<string, Record<string, boolean>>();
+  const presetThinking = new Map<string, Record<string, boolean>>();
+  for (const [key, slot] of Object.entries(map)) {
+    const agent = agentOfSlotKey(key);
+    if (!agent) continue;
+    if (key.slice(key.indexOf(':') + 1) === MODEL_PRESET_SLOT_ID) continue;
+    const presetKey = presetKeyOf(agent);
+    const effort = presetEffort.get(presetKey) ?? {};
+    for (const [model, value] of Object.entries(slot.effortByModel)) {
+      if (!(model in effort)) effort[model] = value;
+    }
+    const fast = presetFast.get(presetKey) ?? {};
+    for (const [model, value] of Object.entries(slot.fastByModel)) {
+      if (!(model in fast)) fast[model] = value;
+    }
+    const thinking = presetThinking.get(presetKey) ?? {};
+    for (const [model, value] of Object.entries(slot.thinkingByModel)) {
+      if (!(model in thinking)) thinking[model] = value;
+    }
+    presetEffort.set(presetKey, effort);
+    presetFast.set(presetKey, fast);
+    presetThinking.set(presetKey, thinking);
+  }
+  const out: Record<string, ProviderMemory> = { ...map };
+  let changed = false;
+  const merge = (
+    target: Record<string, Effort | boolean>,
+    source: Record<string, Effort | boolean> | undefined,
+  ): boolean => {
+    let touched = false;
+    if (!source) return touched;
+    for (const [model, value] of Object.entries(source)) {
+      if (model in target) continue;
+      target[model] = value;
+      touched = true;
+    }
+    return touched;
+  };
+  for (const [presetKey, effort] of presetEffort) {
+    const existing = out[presetKey];
+    const nextEffort: Record<string, Effort> = { ...(existing?.effortByModel ?? {}) };
+    const nextFast: Record<string, boolean> = { ...(existing?.fastByModel ?? {}) };
+    const nextThinking: Record<string, boolean> = { ...(existing?.thinkingByModel ?? {}) };
+    const touched =
+      merge(nextEffort, effort) ||
+      merge(nextFast, presetFast.get(presetKey)) ||
+      merge(nextThinking, presetThinking.get(presetKey));
+    if (!touched) continue;
+    out[presetKey] = {
+      lastModel: existing?.lastModel ?? '',
+      effortByModel: nextEffort,
+      fastByModel: nextFast,
+      thinkingByModel: nextThinking,
+    };
+    changed = true;
+  }
+  return changed ? out : map;
+}
+
+/** sanitize + 历史全局槽回填。localStorage 的每个读出口都走它,两条路径口径才一致。 */
+function readMap(raw: unknown): Record<string, ProviderMemory> {
+  return backfillGlobalPresets(sanitize(raw));
+}
+
 /**
  * 严格校验 v2:每个槽收敛成 { lastModel, effortByModel },其中 effortByModel 只保留
  * model / effort 都是非空 string 的条目;lastModel 和预设都为空才丢弃。
@@ -181,9 +267,9 @@ function migrateLegacyToOwner(ownerId: string): void {
     const rawV2 = window.localStorage.getItem(STORAGE_KEY);
     const rawV1 = window.localStorage.getItem(LEGACY_STORAGE_KEY_V1);
     const migrated = rawV2
-      ? sanitize(JSON.parse(rawV2))
+      ? backfillGlobalPresets(sanitize(JSON.parse(rawV2)))
       : rawV1
-        ? migrateV1(JSON.parse(rawV1))
+        ? backfillGlobalPresets(migrateV1(JSON.parse(rawV1)))
         : null;
     if (!migrated) return;
 
@@ -261,6 +347,17 @@ function sameMap(
   );
 }
 
+/**
+ * 把一次用户写入应用到整表。
+ *
+ * **模型级维度(effort / fast / thinking)双写**:`${agent}:*` 权威槽 + `${agent}:${providerId}`
+ * 来源兼容副本。只写来源槽会让 doc 承诺的「同模型跨来源共享」落空(旧版本正是如此:
+ * `*` 槽只被 clear 分支扫过,从不被写也不被读,实际生效的是分散的来源槽 —— 于是同一模型
+ * 换个来源就换回旧档位,表现为「推理强度自己变低」)。来源副本留给旧 v2 客户端与旧
+ * device-link 快照继续工作。
+ *
+ * `lastModel` 仍是来源维度(它回答的是「这个来源上次选的是哪个模型」),不双写。
+ */
 function applyProviderMemoryOp(
   map: Record<string, ProviderMemory>,
   op: ProviderMemoryOp,
@@ -277,6 +374,7 @@ function applyProviderMemoryOp(
         fastByModel: provider?.fastByModel ?? {},
         thinkingByModel: provider?.thinkingByModel ?? {},
       },
+      ...withModelKey(map, presetKeyOf(op.agent), 'effortByModel', op.model, op.effort),
     };
   }
   if (op.kind === 'set-last-model') {
@@ -301,6 +399,7 @@ function applyProviderMemoryOp(
         fastByModel: { ...(provider?.fastByModel ?? {}), [op.model]: op.enabled },
         thinkingByModel: provider?.thinkingByModel ?? {},
       },
+      ...withModelKey(map, presetKeyOf(op.agent), 'fastByModel', op.model, op.enabled),
     };
   }
   if (op.kind === 'set-thinking') {
@@ -313,6 +412,7 @@ function applyProviderMemoryOp(
         fastByModel: provider?.fastByModel ?? {},
         thinkingByModel: { ...(provider?.thinkingByModel ?? {}), [op.model]: op.enabled },
       },
+      ...withModelKey(map, presetKeyOf(op.agent), 'thinkingByModel', op.model, op.enabled),
     };
   }
 
@@ -383,10 +483,10 @@ function matchesOpConflictBaseline(
   const { op, baseline } = pending;
   const current = captureOpConflictBaseline(map, op);
   if (op.kind === 'set-last-model') return current.lastModel === baseline.lastModel;
+  // set-effort / set-fast / set-thinking 同时写权威槽与来源副本,两个槽都要仍处在基线上;
+  // 任一被别的窗口改动过,这笔旧操作就退休,不用过期快照覆盖别人的新选择。
   if (current.providerValue !== baseline.providerValue) return false;
-  if (op.kind === 'clear-effort' || op.kind === 'clear-fast') {
-    return current.presetValue === baseline.presetValue;
-  }
+  if (current.presetValue !== baseline.presetValue) return false;
   return true;
 }
 
@@ -433,7 +533,7 @@ function loadFromStorage(): Record<string, ProviderMemory> {
   if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(storageKey());
-    return raw ? sanitize(JSON.parse(raw)) : {};
+    return raw ? readMap(JSON.parse(raw)) : {};
   } catch {
     return {};
   }
@@ -449,12 +549,12 @@ function load(): Record<string, ProviderMemory> {
   try {
     const rawV2 = window.localStorage.getItem(storageKey());
     if (rawV2) {
-      cache = applyPendingOps(key, sanitize(JSON.parse(rawV2)));
+      cache = applyPendingOps(key, readMap(JSON.parse(rawV2)));
       return cache;
     }
     // 无 v2 → 尝试从历史 v1 迁移(只灌缓存,下次 set 再落盘 v2)。
     const rawV1 = activeDataOwnerId ? null : window.localStorage.getItem(LEGACY_STORAGE_KEY_V1);
-    cache = applyPendingOps(key, rawV1 ? migrateV1(JSON.parse(rawV1)) : {});
+    cache = applyPendingOps(key, rawV1 ? backfillGlobalPresets(migrateV1(JSON.parse(rawV1))) : {});
   } catch {
     cache = {};
   }
@@ -476,7 +576,7 @@ function freshMap(): Record<string, ProviderMemory> {
   }
   if (raw === null) return load();
   try {
-    const stored = sanitize(JSON.parse(raw));
+    const stored = readMap(JSON.parse(raw));
     const next = applyPendingOps(key, stored);
     if (pendingOpsByStorageKey.has(key)) {
       try {
@@ -591,13 +691,15 @@ export function getProviderModelChoice(
   if (!providerId) return undefined;
   const rec = load()[keyOf(agent, providerId)];
   if (!rec || !rec.lastModel) return undefined;
-  const effort = rec.effortByModel[rec.lastModel];
+  // 档位按权威全局槽取(切来源时同一模型应保持用户上一次的选择),来源槽只兜底旧数据。
+  const effort =
+    load()[presetKeyOf(agent)]?.effortByModel[rec.lastModel] ?? rec.effortByModel[rec.lastModel];
   return effort ? { model: rec.lastModel, effort } : undefined;
 }
 
 /**
- * 读某 (agent, 模型) 的全局 effort;providerId 只用于兼容读取旧 v2 来源槽。
- * 新全局值优先,所以同模型跨来源 / 跨对话共享;旧数据尚未产生全局值时仍能按原来源恢复。
+ * 读某 (agent, 模型) 的全局 effort —— `${agent}:*` 权威槽优先,来源槽只作旧数据兜底。
+ * providerId 仍参与入参保护与旧 v2 兼容读取,但**不再是权威**:同模型跨来源 / 跨对话共享。
  */
 export function getProviderModelEffort(
   agent: AgentKind,
@@ -606,7 +708,9 @@ export function getProviderModelEffort(
 ): Effort | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
-  return map[keyOf(agent, providerId)]?.effortByModel[model];
+  return (
+    map[presetKeyOf(agent)]?.effortByModel[model] ?? map[keyOf(agent, providerId)]?.effortByModel[model]
+  );
 }
 
 function setModelEffort(
@@ -653,7 +757,8 @@ export function setProviderModelChoice(
 }
 
 /**
- * 读某 (agent, 模型) 的全局 fast;providerId 只用于兼容读取旧 v2 来源槽。
+ * 读某 (agent, 模型) 的全局 fast —— 权威槽优先,来源槽兜底(同 effort)。
+ * 显式 false 是有效值,所以用 `??` 而不是 `||`:两个槽都没有才是 undefined(跟随默认)。
  */
 export function getProviderModelFast(
   agent: AgentKind,
@@ -662,7 +767,9 @@ export function getProviderModelFast(
 ): boolean | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
-  return map[keyOf(agent, providerId)]?.fastByModel?.[model];
+  return (
+    map[presetKeyOf(agent)]?.fastByModel?.[model] ?? map[keyOf(agent, providerId)]?.fastByModel?.[model]
+  );
 }
 
 /**
@@ -688,7 +795,11 @@ export function getProviderModelThinking(
   model: string,
 ): boolean | undefined {
   if (!providerId || !model) return undefined;
-  return load()[keyOf(agent, providerId)]?.thinkingByModel?.[model];
+  const map = load();
+  return (
+    map[presetKeyOf(agent)]?.thinkingByModel?.[model] ??
+    map[keyOf(agent, providerId)]?.thinkingByModel?.[model]
+  );
 }
 
 export function setProviderModelThinking(
@@ -703,6 +814,32 @@ export function setProviderModelThinking(
   const next = applyProviderMemoryOp(map, op);
   if (next === map) return;
   persist(next, [op], map);
+}
+
+/**
+ * 把某个模型键写进指定槽(一般为 `${agent}:*` 权威槽);槽不存在则新建。
+ * 只返回需要覆盖的那个键,调用方展开进整表 —— 与 clear 侧只清点名槽同一形状。
+ */
+function withModelKey<K extends 'effortByModel' | 'fastByModel' | 'thinkingByModel'>(
+  map: Record<string, ProviderMemory>,
+  slotKey: string,
+  field: K,
+  model: string,
+  value: string | boolean,
+): Record<string, ProviderMemory> {
+  const slot = map[slotKey];
+  const nextField = { ...(slot?.[field] ?? {}) };
+  // 类型上 K 决定 value 的形状;这里按字段取,调用方已保证配对。
+  (nextField as Record<string, string | boolean>)[model] = value;
+  return {
+    [slotKey]: {
+      lastModel: slot?.lastModel ?? '',
+      effortByModel: field === 'effortByModel' ? (nextField as Record<string, Effort>) : slot?.effortByModel ?? {},
+      fastByModel: field === 'fastByModel' ? (nextField as Record<string, boolean>) : slot?.fastByModel ?? {},
+      thinkingByModel:
+        field === 'thinkingByModel' ? (nextField as Record<string, boolean>) : slot?.thinkingByModel ?? {},
+    },
+  };
 }
 
 /**

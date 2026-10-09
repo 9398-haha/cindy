@@ -141,6 +141,7 @@ export interface WorkerDefaultsFromNewMaker {
 /**
  * 读某 (agent, provider, model) 在 providerModelMemory 镜像里的思考开关。
  * 未推送 / 未记录 → undefined，调用方保持模型默认（开）。
+ * 权威 `${agent}:*` 全局槽优先，来源副本兜底（被控端旧快照可能只写过来源槽）。
  */
 export function getThinkingEnabledFromMemory(
   agentKind: 'claude-code' | 'codex' | 'pi',
@@ -148,7 +149,10 @@ export function getThinkingEnabledFromMemory(
   model: string | undefined,
 ): boolean | undefined {
   if (!providerMemoryCache || !providerId || !model) return undefined;
-  return providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model];
+  return (
+    providerMemoryCache[`${agentKind}:*`]?.thinkingByModel?.[model] ??
+    providerMemoryCache[`${agentKind}:${providerId}`]?.thinkingByModel?.[model]
+  );
 }
 
 /**
