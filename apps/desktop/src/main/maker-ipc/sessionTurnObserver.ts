@@ -33,6 +33,9 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
       await deps.beforeLocalProviderStart?.(session);
       // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
       // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
+      // Agent 在另一台电脑（含 `share:` 分享来源）上运行时，所选来源在对端目录里；本机目录查不到
+      // 它不代表来源失效。只放过这一种拒绝，provider 原样保留，付费门禁照常执行。
+      const providerOnOtherDevice = session.agentDeviceId !== null;
       const model = session.model;
       if (model) {
         const verdict = await verdictForModelRoute(
@@ -53,14 +56,18 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         if (verdict.kind === 'reject' && verdict.reason === 'payment-required') {
           throwIpcError('PERMISSION_DENIED', `model "${model}" requires paid access`);
         }
-        if (verdict.kind === 'reject' && verdict.reason === 'explicit-source-unavailable') {
+        if (
+          verdict.kind === 'reject'
+          && verdict.reason === 'explicit-source-unavailable'
+          && !providerOnOtherDevice
+        ) {
           throwIpcError('INVALID_PARAMS', describeModelRouteRejection(verdict.reason, model, getSessionProvider(session.id)));
         }
       }
       // Existing tasks must restore the managed service after a manual stop too.
       // Reuse the common send boundary so IM/Goal/Scheduler get the same behavior.
       const providerId = getSessionProvider(session.id);
-      if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+      if (!providerOnOtherDevice && providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
         await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true });
       }
       deps.silentStopTurnLeaseGate.supersede(session.id);
