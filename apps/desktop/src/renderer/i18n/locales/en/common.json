@@ -206,7 +206,6 @@
       "descriptionOff": "When on, your other computers and the people you share with can use this provider’s models. While it’s off, existing shares are paused, not deleted."
     },
     "manage": {
-      "title": "Share {{provider}}",
       "description": "People you share with can pick {{provider}} models in their own sessions. The Agent runs on this computer and usage counts toward your {{provider}}; their files and commands still run on their own computer.",
       "descriptionWithDevice": "People you share with can pick {{provider}} models in their own sessions. The Agent runs on this computer ({{device}}) and usage counts toward your {{provider}}; their files and commands still run on their own computer.",
       "createLink": "Create Share Link",
@@ -398,6 +397,112 @@
       "approvedBody": "{{name}} shared {{provider}} with you",
       "rejectedTitle": "Share Request Declined",
       "rejectedBody": "{{name}} declined to share {{provider}}"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "Provider Group",
+      "description": "Combine this provider across your computers. Tasks are assigned automatically and move to another computer when one fails.",
+      "summary_one": "{{count}} computer · {{strategy}}",
+      "summary_other": "{{count}} computers · {{strategy}}",
+      "setUp": "Set Up Group",
+      "manage": "Manage Group"
+    },
+    "page": {
+      "title": "{{provider}} · Remote & Sharing",
+      "description": "Provider group and sharing for {{provider}} on this computer.",
+      "descriptionWithDevice": "Provider group and sharing for {{provider}} on this computer ({{device}}).",
+      "shareTitle": "Sharing"
+    },
+    "section": {
+      "title": "Provider Group",
+      "addComputer": "Add Computer",
+      "delete": "Delete Group",
+      "empty": "No provider group yet. Add {{provider}} from other computers, and tasks on this computer will pick one automatically.",
+      "loading": "Loading provider group…",
+      "loadFailed": "Couldn’t load the provider group",
+      "note": "Tasks on this computer are assigned by the group, and the Agent runs on the chosen computer. When your other computers or people you share with use it through this computer, the Agent still runs here for now."
+    },
+    "strategy": {
+      "label": "Group Strategy",
+      "least": "Least Busy",
+      "round": "Round Robin",
+      "order": "In Order",
+      "weight": "By Weight",
+      "description": {
+        "least": "New tasks go to the computer running the fewest tasks",
+        "round": "New tasks rotate across available computers",
+        "order": "Computers higher in the list come first; later ones are used only when earlier ones are unavailable",
+        "weight": "New tasks are split by weight"
+      }
+    },
+    "autoSwitch": {
+      "label": "Switch Computers Automatically",
+      "description": "When a computer in the group hits its usage limit, is signed out, or can’t be reached, the task continues on another one"
+    },
+    "member": {
+      "local": "This Computer",
+      "sourceDevice": "My other computer",
+      "sourceShare": "Shared by {{name}}",
+      "runningLabel": "running / limit",
+      "limitAria": "Task limit for {{name}}",
+      "limitOption_one": "Up to {{count}} task",
+      "limitOption_other": "Up to {{count}} tasks",
+      "weightAria": "Weight for {{name}}",
+      "weightOption": "Weight {{weight}}",
+      "localAria": "Assign tasks to this computer",
+      "pause": "Pause Assignments",
+      "resume": "Resume Assignments",
+      "remove": "Remove from Group",
+      "status": {
+        "checking": "Checking…",
+        "available": "Available",
+        "full": "Full",
+        "paused": "Assignments paused",
+        "cooling": "Cooling down",
+        "coolingUntil": "Cooling down · back around {{time}}",
+        "offline": "Offline",
+        "unavailable": {
+          "provider-off": "“Allow remote use” is off for this provider on that computer",
+          "disconnected": "Provider not connected or turned off",
+          "share-paused": "Share paused",
+          "share-removed": "Share removed"
+        }
+      },
+      "removeConfirm": {
+        "title": "Remove {{name}} from the provider group?",
+        "description": "It won’t get new tasks. Tasks already running there stay on that computer.",
+        "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} provider group.",
+        "confirm": "Remove from Group"
+      }
+    },
+    "deleteConfirm": {
+      "title": "Delete the {{provider}} provider group?",
+      "description": "New tasks on this computer will run here. Tasks already on other computers stay where they are.",
+      "confirm": "Delete Group"
+    },
+    "add": {
+      "title": "Add Computers to the {{provider}} Provider Group",
+      "sourceAria": "Computer source",
+      "tabAvailable": "Already Available",
+      "tabLink": "Share Link",
+      "availableDescription": "{{provider}} that this computer can already use: your other computers and providers shared with you, the same as the remote providers in the model list. Select one to add it—no request needed.",
+      "loading": "Looking for computers to add…",
+      "loadFailed": "Couldn’t load computers to add",
+      "empty": "No computers to add. Enable “Allow remote use” for {{provider}} on another computer, or request access with someone’s share link.",
+      "alreadyMember": "Already in group",
+      "confirm": "Add to Group",
+      "cancel": "Cancel",
+      "linkDescription": "Paste a {{provider}} share link from someone else. After they approve, come back to “Already Available” and select it.",
+      "pasteLink": "Paste Share Link"
+    },
+    "toast": {
+      "added_one": "Added {{count}} computer to the {{provider}} provider group",
+      "added_other": "Added {{count}} computers to the {{provider}} provider group",
+      "removed": "Removed {{name}} from the provider group",
+      "paused": "Paused assignments to {{name}}",
+      "resumed": "Resumed assignments to {{name}}",
+      "deleted": "Deleted the {{provider}} provider group"
     }
   },
   "privacyExit": {
@@ -10413,6 +10518,12 @@
           "reason": "Interruption reason",
           "attempt": "Attempt {{attempt}}/{{total}}",
           "sessionTotal": "{{count}} reconnects in this session"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} hit its usage limit; continued on {{to}}",
+          "auth": "{{from}} is signed out; continued on {{to}}",
+          "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
+          "overload": "{{from}} was overloaded; continued on {{to}}"
         }
       },
       "autoResumeSeparator": {
@@ -10674,7 +10785,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue."
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page."
     },
     "generatedFiles": {
       "title": "Files created this message",
