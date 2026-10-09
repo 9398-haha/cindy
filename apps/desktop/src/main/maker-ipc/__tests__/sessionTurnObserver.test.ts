@@ -69,14 +69,31 @@ describe('installSessionTurnObserver provider precheck', () => {
     }
   });
 
-  it('keeps the paid-model gate for an Agent on another computer', async () => {
+  it('keeps the paid-model gate for an Agent on your own other computer', async () => {
+    // 同账号另一台电脑仍由同一账号付费：本机 requires_payment 的记账主体就是这个账号，
+    // 门禁照常执行，不能借远端 Agent 绕开本账号的付费裁决。
     h.verdict.mockResolvedValue({ kind: 'reject', reason: 'payment-required' });
     const rejected = setup({ agentDeviceId: 'device-2' });
     await expect(rejected.start()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     expect(rejected.deps.sessionTurnLeaseTracker.markTurnStarted).not.toHaveBeenCalled();
     h.verdict.mockResolvedValue({ kind: 'reroute', providerId: 'paid', reason: 'payment-required' });
-    const rerouted = setup({ agentDeviceId: 'share:abc' });
+    const rerouted = setup({ agentDeviceId: 'device-2' });
     await expect(rerouted.start()).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+  });
+
+  it('lets a shared-provider run send even when this account marks the model requires_payment', async () => {
+    // 回归（PR #5689 review）：受邀者（免费账号）使用分享者的付费订阅供应商时，受邀者本机目录
+    // 把同名模型标为 requires_payment；请求记在分享者账上，不得用受邀者自己的标记拦发送。
+    for (const verdict of [
+      { kind: 'reject', reason: 'payment-required' },
+      { kind: 'reroute', providerId: 'paid', reason: 'payment-required' },
+    ]) {
+      h.verdict.mockClear();
+      h.verdict.mockResolvedValue(verdict);
+      const { deps, start } = setup({ agentDeviceId: 'share:abc' });
+      await expect(start()).resolves.toBeUndefined();
+      expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledWith('s1', 'i1:1');
+    }
   });
 
   it("does not start this computer's managed llama.cpp for an Agent on another computer", async () => {
