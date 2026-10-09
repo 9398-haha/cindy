@@ -796,6 +796,10 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   const checkKey = generatedFilesCheckKey(files, turnStartMs, turnEndMs, turnSealed);
   const filesRef = useRef(files);
   filesRef.current = files;
+  // onVisibilityChange 取这个快照,不让尚未复核的 seed 被下游(useBotGeneratedFileDeliveries)
+  // 当成已确认成果来隐藏 fallback 正文。
+  const pendingPathsRef = useRef(pendingPaths);
+  pendingPathsRef.current = pendingPaths;
   const visibleRef = useRef<GeneratedFileRef[] | null>(initialVisible);
   // 首屏来自缓存的结论仍要整卡复核一次:缓存只负责不留空白帧,不替代本次 stat。
   // 复核结果真正应用后才收起标记:检查中途被 checkKey 变化取消时,下一轮必须继续
@@ -858,7 +862,19 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
     visibleRef.current = plan.visible;
     // A remounted viewport starts with unknown visibility. Keep the parent's
     // last confirmation until this check settles instead of reviving prose.
-    if (plan.visible !== null) onVisibilityChange?.(checkKey, plan.visible.length > 0);
+    // A seed that is still pending (not yet re-checked by *this* mount) is
+    // not a fresh confirmation either, so it must not actively assert
+    // visible=true: useBotGeneratedFileDeliveries already keeps a prior
+    // true confirmation across the remount on its own (no jump either way);
+    // what it must not do is derive a *new* true from an unconfirmed seed.
+    // A plan with no visible files at all (confirmed gone, or genuinely new)
+    // is a real verdict and still reports immediately.
+    if (plan.visible !== null) {
+      const pendingNow = pendingPathsRef.current;
+      const hasConfirmedVisible = plan.visible.some((file) => !pendingNow.has(file.path));
+      const pendingOnly = plan.visible.length > 0 && !hasConfirmedVisible;
+      if (!pendingOnly) onVisibilityChange?.(checkKey, plan.visible.length > 0);
+    }
     if (plan.visible === null) {
       setExisting(null);
     } else {

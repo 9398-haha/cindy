@@ -38,6 +38,7 @@ function renderCard(props: {
   turnStartMs: number;
   turnEndMs?: number | null;
   botArtifacts?: boolean;
+  onVisibilityChange?: (checkKey: string, visible: boolean) => void;
 }) {
   return render(cardElement(props));
 }
@@ -48,6 +49,7 @@ function cardElement(props: {
   turnStartMs: number;
   turnEndMs?: number | null;
   botArtifacts?: boolean;
+  onVisibilityChange?: (checkKey: string, visible: boolean) => void;
 }) {
   return (
     <ChatSessionFileProvider
@@ -59,6 +61,7 @@ function cardElement(props: {
         turnStartMs={props.turnStartMs}
         turnEndMs={props.turnEndMs ?? null}
         botArtifacts={props.botArtifacts}
+        onVisibilityChange={props.onVisibilityChange}
       />
     </ChatSessionFileProvider>
   );
@@ -223,6 +226,35 @@ describe('local generated files remount', () => {
       cardElement({ renderItemKey: 'genfiles-b', turnStartMs: START, turnEndMs: START + 10_000 }),
     );
     expect(screen.queryByText('report.md')).toBeNull();
+  });
+
+  it('does not report a seeded-but-pending chip as a confirmed visibility', async () => {
+    const pendingStat: Array<(stat: unknown) => void> = [];
+    const statPath = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingStat.push(resolve);
+        }),
+    );
+    stubStat(statPath);
+    const first = renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START });
+    await waitFor(() => expect(pendingStat).toHaveLength(1));
+    pendingStat[0]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() => expect(screen.getByText('report.md')).toBeTruthy());
+    first.unmount();
+
+    // The chip itself is seeded and shown immediately, but it is not a fresh
+    // confirmation: useBotGeneratedFileDeliveries already keeps a prior true
+    // confirmation across a remount on its own, so a bare unconfirmed seed
+    // must not actively assert a *new* true (chatgpt-codex-connector P2,
+    // botConversationPresentation.ts) before this mount's own recheck lands.
+    const onVisibilityChange = vi.fn();
+    renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START, onVisibilityChange });
+    expect(screen.getByText('report.md')).toBeTruthy();
+    expect(onVisibilityChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(pendingStat).toHaveLength(2));
+    pendingStat[1]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() => expect(onVisibilityChange).toHaveBeenCalledWith(expect.any(String), true));
   });
 
   it('re-checks a seeded path when another file finishes during the first check', async () => {
