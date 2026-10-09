@@ -256,6 +256,11 @@ describe('Worker running on another device (execution device)', () => {
       ok: true as const,
       proxySessionId: 'proxy-1',
       remoteSessionId: 'remote-1',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'device-default-model', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
       agent: input.agent,
       model: input.model ?? 'device-default-model',
       workingDir: input.workingDir ?? '/Users/demo/Cindy/dialogues/remote-1',
@@ -285,6 +290,7 @@ describe('Worker running on another device (execution device)', () => {
     expect(deps.recordRemoteWorker).toHaveBeenCalledWith({
       workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
       proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+      proxySession: expect.objectContaining({ model: 'only-on-device', agentKind: 'cc' }),
       label: 'transcribe', role: '转写',
       workingDir: '/Users/demo/Interviews',
     });

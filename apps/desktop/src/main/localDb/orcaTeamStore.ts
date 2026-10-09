@@ -4,6 +4,7 @@ import { createId } from '@paralleldrive/cuid2';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 
 import { getDbClient } from './client/current.js';
+import type { OrcaRemoteWorkerProxySessionSeed } from './client/tx/types.js';
 import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, orcaRemoteOpens, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -735,49 +736,16 @@ export interface RemoteWorkerRow {
   remoteStopConfirmedAt: number | null;
 }
 
-/**
- * 写入远端 Worker 的本机代理任务行：不跑 Agent，不绑定本机目录(working_dir 为空)，
- * 只用来承接现有协同的计槽、归档与回报。真实任务在运行设备上。
- */
-export async function insertRemoteWorkerProxySession(input: {
-  id: string;
-  title: string;
-  agentKind: MakerAgentKind;
-  model: string;
-  effort: string | null;
-  permissionMode: string;
-  fastMode: boolean;
-}): Promise<void> {
-  const now = Date.now();
-  await getDbClient()
-    .drizzle.insert(sessions)
-    .values({
-      id: input.id,
-      title: input.title,
-      workingDir: null,
-      workspaceKind: 'project',
-      model: input.model,
-      effort: (input.effort ?? 'high') as (typeof sessions.$inferInsert)['effort'],
-      permissionMode: input.permissionMode as (typeof sessions.$inferInsert)['permissionMode'],
-      fastMode: input.fastMode,
-      status: 'active',
-      agentKind: input.agentKind === 'claude-code' ? 'cc' : input.agentKind,
-      orcaRole: 'worker',
-      source: 'desktop',
-      createdAt: now,
-      updatedAt: now,
-    });
-}
-
 /** Worker、远端路由、代理身份和 open 收据在同一事务内提交。 */
 export async function addRemoteWorker(input: {
   workerId: string; teamId: string; proxySessionId: string;
   deviceId: string; remoteSessionId: string; label: string; role: string;
+  proxySession?: OrcaRemoteWorkerProxySessionSeed;
 }): Promise<void> {
   await getDbClient().tx('orca.upsertWorker', {
     id: input.workerId, teamId: input.teamId, sessionId: input.proxySessionId,
     label: input.label, role: input.role, status: 'idle', focused: false,
-    remoteExecution: { deviceId: input.deviceId, remoteSessionId: input.remoteSessionId },
+    remoteExecution: { deviceId: input.deviceId, remoteSessionId: input.remoteSessionId, proxySession: input.proxySession },
     now: Date.now(),
   });
 }

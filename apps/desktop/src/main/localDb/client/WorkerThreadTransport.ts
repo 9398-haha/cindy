@@ -1456,6 +1456,19 @@ function orcaUpsertWorker(readyDb, args) {
     if (!activeTeam) {
       throw new Error('Orca team ' + teamId + ' is no longer active');
     }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), proxy.fastMode === true ? 1 : 0,
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+        );
+      }
+    }
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }

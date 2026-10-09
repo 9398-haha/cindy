@@ -6,6 +6,7 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import type { OrcaRemoteWorkerProxySessionSeed } from '../localDb/client/tx/types.js';
 import {
   resolveOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -230,11 +231,12 @@ export interface OrcaWorkerCreateParams {
   executionDeviceId?: string;
 }
 
-/** 在运行设备上建好 Worker 任务、并在本机写好代理任务行之后的结果。 */
+/** 运行设备已建好任务；代理数据随后与 Worker 路由一起提交。 */
 export type OrcaRemoteWorkerOpenResult =
   | {
       ok: true;
       proxySessionId: string;
+      proxySession: OrcaRemoteWorkerProxySessionSeed;
       remoteSessionId: string;
       agent: AgentKind;
       model: string;
@@ -358,6 +360,7 @@ export interface OrcaWorkerCreationDeps {
     teamId: string;
     leadSessionId: string;
     proxySessionId: string;
+    proxySession: OrcaRemoteWorkerProxySessionSeed;
     deviceId: string;
     remoteSessionId: string;
     label: string;
@@ -853,6 +856,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           teamId: params.teamId,
           leadSessionId: params.leadSessionId,
           proxySessionId: opened.proxySessionId,
+          proxySession: opened.proxySession,
           deviceId,
           remoteSessionId: opened.remoteSessionId,
           label,

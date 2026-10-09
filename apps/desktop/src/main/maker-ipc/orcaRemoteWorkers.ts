@@ -24,7 +24,6 @@ import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import {
   archiveSingleWorkerSession,
   getRemoteWorkerByProxySession,
-  insertRemoteWorkerProxySession,
   listActiveRemoteWorkers,
   listUnreleasedEndedRemoteWorkers,
   markWorkerRemoteReleased,
@@ -480,35 +479,21 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       }
       const proxySessionId = createId();
       const agent: AgentKind = opened.agentKind ?? input.agent;
-      try {
-        assertOwner(owner);
-        await insertRemoteWorkerProxySession({
-          id: proxySessionId,
-          title: input.title,
-          agentKind: agent,
-          model: opened.model || input.model || '',
-          effort: input.effort && EFFORTS.has(input.effort) ? input.effort : null,
-          permissionMode: input.permissionMode,
-          fastMode: input.fast === true,
-        });
-        assertOwner(owner);
-      } catch (err) {
-        opening.delete(remoteSessionId);
-        if (
-          owner === ownerToken() &&
-          ownerCurrent() &&
-          (await runtime.release({
-            deviceId: input.deviceId,
-            remoteSessionId,
-          }))
-        )
-          await removeRemoteWorkerOpen(remoteSessionId);
-        throw err;
-      }
+      // open 与关联之间尚未创建本机代理，退出后只需按持久 open 身份解除远端标记。
+      assertOwner(owner);
+      const proxySession = {
+        title: input.title,
+        agentKind: agent === 'claude-code' ? 'cc' : agent,
+        model: opened.model || input.model || '',
+        effort: input.effort && EFFORTS.has(input.effort) ? input.effort : null,
+        permissionMode: input.permissionMode,
+        fastMode: input.fast === true,
+      };
       creationOwners.set(proxySessionId, owner);
       return {
         ok: true,
         proxySessionId,
+        proxySession,
         remoteSessionId: opened.sessionId || remoteSessionId,
         agent,
         model: opened.model,
@@ -529,7 +514,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         await addRemoteWorker(input);
         assertOwner(owner);
         opening.delete(input.remoteSessionId);
-        const { workingDir, label: _label, role: _role, ...ref } = input;
+        const { workingDir, proxySession: _proxySession, label: _label, role: _role, ...ref } = input;
         runtime.track({ ...ref, lastBridgedMessageId: null }, { workingDir });
         deps.broadcastOrcaWorkerChanged(input.leadSessionId);
         creationOwners.delete(input.proxySessionId);
@@ -552,7 +537,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         opening.delete(input.remoteSessionId);
         const row = await getRemoteWorkerByProxySession(input.proxySessionId);
         assertOwner(owner);
-        if (row) {
+        if (row && row.deviceId === input.deviceId && row.remoteSessionId === input.remoteSessionId) {
           await removeWorker(row.workerId);
           assertOwner(owner);
           runtime.untrack(input.proxySessionId);
@@ -560,13 +545,12 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           creationOwners.delete(input.proxySessionId);
           return;
         }
-        runtime.untrack(input.proxySessionId);
+        // 关联事务失败时没有新代理；ID 冲突也不能归档或取消已有任务的路由。
         if (await runtime.release(input)) {
           assertOwner(owner);
           await removeRemoteWorkerOpen(input.remoteSessionId);
         }
         assertOwner(owner);
-        await archiveSingleWorkerSession(input.proxySessionId).catch(() => undefined);
         creationOwners.delete(input.proxySessionId);
       });
     },

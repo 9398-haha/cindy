@@ -8,7 +8,6 @@ import { withSendToSessionLock } from '../sendToSessionLock.js';
 const store = vi.hoisted(() => ({
   archiveSingleWorkerSession: vi.fn(async () => undefined),
   getRemoteWorkerByProxySession: vi.fn(async () => null),
-  insertRemoteWorkerProxySession: vi.fn(async () => undefined),
   listActiveRemoteWorkers: vi.fn(async () => []),
   listUnreleasedEndedRemoteWorkers: vi.fn(async () => []),
   markWorkerRemoteReleased: vi.fn(async () => undefined),
@@ -108,6 +107,9 @@ const openInput = {
   title: 'transcriber',
 };
 
+const proxySeed = { title: 'transcriber', agentKind: 'cc', model: 'claude-opus-5-5',
+  effort: null, permissionMode: 'auto', fastMode: false };
+
 function baseDeps() {
   return {
     getLiveSession: vi.fn(() => null),
@@ -196,7 +198,7 @@ describe('execution devices', () => {
 });
 
 describe('openRemoteWorker', () => {
-  it('opens the task on the device and writes a local proxy row without a directory', async () => {
+  it('opens the device task and defers the local proxy until Worker association', async () => {
     const { workers, remoteInvoke } = setup();
     const result = await workers.openRemoteWorker({ ...openInput, workingDir: '/Users/demo/Interviews' });
     expect(result).toMatchObject({
@@ -212,9 +214,15 @@ describe('openRemoteWorker', () => {
       workingDir: '/Users/demo/Interviews',
       lead: { leadSessionId: 'lead-1', leadTitle: '访谈整理', workerLabel: 'transcriber' },
     });
-    expect(store.insertRemoteWorkerProxySession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'claude-opus-5-5', permissionMode: 'auto' }),
-    );
+    expect(store.addRemoteWorker).not.toHaveBeenCalled();
+    if (!result.ok) throw Error('expected successful open');
+    await workers.recordRemoteWorker({ workerId: 'w-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      proxySessionId: result.proxySessionId, proxySession: result.proxySession,
+      remoteSessionId: result.remoteSessionId, deviceId: 'mac-mini', label: 'transcriber', role: 'developer' });
+    expect(store.addRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySessionId: result.proxySessionId, proxySession: proxySeed,
+    }));
+    workers.stop();
   });
 
   it('refuses an offline device without falling back to this computer', async () => {
@@ -224,7 +232,7 @@ describe('openRemoteWorker', () => {
       errorCode: 'REMOTE_AGENT_DEVICE_UNREACHABLE',
     });
     expect(remoteInvoke).not.toHaveBeenCalled();
-    expect(store.insertRemoteWorkerProxySession).not.toHaveBeenCalled();
+    expect(store.addRemoteWorker).not.toHaveBeenCalled();
   });
 
   it('reports an outdated device as unsupported', async () => {
@@ -417,6 +425,7 @@ describe('wrapTeamDeps', () => {
       teamId: 'team-1',
       leadSessionId: 'lead-1',
       proxySessionId: 'proxy-1',
+      proxySession: proxySeed,
       deviceId: 'mac-mini',
       remoteSessionId: 'remote-1',
       label: 'transcriber',
@@ -733,6 +742,46 @@ describe('wrapTeamDeps', () => {
 });
 
 describe('remote open recovery', () => {
+  it.each([false, true])('does not touch a colliding existing task after association fails (remote=%s)', async remote => {
+    const existing = { workerId: 'other-worker', teamId: 'other-team', leadSessionId: 'other-lead',
+      proxySessionId: 'proxy-1', deviceId: 'other-device', remoteSessionId: 'other-remote', lastBridgedMessageId: null };
+    const { workers, remoteInvoke } = setup();
+    if (remote) workers.runtime.track(existing);
+    store.addRemoteWorker.mockRejectedValueOnce(new Error('UNIQUE constraint failed: sessions.id'));
+    store.getRemoteWorkerByProxySession.mockResolvedValueOnce(remote ? existing as never : null);
+    const input = { ...openInput, proxySessionId: 'proxy-1', proxySession: proxySeed, remoteSessionId: 'new-remote' };
+    try {
+      await expect(workers.recordRemoteWorker(input)).rejects.toThrow('UNIQUE');
+      await workers.discardRemoteWorker(input);
+      expect(store.removeWorker).not.toHaveBeenCalled();
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+      expect(workers.runtime.isRemote('proxy-1')).toBe(remote);
+      expect(remoteInvoke.mock.calls.map(([, channel]) => channel)).toEqual(['maker:orca:remote-worker:release']);
+      expect(remoteInvoke.mock.calls[0]![0]).toBe('mac-mini');
+      expect(store.removeRemoteWorkerOpen).toHaveBeenCalledWith('new-remote');
+    } finally { workers.stop(); }
+  });
+
+  it('recovers an open abandoned before association without creating a local proxy', async () => {
+    const first = setup();
+    const opened = await first.workers.openRemoteWorker(openInput);
+    if (!opened.ok) throw Error('expected successful open');
+    expect(store.addRemoteWorker).not.toHaveBeenCalled();
+    first.workers.stop();
+    const receipt = { deviceId: 'mac-mini', remoteSessionId: opened.remoteSessionId, createdAt: Date.now() };
+    store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+    store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+    const second = setup();
+    try {
+      await second.workers.releaseEnded([]);
+      expect(second.remoteInvoke.mock.calls.map(([, channel]) => channel))
+        .toEqual(['local-db:sessions:get', 'maker:orca:remote-worker:release']);
+      expect(store.removeRemoteWorkerOpen).toHaveBeenCalledWith(opened.remoteSessionId);
+      expect(store.addRemoteWorker).not.toHaveBeenCalled();
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+    } finally { second.workers.stop(); }
+  });
+
   it('rechecks an orphan snapshot after a Worker has become associated', async () => {
     const { workers, remoteInvoke } = setup();
     let deliver!: (rows: never[]) => void;
@@ -742,7 +791,7 @@ describe('remote open recovery', () => {
     store.listOrphanRemoteWorkerOpens.mockImplementationOnce(async () => { entered(); return gate; });
     const cleanup = workers.releaseEnded([]);
     await reading;
-    await workers.recordRemoteWorker({ ...openInput, proxySessionId: 'proxy-1', remoteSessionId: 'remote-1' });
+    await workers.recordRemoteWorker({ ...openInput, proxySessionId: 'proxy-1', proxySession: proxySeed, remoteSessionId: 'remote-1' });
     store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([]);
     deliver([{ deviceId: 'mac-mini', remoteSessionId: 'remote-1', createdAt: Date.now() }] as never[]);
     await cleanup;
@@ -772,7 +821,7 @@ describe('remote open recovery', () => {
     await workers.start();
     finishList(); await rejected;
     expect(store.saveRemoteWorkerOpen).not.toHaveBeenCalled();
-    expect(store.insertRemoteWorkerProxySession).not.toHaveBeenCalled();
+    expect(store.addRemoteWorker).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
     workers.stop();
   });
@@ -783,7 +832,7 @@ describe('remote open recovery', () => {
     const opened = await workers.openRemoteWorker(openInput);
     if (!opened.ok) throw Error('expected successful open');
     workers.stop(); owner = {}; await workers.start();
-    const record = { ...openInput, proxySessionId: opened.proxySessionId, remoteSessionId: opened.remoteSessionId };
+    const record = { ...openInput, proxySessionId: opened.proxySessionId, proxySession: opened.proxySession, remoteSessionId: opened.remoteSessionId };
     await expect(workers.recordRemoteWorker(record)).rejects.toThrow('owner changed');
     await workers.discardRemoteWorker(record);
     expect(store.addRemoteWorker).not.toHaveBeenCalled();
