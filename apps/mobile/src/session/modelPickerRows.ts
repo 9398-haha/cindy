@@ -7,6 +7,7 @@
  * 这里可 node 单测。
  */
 import { isCodexGatewayWireModel } from '@cindy/model-providers/classification';
+import { isCustomRoutedProvider } from '@cindy/model-providers/provider-identity';
 import { getModel, modelSupportsFastMode, type ProviderView } from '@cindy/model-providers/registry';
 import type { SectionModel } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
@@ -345,9 +346,15 @@ export function rowFastOn(args: {
 
 /**
  * budget 档置灰判定(桌面 budgetDisabledOf 同口径,key 判定换成被控端 presence 探测):
- * `openai-codex/` 或 `codex/` 前缀 且 被控端明确无 key 才置灰;'unknown'(旧被控端 / 拉取失败)不置灰,
- * 宁可放行到被控端请求期报错也不误伤。
+ * `openai-codex/` 或 `codex/` 前缀且被控端明确无 key 才置灰。自定义/组织供应商目录里的
+ * 同前缀模型走该供应商自己的路由,不吃 Cindy 网关 key gate。没传 provider 时保持原前缀判定。
+ * 'unknown'(旧被控端 / 拉取失败)不置灰,宁可放行到被控端请求期报错也不误伤。
  */
-export function budgetRowDisabled(modelId: string, keyStatus: DeviceApiKeyStatus): boolean {
+export function budgetRowDisabled(
+  modelId: string,
+  keyStatus: DeviceApiKeyStatus,
+  provider?: Pick<ProviderView, 'source'> | null,
+): boolean {
+  if (isCustomRoutedProvider(provider)) return false;
   return isCodexGatewayWireModel(modelId) && keyStatus === 'absent';
 }

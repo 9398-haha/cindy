@@ -390,5 +390,8 @@ describe('budgetRowDisabled(折扣版置灰三态)', () => {
     expect(budgetRowDisabled('codex/gpt-5.5', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'unknown')).toBe(false);
     expect(budgetRowDisabled('gpt-5.5', 'absent')).toBe(false);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'builtin' })).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'user' })).toBe(false);
+    expect(budgetRowDisabled('codex/gpt-5.5', 'absent', { source: 'organization' })).toBe(false);
   });
 });
