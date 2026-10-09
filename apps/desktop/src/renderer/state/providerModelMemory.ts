@@ -309,6 +309,13 @@ interface PendingProviderMemoryOp {
     providerValue: Effort | boolean | undefined;
     lastModel: string;
     presetValue: Effort | boolean | undefined;
+    /**
+     * clear-effort / clear-fast 额外要看的写集:该 agent 下、该模型在**每个**来源槽里
+     * 的值(全来源清除会连它们一起删)。只记 providerValue + presetValue 是不够的 ——
+     * 别的窗口改了第三个来源时这两个都没变,旧清除会按陈旧快照把别人的新值删掉。
+     * set-* 与 set-last-model 不写这个字段。
+     */
+    clearedSlots?: Record<string, Effort | boolean | undefined>;
   };
   conflictKey: string;
 }
@@ -360,6 +367,36 @@ function sameMap(
  *
  * `lastModel` 仍是来源维度(它回答的是「这个来源上次选的是哪个模型」),不双写。
  */
+/**
+ * clear-effort / clear-fast 的**全来源写集**:该 agent 下、该模型在除权威槽以外每个来源
+ * 槽里的当前值,以及删掉该键后的槽。apply 与冲突基线都从这里取,两边口径不会漂移。
+ */
+function clearedSourceValues(
+  map: Record<string, ProviderMemory>,
+  op: ProviderMemoryOp,
+): {
+  /** 槽 key → 删键后的槽(只含有该键的槽;空 = 没有可删的副本)。 */
+  nextSlots: Record<string, ProviderMemory>;
+  /** 槽 key → 删之前的旧值(供写盘失败重放时判断别窗有没有改过它)。 */
+  values: Record<string, Effort | boolean | undefined>;
+} {
+  const field = op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
+  const presetKey = presetKeyOf(op.agent);
+  const nextSlots: Record<string, ProviderMemory> = {};
+  const values: Record<string, Effort | boolean | undefined> = {};
+  for (const [key, slot] of Object.entries(map)) {
+    if (key === presetKey) continue;
+    if (agentOfSlotKey(key) !== op.agent) continue;
+    // 记下每个来源槽的当前值,**包括没有该键的槽**(值 undefined):别窗从「无」写
+    // 成一个具体值也是变化,旧清除同样该退休。
+    values[key] = slot[field][op.model];
+    const nextSlot = withoutModelKey(slot, field, op.model);
+    if (nextSlot) nextSlots[key] = nextSlot;
+  }
+  values[keyOf(op.agent, op.providerId)] ??= map[keyOf(op.agent, op.providerId)]?.[field][op.model];
+  return { nextSlots, values };
+}
+
 function applyProviderMemoryOp(
   map: Record<string, ProviderMemory>,
   op: ProviderMemoryOp,
@@ -442,18 +479,12 @@ function applyProviderMemoryOp(
   // 清除是**全局**语义(「没有该键 ⇒ 跟随当前版本的目录默认」),所以同一个模型在**所有**
   // 来源槽里的副本都要删。只删当前来源的话,别的来源那份会被 backfillGlobalPresets
   // 补回刚清空的权威槽 —— 用户的「恢复默认」被悄悄撤销(且不需要新旧版本混跑)。
-  const cleared: Record<string, ProviderMemory> = {};
-  for (const [key, slot] of Object.entries(map)) {
-    if (key === presetKey) continue;
-    if (agentOfSlotKey(key) !== op.agent) continue;
-    const nextSlot = withoutModelKey(slot, field, op.model);
-    if (nextSlot) cleared[key] = nextSlot;
-  }
-  const clearedAny = Object.keys(cleared).length > 0;
+  const cleared = clearedSourceValues(map, op);
+  const clearedAny = Object.keys(cleared.nextSlots).length > 0;
   if (!nextProvider && !nextPreset && !clearedAny) return map;
   return {
     ...map,
-    ...cleared,
+    ...cleared.nextSlots,
     ...(nextProvider ? { [providerKey]: nextProvider } : {}),
     ...(nextPreset ? { [presetKey]: nextPreset } : {}),
   };
@@ -487,6 +518,17 @@ function captureOpConflictBaseline(
   // 三个模型级维度的写集都是「权威槽 + 来源槽」两处,基线必须两处都取 —— 只取来源槽
   // 会让权威槽的冲突检查恒通过(两侧都是 undefined),该退休的旧操作不退休。
   const preset = map[presetKeyOf(op.agent)];
+  // clear 的写集是「权威槽 + 所有来源副本」,基线也要这么多值:只取 providerValue +
+  // presetValue 的话,别的窗口改了第三个来源时这两个都没变,旧清除按陈旧快照重放会把
+  // 它刚写的新值一并删掉(Greptile 二审 finding)。
+  if (op.kind === 'clear-effort' || op.kind === 'clear-fast') {
+    return {
+      providerValue: undefined,
+      lastModel: provider?.lastModel ?? '',
+      presetValue: undefined,
+      clearedSlots: clearedSourceValues(map, op).values,
+    };
+  }
   if (opDimension(op) === 'thinking') {
     return {
       providerValue: provider?.thinkingByModel[op.model],
@@ -519,6 +561,13 @@ function matchesOpConflictBaseline(
   // 任一被别的窗口改动过,这笔旧操作就退休,不用过期快照覆盖别人的新选择。
   if (current.providerValue !== baseline.providerValue) return false;
   if (current.presetValue !== baseline.presetValue) return false;
+  if (baseline.clearedSlots) {
+    for (const [key, value] of Object.entries(baseline.clearedSlots)) {
+      const slot = map[key];
+      const field = op.kind === 'clear-effort' ? 'effortByModel' : 'fastByModel';
+      if (slot?.[field][op.model] !== value) return false;
+    }
+  }
   return true;
 }
 
