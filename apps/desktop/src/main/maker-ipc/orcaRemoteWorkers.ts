@@ -115,17 +115,19 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     onTurnStarted: async (proxySessionId) => {
       await deps.getTeamService()?.handleWorkerTurnStarted(proxySessionId);
     },
-    onTurnEnded: async (proxySessionId, turn: RemoteWorkerTurnEnd) => {
+    captureTurnEnded: (proxySessionId) => {
       const service = deps.getTeamService();
-      if (!service) return;
-      if (turn.finalText)
-        service.captureWorkerText(proxySessionId, turn.finalText, { isFinal: true });
-      await service.handleWorkerTerminalTurn({
-        sessionId: proxySessionId,
-        status: turn.status,
-        finalText: turn.finalText,
-        ...(turn.diagnostic ? { diagnostic: turn.diagnostic } : {}),
-      });
+      const capture = service?.captureWorkerTerminalTurn(proxySessionId);
+      return async (turn: RemoteWorkerTurnEnd) => {
+        if (!service || !capture) return;
+        await service.handleWorkerTerminalTurn({
+          sessionId: proxySessionId,
+          status: turn.status,
+          finalText: turn.finalText,
+          capture,
+          ...(turn.diagnostic ? { diagnostic: turn.diagnostic } : {}),
+        });
+      };
     },
     onWorkerStateChanged: deps.broadcastOrcaWorkerChanged,
     now: Date.now,
@@ -434,47 +436,56 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       },
       dispatchWorkerMessage: async (params) => {
         if (!remote(params.targetSessionId)) return base.dispatchWorkerMessage(params);
-        const clientId = createId();
-        const result = await runtime.dispatch({
-          proxySessionId: params.targetSessionId,
-          rawContent: params.message,
-          clientId,
-        });
-        const meta = { source: params.dispatchMeta.source, context: params.dispatchMeta.context };
-        if (!result.ok) {
+        // 与本机派发复用同一会话锁，保持 enqueue 与 accepted/commit 身份的顺序一致。
+        return base.withSessionSendLock(params.targetSessionId, async () => {
+          const clientId = createId();
+          const result = await runtime.dispatch({
+            proxySessionId: params.targetSessionId,
+            rawContent: params.message,
+            clientId,
+          });
+          const meta = { source: params.dispatchMeta.source, context: params.dispatchMeta.context };
+          if (!result.ok) {
+            return {
+              ok: false,
+              dispatchOutcome: {
+                ...createHostSendFailure(
+                  result.code === 'DEVICE_UNREACHABLE'
+                    ? 'HOST_NOT_READY'
+                    : result.code === 'SESSION_NOT_FOUND'
+                      ? 'SESSION_NOT_FOUND'
+                      : 'SEND_FAILED',
+                  result.message,
+                ),
+                ...meta,
+              },
+            };
+          }
+          try {
+            await params.onAccepted?.();
+            await params.onAcceptedCommit?.();
+          } catch (err) {
+            runtime.rejectDispatchAcceptance(params.targetSessionId, clientId);
+            throw err;
+          }
+          runtime.confirmDispatchAccepted(params.targetSessionId, clientId);
           return {
-            ok: false,
-            dispatchOutcome: {
-              ...createHostSendFailure(
-                result.code === 'DEVICE_UNREACHABLE'
-                  ? 'HOST_NOT_READY'
-                  : result.code === 'SESSION_NOT_FOUND'
-                    ? 'SESSION_NOT_FOUND'
-                    : 'SEND_FAILED',
-                result.message,
-              ),
-              ...meta,
-            },
+            ok: true,
+            mode: result.mode,
+            clientId,
+            dispatchOutcome:
+              result.mode === 'queued'
+                ? {
+                    kind: 'session-dispatch',
+                    source: meta.source,
+                    dispatched: true,
+                    wakeKind: 'queued',
+                  }
+                : { kind: 'session-dispatch', source: meta.source, dispatched: true },
+            targetTitle: null,
+            targetLastUserSendAt: null,
           };
-        }
-        await params.onAccepted?.();
-        await params.onAcceptedCommit?.();
-        return {
-          ok: true,
-          mode: result.mode,
-          clientId,
-          dispatchOutcome:
-            result.mode === 'queued'
-              ? {
-                  kind: 'session-dispatch',
-                  source: meta.source,
-                  dispatched: true,
-                  wakeKind: 'queued',
-                }
-              : { kind: 'session-dispatch', source: meta.source, dispatched: true },
-          targetTitle: null,
-          targetLastUserSendAt: null,
-        };
+        });
       },
       reserveWorkerMessage: async (params) => {
         if (!remote(params.targetSessionId)) return base.reserveWorkerMessage(params);

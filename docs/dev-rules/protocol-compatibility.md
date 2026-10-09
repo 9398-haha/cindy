@@ -622,6 +622,10 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 - **可选运行设备**：`maker:orca:execution-devices`(只读)由 A 本机界面与控制端共用，返回
   `{ devices: [{ deviceId, name, platform, supported }] }`；逐台探测 caps，旧版标 `supported:false`，
   探测失败的不列出。共享任务访客拒绝。
+  Mobile 使用同一只读通道获取 A 视角的设备，模型与 Agent 从所选运行设备读取。
+  新手机连接旧 A 收到 `CHANNEL_NOT_ALLOWED` 时隐藏设备选择，原来的 A 本机 Worker 创建不变。
+  首个与追加 Worker 都沿用既有可选 `executionDeviceId` / `workingDir` 字段；「对话」不传目录，
+  「指定目录」传 B 上的绝对路径，由 B 校验；失败不回退 A。
 - **A 驱动 B 的其余通道**全部是已有同账号 channel：`maker:input:enqueue`(按 `clientId` 幂等，
   `durableDelivery`)、`maker:input:get-projection`(投递回执)、`maker:list-active`、`local-db:sessions:get`、
   `local-db:history:messages`、`maker:abort-session`；B 不需要知道「这是协同派活」，只认来源标签。

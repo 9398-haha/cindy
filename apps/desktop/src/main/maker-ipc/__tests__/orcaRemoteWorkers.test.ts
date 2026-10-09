@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
-import type { OrcaTeamServiceDeps } from '../orcaTeamService.js';
+import type { OrcaTeamService, OrcaTeamServiceDeps, WorkerTerminalTurnCapture } from '../orcaTeamService.js';
+import { withSendToSessionLock } from '../sendToSessionLock.js';
 
 const store = vi.hoisted(() => ({
   archiveSingleWorkerSession: vi.fn(async () => undefined),
@@ -15,6 +16,7 @@ const store = vi.hoisted(() => ({
   setWorkerRemoteExecution: vi.fn(async () => undefined),
 }));
 vi.mock('../../localDb/orcaTeamStore.js', () => store);
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 
 import {
   createOrcaRemoteWorkers,
@@ -44,11 +46,12 @@ const fail = (code: string, message: string): InvokeResultPayload =>
 
 function setup(opts: {
   devices?: DeviceLinkDeviceView[];
-  handle?: (deviceId: string, channel: string, args: unknown[]) => InvokeResultPayload | undefined;
+  handle?: (deviceId: string, channel: string, args: unknown[]) => InvokeResultPayload | undefined | Promise<InvokeResultPayload | undefined>;
+  getTeamService?: () => OrcaTeamService | null;
 } = {}) {
   const devices = opts.devices ?? [device({})];
   const remoteInvoke = vi.fn(async (deviceId: string, channel: string, args: unknown[]) => {
-    const custom = opts.handle?.(deviceId, channel, args);
+    const custom = await opts.handle?.(deviceId, channel, args);
     if (custom) return custom;
     switch (channel) {
       case 'maker:orca:remote-worker:caps':
@@ -77,7 +80,7 @@ function setup(opts: {
   const workers = createOrcaRemoteWorkers({
     remoteInvoke,
     listDevices: async () => ({ devices }),
-    getTeamService: () => null,
+    getTeamService: opts.getTeamService ?? (() => null),
     broadcastOrcaWorkerChanged: vi.fn(),
     readLeadTitle: async () => '访谈整理',
     log: { info: vi.fn(), warn: vi.fn() },
@@ -103,6 +106,7 @@ function baseDeps() {
     dispatchWorkerMessage: vi.fn(async () => ({ ok: true, local: true })),
     hasPendingWorkerInput: vi.fn(async () => true),
     archiveWorkerSession: vi.fn(async () => undefined),
+    withSessionSendLock: withSendToSessionLock,
   } as unknown as OrcaTeamServiceDeps;
 }
 
@@ -274,6 +278,165 @@ describe('wrapTeamDeps', () => {
     });
     return ctx;
   }
+
+  function reportService() {
+    let capture: WorkerTerminalTurnCapture = {
+      sessionId: 'proxy-1', manualInterrupt: null, autoBridgeIdentity: null,
+    };
+    const service = {
+      captureWorkerTerminalTurn: vi.fn(() => capture),
+      captureWorkerText: vi.fn(),
+      handleWorkerTerminalTurn: vi.fn(async () => undefined),
+      handleWorkerTurnStarted: vi.fn(async () => undefined),
+    };
+    const history: Array<{ id: string; clientId?: string; role: string; content: string }> = [];
+    const handle = (_deviceId: string, channel: string, args: unknown[]) => {
+      if (channel === 'maker:input:enqueue') {
+        const clientId = (args[1] as { clientId: string }).clientId;
+        history.push({ id: `input-${clientId}`, clientId, role: 'user', content: 'Lead input' });
+        return ok({});
+      }
+      if (channel === 'maker:input:get-projection') {
+        return ok({ deliveryReceipts: (args[1] as { deliveryClientIds: string[] }).deliveryClientIds
+          .map((clientId) => ({ clientId, state: 'accepted' })) });
+      }
+      if (channel === 'maker:list-active') return ok({ sessions: [] });
+      if (channel === 'local-db:history:messages') {
+        const roles = (args[0] as { roles: string[] }).roles;
+        return ok({ items: history.filter((row) => roles.includes(row.role)).slice().reverse(), hasMore: false });
+      }
+      return undefined;
+    };
+    const onAccepted = async () => {
+      capture = { sessionId: 'proxy-1', manualInterrupt: null, autoBridgeIdentity: {} };
+    };
+    return { service, history, handle, onAccepted, capture: () => capture };
+  }
+
+  it('waits for the host accepted lifecycle before reporting an immediate remote reply', async () => {
+    const report = reportService();
+    const { workers } = await trackedWorker({ handle: report.handle, getTeamService: () => report.service as unknown as OrcaTeamService });
+    const wrapped = workers.wrapTeamDeps(baseDeps());
+    let finishCommit!: () => void;
+    let enteredCommit!: () => void;
+    const commitGate = new Promise<void>((resolve) => { finishCommit = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredCommit = resolve; });
+    const dispatch = wrapped.dispatchWorkerMessage({
+      targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+      dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+      onAccepted: report.onAccepted,
+      onAcceptedCommit: async () => { enteredCommit(); await commitGate; },
+    } as never);
+    try {
+      await entered;
+      report.history.push({ id: 'reply-1', role: 'assistant', content: 'Immediate result' });
+      await workers.runtime.pollNow();
+      expect(report.service.handleWorkerTerminalTurn).not.toHaveBeenCalled();
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+      finishCommit();
+      await dispatch;
+      await workers.runtime.pollNow();
+      expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({
+        finalText: 'Immediate result', capture: report.capture(),
+      }));
+    } finally {
+      finishCommit();
+      await dispatch;
+      workers.stop();
+    }
+  });
+
+  it('keeps the old terminal capture when a new dispatch commits during report persistence', async () => {
+    const report = reportService();
+    const { workers } = await trackedWorker({ handle: report.handle, getTeamService: () => report.service as unknown as OrcaTeamService });
+    const wrapped = workers.wrapTeamDeps(baseDeps());
+    const dispatch = () => wrapped.dispatchWorkerMessage({
+      targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+      dispatchMeta: { source: 'mcp', context: 'send_to_worker' }, onAccepted: report.onAccepted,
+    } as never);
+    try {
+      await dispatch();
+      const firstCapture = report.capture();
+      report.history.push({ id: 'reply-1', role: 'assistant', content: 'First result' });
+      store.setWorkerLastBridgedMessageId.mockImplementationOnce(async () => { await dispatch(); });
+      await workers.runtime.pollNow();
+      expect(report.capture()).not.toBe(firstCapture);
+      expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({
+        finalText: 'First result', capture: firstCapture,
+      }));
+      expect(report.service.captureWorkerText).not.toHaveBeenCalled();
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+      report.history.push({ id: 'reply-2', role: 'assistant', content: 'Second result' });
+      await workers.runtime.pollNow();
+      expect(report.service.handleWorkerTerminalTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+        finalText: 'Second result', capture: report.capture(),
+      }));
+    } finally { workers.stop(); }
+  });
+
+  it('serializes concurrent remote sends through accepted commit so the latest reply owns the latest capture', async () => {
+    const report = reportService();
+    const { workers } = await trackedWorker({ handle: report.handle, getTeamService: () => report.service as unknown as OrcaTeamService });
+    const wrapped = workers.wrapTeamDeps(baseDeps());
+    let releaseFirst!: () => void;
+    let enteredFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredFirst = resolve; });
+    const params = {
+      targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+      dispatchMeta: { source: 'mcp', context: 'send_to_worker' }, onAccepted: report.onAccepted,
+    };
+    const first = wrapped.dispatchWorkerMessage({ ...params, onAccepted: async () => {
+      enteredFirst(); await firstGate; await report.onAccepted();
+    } } as never);
+    let second: ReturnType<typeof wrapped.dispatchWorkerMessage> | undefined;
+    try {
+      await entered;
+      second = wrapped.dispatchWorkerMessage(params as never);
+      // Drain queued microtasks without releasing the first accepted callback.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(report.history.filter((row) => row.role === 'user')).toHaveLength(1);
+      releaseFirst();
+      const results = await Promise.all([first, second]);
+      expect(results.every((result) => result.ok)).toBe(true);
+      expect(report.history.filter((row) => row.role === 'user')).toHaveLength(2);
+      report.history.push({ id: 'reply-final', role: 'assistant', content: 'Latest result' });
+      await workers.runtime.pollNow();
+      expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledOnce();
+      expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({
+        finalText: 'Latest result', capture: report.capture(),
+      }));
+    } finally {
+      releaseFirst();
+      await first;
+      await second;
+      workers.stop();
+    }
+  });
+
+  it.each([false, true])('restores the previous report after an accepted callback rolls back (previous=%s)', async (previous) => {
+    const report = reportService();
+    const { workers } = await trackedWorker({ handle: report.handle, getTeamService: () => report.service as unknown as OrcaTeamService });
+    const wrapped = workers.wrapTeamDeps(baseDeps());
+    const params = {
+      targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+      dispatchMeta: { source: 'mcp', context: 'send_to_worker' }, onAccepted: report.onAccepted,
+    };
+    try {
+      if (previous) {
+        await wrapped.dispatchWorkerMessage(params as never);
+        report.history.push({ id: 'reply-1', role: 'assistant', content: 'First result' });
+      }
+      await expect(wrapped.dispatchWorkerMessage({ ...params,
+        onAccepted: async () => { throw new Error('accepted lifecycle rolled back'); },
+      } as never)).rejects.toThrow('accepted lifecycle rolled back');
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(previous);
+      if (previous) {
+        await workers.runtime.pollNow();
+        expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({ finalText: 'First result', capture: report.capture() }));
+      }
+    } finally { workers.stop(); }
+  });
 
   it('treats an idle remote worker as not live so dispatch reports it as resumed', async () => {
     const { workers } = await trackedWorker();

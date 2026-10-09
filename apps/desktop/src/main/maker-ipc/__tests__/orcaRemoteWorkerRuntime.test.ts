@@ -4,6 +4,7 @@ import {
   createOrcaRemoteWorkerRuntime,
   type OrcaRemoteWorkerRuntimeDeps,
   type RemoteWorkerRef,
+  type RemoteWorkerTurnEnd,
 } from '../orcaRemoteWorkerRuntime.js';
 
 const ref: RemoteWorkerRef = {
@@ -16,12 +17,21 @@ const ref: RemoteWorkerRef = {
   lastBridgedMessageId: null,
 };
 
+interface FakeHistoryMessage {
+  id: string;
+  clientId?: string;
+  role: 'user' | 'assistant';
+  content: unknown;
+  agentMeta?: { parentUuid: string };
+}
+
 interface FakeDevice {
   offline: boolean;
   running: boolean;
   receipts: Record<string, string>;
   assistant: { id: string; content: unknown } | null;
   terminalError: boolean;
+  history?: FakeHistoryMessage[];
   enqueueError?: Error & { inFlight?: boolean };
   enqueued: unknown[];
   aborted: number;
@@ -66,10 +76,21 @@ function setup(device: Partial<FakeDevice> = {}) {
         if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 8_000)) {
           throw new Error('[INVALID_PARAMS] contentCharLimit must be an integer between 1 and 8000 or null');
         }
+        const inputs = Object.entries(state.receipts)
+          .filter(([, delivery]) => delivery === 'accepted')
+          .map(([clientId]) => ({ id: `input-${clientId}`, clientId, role: 'user' as const, content: 'Lead input' }));
+        const assistant = state.assistant ? [{ ...state.assistant, role: 'assistant' as const }] : [];
+        const history = state.history ?? (state.assistant?.id === 'msg-0'
+          ? [...assistant, ...inputs] : [...inputs, ...assistant]);
+        const request = args[0] as { roles: string[]; limit: number; cursor: { id: string } | null };
+        const rows = history.filter((row) => request.roles.includes(row.role)).slice().reverse();
+        const start = request.cursor ? rows.findIndex((row) => row.id === request.cursor!.id) + 1 : 0;
+        const items = rows.slice(start, start + request.limit);
+        const hasMore = start + items.length < rows.length;
         return {
-          items: state.assistant ? [state.assistant] : [],
-          hasMore: false,
-          nextCursor: null,
+          items,
+          hasMore,
+          nextCursor: hasMore ? { id: items.at(-1)!.id, createdAt: 0 } : null,
           terminal: state.terminalError ? { status: 'error' } : null,
         };
       }
@@ -97,21 +118,27 @@ function setup(device: Partial<FakeDevice> = {}) {
         throw new Error(`[CHANNEL_NOT_ALLOWED] ${channel}`);
     }
   });
+  const onTurnEnded = vi.fn(async (_proxySessionId: string, _turn: RemoteWorkerTurnEnd) => undefined);
   const deps: OrcaRemoteWorkerRuntimeDeps = {
     invoke,
     deviceName: () => 'Mac mini',
     saveLastBridgedMessageId: vi.fn(async () => undefined),
     onTurnStarted: vi.fn(async () => undefined),
-    onTurnEnded: vi.fn(async () => undefined),
+    captureTurnEnded: (proxySessionId) => (turn) => onTurnEnded(proxySessionId, turn),
     onWorkerStateChanged: vi.fn(),
     now: () => Date.parse('2026-10-09T10:24:00Z'),
     setTimeout: vi.fn(() => ({})),
     clearTimeout: vi.fn(),
     log: { info: vi.fn(), warn: vi.fn() },
   };
-  const runtime = createOrcaRemoteWorkerRuntime(deps);
-  runtime.track(ref);
-  return { runtime, deps, state, invoke };
+  const coreRuntime = createOrcaRemoteWorkerRuntime(deps);
+  coreRuntime.track(ref);
+  const runtime = { ...coreRuntime, dispatch: async (params: Parameters<typeof coreRuntime.dispatch>[0]) => {
+    const result = await coreRuntime.dispatch(params);
+    if (result.ok) coreRuntime.confirmDispatchAccepted(params.proxySessionId, params.clientId);
+    return result;
+  } };
+  return { runtime, coreRuntime, deps: { ...deps, onTurnEnded }, state, invoke };
 }
 
 describe('orca remote worker runtime', () => {
@@ -181,6 +208,142 @@ describe('orca remote worker runtime', () => {
     await runtime.pollNow();
     expect(deps.onTurnStarted).not.toHaveBeenCalled();
     expect(deps.onTurnEnded).not.toHaveBeenCalled();
+  });
+
+  it('reports the Lead reply across pages instead of a later phone reply or its terminal error', async () => {
+    const { runtime, deps, state, invoke } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      { id: 'lead-progress', role: 'assistant', content: 'Lead progress' },
+      { id: 'lead-final', role: 'assistant', content: 'Lead final' },
+      ...Array.from({ length: 80 }, (_, i): FakeHistoryMessage[] => [
+        { id: `phone-input-${i}`, clientId: `phone-${i}`, role: 'user', content: 'Phone input' },
+        { id: `phone-reply-${i}`, role: 'assistant', content: 'Phone reply' },
+      ]).flat(),
+    ];
+    state.terminalError = true;
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Lead final' });
+    expect(deps.saveLastBridgedMessageId).toHaveBeenCalledWith('worker-1', 'lead-final');
+    expect(invoke.mock.calls.some(([, channel, args]) => channel === 'local-db:history:messages'
+      && (args[0] as { cursor: unknown }).cursor !== null)).toBe(true);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps awaiting when only the later phone input has a reply', async () => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Lead task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'lead-input', clientId: 'c-1', role: 'user', content: 'Lead task' },
+      { id: 'phone-input', clientId: 'phone-1', role: 'user', content: 'Phone input' },
+      { id: 'phone-reply', role: 'assistant', content: 'Phone reply' },
+    ];
+    state.terminalError = true;
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+  });
+
+  it('continues a bounded history scan on the next poll instead of declaring a missing reply', async () => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Long task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'input-1', clientId: 'c-1', role: 'user', content: 'Long task' },
+      ...Array.from({ length: 2001 }, (_, i): FakeHistoryMessage => ({
+        id: `reply-${i}`, role: 'assistant', content: i === 2000 ? 'Final result' : 'Progress',
+      })),
+    ];
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Final result' });
+  });
+
+  it('discards a previous partial history scan when another dispatch is accepted', async () => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Long task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.history = [
+      { id: 'input-1', clientId: 'c-1', role: 'user', content: 'Long task' },
+      ...Array.from({ length: 2001 }, (_, i): FakeHistoryMessage => ({ id: `reply-${i}`, role: 'assistant', content: 'Old progress' })),
+    ];
+    await runtime.pollNow();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'New task', clientId: 'c-2' });
+    state.receipts['c-2'] = 'accepted';
+    state.history.push(
+      { id: 'input-2', clientId: 'c-2', role: 'user', content: 'New task' },
+      { id: 'reply-new', role: 'assistant', content: 'New result' },
+    );
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledOnce();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'New result' });
+  });
+
+  it.each(['confirm', 'reject'])('ignores a stale accepted lifecycle %s while a newer dispatch is awaiting', async (action) => {
+    const { coreRuntime, deps, state } = setup();
+    await coreRuntime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'First', clientId: 'c-1' });
+    await coreRuntime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Second', clientId: 'c-2' });
+    if (action === 'confirm') coreRuntime.confirmDispatchAccepted('proxy-1', 'c-1');
+    else coreRuntime.rejectDispatchAcceptance('proxy-1', 'c-1');
+    state.receipts = { 'c-1': 'accepted', 'c-2': 'accepted' };
+    state.assistant = { id: 'reply-2', content: 'Second result' };
+    await coreRuntime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(coreRuntime.hasPendingReport('proxy-1')).toBe(true);
+    coreRuntime.confirmDispatchAccepted('proxy-1', 'c-2');
+    await coreRuntime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Second result' });
+  });
+
+  it('uses the latest accepted Lead input and ignores child Agent messages', async () => {
+    const { runtime, deps, state } = setup({ history: [] });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'First task', clientId: 'c-1' });
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Second task', clientId: 'c-2' });
+    state.receipts = { 'c-1': 'accepted', 'c-2': 'accepted' };
+    state.history = [
+      { id: 'input-1', clientId: 'c-1', role: 'user', content: 'First task' },
+      { id: 'reply-1', role: 'assistant', content: 'First reply' },
+      { id: 'input-2', clientId: 'c-2', role: 'user', content: 'Second task' },
+      { id: 'child-input', role: 'user', content: 'Child task', agentMeta: { parentUuid: 'subagent-tool' } },
+      { id: 'reply-2', role: 'assistant', content: 'Second reply' },
+      { id: 'child-reply', role: 'assistant', content: 'Child reply', agentMeta: { parentUuid: 'subagent-tool' } },
+      { id: 'phone-input', clientId: 'phone-1', role: 'user', content: 'Phone input' },
+      { id: 'phone-reply', role: 'assistant', content: 'Phone reply' },
+    ];
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Second reply' });
+    expect(deps.saveLastBridgedMessageId).toHaveBeenCalledWith('worker-1', 'reply-2');
+  });
+
+  it('retains a new dispatch accepted while reading the previous reply', async () => {
+    const { runtime, deps, state, invoke } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'First task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'reply-1', content: 'First reply' };
+    const originalInvoke = invoke.getMockImplementation()!;
+    let injected = false;
+    invoke.mockImplementation(async (deviceId, channel, args) => {
+      if (!injected && channel === 'local-db:history:messages'
+        && (args[0] as { roles: string[] }).roles.includes('user')) {
+        injected = true;
+        await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Second task', clientId: 'c-2' });
+      }
+      return originalInvoke(deviceId, channel, args);
+    });
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    state.receipts['c-2'] = 'accepted';
+    state.assistant = { id: 'reply-2', content: 'Second reply' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Second reply' });
   });
 
   it('marks the device unreachable without failing the worker, then recovers and still reports', async () => {

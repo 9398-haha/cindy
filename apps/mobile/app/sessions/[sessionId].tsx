@@ -262,6 +262,7 @@ import {
   ContextSheetRow,
 } from '@/session/ContextSheet';
 import { OrcaTeamPanelView, OrcaWorkerFormView } from '@/session/ContextSheetCollabView';
+import { OrcaWorkerDirectoryPicker } from '@/session/OrcaWorkerDirectoryPicker';
 import { useSessionOrcaCollab } from '@/session/useSessionOrcaCollab';
 import { orcaWorkerProvidersForLead, subscribeOrcaStartFailure, takeOrcaStartFailure } from '@/session/orcaTeam';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
@@ -2118,8 +2119,13 @@ export default function SessionScreen() {
   }, [deviceId, deviceName, navigation, router, sessionId, t]);
   // 来源目录在协同 hook 之后才取得(它依赖 Worker 选择器是否打开),经 ref 在提交时读。
   const collabProvidersRef = useRef<readonly ProviderView[] | null>(null);
+  const executionMakerForDevice = useCallback(
+    (targetDeviceId: string) => createMobileMakerTransport({ deviceId: targetDeviceId, invoke }),
+    [invoke],
+  );
   const collab = useSessionOrcaCollab({
     maker,
+    executionMakerForDevice,
     deviceId: deviceId || null,
     sessionId,
     session: currentSession,
@@ -2136,14 +2142,18 @@ export default function SessionScreen() {
   });
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
-    modelSheetOpen || collab.workerForm.modelPicker.open,
+    modelSheetOpen,
   );
+  const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
+  const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
+  const collabModelPricing = useDeviceModelPricing(collabWorkerDeviceId || undefined);
+  const collabApiKeyStatus = useDeviceApiKeyStatus(collabWorkerDeviceId || undefined);
   // SSH 远端 Lead 的 Worker 只能用远端可路由的来源(与桌面创建 Worker 面板同口径)。
   const collabWorkerProviders = useMemo(
-    () => orcaWorkerProvidersForLead(composerDeviceProviders.providers, !!currentSession?.remoteHostId?.trim()),
-    [composerDeviceProviders.providers, currentSession?.remoteHostId],
+    () => orcaWorkerProvidersForLead(collabDeviceProviders.providers, !!currentSession?.remoteHostId?.trim()),
+    [collabDeviceProviders.providers, currentSession?.remoteHostId],
   );
-  collabProvidersRef.current = composerDeviceProviders.ready ? collabWorkerProviders : null;
+  collabProvidersRef.current = collabDeviceProviders.ready ? collabWorkerProviders : null;
   // Worker 任务打开详情时刷新自身记录(焦点可能已在别处变化)。
   const refreshWorkerSelf = collab.refreshWorkerSelf;
   useEffect(() => {
@@ -9556,6 +9566,9 @@ export default function SessionScreen() {
           ) : contextSheetView === 'collab' || contextSheetView === 'collab-create' ? (
             <OrcaWorkerFormView
               agents={collab.workerForm.agents}
+              executionDevices={collab.workerForm.executionDevices}
+              executionDevicesLoading={collab.workerForm.executionDevicesLoading}
+              executionDevicesError={collab.workerForm.executionDevicesError}
               busy={collab.busy}
               customRoleMode={collab.workerForm.customRoleMode}
               error={collab.error}
@@ -9566,6 +9579,7 @@ export default function SessionScreen() {
               onCustomRoleModeChange={collab.workerForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collab.workerForm.changePermission(mode)}
               onPickModel={collab.workerForm.modelPicker.openPicker}
+              onPickDirectory={collab.workerForm.directoryPicker.openPicker}
             />
           ) : (
             // goal 接回载荷按 sessionId 归属、渲染时同步过滤(codex review P1):
@@ -9653,6 +9667,8 @@ export default function SessionScreen() {
           />
         ) : null
         )}</MountOnFirstOpen>
+        <OrcaWorkerDirectoryPicker picker={collab.workerForm.directoryPicker}
+          deviceId={collab.workerForm.form.executionDeviceId} workingDir={collab.workerForm.form.remoteDir} mode={collab.workerForm.form.remoteDirMode} />
         <MountOnFirstOpen open={collab.workerForm.modelPicker.open}>{() => currentSession && collab.eligible ? (
           // 协同 Worker 的模型选择:与会话模型浮窗同一套统一模型目录,但只回写 Worker 表单,
           // 不触碰当前任务的模型。iOS 原生 sheet 不能叠开:打开前先收起 + 面板,关闭后再展开。
@@ -9665,10 +9681,10 @@ export default function SessionScreen() {
                 selectedEffort: collab.workerForm.form.model.effort ?? '',
                 selectedFastMode: collab.workerForm.form.model.fast,
               } : undefined,
-              scope: JSON.stringify([auth.user?.id, deviceId, 'orca-worker']),
+              scope: JSON.stringify([auth.user?.id, collabWorkerDeviceId, 'orca-worker']),
               agents: collab.workerForm.pickerAgents,
               loadCapabilities: async agent => {
-                const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+                const result = normalizeMobileAgentCapabilities(await collab.workerForm.maker.getCapabilities(agent));
                 if (!result) throw new Error('Capabilities unavailable');
                 return result;
               },
@@ -9677,26 +9693,26 @@ export default function SessionScreen() {
             activeModelId={collab.workerForm.form.model?.id ?? ''}
             activePermissionMode=""
             agentKind={collab.workerForm.form.agent}
-            apiKeyStatus={deviceApiKeyStatus}
+            apiKeyStatus={collabApiKeyStatus}
             capabilities={null}
-            emptyHint={composerDeviceProviders.error && !composerDeviceProviders.unsupported
-              ? humanizeRemoteError(composerDeviceProviders.error)
+            emptyHint={collabDeviceProviders.error && !collabDeviceProviders.unsupported
+              ? humanizeRemoteError(collabDeviceProviders.error)
               : undefined}
             flatOptions={collab.workerForm.modelPicker.flatModelOptions}
             hidePermissionTrigger
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
-            loading={composerDeviceProviders.loading}
-            modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
+            loading={collabDeviceProviders.loading}
+            modelVisibilityOverrides={collabDeviceProviders.modelVisibilityOverrides}
             onClose={collab.workerForm.modelPicker.close}
             onClosed={collab.workerForm.modelPicker.closed}
             onSelectFlatModel={collab.workerForm.modelPicker.selectFlatModel}
             onSelectPermissionMode={() => undefined}
             onSelectProviderRow={() => undefined}
             permissionOptions={[]}
-            pricing={deviceModelPricing}
+            pricing={collabModelPricing}
             providers={collabWorkerProviders}
-            providersReady={composerDeviceProviders.ready}
-            providersUnsupported={composerDeviceProviders.unsupported}
+            providersReady={collabDeviceProviders.ready}
+            providersUnsupported={collabDeviceProviders.unsupported}
             selectedEffort={collab.workerForm.form.model?.effort ?? ''}
             selectedFastMode={!!collab.workerForm.form.model?.fast}
             selectedProviderId={collab.workerForm.form.model?.providerId ?? null}

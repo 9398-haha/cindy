@@ -4,8 +4,8 @@
  * 远端 Worker 在本机只有一条代理任务行(不跑 Agent)，真实任务在运行设备上。本模块负责：
  *  - 派活：经 `maker:input:enqueue` 投递到运行设备的任务，按 clientId 幂等；
  *  - 轮询：每台设备一次 `maker:list-active` 得到全部远端 Worker 的运行状态，派活后加快节奏；
- *  - 回报：派出的消息已进入对话(投递回执 accepted)且运行设备不在跑时，取最后一条 assistant
- *    消息交给现有 auto-bridge；按消息 id 去重，断线重连后自然补报，同一条只报一次；
+ *  - 回报：派出的消息已进入对话(投递回执 accepted)且运行设备不在跑时，按该 user 的 clientId
+ *    找对应的 assistant 回复交给 auto-bridge；按消息 id 去重，断线重连后自然补报；
  *  - 可达性：设备调用失败即标为不可达，恢复后自动回到在线，不判失败、不重派。
  *
  * 用户在运行设备上直接发的消息(插话)不会触发回报：只有本机派出、仍在等待回报的消息才会。
@@ -20,6 +20,7 @@ import type {
   AgentInputCreateOpts,
   AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
+import type { HistoryCursor, HistoryMessage, HistoryPage } from '../localDb/chatHistoryReader.js';
 
 export interface RemoteWorkerRef {
   workerId: string;
@@ -53,7 +54,8 @@ export interface OrcaRemoteWorkerRuntimeDeps {
   deviceName(deviceId: string): string;
   saveLastBridgedMessageId(workerId: string, messageId: string): Promise<void>;
   onTurnStarted(proxySessionId: string): Promise<void>;
-  onTurnEnded(proxySessionId: string, turn: RemoteWorkerTurnEnd): Promise<void>;
+  /** 同步冻结已完成宿主 accepted 生命周期的回报身份，异步收尾不得重新读取新派活身份。 */
+  captureTurnEnded(proxySessionId: string): (turn: RemoteWorkerTurnEnd) => Promise<void>;
   /** 可达性或运行状态变化，供协同面板刷新。 */
   onWorkerStateChanged(leadSessionId: string): void;
   now(): number;
@@ -72,6 +74,9 @@ export const REMOTE_WORKER_IDLE_POLL_MS = 15_000;
 const MISSING_REPLY_POLLS = 15;
 /** `local-db:history:messages` 的 contentCharLimit 只接受 1–8000。 */
 const MAX_REPORT_CHARS = 8_000;
+/** 单轮只读最多 2000 行 user/assistant，预算用尽后下一轮从游标续读。 */
+const REPORT_HISTORY_PAGE_SIZE = 100;
+const REPORT_HISTORY_MAX_PAGES = 20;
 
 /** 视为「设备当前不可达」的错误码：relay / 链路 / 本机开关 / 熔断。其余错误按普通失败处理。 */
 const UNREACHABLE_CODES = new Set([
@@ -92,6 +97,17 @@ interface AwaitingReport {
   baselineMessageId: string | null;
   startedNotified: boolean;
   missingReplyPolls: number;
+  terminalHandler: ((turn: RemoteWorkerTurnEnd) => Promise<void>) | null;
+  /** 宿主 accepted 回调失败时恢复上一代原对象；确认成功后释放。 */
+  previous: AwaitingReport | null;
+  historyScan: ReportHistoryScan | null;
+}
+
+interface ReportHistoryScan {
+  cursor: HistoryCursor | null;
+  reply: { id: string; text: string } | null;
+  newerInput: boolean;
+  terminalError: boolean;
 }
 
 interface WorkerState {
@@ -291,10 +307,69 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     });
   }
 
+  async function replyForInputs(
+    ref: RemoteWorkerRef,
+    clientIds: string[],
+    scan: ReportHistoryScan,
+  ): Promise<{
+    id: string | null;
+    text: string;
+    terminalError: boolean;
+    complete: boolean;
+  }> {
+    const inputs = new Set(clientIds);
+    for (let pageIndex = 0; pageIndex < REPORT_HISTORY_MAX_PAGES; pageIndex += 1) {
+      const page = (await deps.invoke(ref.deviceId, DL_HISTORY_MESSAGES_CHANNEL, [
+        {
+          sessionId: ref.remoteSessionId,
+          workdir: null,
+          fromMs: null,
+          toMs: null,
+          agentKind: null,
+          roles: ['user', 'assistant'],
+          includeRewound: false,
+          limit: REPORT_HISTORY_PAGE_SIZE,
+          cursor: scan.cursor,
+          order: 'desc',
+          contentCharLimit: MAX_REPORT_CHARS,
+        },
+      ])) as HistoryPage<Pick<HistoryMessage, 'id' | 'clientId' | 'role' | 'content' | 'agentMeta'>> & {
+        terminal?: { status?: unknown } | null;
+      };
+      if (scan.cursor === null) scan.terminalError = page?.terminal?.status === 'error';
+      for (const item of Array.isArray(page?.items) ? page.items : []) {
+        // 子 Agent 的消息不构成顶层输入/回复边界。
+        if ((item.agentMeta as { parentUuid?: unknown } | null)?.parentUuid) continue;
+        if (item.role === 'assistant' && typeof item.id === 'string' && !scan.reply) {
+          scan.reply = { id: item.id, text: textOf(item.content).slice(-MAX_REPORT_CHARS) };
+        } else if (item.role === 'user') {
+          if (typeof item.clientId === 'string' && inputs.has(item.clientId)) {
+            return {
+              id: scan.reply?.id ?? null,
+              text: scan.reply?.text ?? '',
+              terminalError: !scan.newerInput && scan.terminalError,
+              complete: true,
+            };
+          }
+          // 倒序先遇到的非 Lead 输入及其回复属于插话，不能用来收尾派活。
+          scan.newerInput = true;
+          scan.reply = null;
+        }
+      }
+      if (!page?.hasMore) return { id: null, text: '', terminalError: false, complete: true };
+      if (!page.nextCursor || page.nextCursor.id === scan.cursor?.id) {
+        throw new Error('remote worker history pagination cursor did not advance');
+      }
+      scan.cursor = page.nextCursor;
+    }
+    return { id: null, text: '', terminalError: false, complete: false };
+  }
+
   async function finishTurn(
     state: WorkerState,
     turn: RemoteWorkerTurnEnd,
     messageId: string | null,
+    terminalHandler: (turn: RemoteWorkerTurnEnd) => Promise<void>,
   ) {
     state.awaiting = null;
     state.inTurn = false;
@@ -307,13 +382,14 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }),
       );
     }
-    await deps.onTurnEnded(state.ref.proxySessionId, turn);
+    await terminalHandler(turn);
     deps.onWorkerStateChanged(state.ref.leadSessionId);
   }
 
   async function checkAwaiting(state: WorkerState, running: boolean): Promise<void> {
     const awaiting = state.awaiting;
-    if (!awaiting) return;
+    if (!awaiting?.terminalHandler) return;
+    const terminalHandler = awaiting.terminalHandler;
     if (running) {
       if (!awaiting.startedNotified) {
         awaiting.startedNotified = true;
@@ -322,6 +398,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       return;
     }
     const states = await deliveryStates(state.ref, awaiting.clientIds);
+    if (state.awaiting !== awaiting) return;
     // 仍在运行设备的队列里(排在用户插话之后等)，继续等。
     if (states.some((value) => value === 'pending' || value === 'unknown')) return;
     if (states.every((value) => value === 'removed')) {
@@ -333,10 +410,26 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           diagnostic: `派给 ${deps.deviceName(state.ref.deviceId)} 的消息在那台电脑上被撤回，Worker 没有执行。`,
         },
         null,
+        terminalHandler,
       );
       return;
     }
-    const last = await lastAssistantMessage(state.ref);
+    const scan = (awaiting.historyScan ??= {
+      cursor: null,
+      reply: null,
+      newerInput: false,
+      terminalError: false,
+    });
+    const last = await replyForInputs(
+      state.ref,
+      awaiting.clientIds.filter((_, index) => states[index] === 'accepted'),
+      scan,
+    );
+    // 历史读取期间又派入新任务时保留新的 awaiting，下一轮按完整输入集合复核。
+    if (state.awaiting !== awaiting) return;
+    // 扫描预算不足不代表没有回复，保留当前游标与候选，下一轮继续。
+    if (!last.complete) return;
+    awaiting.historyScan = null;
     if (
       last.id &&
       last.id !== awaiting.baselineMessageId &&
@@ -346,6 +439,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         state,
         { status: last.terminalError ? 'error' : 'done', finalText: last.text },
         last.id,
+        terminalHandler,
       );
       return;
     }
@@ -361,6 +455,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             : `Worker 在 ${deps.deviceName(state.ref.deviceId)} 上本轮结束，但没有产生回复。`,
         },
         null,
+        terminalHandler,
       );
     }
   }
@@ -508,6 +603,9 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             baselineMessageId: baseline,
             startedNotified: state.awaiting?.startedNotified ?? false,
             missingReplyPolls: 0,
+            terminalHandler: null,
+            previous: state.awaiting,
+            historyScan: null,
           };
           schedule();
           return { ok: true, mode };
@@ -547,6 +645,22 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         return { ok: false, code: 'SEND_FAILED', message: errorMessage(err) };
       }
+    },
+
+    /** Host onAccepted/onAcceptedCommit 完成后才能冻结身份并允许回报。 */
+    confirmDispatchAccepted(proxySessionId: string, clientId: string): void {
+      const awaiting = workers.get(proxySessionId)?.awaiting;
+      if (!awaiting || awaiting.clientIds.at(-1) !== clientId) return;
+      awaiting.terminalHandler = deps.captureTurnEnded(proxySessionId);
+      awaiting.previous = null;
+    },
+
+    /** accepted 回调的原有异常继续上抛；这里只恢复 runtime 对应的旧回报代次。 */
+    rejectDispatchAcceptance(proxySessionId: string, clientId: string): void {
+      const state = workers.get(proxySessionId);
+      if (!state?.awaiting || state.awaiting.clientIds.at(-1) !== clientId) return;
+      state.awaiting = state.awaiting.previous;
+      schedule();
     },
 
     /** 诊断用：运行设备上这条任务的最后一条回复(读不到返回空串)。 */
