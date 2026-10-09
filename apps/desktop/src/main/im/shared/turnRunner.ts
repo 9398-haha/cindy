@@ -97,6 +97,7 @@ import type {
   InteractiveCardSpec,
   StreamingTextHandle,
 } from '@cindy/im';
+import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
 import { persistUserMessage } from '../messagePersistence';
@@ -2641,15 +2642,20 @@ export function createTurnRunner(
   // composeStreamingView,避免回归 #118。
 
   /** 转播卡正文:运行中 = 头 + 步骤时间线 + 正文;收口 = 头 + 正文(去步骤)。 */
-  function composeTranspondView(t: ScheduledTranspond, final: boolean): string {
+  function composeTranspondView(state: SessionState, t: ScheduledTranspond, final: boolean): string {
     const header = t.header;
+    // Rich transports resolve managed refs themselves. A remote session's refs
+    // must stay text, never reach those host-local file/media resolvers.
+    const body = state.makerSession.remoteHostId
+      ? transformXdtRefs(t.buffer, { image: (ref) => ref.alt, file: (ref) => ref.alt })
+      : t.buffer;
     if (final) {
-      return [header, t.buffer].filter(Boolean).join('\n\n');
+      return [header, body].filter(Boolean).join('\n\n');
     }
     const act = renderActivity(t.activity, Date.now());
     const parts: string[] = header ? [header] : [];
     if (act) parts.push(act);
-    if (t.buffer) parts.push(t.buffer);
+    if (body) parts.push(body);
     // 自动任务沿用标题紧接步骤的排版，其它轮次只显示步骤和正文。
     if (header && parts.length > 1) return `${header}\n${parts.slice(1).join('\n\n')}`;
     return parts.join('\n\n');
@@ -2685,7 +2691,7 @@ export function createTurnRunner(
     if (!t || !richIm) return;
     void ensureTranspondHandle(state, t)
       .then((h) => {
-        if (state.scheduledTranspond === t) h.replace(composeTranspondView(t, false));
+        if (state.scheduledTranspond === t) h.replace(composeTranspondView(state, t, false));
       })
       .catch((err) => log.warn('transpond refresh failed (non-fatal)', err));
   }
@@ -2752,7 +2758,7 @@ export function createTurnRunner(
         // 低频 ticker 刷新耗时(只刷已存在的卡)。
         if (richIm && !t.activityTicker) {
           t.activityTicker = setInterval(() => {
-            t.streamingHandle?.replace(composeTranspondView(t, false));
+            t.streamingHandle?.replace(composeTranspondView(state, t, false));
           }, ACTIVITY_TICK_MS);
         }
         refreshTranspondCard(state);
@@ -2785,7 +2791,7 @@ export function createTurnRunner(
         {
           const notice = turnRetryNotice(event.data, { channel });
           if (notice !== null && setActivityNotice(t.activity, notice)) {
-            t.streamingHandle?.replace(composeTranspondView(t, false));
+            t.streamingHandle?.replace(composeTranspondView(state, t, false));
           }
         }
         return;
@@ -2821,7 +2827,7 @@ export function createTurnRunner(
         }
       }
       if (sessionStates.get(state.makerSession.id) !== state) return;
-      const base = composeTranspondView(t, true);
+      const base = composeTranspondView(state, t, true);
       const body = errMsg ? [base, ui.agent.runtimeError(errMsg)].filter(Boolean).join('\n\n') : base;
       if (output.kind === 'chunked-text') {
         // 微信等文本渠道由适配器解析当前账号下该聊天最近的有效回复上下文。

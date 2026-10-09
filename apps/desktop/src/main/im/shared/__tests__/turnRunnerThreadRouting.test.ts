@@ -662,6 +662,36 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
   });
 
+  it.each(['rich-card', 'chunked-text'] as const)('%s 远端正文引用只回传标签，不交给渠道解析本机附件', async (kind) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    if (kind === 'chunked-text') {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+    }
+    const h = makeSessionHarness('remote-markdown');
+    Object.assign(h.session, { remoteHostId: 'ssh-host' });
+    runner.attachSessionOutput(h.session, 'U1');
+    h.emit({ type: 'text', data: {
+      text: '结果 ![图](xdt-image://remote.png) ![媒体](cindy-media://blobs/remote.png) [文件](xdt-file:///repo/report.txt)',
+      isFinal: true,
+    } });
+    h.emit({ type: 'done', data: {} });
+    if (kind === 'rich-card') {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith('结果 图 媒体 文件'));
+      for (const [text] of stub.replace.mock.calls) {
+        expect(text).not.toMatch(/(?:xdt-image|xdt-file|cindy-media):/);
+      }
+    } else {
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledWith(
+        'U1', '结果 图 媒体 文件', { threadTs: undefined },
+      ));
+    }
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.slackIm.sendFile).not.toHaveBeenCalled();
+  });
+
   it('重启后仅恢复输出监听，不新建会话；重复恢复不会重复回复', async () => {
     const h = makeSessionHarness('cold-session');
     const stub = streamingHandleStub();

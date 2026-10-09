@@ -3290,6 +3290,38 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
+  it.each([false, true])('continuation attachments stay in their runtime (remote=%s)', async (remote) => {
+    const workDir = process.cwd().replaceAll('\\', '/');
+    fakeMaker.getSession.mockReturnValueOnce({
+      ...makeManualSession('sess-live'),
+      workDir,
+      ...(remote ? { remoteHostId: 'ssh-host' } : {}),
+    });
+    const onEnd = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    const { req } = watchReq({ onEnd });
+    runner.watchContinuation!(req as never);
+    const cb = h.eventCbs.get('sess-live')!;
+    const media = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const text = `结果 [文件](xdt-file://${workDir}/package.json) ![图](xdt-image://chart.png) ![媒体](${media})`;
+    cb({ type: 'tool_result_full', data: { fullText: `![工具图](xdt-image://tool.png) ![工具媒体](${media})` } });
+    cb({ type: 'text', data: { text, isFinal: true } });
+    cb({ type: 'done', data: null });
+    await vi.waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+    const outcome = onEnd.mock.calls[0]![0];
+    expect(outcome.status).toBe('ok');
+    if (remote) {
+      expect(resolveXdtImage).not.toHaveBeenCalled();
+      expect(cindyMock.resolveSafe).not.toHaveBeenCalled();
+      expect(outcome.attachments).toBeUndefined();
+      expect(outcome.finalText).toBe(text);
+    } else {
+      expect(resolveXdtImage).toHaveBeenCalled();
+      expect(cindyMock.resolveSafe).toHaveBeenCalled();
+      expect(outcome.attachments?.map((a: { name: string }) => a.name)).toContain('package.json');
+    }
+  });
+
   it.each([false, true])('isolates child events before root completion (isFinal=%s)', async (isFinal) => {
     const session = makeManualSession('sess-subagent-output');
     const onProgress = vi.fn();
