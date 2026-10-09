@@ -1872,6 +1872,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               await completeOAuthCallback(result.url, expectedLoginFlowEpoch);
               return true;
             }
+            // Android may report dismiss on foregrounding before the OAuth link
+            // arrives. Keep PKCE for Linking; explicit cancellation and the
+            // original pending-login expiry still apply. iOS is unchanged.
+            if (Platform.OS === 'android' && result.type === 'dismiss') {
+              return true;
+            }
             await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             pendingAuthRealmRef.current = null;
