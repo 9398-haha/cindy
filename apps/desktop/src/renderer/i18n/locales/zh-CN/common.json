@@ -205,7 +205,6 @@
       "descriptionOff": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型。关闭期间，已有的分享暂时不可用，不会被删除。"
     },
     "manage": {
-      "title": "分享 {{provider}}",
       "description": "分享给他人后，对方可以在自己的任务里选用 {{provider}} 的模型。Agent 在这台电脑上运行，用量计入你的 {{provider}}；对方的文件和命令仍在对方电脑上执行。",
       "descriptionWithDevice": "分享给他人后，对方可以在自己的任务里选用 {{provider}} 的模型。Agent 在这台电脑（{{device}}）上运行，用量计入你的 {{provider}}；对方的文件和命令仍在对方电脑上执行。",
       "createLink": "生成分享链接",
@@ -396,6 +395,109 @@
       "approvedBody": "{{name}} 已同意分享 {{provider}}",
       "rejectedTitle": "分享申请未通过",
       "rejectedBody": "{{name}} 没有同意分享 {{provider}}"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "供应商组",
+      "description": "把多台电脑上的这个供应商合成一组，自动分配，出问题自动换一台",
+      "summary_other": "{{count}} 台电脑 · {{strategy}}",
+      "setUp": "设置供应商组",
+      "manage": "管理供应商组"
+    },
+    "page": {
+      "title": "{{provider}} · 远程与分享",
+      "description": "这台电脑上 {{provider}} 的供应商组与分享设置。",
+      "descriptionWithDevice": "这台电脑（{{device}}）上 {{provider}} 的供应商组与分享设置。",
+      "shareTitle": "分享"
+    },
+    "section": {
+      "title": "供应商组",
+      "addComputer": "添加电脑",
+      "delete": "删除供应商组",
+      "empty": "还没有供应商组。添加其他电脑上的 {{provider}}，这台电脑上的任务会自动选一台运行。",
+      "loading": "正在读取供应商组…",
+      "loadFailed": "未能读取供应商组",
+      "note": "这台电脑上的任务按组分配，Agent 在被选中的电脑上运行；你的其他电脑和你分享的人经这台电脑使用时，暂时仍在这台电脑上运行。"
+    },
+    "strategy": {
+      "label": "组策略",
+      "least": "最少占用",
+      "round": "轮询",
+      "order": "按顺序",
+      "weight": "按权重",
+      "description": {
+        "least": "新任务给正在运行任务最少的那台",
+        "round": "新任务依次分给可用的电脑",
+        "order": "排在前面的优先，前面的不可用才用后面的",
+        "weight": "按权重比例分配新任务"
+      }
+    },
+    "autoSwitch": {
+      "label": "自动换电脑",
+      "description": "组里的电脑撞到用量上限、登录失效或连不上时，自动换一台接着运行"
+    },
+    "member": {
+      "local": "本机",
+      "sourceDevice": "我的其他电脑",
+      "sourceShare": "来自 {{name}} 的分享",
+      "runningLabel": "运行中 / 上限",
+      "limitAria": "{{name}} 的并发上限",
+      "limitOption_other": "最多 {{count}} 个",
+      "weightAria": "{{name}} 的权重",
+      "weightOption": "权重 {{weight}}",
+      "localAria": "本机参与分配",
+      "pause": "暂停分配",
+      "resume": "恢复分配",
+      "remove": "移出组",
+      "status": {
+        "checking": "正在检查…",
+        "available": "可用",
+        "full": "已满",
+        "paused": "已暂停分配",
+        "cooling": "冷却中",
+        "coolingUntil": "冷却中 · 约 {{time}} 恢复",
+        "offline": "不在线",
+        "unavailable": {
+          "provider-off": "那台电脑没有对这个供应商打开「允许被远程调用」",
+          "disconnected": "供应商未连接或已停用",
+          "share-paused": "分享已暂停",
+          "share-removed": "分享已删除"
+        }
+      },
+      "removeConfirm": {
+        "title": "把 {{name}} 移出供应商组？",
+        "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
+        "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
+        "confirm": "移出组"
+      }
+    },
+    "deleteConfirm": {
+      "title": "删除 {{provider}} 的供应商组？",
+      "description": "之后这台电脑上的新任务都在本机运行；已经分到其他电脑的任务留在那台电脑上。",
+      "confirm": "删除供应商组"
+    },
+    "add": {
+      "title": "把电脑加入 {{provider}} 的供应商组",
+      "sourceAria": "电脑来源",
+      "tabAvailable": "已经能用的",
+      "tabLink": "分享链接",
+      "availableDescription": "这台电脑已经能用的 {{provider}}：你的其他电脑和别人分享给你的，与模型列表里的远程供应商一致。勾选即可加入，不需要再申请。",
+      "loading": "正在查找可以加入的电脑…",
+      "loadFailed": "未能读取可以加入的电脑",
+      "empty": "没有可以加入的电脑。在其他电脑上对 {{provider}} 打开「允许被远程调用」，或用别人的分享链接申请。",
+      "alreadyMember": "已在组里",
+      "confirm": "加入供应商组",
+      "cancel": "取消",
+      "linkDescription": "粘贴别人分享的 {{provider}} 链接，对方同意后，回到「已经能用的」里勾选加入。",
+      "pasteLink": "粘贴分享链接"
+    },
+    "toast": {
+      "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的供应商组",
+      "removed": "已把 {{name}} 移出供应商组",
+      "paused": "已暂停给 {{name}} 分配任务",
+      "resumed": "已恢复给 {{name}} 分配任务",
+      "deleted": "已删除 {{provider}} 的供应商组"
     }
   },
   "privacyExit": {
@@ -10396,6 +10498,12 @@
           "reason": "中断原因",
           "attempt": "本次重试 {{attempt}}/{{total}}",
           "sessionTotal": "本任务累计重连 {{count}} 次"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} 撞到用量上限，已换到 {{to}} 继续",
+          "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
+          "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
+          "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续"
         }
       },
       "autoResumeSeparator": {
@@ -10657,7 +10765,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。"
     },
     "generatedFiles": {
       "title": "本条消息生成的文件",

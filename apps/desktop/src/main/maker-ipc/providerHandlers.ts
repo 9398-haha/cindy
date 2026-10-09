@@ -1,4 +1,5 @@
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -2255,6 +2256,13 @@ export function registerProviderHandlers(
             await afterChange(codexHostPrepared, commitRouteMutation);
             assertProviderMutationOwner(ownerAtIngress);
             deps.broadcastPricingChanged();
+            // 删除连接即删除它的供应商组(provider-groups.md §3)：同名重建会得到同一个 id，不能让旧组复活。
+            await writeProviderGroup(providerId, null).catch((error) => {
+              log.warn('provider group cleanup after provider deletion failed', {
+                providerId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
           });
         };
         if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
