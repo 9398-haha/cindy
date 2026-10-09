@@ -117,7 +117,7 @@ describe('server group feature parity', () => {
   it('returns one available member to ordinary discussion using the real decision parser', async () => {
     arrange(undefined, members.slice(0, 1));
     const { parsePlanDecision } = await import('../botGroupDivision.js');
-    deps.decidePlan = vi.fn(async input => parsePlanDecision(JSON.stringify({ needsPlan: true, steps: [{ botId, task: 'Make a draft' }] }), input.mode, new Set(input.members.map(m => m.botId))));
+    deps.decidePlan = vi.fn<NonNullable<BotGroupChatServiceDeps['decidePlan']>>(async input => parsePlanDecision(JSON.stringify({ needsPlan: true, steps: [{ botId, task: 'Make a draft' }] }), input.mode, new Set(input.members.map(m => m.botId))));
     expect((await send()).ok).toBe(true); await flush();
     expect(deps.decidePlan).toHaveBeenCalledWith(expect.objectContaining({ mode: 'auto' }), expect.any(AbortSignal));
     expect(planPosts()).toHaveLength(0);

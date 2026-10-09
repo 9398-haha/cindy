@@ -166,6 +166,11 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import {
+  controlledTaskAgentLocationReadable,
+  controlledTaskSupportsAgentLocation,
+  selectControlledTaskAgentDevices,
+} from '@/lib/controlledTaskAgentLocation';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import {
   canExposeWritableDirsChange,
@@ -2091,46 +2096,79 @@ export function CCAgentSessionView({
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders } = useProviders();
-  const { mode: authMode, user: authUser, dataOwnerId } = useAuth();
+  const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
   // Agent 在另一台电脑运行的任务:模型目录同样以那台为准(任务本身在本机)。
   const agentDeviceId = remoteDeviceId ? undefined : (session?.agentDeviceId ?? undefined);
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
   const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
-  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，只并进这里，
-  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
+  // 远程控制的被控电脑上的任务:被控电脑支持远程 Agent 时,同样列出其他电脑的供应商(与手机同一
+  // 套)。共享任务访客读到的是自己账号的设备、与任务无关,SSH 任务不支持;Agent 现在或挂着的位置
+  // 在本机读不到目录的地方(被控电脑收到的分享 / 本机自己)时,维持原有的被控电脑列表。
+  const controlledAgentLocation =
+    !!remoteDeviceId &&
+    !session?.remoteHostId &&
+    !isSharedTaskPeer(remoteDeviceId) &&
+    controlledTaskSupportsAgentLocation(session) &&
+    controlledTaskAgentLocationReadable({
+      agentDeviceId: session?.agentDeviceId,
+      pendingAgentDeviceId,
+      selfDeviceId,
+    });
+  /** 被控电脑上的任务里 Agent 现在所在的电脑(undefined = 被控电脑本身)。 */
+  const controlledAgentDeviceId = controlledAgentLocation
+    ? (session?.agentDeviceId ?? undefined)
+    : undefined;
+  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，只并进本机任务，
+  // 不进设备切换器(被控电脑上的任务用不了本机收到的分享)。已暂停 / 已不在的分享只在它正是
+  // 当前或即将使用的位置时保留。
   const { devices: providerShareDevices, nameFor: providerShareDeviceName } =
     useProviderShareAgentDevices([agentDeviceId, pendingAgentDeviceId]);
-  const remoteAgentDevices = useMemo(
-    () =>
-      remoteDeviceId || session?.remoteHostId
-        ? undefined
-        : [
-            ...selectableDevices
-              .filter(
-                (device) =>
-                  device.online ||
-                  device.deviceId === agentDeviceId ||
-                  device.deviceId === pendingAgentDeviceId,
-              )
-              .map(({ deviceId, name }) => ({ deviceId, name })),
-            ...providerShareDevices,
-          ],
-    [
-      selectableDevices,
-      providerShareDevices,
-      remoteDeviceId,
-      session?.remoteHostId,
-      agentDeviceId,
-      pendingAgentDeviceId,
-    ],
-  );
-  const agentDeviceName = agentDeviceId
-    ? (selectableDevices.find((device) => device.deviceId === agentDeviceId)?.name ??
-      providerShareDeviceName(agentDeviceId))
+  const remoteAgentDevices = useMemo(() => {
+    if (session?.remoteHostId) return undefined;
+    if (remoteDeviceId) {
+      return controlledAgentLocation
+        ? selectControlledTaskAgentDevices({
+            devices: selectableDevices,
+            controlledDeviceId: remoteDeviceId,
+            keepDeviceIds: [controlledAgentDeviceId, pendingAgentDeviceId],
+          })
+        : undefined;
+    }
+    return [
+      ...selectableDevices
+        .filter(
+          (device) =>
+            device.online ||
+            device.deviceId === agentDeviceId ||
+            device.deviceId === pendingAgentDeviceId,
+        )
+        .map(({ deviceId, name }) => ({ deviceId, name })),
+      ...providerShareDevices,
+    ];
+  }, [
+    selectableDevices,
+    providerShareDevices,
+    remoteDeviceId,
+    session?.remoteHostId,
+    controlledAgentLocation,
+    controlledAgentDeviceId,
+    agentDeviceId,
+    pendingAgentDeviceId,
+  ]);
+  const shownAgentDeviceId = agentDeviceId ?? controlledAgentDeviceId;
+  const agentDeviceName = shownAgentDeviceId
+    ? (selectableDevices.find((device) => device.deviceId === shownAgentDeviceId)?.name ??
+      providerShareDeviceName(shownAgentDeviceId))
     : null;
-  const catalogDeviceId = remoteDeviceId ?? agentDeviceId;
+  /** 被控电脑的名字(换 Agent 所在电脑时「改回那台」的确认文案用)。 */
+  const controlledDeviceName = remoteDeviceId
+    ? (session?.deviceLinkDeviceName ||
+      selectableDevices.find((device) => device.deviceId === remoteDeviceId)?.name ||
+      null)
+    : null;
+  const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
   const canSwitchToClaudeSubscription = useMemo(() => {
@@ -5537,6 +5575,7 @@ export function CCAgentSessionView({
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
+                  deviceLinkDeviceName={controlledDeviceName}
                   agentDeviceId={session?.agentDeviceId ?? null}
                   agentDeviceName={agentDeviceName}
                   {...(remoteAgentDevices ? { remoteAgentDevices } : {})}
