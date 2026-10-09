@@ -135,6 +135,17 @@ private final class CindyBottomActionSheetController: UIViewController, UITableV
   private let tableView = UITableView(frame: .zero, style: .insetGrouped)
   private var picked = false
 
+  /// 与 CindyComposerMorphModule / expo-glass-effect 同口径：只有 iOS 26 SDK 编译、
+  /// iOS 26+ 运行且未声明兼容模式时，系统 Sheet 才带 Liquid Glass 材质。
+  private static let liquidGlassAvailable: Bool = {
+    #if compiler(>=6.2)
+    if #available(iOS 26.0, *) {
+      return (Bundle.main.infoDictionary?["UIDesignRequiresCompatibility"] as? Bool) != true
+    }
+    #endif
+    return false
+  }()
+
   private var actionIndices: [Int] {
     labels.indices.filter { $0 != cancelButtonIndex }
   }
@@ -160,16 +171,18 @@ private final class CindyBottomActionSheetController: UIViewController, UITableV
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    // iOS 26 的系统 Sheet 自带 Liquid Glass。不透明 grouped 底会把材质盖掉。
+    // 有 Liquid Glass 时透明，不透明 grouped 底会把材质盖掉；没有材质时 Sheet 本身
+    // 不画底，透明会让下层正文与菜单文字叠印（#5645），必须用系统分组底色。
+    let sheetBackground: UIColor = Self.liquidGlassAvailable ? .clear : .systemGroupedBackground
     view.isOpaque = false
-    view.backgroundColor = .clear
+    view.backgroundColor = sheetBackground
     presentationController?.delegate = self
     tableView.translatesAutoresizingMaskIntoConstraints = false
     tableView.delegate = self
     tableView.dataSource = self
     tableView.isScrollEnabled = true
     tableView.isOpaque = false
-    tableView.backgroundColor = .clear
+    tableView.backgroundColor = sheetBackground
     tableView.backgroundView = nil
     tableView.separatorInset = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
     view.addSubview(tableView)
@@ -219,7 +232,9 @@ private final class CindyBottomActionSheetController: UIViewController, UITableV
     }
     cell.contentConfiguration = config
     var background = UIBackgroundConfiguration.listGroupedCell()
-    background.backgroundColor = .clear
+    if Self.liquidGlassAvailable {
+      background.backgroundColor = .clear
+    }
     cell.backgroundConfiguration = background
     cell.selectionStyle = .default
     return cell
