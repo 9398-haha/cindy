@@ -13,7 +13,6 @@ import {
   mapMessageBodies,
   messageRecord,
   MESSAGE_BODY_FORMAT,
-  MAX_LIST_MESSAGE_CHARS,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -199,7 +198,9 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
   'local-db:sessions:get-many',
 ]);
 const textEncoder = new TextEncoder();
-const offlinePushQueue = createOfflinePushQueue();
+// A 200,000-code-unit body can take 1.2 MB after JSON escaping. Keep the existing
+// per-peer queue bounded, with room for that body plus its message envelope.
+const offlinePushQueue = createOfflinePushQueue({ maxBytes: 2 * 1024 * 1024 });
 
 // Serialize the async DB check at the final wire boundary, retaining per-peer
 // order even when replies arrive out of order. Bounds match best-effort push:
@@ -1284,7 +1285,7 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
       return;
     }
     for (const sid of stage.sessions.keys()) {
-      if (!receivesSessionText(dst, sid)) {
+      if (!subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
         stage.sessions.delete(sid);
         continue;
       }
@@ -1307,8 +1308,8 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
         let admissionFailed = false;
         sendBotCheckedPush(dst, SESSION_SYNC_CHANNEL, payload,
           (projected) => {
-            if (activeClient && receivesSessionText(dst, sid)) {
-              activeClient.sendPush(dst, SESSION_SYNC_CHANNEL, listMessagePayload(dst, sid, projected), ownerStamp);
+            if (activeClient && subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
+              activeClient.sendPush(dst, SESSION_SYNC_CHANNEL, projected, ownerStamp);
               // Admission is not delivery/ACK. Log once per admitted repair,
               // never per retry or token, and never include the snapshot body.
               log.debug(`session sync repair admitted to=${shortId(dst)}`
@@ -1608,7 +1609,7 @@ function flushMakerEventBatchSession(
     while (segment.events.length > 0) {
       const slice = takeMakerEventBatchSlice(segment);
       if (slice.length === 0) break;
-      if (!receivesSessionText(dst, sessionId)) continue;
+      if (!subscriptions.controllerHasTopic(dst, `session:${sessionId}`)) continue;
       // relay 已确认离线:只把缓冲取空(维持强不变量),不再制造成功率恒为 0 的帧。
       if (outcome.offline) {
         outcome.droppedEvents += slice.length;
@@ -1895,11 +1896,6 @@ export function pushSessionActivityToController(
   if (!activeClient) return;
   if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
   stageSessionActivityPush(controllerDeviceId, payload, broadcastTap.getSafeDataOwnerPushStamp?.());
-  const sessionId = readPushSessionId(payload);
-  if (sessionId && receivesListMessages(controllerDeviceId)
-    && (payload as { phase?: unknown }).phase === 'running') {
-    stageSessionSync(controllerDeviceId, sessionId, false);
-  }
 }
 
 /**
@@ -1932,28 +1928,9 @@ function receivesListMessages(dst: string): boolean {
     && subscriptions.controllerHasTopic(dst, 'sessions');
 }
 
-function receivesSessionText(dst: string, sessionId: string): boolean {
-  return subscriptions.controllerHasTopic(dst, `session:${sessionId}`) || receivesListMessages(dst);
-}
-
 function listMessagePayload(dst: string, sessionId: string, payload: unknown): unknown {
-  if (!receivesListMessages(dst) || subscriptions.controllerHasTopic(dst, `session:${sessionId}`)) return payload;
-  const value = payload as Record<string, unknown>;
-  const event = messageRecord(value.event) ? value.event : undefined;
-  const data = messageRecord(event?.data) ? event.data : undefined;
-  // Snapshot repair must use the same bound as ordinary list text pushes.
-  if (event?.type === 'text' && typeof data?.text === 'string' && data.text.length > MAX_LIST_MESSAGE_CHARS) {
-    return { sessionId, listMessage: true, resyncRequired: true };
-  }
-  // SDK done payloads can contain the entire turn, including tools and thinking.
-  // List subscribers need only the lifecycle boundary, including continuation claims.
-  if (event?.type === 'done') return {
-    sessionId, listMessage: true,
-    event: { type: 'done', source: event.source, turnScope: event.turnScope,
-      turnContinuationId: event.turnContinuationId,
-      data: { silentStop: data?.silentStop === true, cancelled: data?.cancelled === true } },
-  };
-  return { ...value, listMessage: true };
+  return receivesListMessages(dst) && !subscriptions.controllerHasTopic(dst, `session:${sessionId}`)
+    ? { ...(payload as object), listMessage: true } : payload;
 }
 
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
@@ -3951,7 +3928,6 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
       const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;
       if (sessionId) dropMakerEventBatch(src, sessionId);
       if (sessionId) sessionSyncStages.get(src)?.sessions.delete(sessionId);
-      if (sessionId && receivesListMessages(src)) stageSessionSync(src, sessionId, false);
     }
   }
   syncForwarding();

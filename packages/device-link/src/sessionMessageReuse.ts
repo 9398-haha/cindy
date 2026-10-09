@@ -39,15 +39,9 @@ export function isListMessagePush(channel: string, value: unknown): boolean {
     channel === "maker:status-changed"
   )
     return true;
-  if (channel !== "maker:event" || !messageRecord(value.event)) return false;
-  const event = value.event;
-  if (event.type === "done") return true;
-  return (
-    event.type === "text" &&
-    messageRecord(event.data) &&
-    typeof event.data.text === "string" &&
-    event.data.text.length <= MAX_LIST_MESSAGE_CHARS
-  );
+  // Only complete persisted bodies enter prefetch. Streaming text and SDK done
+  // stay on the detail topic: prefixes cannot establish a whole-message bound.
+  return false;
 }
 
 /** Only traverse protocol message containers, never user content. */
