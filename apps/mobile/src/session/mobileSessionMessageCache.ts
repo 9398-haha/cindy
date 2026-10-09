@@ -88,9 +88,10 @@ export function captureSessionMessageCacheWriteAuthority(
 export async function cacheSessionMessagesIfCurrent(
   authority: SessionMessageCacheWriteAuthority | null,
   messages: readonly RemoteMessage[],
-): Promise<void> {
-  if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+): Promise<boolean> {
+  if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return false;
   const normalized = normalizeCachedMessages(messages);
+  let written = false;
   await enqueueCacheOperation(authority.key, async () => {
     if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
     if (normalized.length === 0) {
@@ -103,7 +104,9 @@ export async function cacheSessionMessagesIfCurrent(
       messages: normalized,
     };
     await messageCacheStorage.setItem(authority.key, JSON.stringify(payload));
+    written = true;
   });
+  return written && isSessionMessageCacheWriteAuthorityCurrent(authority);
 }
 
 /** 显式替换/删除会推进 key epoch，使已排队但尚未提交的旧 render 快照失效。 */
