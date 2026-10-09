@@ -656,6 +656,48 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.requestVerification).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['delayed', 'late-link'], ['failed', 'late-link'],
+    ['delayed', 'in-flight'], ['failed', 'in-flight'],
+  ] as const)('fences add-account close with %s deletion and %s callback', async (deletion, timing) => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const url = callbackUrl();
+    const user = auth.user;
+    let complete!: (value: typeof verifiedOutcome) => void;
+    if (timing === 'in-flight') {
+      native.exchange.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+      await emitLink(url);
+    }
+    let finishDelete!: () => void;
+    if (deletion === 'failed') native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    else native.deleteSecure.mockImplementationOnce(() => new Promise<void>(resolve => {
+      finishDelete = () => { native.storage.delete(pendingKey); resolve(); };
+    }));
+    let closing!: Promise<void>;
+    await act(async () => { closing = auth.cancelAddAccount(); });
+    await emitLink(url);
+    expect(native.exchange).toHaveBeenCalledTimes(timing === 'in-flight' ? 1 : 0);
+    if (timing === 'in-flight') await act(async () => { complete(verifiedOutcome); });
+    await act(async () => {
+      if (deletion === 'delayed') finishDelete();
+      await closing;
+    });
+    await emitLink(url);
+    expect(native.exchange).toHaveBeenCalledTimes(timing === 'in-flight' ? 1 : 0);
+    expect(auth.loginState).toBeNull();
+    expect(auth.user).toBe(user);
+    expect(auth.authError).toBeNull();
+    expect(auth.isBusy).toBe(false);
+    // Failed deletion may leave storage behind, but it must not reopen the attempt.
+    expect(native.storage.has(pendingKey)).toBe(deletion === 'failed');
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledTimes(timing === 'in-flight' ? 2 : 1);
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
   it.each(['method-choice', 'realm-confirmation'] as const)('preserves %s before starting browser authorization', async step => {
     native.crossRealm = true;
     native.discoverOrganization.mockResolvedValue({

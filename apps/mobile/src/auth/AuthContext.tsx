@@ -2715,6 +2715,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [dispatchLoginAction, updateLoginState]);
 
   const cancelAddAccount = useCallback(async (): Promise<void> => {
+    oauthCancelledRef.current = true;
     loginFlowEpochRef.current += 1;
     setIsBusy(false);
     pendingAccountTokenRef.current = null;
