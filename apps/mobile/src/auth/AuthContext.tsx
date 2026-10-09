@@ -1826,7 +1826,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               throw error;
             });
             if (!isCurrent()) return false;
-            if (pending) {
+            if (pending && !oauthCancelledRef.current) {
               // Retained credentials belong to the browser attempt. Restore its
               // cancelable wait screen instead of offering an unrelated login.
               updateLoginState({ step: 'browser-redirect', label: pending.label });
@@ -1952,8 +1952,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (Platform.OS === 'android' && result.type === 'dismiss') {
               return true;
             }
+            oauthCancelledRef.current = true;
+            setIsBusy(false);
+            const cancelledEpoch = ++loginFlowEpochRef.current;
             await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
-            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            assertLoginFlowCurrent(cancelledEpoch);
             pendingAuthRealmRef.current = null;
             updateLoginState(null);
             throw authCodeError('USER_CANCELLED');
@@ -2355,7 +2358,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) return false;
           const code = authErrorCode(error);
-          if (action.type === 'reset') updateLoginState({ step: 'error', code });
+          if (action.type === 'reset') updateLoginState({ step: 'error', code, recoverTo: 'identifier' });
           if (
             code === 'INVALID_LOGIN_TICKET' ||
             code === 'INVALID_BIND_TICKET' ||
@@ -2717,6 +2720,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const cancelAddAccount = useCallback(async (): Promise<void> => {
     oauthCancelledRef.current = true;
     loginFlowEpochRef.current += 1;
+    const cancelledEpoch = loginFlowEpochRef.current;
     setIsBusy(false);
     pendingAccountTokenRef.current = null;
     pendingAccountRefreshTokenRef.current = null;
@@ -2731,6 +2735,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     additionalLoginRef.current = false;
     sessionRecoverySuspendedRef.current = false;
     await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+    if (loginFlowEpochRef.current !== cancelledEpoch) return;
     activateMobileSessionRealm(activeAuthRealmRef.current);
     setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
     updateLoginState(null);
@@ -2740,6 +2745,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearLocalSession = useCallback(async (
     options: { persistedAuthAlreadyCleared?: boolean } = {},
   ) => {
+    oauthCancelledRef.current = true;
+    loginFlowEpochRef.current += 1;
+    setIsBusy(false);
     // 任何登录态清除路径(logout / terminateSession / 账号注销 / ACCOUNT_UNAVAILABLE)
     // 都先 best-effort 注销移动推送 token —— 只挂在 logout 会漏掉终止路径,设备会
     // 继续收到旧账号的任务通知。token 此刻可能已失效(账号不可用),失败静默,
@@ -2757,7 +2765,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
     // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
     authGenerationRef.current += 1;
-    loginFlowEpochRef.current += 1;
     refreshInFlightRef.current = null;
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
@@ -2858,6 +2865,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     // Invalidate refresh/login continuations before the first storage await;
     // the UI remains signed in until the durable credential transaction wins.
+    oauthCancelledRef.current = true;
+    loginFlowEpochRef.current += 1;
+    setIsBusy(false);
     authGenerationRef.current += 1;
     refreshInFlightRef.current = null;
     const token = accessTokenRef.current;
@@ -3468,6 +3478,7 @@ async function readPendingOAuth(): Promise<PendingOAuth> {
     throw authCodeError('INVALID_AUTH_CODE');
   }
   if (
+    !parsed ||
     typeof parsed.codeVerifier !== 'string' ||
     typeof parsed.deviceId !== 'string' ||
     typeof parsed.state !== 'string' ||

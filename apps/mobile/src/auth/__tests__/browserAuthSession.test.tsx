@@ -8,6 +8,8 @@ const native = vi.hoisted(() => ({
   storage: new Map<string, string>(),
   readSecure: vi.fn(),
   deleteSecure: vi.fn(),
+  logoutCleanup: vi.fn(),
+  unregisterPush: vi.fn(),
   links: new Set<(event: { url: string }) => void>(),
   open: vi.fn(),
   exchange: vi.fn(),
@@ -76,6 +78,7 @@ vi.mock('@/auth/pkce', () => ({
 vi.mock('@/auth/deviceId', () => ({ ensureDeviceId: async () => 'fixture-device', hasStoredDeviceId: async () => true }));
 vi.mock('@/auth/mobileAccountVault', () => ({
   readMobileAccountVault: async () => null,
+  clearMobileLoginCredentialsForLogout: native.logoutCleanup,
   listMobileSavedAccounts: () => [],
   reconcileMobileActiveAuthSession: async () => null,
 }));
@@ -86,12 +89,12 @@ vi.mock('@/auth/canaryChannelSync', () => ({}));
 vi.mock('@/auth/xdOrgBetaDefault', () => ({}));
 vi.mock('@/analytics/mobileTapdb', () => ({ clearTapdbUser: async () => {} }));
 vi.mock('@/analytics/analyticsConsentStore', () => ({}));
-vi.mock('@/notifications/pushNotifications', () => ({}));
+vi.mock('@/notifications/pushNotifications', () => ({ unregisterPushTokenBestEffort: native.unregisterPush }));
 vi.mock('@/session/agentCapabilitiesCache', () => ({}));
 vi.mock('@/session/composerPaletteCache', () => ({}));
 vi.mock('@/device-link/remoteResourceCache', () => ({}));
 vi.mock('@/session/mobileHomeListCache', () => ({}));
-vi.mock('@/device-link/clipboardInvitationHistory', () => ({}));
+vi.mock('@/device-link/clipboardInvitationHistory', () => ({ clearClipboardInvitationHistory: async () => {} }));
 vi.mock('@/remote-desktop/credentialIdentity', () => ({}));
 vi.mock('@/session/mobileSessionMessageCache', () => ({}));
 vi.mock('@/session/remoteHistoryDiskCache', () => ({}));
@@ -172,6 +175,8 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.initialUrl.mockReset().mockResolvedValue(null);
     native.requestCode.mockReset().mockResolvedValue(undefined);
     native.storage.clear();
+    native.logoutCleanup.mockReset();
+    native.unregisterPush.mockReset();
     native.deleteSecure.mockReset().mockImplementation(async (key: string) => { native.storage.delete(key); });
     native.readSecure.mockReset().mockImplementation(async (key: string) => native.storage.get(key) ?? null);
     native.state = 0;
@@ -313,6 +318,89 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.storage.has(pendingKey)).toBe(false);
     expect(auth.loginState).toBeNull();
     expect(native.exchange).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['android', 'cancel', 'delayed'], ['android', 'cancel', 'failed'],
+    ['ios', 'cancel', 'delayed'], ['ios', 'cancel', 'failed'],
+    ['ios', 'dismiss', 'delayed'], ['ios', 'dismiss', 'failed'],
+  ])('fences %s browser %s during %s credential deletion', async (platform, type, deletion) => {
+    native.platform = platform;
+    native.open.mockResolvedValueOnce({ type });
+    let finishDelete!: () => void;
+    if (deletion === 'failed') native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage failure'));
+    else native.deleteSecure.mockImplementationOnce(() => new Promise<void>(resolve => {
+      finishDelete = () => { native.storage.delete(pendingKey); resolve(); };
+    }));
+    let result!: Promise<unknown>;
+    await act(async () => {
+      result = auth.dispatchLoginAction({ type: 'start-social-browser', provider: 'wechat', label: 'WeChat' })
+        .catch(error => error);
+    });
+    await emitLink(callbackUrl());
+    expect(native.exchange).not.toHaveBeenCalled();
+    await act(async () => {
+      if (deletion === 'delayed') finishDelete();
+      expect(await result).toMatchObject({ code: 'USER_CANCELLED' });
+    });
+    expect(auth.loginState).toBeNull();
+  });
+
+  it('invalidates an exchange already running when the browser reports cancel', async () => {
+    let finishBrowser!: (value: { type: string }) => void;
+    let finishExchange!: (value: typeof verifiedOutcome) => void;
+    native.open.mockImplementationOnce(() => new Promise(resolve => { finishBrowser = resolve; }));
+    native.exchange.mockImplementationOnce(() => new Promise(resolve => { finishExchange = resolve; }));
+    let result!: Promise<unknown>;
+    await act(async () => {
+      result = auth.dispatchLoginAction({ type: 'start-social-browser', provider: 'wechat', label: 'WeChat' })
+        .catch(error => error);
+    });
+    await emitLink(callbackUrl());
+    await act(async () => { finishBrowser({ type: 'cancel' }); await result; });
+    expect(auth.loginState).toBeNull();
+    await act(async () => { finishExchange(verifiedOutcome); });
+    expect(auth.loginState).toBeNull();
+    expect(auth.authError).toBeNull();
+    expect(auth.isBusy).toBe(false);
+  });
+
+  it.each(['logout', 'terminateSession'] as const)('fences OAuth before %s awaits cleanup', async action => {
+    await start();
+    const url = callbackUrl();
+    let failCleanup!: (error: Error) => void;
+    const boundary = action === 'logout' ? native.logoutCleanup : native.unregisterPush;
+    boundary.mockImplementationOnce(() => new Promise((_, reject) => { failCleanup = reject; }));
+    let closing!: Promise<unknown>;
+    await act(async () => { closing = auth[action]().catch(error => error); });
+    expect(boundary).toHaveBeenCalledTimes(1);
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+    const cleanupError = new Error('fixture cleanup failure');
+    await act(async () => { failCleanup(cleanupError); expect(await closing).toBe(cleanupError); });
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+  });
+
+  it('does not let a delayed add-account close erase a newer login', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    let finishDelete!: () => void;
+    native.deleteSecure.mockImplementationOnce(() => {
+      native.storage.delete(pendingKey);
+      return new Promise<void>(resolve => { finishDelete = resolve; });
+    });
+    let closing!: Promise<void>;
+    await act(async () => { closing = auth.cancelAddAccount(); });
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const pending = native.storage.get(pendingKey);
+    const state = auth.loginState;
+    await act(async () => { finishDelete(); await closing; });
+    expect(auth.loginState).toBe(state);
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
   });
 
   it('does not erase PKCE when Linking begins exchanging before Android dismiss resolves', async () => {
@@ -524,7 +612,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState?.step).toBe('sso-verification');
   });
 
-  it.each(['email', 'sms'] as const)('cancels a restored OAuth attempt before starting %s login', async kind => {
+  it.each(['email', 'phone'] as const)('cancels a restored OAuth attempt before starting %s login', async kind => {
     await start();
     const url = callbackUrl();
     await act(async () => root.unmount());
@@ -548,9 +636,21 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.isAuthenticated).toBe(false);
   });
 
-  it.each(['expired', 'malformed', 'absent'])('starts the normal identifier flow for %s persisted OAuth', async kind => {
+  it('does not restore a canceled browser wait on remount when deletion failed', async () => {
+    await start();
+    const url = callbackUrl();
+    native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage failure'));
     await act(async () => { await auth.cancelAddAccount(); });
-    if (kind !== 'absent') native.storage.set(pendingKey, kind === 'malformed' ? '{invalid' : JSON.stringify({
+    await mountLoginScreen('remount-after-cancel');
+    expect(auth.loginState?.step).toBe('identifier');
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+    expect(auth.loginState?.step).toBe('identifier');
+  });
+
+  it.each(['expired', 'malformed', 'null', 'absent'])('starts the normal identifier flow for %s persisted OAuth', async kind => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    if (kind !== 'absent') native.storage.set(pendingKey, kind === 'malformed' ? '{invalid' : kind === 'null' ? 'null' : JSON.stringify({
       state: 'fixture-state', codeVerifier: 'fixture-verifier', deviceId: 'fixture-device',
       realm: 'cn', label: 'Fixture SSO', createdAt: Date.now() - 10 * 60_000 - 1,
     }));
