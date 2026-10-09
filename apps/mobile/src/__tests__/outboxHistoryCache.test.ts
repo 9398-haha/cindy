@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { HistoryViewController, projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { cacheOutboxHistory } from '@/session/outboxHistoryCache';
 import { clearHistoryDisk, historyDiskAuthority, readHistoryDisk } from '@/session/remoteHistoryDiskCache';
-import { getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
+import { cacheSessionMessagesIfCurrent, captureSessionMessageCacheWriteAuthority, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { clearRemoteHistoryViews, getRemoteHistoryView, mountRemoteHistoryView } from '@/session/remoteHistoryViews';
 import type { RemoteMessage } from '@/session/types';
 
@@ -50,6 +53,27 @@ async function opened(rows: RemoteMessage[], error?: string) {
   return { entry, source };
 }
 const save = (current = () => true) => cacheOutboxHistory('d', 's', 'sent', current);
+// Execute the actual unmount effect without mounting the native message screen.
+const source = ts.createSourceFile('remoteSessionStore.ts', readFileSync(
+  new URL('../session/remoteSessionStore.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+const hook = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'useSessionMessageCacheSync')!;
+let cleanupSource = '';
+function findCleanup(node: ts.Node) {
+  if (ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect') {
+    const callback = node.arguments[0];
+    if (ts.isArrowFunction(callback) && ts.isArrowFunction(callback.body)) cleanupSource = callback.body.getText(source);
+  }
+  ts.forEachChild(node, findCleanup);
+}
+findCleanup(hook);
+function flushUnmount(rendered: RemoteMessage[]) {
+  const bindings = { persistTimerRef: { current: setTimeout(() => {}, 60_000) },
+    ctxRef: { current: { deviceId: 'd', sessionId: 's', messages: rendered } },
+    remoteSessionStore, captureSessionMessageCacheWriteAuthority, cacheSessionMessagesIfCurrent, clearTimeout };
+  const js = ts.transpileModule(`const { ${Object.keys(bindings).join(',')} } = bindings; (${cleanupSource})();`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  new Function('bindings', js)(bindings);
+}
 beforeEach(() => { state.rows = [row('sent', 2)]; state.fail = false; setMobileAuthOwner('a'); });
 afterEach(async () => {
   state.fail = false;
@@ -133,6 +157,30 @@ describe('outbox to offline history handoff', () => {
     state.fail = false;
     expect(await save()).toBe(true);
     expect(await getCachedSessionMessages('d', 's')).toEqual(state.rows);
+  });
+  it('rejects a pre-handoff debounce write queued after raw fallback was saved', async () => {
+    await opened([], 'UNSUPPORTED_CAPABILITY');
+    const staleAuthority = captureSessionMessageCacheWriteAuthority('d', 's');
+    expect(await save()).toBe(true);
+    expect(await cacheSessionMessagesIfCurrent(staleAuthority, [row('previous', 1)])).toBe(false);
+    expect(await getCachedSessionMessages('d', 's')).toEqual(state.rows);
+  });
+  it.each(['before', 'after'])('unmount %s handoff reads store ingress newer than the last render', async (order) => {
+    await opened([], 'UNSUPPORTED_CAPABILITY');
+    const rendered = [row('previous', 1)];
+    state.rows = [...rendered, row('sent', 2)];
+    if (order === 'before') flushUnmount(rendered);
+    expect(await save()).toBe(true);
+    if (order === 'after') flushUnmount(rendered);
+    expect(await getCachedSessionMessages('d', 's')).toEqual(state.rows);
+  });
+  it('unmount after raw store eviction preserves the confirmed disk window', async () => {
+    await opened([], 'UNSUPPORTED_CAPABILITY');
+    expect(await save()).toBe(true);
+    const saved = state.rows;
+    state.rows = [];
+    flushUnmount([row('previous', 1)]);
+    expect(await getCachedSessionMessages('d', 's')).toEqual(saved);
   });
   it('does not release on logout or a stale sender', async () => {
     await opened([row('sent', 2)]);

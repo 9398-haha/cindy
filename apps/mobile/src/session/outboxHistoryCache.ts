@@ -1,5 +1,5 @@
 import { historyViewLeaves, isHistoryViewUnavailable, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
-import { cacheSessionMessagesIfCurrent, captureSessionMessageCacheWriteAuthority } from './mobileSessionMessageCache';
+import { replaceCachedSessionMessages } from './mobileSessionMessageCache';
 import { historyDiskAuthority, readHistoryDisk, writeHistoryDisk } from './remoteHistoryDiskCache';
 import { findRemoteHistoryView } from './remoteHistoryViews';
 import { remoteSessionStore } from './remoteSessionStore';
@@ -37,8 +37,8 @@ export async function cacheOutboxHistory(
   if (snapshot && isHistoryViewUnavailable(snapshot.error)) {
     // Older hosts render the raw window. Do not turn a scheduled task into a long-term cache.
     if (remoteSessionStore.getSessionRetention(sessionId) !== 'regular') return true;
-    const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
-    return await cacheSessionMessagesIfCurrent(authority, messages) && isCurrent();
+    // Revoke pre-handoff debounce writes before the existing serialized replacement.
+    return await replaceCachedSessionMessages(deviceId, sessionId, messages) && isCurrent();
   }
   const authority = historyDiskAuthority(deviceId, sessionId);
   if (snapshot && coversMessage(snapshot, message)) {

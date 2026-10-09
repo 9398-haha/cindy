@@ -114,12 +114,12 @@ export async function replaceCachedSessionMessages(
   deviceId: string,
   sessionId: string,
   messages: readonly RemoteMessage[],
-): Promise<void> {
+): Promise<boolean> {
   const key = safeStorageKey(deviceId, sessionId);
-  if (!key) return;
+  if (!key) return false;
   keyWriteEpochs.set(key, (keyWriteEpochs.get(key) ?? 0) + 1);
   const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
-  await cacheSessionMessagesIfCurrent(authority, messages);
+  return cacheSessionMessagesIfCurrent(authority, messages);
 }
 
 // 读取某 (host, session) 的缓存消息;无缓存 / 解析失败一律返回空数组(乐观 hydrate 不应抛错)。
