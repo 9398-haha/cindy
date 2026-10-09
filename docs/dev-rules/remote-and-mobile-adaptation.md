@@ -83,6 +83,19 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
    12 个在途配额；被控端连续立即返回空结果时控制端放慢到 1s 一次，防止空转。2 台控制端共享被控端、
    其中一台静默的回归仍需在双实例实机验证中补测。
 
+## 协同远端 Worker 的轮询与恢复
+
+协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「协同远端 Worker」，实现见
+`apps/desktop/src/main/maker-ipc/orcaRemoteWorkerRuntime.ts`。按故障半径三问：
+
+1. **故障层级**：单台运行设备的单个请求。轮询或派活失败只把这台设备标为「暂时无法获取状态」，
+   Worker 不判失败、不重派；下一轮成功即恢复，并按消息 id 补报缺失的回报。派活时设备不可达直接失败，
+   不排队、不重试；`enqueue` 回执丢失时只查一次投递回执，不盲重发。
+2. **动作层级**：只影响这台设备上的远端 Worker；不重建 link、不断开 relay，不影响其它设备与普通远控。
+   结束通知(release)送不到时留待重连或 5 分钟后低频补发。
+3. **多 peer 与负载**：每台设备每轮只发一次 `maker:list-active`，有待回报时 2s 一轮，否则 15s 一轮；
+   读最后回复与投递回执只针对仍在等待回报的 Worker。多台控制端共享同一运行设备的回归仍需实机补测。
+
 ## 共享恢复与请求策略
 
 普通出站 invoke 在共享 `InvokeScheduler` 中按目标设备排队：每台最多 12 个在途，

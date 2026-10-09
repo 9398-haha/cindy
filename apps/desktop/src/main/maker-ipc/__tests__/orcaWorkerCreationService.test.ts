@@ -240,6 +240,132 @@ describe('SSH Codex Worker catalog', () => {
   });
 });
 
+describe('Worker running on another device (execution device)', () => {
+  const remoteDeps = (overrides: Partial<OrcaWorkerCreationDeps> = {}) => createDeps({
+    openRemoteWorker: vi.fn(async (input) => ({
+      ok: true as const,
+      proxySessionId: 'proxy-1',
+      remoteSessionId: 'remote-1',
+      agent: input.agent,
+      model: input.model ?? 'device-default-model',
+      workingDir: input.workingDir ?? '/Users/demo/Cindy/dialogues/remote-1',
+    })),
+    recordRemoteWorker: vi.fn(async () => undefined),
+    discardRemoteWorker: vi.fn(async () => undefined),
+    ...overrides,
+  });
+
+  it('creates the task on the device, records a proxy worker and skips local model admission', async () => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: '转写', label: 'transcribe', agent: 'claude-code',
+      executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews', model: 'only-on-device',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      workerSessionId: 'proxy-1',
+      resolved: { agent: 'claude-code', model: 'only-on-device', label: 'transcribe' },
+    });
+    expect(deps.openRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'mac-mini', workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      label: 'transcribe', role: '转写', agent: 'claude-code', model: 'only-on-device',
+      permissionMode: 'auto', workingDir: '/Users/demo/Interviews', title: 'Worker · 转写 · transcribe',
+    }));
+    expect(deps.addOrUpdateWorker).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'worker-1', sessionId: 'proxy-1', status: 'idle',
+    }));
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith({
+      workerId: 'worker-1', teamId: 'team-1', leadSessionId: 'lead-1',
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+      workingDir: '/Users/demo/Interviews',
+    });
+    expect(deps.getProviderRoutingContext).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('lets the device allocate a directory when none is given and accepts Windows paths', async () => {
+    const { deps, service } = remoteDeps();
+    await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(deps.openRemoteWorker).toHaveBeenLastCalledWith(expect.not.objectContaining({ workingDir: expect.anything() }));
+    const windows = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'b', agent: 'codex', executionDeviceId: 'office',
+      workingDir: 'D:\\projects\\site',
+    });
+    expect(windows.ok).toBe(true);
+  });
+
+  it.each([
+    ['relative directory', { workingDir: 'relative/dir' }],
+    ['malformed device id', { executionDeviceId: 'bad id/../' }],
+  ])('rejects a %s before reserving a slot', async (_name, patch) => {
+    const { deps, service } = remoteDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office', ...patch,
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['SSH', { remoteHostId: 'host-1' }],
+    ['remote Agent', { agentDeviceId: 'device-b' }],
+  ])('refuses to mix with a Lead on %s', async (_name, leadPatch) => {
+    const { deps, service } = remoteDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1', agentKind: 'codex' as const, workspaceKind: 'project' as const, workingDir: '/repo',
+        model: 'gpt-5.5', effort: 'medium', permissionMode: 'default', fastMode: false, providerId: 'xd',
+        remoteHostId: null, ...leadPatch,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'office',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it('passes through device errors without recording a worker', async () => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({
+        ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'Mac mini 需要更新',
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Mac mini 需要更新' });
+    expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
+  });
+
+  it('discards the device task when persisting the worker fails', async () => {
+    const { deps, service } = remoteDeps({
+      addOrUpdateWorker: vi.fn(async () => { throw new Error('disk full'); }),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(deps.discardRemoteWorker).toHaveBeenCalledWith({
+      proxySessionId: 'proxy-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1',
+    });
+    expect(deps.recordRemoteWorker).not.toHaveBeenCalled();
+  });
+
+  it('reports remote workers as unsupported when the host did not wire them', async () => {
+    const { service } = createDeps();
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'dev', label: 'a', agent: 'codex', executionDeviceId: 'mac-mini',
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+});
+
 describe('Worker of a lead whose agent runs on another computer', () => {
   const sparkModels = ['spark/qwen', 'spark/deepseek'].map((id) => ({
     id, name: id, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false,

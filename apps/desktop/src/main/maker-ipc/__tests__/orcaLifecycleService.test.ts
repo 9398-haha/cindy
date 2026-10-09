@@ -163,7 +163,7 @@ describe('OrcaLifecycleService', () => {
         insideSend = true; allowed = !revoked;
         try { await runAcceptedCallback(opts.onAccepted, 'worker-session-1', 'placeholder'); nativeCalls++; return { dispatched: true }; }
         finally { insideSend = false; }
-      } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() } };
+      } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() }, orcaRemoteWorkers: { runtime: { isRemote: () => false } } };
       const js = ts.transpileModule(`return ({${callback}}).sendWorkerReadyPlaceholder;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
       deps.sendWorkerReadyPlaceholder = new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
       deps.rollbackCreatedWorker = vi.fn(async () => { expect(insideSend).toBe(false); });

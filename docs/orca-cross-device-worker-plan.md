@@ -1,8 +1,9 @@
 # 协同扩展：Worker 在另一台电脑运行
 
 > 状态：产品决策已定（2026-10-09，见 §5），分三步实现，不是产品规则。
-> 第一步（运行设备侧支持与 schema）已落地，协议见 `docs/dev-rules/protocol-compatibility.md`
-> 「协同远端 Worker」；Lead 侧编排与界面落地后再拆入 `docs/dev-rules/orca-team-architecture.md`。
+> 第一步（运行设备侧支持与 schema）与第二步（Lead 侧编排、Agent 工具）已落地，协议见
+> `docs/dev-rules/protocol-compatibility.md`「协同远端 Worker」，运行时契约见
+> `docs/dev-rules/orca-team-architecture.md`「远端 Worker」；第三步（协同面板界面）进行中。
 > 来源讨论：issue #5620「远程控制功能疑问」→ 跨设备派活。
 
 ## 1. 结论
@@ -100,24 +101,28 @@
 | 在 B 创建 Worker 任务 | `maker:orca:remote-worker:open`(幂等；来源取 server 盖章的 src)                      |
 | 结束协同              | `maker:orca:remote-worker:release`                                                    |
 | 派活、补充            | `maker:input:enqueue`(按 `item.clientId` 幂等，`maker:input:get-projection` 查回执) |
-| 打断、停止            | `maker:input:stop`、`maker:abort-session`                                            |
-| 运行状态与轮次结束    | `sessions` topic 的 `local-db:sessions:activity`                                     |
+| 打断、停止            | `maker:abort-session`                                                                |
+| 运行状态与轮次结束    | 轮询 `maker:list-active`(每台设备一次，带 `isTurnRunning`)                           |
+| 可选运行设备          | `maker:orca:execution-devices`(A 本机与控制端共用，只读)                              |
 | 最后回复              | `local-db:history:messages`(assistant、倒序、取 1 条)                                |
 | 授权确认              | 现有远程任务确认链路                                                                 |
 
 ### 4.3 A 侧改动
 
-- **数据**：Orca Worker 记录新增 `execution_device_id`（空 = 本机）与远端任务 id，需新 migration，
-  旧版本读不到时按本机 Worker 处理。改动前读 `database-and-migrations.md`。
+- **数据**：Orca Worker 记录新增 `execution_device_id`（空 = 本机）、`remote_session_id`、
+  `last_bridged_message_id`、`remote_released_at`（migration 0124）。本机只留一条不跑 Agent、
+  没有目录的代理任务行，承接计槽、归档与回报；旧版本读不到这些列时按本机 Worker 处理。
 - **创建**：`orcaWorkerCreationService` 增加设备分支：校验设备（在线、版本、同账号、非共享访客）、
   在 B 校验目录、创建任务并标记角色。与 `remoteHostId`、`agentDeviceId` 互斥，冲突时报错。
-- **派活**：`orcaTeamService` 的私有 dispatch 路径按 Worker 位置分到本机适配器或远端适配器；
-  accepted 回调、clientId、持久化与 `activeWorkerDispatches` 计数保持同一套，不另造状态机。
-- **回报**：远端轮次结束事件触发 auto-bridge；待回报按远端轮次标识幂等。
-- **恢复**：每台设备一个订阅；断线按 `remote-and-mobile-adaptation.md` 的「故障半径三问」，
-  只影响该设备上的 Worker，不重建 link、不影响其它设备和普通远控。
-- **工具**：`create_worker` / `create_workers` 新增 `device`；新增或扩展只读工具返回可选设备；
-  归属校验 `resolveWorkerRef` 不变。
+- **派活**：`OrcaTeamService` 的会话依赖按「是否远端 Worker」分流（`orcaRemoteWorkers.ts` 的
+  `wrapTeamDeps`）；accepted 回调、clientId、持久化与 `activeWorkerDispatches` 计数保持同一套，
+  不另造状态机。
+- **回报**：轮询发现派出的消息已进入对话且设备不在跑时，取最后一条 assistant 消息交给 auto-bridge；
+  按消息 id 去重（`last_bridged_message_id`），断线重连后补报，同一条只报一次。
+- **恢复**：轮询代替订阅（Main 侧没有可复用的订阅入口）；断线按 `remote-and-mobile-adaptation.md`
+  的「故障半径三问」，只影响该设备上的 Worker，不重建 link、不影响其它设备和普通远控。
+- **工具**：`create_worker` / `create_workers` 新增 `execution_device_id`；`get_workspace_info`
+  返回 `execution_devices` 与每个 Worker 的 `execution_device`；归属校验 `resolveWorkerRef` 不变。
 
 ### 4.4 首版不支持
 

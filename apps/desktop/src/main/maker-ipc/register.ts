@@ -423,6 +423,7 @@ import {
   removeWorker,
   renewWorkerCreationReservation,
   reserveWorkerCreation,
+  setRemoteWorkerStatusProvider,
   setSessionOrcaRole,
   setWorkerFocus,
   updateWorkerStatus,
@@ -876,6 +877,8 @@ import {
   createOrcaRemoteWorkerHost,
   registerOrcaRemoteWorkerHandlers,
 } from './orcaRemoteWorkerHost.js';
+import { createOrcaRemoteWorkers, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
+import { ORCA_EXECUTION_DEVICES_CHANNEL } from '@cindy/device-link';
 import {
   parseOrcaRemoteLead,
   serializeOrcaRemoteLead,
@@ -1310,6 +1313,8 @@ async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<bo
 const workerTurnStartSequencer = createWorkerTurnStartSequencer(log);
 // session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
 let orcaTeamServiceForEvents: OrcaTeamService | null = null;
+// 协同远端 Worker 的宿主装配；bootstrapSession 据此拒绝在本机启动远端 Worker 的代理任务。
+let orcaRemoteWorkersForHost: OrcaRemoteWorkers | null = null;
 // silent-stop 自动续跑守卫(决策语义与防死循环不变量见 silentStopAutoResume.ts 文件头)。
 // 纯内存、app 级单例:额度按 sessionId 记账,kill switch 每次决策时现读(改配置即生效)。
 const silentStopAutoResumeGuard = new SilentStopAutoResumeGuard({
@@ -2277,6 +2282,17 @@ interface OrcaCollabService {
           effort: string | null;
           focused: boolean;
           working_dir: string;
+          execution_device?: {
+            device_id: string;
+            device_name: string | null;
+            reachable: boolean | null;
+          };
+        }>;
+        execution_devices?: Array<{
+          device_id: string;
+          name: string;
+          platform: string | null;
+          supported: boolean;
         }>;
       }
     | { ok: false; errorCode: string; message: string }
@@ -7375,6 +7391,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectProjectContext: boolean;
   }> {
     assertAccess?.();
+    // 协同远端 Worker 的代理任务行只承接计槽与回报，真实任务在运行设备上，绝不在本机起 Agent。
+    if (o.id && orcaRemoteWorkersForHost?.runtime.isRemote(o.id)) {
+      throw new Error('[PRECONDITION_FAILED] this Worker runs on another device and cannot start locally');
+    }
     // Agent 在另一台电脑上运行的任务：恢复时调用方可能没带设备，以任务记录为准。
     if (o.id && o.agentDeviceId === undefined && !o.remoteHostId) {
       const agentDeviceId = await readSessionAgentDeviceId(o.id);
@@ -12390,6 +12410,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     const workerRecycleScope = captureSessionRecycleScope();
     const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent);
+    // 远端 Worker：停止那台的当前一轮并通知结束协同(任务与文件保留)；不可达的留待重连后补发。
+    void orcaRemoteWorkers.releaseEnded(archivedWorkerSessionIds);
     await Promise.all(
       archivedWorkerSessionIds.map(async (sessionId) => {
         await assertCurrent?.();
@@ -12454,6 +12476,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       label: label.value,
       initialTask:
         typeof b.initialTask === 'string' && b.initialTask.length > 0 ? b.initialTask : undefined,
+      // 运行设备与那台上的目录(可选)；旧控制端不带，行为不变。
+      ...(typeof b.executionDeviceId === 'string' && b.executionDeviceId.trim()
+        ? {
+            executionDeviceId: b.executionDeviceId.trim(),
+            ...(typeof b.workingDir === 'string' && b.workingDir.trim()
+              ? { workingDir: b.workingDir.trim() }
+              : {}),
+          }
+        : {}),
     });
     if (!result.ok) throwOrcaServiceFailure(result);
     return {
@@ -12538,7 +12569,35 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   };
 
-  const orcaTeamService = createOrcaTeamService({
+  // 协同远端 Worker：Worker 在同账号另一台电脑运行(见 orcaRemoteWorkers.ts)。
+  // 其代理任务行永不在本机跑 Agent，团队服务的会话依赖按是否远端分流。
+  const orcaRemoteWorkers = createOrcaRemoteWorkers({
+    remoteInvoke: (deviceId, channel, args) => invokeBotPeer(deviceId, channel, args),
+    listDevices: () => handleListDevices(deviceDirectoryDeps()),
+    getTeamService: () => orcaTeamServiceForEvents,
+    broadcastOrcaWorkerChanged: (leadSessionId) => {
+      broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
+    },
+    readLeadTitle: async (leadSessionId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({ title: sessions.title })
+        .from(sessions)
+        .where(eq(sessions.id, leadSessionId))
+        .limit(1);
+      return row?.title ?? '';
+    },
+    log,
+  });
+  orcaRemoteWorkersForHost = orcaRemoteWorkers;
+  setRemoteWorkerStatusProvider((proxySessionId, deviceId) => ({
+    deviceName: orcaRemoteWorkers.deviceName(deviceId),
+    reachable: orcaRemoteWorkers.runtime.isReachable(proxySessionId),
+    ...(orcaRemoteWorkers.runtime.workingDir(proxySessionId)
+      ? { workingDir: orcaRemoteWorkers.runtime.workingDir(proxySessionId)! }
+      : {}),
+  }));
+
+  const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({
     captureControlAuthority: async (leadSessionId) => (await captureOrcaPluginAuthority(leadSessionId)).assertCurrent,
     withSessionSendLock: withSendToSessionLock,
     getWorkerLinkBySessionId: (workerSessionId) => getWorkerLink({ workerSessionId }),
@@ -12770,8 +12829,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return { accepted: result.ok };
     },
     log,
-  });
+  }));
   orcaTeamServiceForEvents = orcaTeamService;
+  void orcaRemoteWorkers.start().catch((err) =>
+    log.warn('orca remote workers: restore failed', {
+      err: err instanceof Error ? err.message : String(err),
+    }),
+  );
+  ipcMain.handle(ORCA_EXECUTION_DEVICES_CHANNEL, async (event) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    // 共享任务访客看不到本账号的设备目录。
+    if (getDeviceLinkInvokeContext()?.sharedTask) throwIpcError('PERMISSION_DENIED', 'not available to shared task guests');
+    return { devices: await orcaRemoteWorkers.listExecutionDevices() };
+  });
 
   const getProviderRoutingContext = () =>
     readOrcaWorkerProviderRoutingContext({
@@ -12964,6 +13034,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcastOrcaWorkerChanged: (leadSessionId) => {
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
     },
+    openRemoteWorker: (input) => orcaRemoteWorkers.openRemoteWorker(input),
+    recordRemoteWorker: (input) => orcaRemoteWorkers.recordRemoteWorker(input),
+    discardRemoteWorker: (input) => orcaRemoteWorkers.discardRemoteWorker(input),
   });
 
   const orcaUiAssignmentHistoryGate = createOrcaUiAssignmentHistoryGate({
@@ -13024,6 +13097,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     sendWorkerReadyPlaceholder: async ({ workerSessionId, agentKind, entrypoint, context }, assertCurrent) => {
+      // 远端 Worker 的任务在运行设备上已建好并启动，无需本机占位消息。
+      if (orcaRemoteWorkers.runtime.isRemote(workerSessionId)) return;
       const workerSession = maker.getSession(workerSessionId);
       if (!workerSession) {
         throw new Error(`worker session ${workerSessionId} not found for ready placeholder`);
@@ -13053,6 +13128,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
+      if (orcaRemoteWorkers.runtime.isRemote(workerSessionId)) {
+        await orcaRemoteWorkers.archive(workerSessionId).catch(() => undefined);
+        await removeWorker(workerId);
+        return;
+      }
       const workerSession = maker.getSession(workerSessionId);
       if (workerSession) {
         await maker.closeSession(workerSessionId).catch(() => undefined);
@@ -14249,7 +14329,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getWorkspaceInfo: async ({ leadSessionId }) => {
       try {
-        return await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), leadSessionId);
+        const info = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), leadSessionId);
+        if (!info.ok || !orcaRemoteWorkersForHost) return info;
+        // 运行设备目录只给 Lead 选 execution_device_id 用；探测失败不影响其余诊断。
+        const devices = await orcaRemoteWorkersForHost.listExecutionDevices().catch(() => []);
+        return {
+          ...info,
+          execution_devices: devices.map((d) => ({
+            device_id: d.deviceId,
+            name: d.name,
+            platform: d.platform,
+            supported: d.supported,
+          })),
+        };
       } catch (err) {
         return {
           ok: false,

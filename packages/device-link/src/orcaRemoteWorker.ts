@@ -14,6 +14,21 @@ export const ORCA_REMOTE_WORKER_OPEN_CHANNEL = 'maker:orca:remote-worker:open';
 export const ORCA_REMOTE_WORKER_RELEASE_CHANNEL = 'maker:orca:remote-worker:release';
 export const ORCA_REMOTE_WORKER_VERSION = 1;
 
+/**
+ * Lead 所在电脑的只读查询：哪些同账号电脑可以被选为运行设备。控制端(远程控制这台
+ * Lead 电脑的手机或另一台桌面)经设备互联读取，结果以 Lead 所在电脑的视角为准。
+ * 老版本没有该 channel → CHANNEL_NOT_ALLOWED，控制端按「不支持远端 Worker」隐藏入口。
+ */
+export const ORCA_EXECUTION_DEVICES_CHANNEL = 'maker:orca:execution-devices';
+
+export interface OrcaExecutionDeviceView {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  /** false = 那台电脑版本过旧，不支持协同远端 Worker(显示为需要更新)。 */
+  supported: boolean;
+}
+
 /** 运行设备上 open 可能要准备工作目录并启动 Agent，给足执行与回程余量。 */
 export const ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS = 60_000;
 

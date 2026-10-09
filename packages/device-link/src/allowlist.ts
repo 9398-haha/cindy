@@ -27,6 +27,7 @@
 import { FILE_PEER_CHANNEL } from './filePeer.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
+  ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_TIMEOUT_MS,
@@ -419,6 +420,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   ORCA_REMOTE_WORKER_CAPS_CHANNEL,
   ORCA_REMOTE_WORKER_OPEN_CHANNEL,
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
+  // 远程控制 Lead 所在电脑时，读取那台视角下可选的运行设备(只读，真相在被控端)。
+  ORCA_EXECUTION_DEVICES_CHANNEL,
   // —— Rewind / Fork / Title / Context ——
   'maker:rewind:preview',
   'maker:rewind:commit',

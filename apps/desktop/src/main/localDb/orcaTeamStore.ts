@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, gt, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
@@ -61,6 +61,30 @@ export interface OrcaWorkerRecord {
     fastMode: boolean;
     sdkSessionId?: string;
   };
+  /**
+   * Worker 在同账号另一台电脑运行时的运行设备与那台上的真实任务 id；缺省 = 本机 Worker。
+   * 此时 sessionId / session 指本机不跑 Agent 的代理任务行。
+   */
+  executionDevice?: {
+    deviceId: string;
+    remoteSessionId: string;
+    /** 以下为运行期投影(本机轮询所得)，未装配宿主时缺省。 */
+    deviceName?: string;
+    reachable?: boolean;
+    /** 运行设备上的工作目录；尚未读到时缺省。 */
+    workingDir?: string;
+  };
+}
+
+/** 远端 Worker 的运行期状态由宿主注入(轮询所得)，读模型投影时附带，不落库。 */
+type RemoteWorkerStatusProvider = (
+  proxySessionId: string,
+  deviceId: string,
+) => { deviceName: string; reachable: boolean; workingDir?: string };
+let remoteWorkerStatusProvider: RemoteWorkerStatusProvider | null = null;
+
+export function setRemoteWorkerStatusProvider(provider: RemoteWorkerStatusProvider | null): void {
+  remoteWorkerStatusProvider = provider;
 }
 
 export interface OrcaWorkerLinkRecord {
@@ -683,7 +707,141 @@ function workerToRecord(
       fastMode: !!session.fastMode,
       sdkSessionId: session.sdkSessionId ?? undefined,
     },
+    ...(worker.executionDeviceId && worker.remoteSessionId
+      ? {
+          executionDevice: {
+            deviceId: worker.executionDeviceId,
+            remoteSessionId: worker.remoteSessionId,
+            ...(remoteWorkerStatusProvider?.(worker.sessionId, worker.executionDeviceId) ?? {}),
+          },
+        }
+      : {}),
   };
+}
+
+// ─── 协同远端 Worker(运行在同账号另一台电脑) ─────────────────────────────────
+
+export interface RemoteWorkerRow {
+  workerId: string;
+  teamId: string;
+  leadSessionId: string;
+  proxySessionId: string;
+  deviceId: string;
+  remoteSessionId: string;
+  lastBridgedMessageId: string | null;
+}
+
+/**
+ * 写入远端 Worker 的本机代理任务行：不跑 Agent，不绑定本机目录(working_dir 为空)，
+ * 只用来承接现有协同的计槽、归档与回报。真实任务在运行设备上。
+ */
+export async function insertRemoteWorkerProxySession(input: {
+  id: string;
+  title: string;
+  agentKind: MakerAgentKind;
+  model: string;
+  effort: string | null;
+  permissionMode: string;
+  fastMode: boolean;
+}): Promise<void> {
+  const now = Date.now();
+  await getDbClient()
+    .drizzle.insert(sessions)
+    .values({
+      id: input.id,
+      title: input.title,
+      workingDir: null,
+      workspaceKind: 'project',
+      model: input.model,
+      effort: (input.effort ?? 'high') as (typeof sessions.$inferInsert)['effort'],
+      permissionMode: input.permissionMode as (typeof sessions.$inferInsert)['permissionMode'],
+      fastMode: input.fastMode,
+      status: 'active',
+      agentKind: input.agentKind === 'claude-code' ? 'cc' : input.agentKind,
+      orcaRole: 'worker',
+      source: 'desktop',
+      createdAt: now,
+      updatedAt: now,
+    });
+}
+
+export async function setWorkerRemoteExecution(
+  workerId: string,
+  input: { deviceId: string; remoteSessionId: string },
+): Promise<void> {
+  await getDbClient()
+    .drizzle.update(orcaWorkers)
+    .set({ executionDeviceId: input.deviceId, remoteSessionId: input.remoteSessionId, updatedAt: Date.now() })
+    .where(eq(orcaWorkers.id, workerId));
+}
+
+export async function setWorkerLastBridgedMessageId(workerId: string, messageId: string): Promise<void> {
+  await getDbClient()
+    .drizzle.update(orcaWorkers)
+    .set({ lastBridgedMessageId: messageId })
+    .where(eq(orcaWorkers.id, workerId));
+}
+
+export async function markWorkerRemoteReleased(workerId: string, at = Date.now()): Promise<void> {
+  await getDbClient()
+    .drizzle.update(orcaWorkers)
+    .set({ remoteReleasedAt: at })
+    .where(eq(orcaWorkers.id, workerId));
+}
+
+function remoteWorkerRow(
+  worker: typeof orcaWorkers.$inferSelect,
+  team: typeof orcaTeams.$inferSelect,
+): RemoteWorkerRow | null {
+  if (!worker.executionDeviceId || !worker.remoteSessionId) return null;
+  return {
+    workerId: worker.id,
+    teamId: worker.teamId,
+    leadSessionId: team.leadSessionId,
+    proxySessionId: worker.sessionId,
+    deviceId: worker.executionDeviceId,
+    remoteSessionId: worker.remoteSessionId,
+    lastBridgedMessageId: worker.lastBridgedMessageId,
+  };
+}
+
+/** 仍在协同中的远端 Worker(团队与代理任务都处于活跃状态)，启动时据此恢复轮询。 */
+export async function listActiveRemoteWorkers(): Promise<RemoteWorkerRow[]> {
+  const rows = await getDbClient()
+    .drizzle.select({ worker: orcaWorkers, team: orcaTeams })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(and(
+      eq(orcaTeams.status, 'active'),
+      eq(sessions.status, 'active'),
+      isNotNull(orcaWorkers.executionDeviceId),
+    ));
+  return rows.flatMap((row) => remoteWorkerRow(row.worker, row.team) ?? []);
+}
+
+/** 已结束协同(归档或团队结束)但还没通知到运行设备的远端 Worker，重连后补发。 */
+export async function listUnreleasedEndedRemoteWorkers(): Promise<RemoteWorkerRow[]> {
+  const rows = await getDbClient()
+    .drizzle.select({ worker: orcaWorkers, team: orcaTeams, session: sessions })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
+    .where(and(isNotNull(orcaWorkers.executionDeviceId), isNull(orcaWorkers.remoteReleasedAt)));
+  return rows
+    .filter((row) => row.team.status !== 'active' || row.session.status !== 'active')
+    .flatMap((row) => remoteWorkerRow(row.worker, row.team) ?? []);
+}
+
+/** 按代理任务 id 查远端 Worker；不论团队是否仍活跃。 */
+export async function getRemoteWorkerByProxySession(proxySessionId: string): Promise<RemoteWorkerRow | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ worker: orcaWorkers, team: orcaTeams })
+    .from(orcaWorkers)
+    .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
+    .where(eq(orcaWorkers.sessionId, proxySessionId))
+    .limit(1);
+  return row ? remoteWorkerRow(row.worker, row.team) : null;
 }
 
 function fromDbAgentKind(agentKind: string): MakerAgentKind {

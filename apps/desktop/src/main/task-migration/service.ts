@@ -257,6 +257,7 @@ async function assertSource(
   if (
     !row ||
     !(row.status === 'active' || (worker && row.status === 'archived')) ||
+    // 含另一台电脑上 Worker 的团队也在此被拒：那名 Worker 的本机代理行没有目录。
     !row.workingDir ||
     row.remoteHostId ||
     // Agent 在另一台电脑运行的任务：Agent 会话记录在那台，本机无法完整复制。
