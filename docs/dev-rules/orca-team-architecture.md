@@ -388,6 +388,14 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 
 ### 测试与回归清单
 
+远端回报身份在 enqueue 前保存于 `orca_workers.pending_remote_report`，恢复时重建 TeamService
+待回报身份；同一数据库 owner 的重复启动不清空派活。只有 Lead 接受回报或该捕获身份已被
+结清/替换后，才原子更新去重游标与对应等待记录；拒收或落盘失败继续重试，不清掉新派活。
+结束协同不依赖缓存 running：先确认停止并保存 `remote_stop_confirmed_at`，再解除协同标记；
+清理单飞且读取最新阶段，后续只补未完成阶段。归档提交成功后才取消远端路由。
+创建回执丢失时使用同一 sessionId 核对，未确认身份保存在 `orca_remote_opens`；孤儿清理与
+Worker 关联共用任务锁，锁内复查后仅解除未关联标记，保留任务、文件及用户发起的工作。
+
 当前文档要求保留以下回归方向：
 
 - Service 边界：`orcaLifecycleService`、`orcaWorkerCreationService`、`orcaTeamService` 的单测覆盖 start/enable/create/dispatch/idle/archive/auto-bridge 关键路径。

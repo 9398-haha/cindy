@@ -568,4 +568,27 @@ describe('orca remote worker runtime', () => {
     expect(deps.onTurnEnded).not.toHaveBeenCalled();
     expect(deps.saveReport).not.toHaveBeenCalled();
   });
+
+  it('keeps another peer reporting while one execution device is offline', async () => {
+    const { runtime, deps, invoke, state } = setup();
+    runtime.untrack('proxy-1');
+    const pendingReport = { clientIds: ['c-1'], baselineMessageId: null };
+    runtime.track({ ...ref, pendingReport });
+    runtime.track({ ...ref, workerId: 'worker-2', proxySessionId: 'proxy-2', deviceId: 'other-pc',
+      remoteSessionId: 'remote-2', pendingReport });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'reply-1', content: 'Other peer result' };
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (deviceId, channel, args) => {
+      if (deviceId === 'mac-mini') throw new Error('[DEVICE_OFFLINE] disconnected');
+      return original(deviceId, channel, args);
+    });
+    await runtime.pollNow();
+    expect(runtime.isReachable('proxy-1')).toBe(false);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(runtime.isReachable('proxy-2')).toBe(true);
+    expect(runtime.hasPendingReport('proxy-2')).toBe(false);
+    expect(deps.onTurnEnded).toHaveBeenCalledOnce();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-2', { status: 'done', finalText: 'Other peer result' });
+  });
 });
