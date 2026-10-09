@@ -699,6 +699,13 @@ describe('makerChatStore text delta batching', () => {
     assertRows();
   });
 
+  it('keeps runtime recovery commentary hidden even when the provider marks it final', () => {
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'recovery-note', event: { type: 'text', source: 'codex',
+      data: { text: 'Internal recovery', isFinal: false, phase: 'final_answer', runtimeRecovery: true } } });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({ assistantPhase: 'commentary' });
+  });
+
   it('preserves provider final phase through text batching before a turn completes', () => {
     for (const text of ['First ', 'words']) onEvent?.({ sessionId: SESSION_ID, persistId: 'phase-answer',
       event: { type: 'text', source: 'codex', data: { text, isFinal: false, phase: 'final_answer' } } });

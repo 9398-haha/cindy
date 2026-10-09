@@ -5582,6 +5582,10 @@ export function handleStreamEvent(
   // - model / parentUuid 让纯文本子代理在 streaming 阶段也能反查模型 chip;
   // - turnCompleted 由 main 在 done 边界盖到该 SDK turn 的最后一条 assistant 上,
   //   让后台任务自动续跑时前一轮正式总结不会被后续补充回复顶掉。
+  const phaseData = event.data as { phase?: unknown; runtimeRecovery?: boolean } | undefined;
+  const assistantPhase = phaseData?.runtimeRecovery === true
+    ? 'commentary'
+    : typeof phaseData?.phase === 'string' ? phaseData.phase : incomingMeta?.assistantPhase;
   const assistantMetaFields: {
     botPrivateReply?: boolean;
     assistantPhase?: string;
@@ -5589,9 +5593,7 @@ export function handleStreamEvent(
     parentToolUseId?: string;
     turnCompleted?: boolean;
   } = {
-    ...(typeof (event.data as { phase?: unknown })?.phase === 'string'
-      ? { assistantPhase: (event.data as { phase: string }).phase }
-      : typeof incomingMeta?.assistantPhase === 'string' ? { assistantPhase: incomingMeta.assistantPhase } : {}),
+    ...(typeof assistantPhase === 'string' ? { assistantPhase } : {}),
     ...(typeof incomingMeta?.model === 'string' && incomingMeta.model
       ? { model: incomingMeta.model }
       : {}),
@@ -7597,7 +7599,8 @@ function enqueueTextDeltaPayload(
   ingress: LiveIngressContext = {},
 ): void {
   if (!event) return;
-  const data = event.data as { text?: unknown };
+  const data = event.data as { text?: unknown; phase?: unknown; runtimeRecovery?: boolean };
+  const phase = data.runtimeRecovery === true ? 'commentary' : typeof data.phase === 'string' ? data.phase : undefined;
   const text = typeof data.text === 'string' ? data.text : '';
   const dataOwner = getDataOwnerGeneration();
   let existing = pendingTextDeltaBatches.get(sessionId);
@@ -7618,9 +7621,7 @@ function enqueueTextDeltaPayload(
     if (!existing.persistId && persistId) existing.persistId = persistId;
     if (event.source) existing.source = event.source;
     if (event.agentMeta) existing.agentMeta = { ...existing.agentMeta, ...event.agentMeta };
-    if (typeof (event.data as { phase?: unknown }).phase === 'string') {
-      existing.agentMeta = { ...existing.agentMeta, assistantPhase: (event.data as { phase: string }).phase };
-    }
+    if (phase) existing.agentMeta = { ...existing.agentMeta, assistantPhase: phase };
   } else {
     pendingTextDeltaBatches.set(sessionId, {
       text,
@@ -7628,10 +7629,7 @@ function enqueueTextDeltaPayload(
       ingress,
       source: event.source,
       persistId,
-      agentMeta: { ...event.agentMeta,
-        ...(typeof (event.data as { phase?: unknown }).phase === 'string'
-          ? { assistantPhase: (event.data as { phase: string }).phase } : {}),
-      },
+      agentMeta: { ...event.agentMeta, ...(phase ? { assistantPhase: phase } : {}) },
     });
   }
   scheduleTextDeltaFlush();
