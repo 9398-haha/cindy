@@ -3322,7 +3322,8 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     }
   });
 
-  it.each([false, true])('isolates child events before root completion (isFinal=%s)', async (isFinal) => {
+  it.each([false, true].flatMap((isFinal) => [false, true].map((background) => ({ isFinal, background }))))(
+    'isolates out-of-turn events (isFinal=$isFinal, background=$background)', async ({ isFinal, background }) => {
     const session = makeManualSession('sess-subagent-output');
     const onProgress = vi.fn();
     const onToolResult = vi.fn();
@@ -3345,7 +3346,8 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       { type: 'error', data: { message: 'child failed', isTerminal: true } },
       { type: 'done', data: {} },
     ];
-    for (const event of events) emit({ ...event, source: 'claude-code', agentMeta: child });
+    for (const event of events) emit({ ...event, source: background ? 'pi' : 'claude-code',
+      ...(background ? { turnScope: 'background' } : { agentMeta: child }) });
     expect(onProgress).not.toHaveBeenCalled();
     expect(onToolResult).not.toHaveBeenCalled();
     expect(onTurnTerminal).not.toHaveBeenCalled();

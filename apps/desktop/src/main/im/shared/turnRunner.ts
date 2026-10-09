@@ -367,6 +367,8 @@ interface SessionState {
    * 接管任务的 scheduler 输出。与正常入站 TurnState 分开，避免重复发送。
    */
   scheduledTranspond: ScheduledTranspond | null;
+  /** Agent execution ended, but its background output is still being delivered. */
+  pendingTranspondFinals: number;
 }
 
 /**
@@ -1120,6 +1122,7 @@ export function createTurnRunner(
       state.queue.length > 0 ||
       state.sendQueue.length > 0 ||
       state.scheduledTranspond !== null ||
+      state.pendingTranspondFinals > 0 ||
       state.makerSession.isTurnRunning()
     ) {
       if (args.queueMode === 'external') {
@@ -1701,7 +1704,7 @@ export function createTurnRunner(
   function maybeDispatchNextQueued(state: SessionState, userId: string): void {
     if (state.sendQueue.length === 0) return;
     if (state.queue.length > 0) return;
-    if (state.scheduledTranspond) return;
+    if (state.scheduledTranspond || state.pendingTranspondFinals > 0) return;
     if (state.makerSession.isTurnRunning()) {
       armDispatchRetry(state, userId);
       return;
@@ -1937,6 +1940,7 @@ export function createTurnRunner(
       resolveDetachDrain: null,
       attached,
       scheduledTranspond: null,
+      pendingTranspondFinals: 0,
     };
     sessionStates.set(row.id, state);
 
@@ -2769,7 +2773,6 @@ export function createTurnRunner(
           waitForSilentStopSettled(state, t, () => {
             if (state.scheduledTranspond !== t) return;
             void finalizeTranspond(state, null);
-            maybeDispatchNextQueued(state, state.userId);
           });
           return;
         }
@@ -2804,6 +2807,7 @@ export function createTurnRunner(
     const t = state.scheduledTranspond;
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
+    state.pendingTranspondFinals += 1;
     clearSilentStopSettleWait(t);
     clearTranspondTicker(t);
     // 防御性复位: composeTranspondView(final=true) 本身只取 header + 正文, 不含过程区,
@@ -2811,11 +2815,11 @@ export function createTurnRunner(
     // (万一将来 final 视图改成包含过程区)。真正必须显式清的是 handleTurnErrorAsync ——
     // 它不置 turn.done, composeStreamingView 会把 activity 一起写进正文。
     setActivityNotice(t.activity, null);
-    // 没产出任何内容(无文本无步骤)且无错 → 不留空卡。
-    if (!t.streamingHandle && t.buffer.length === 0 && t.mediaAbsPaths.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
-      return;
-    }
     try {
+      // 没产出任何内容(无文本无步骤)且无错 → 不留空卡。
+      if (!t.streamingHandle && t.buffer.length === 0 && t.mediaAbsPaths.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
+        return;
+      }
       if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && t.buffer.includes('![')) {
         const materialized = await materializeLocalMarkdownImages({
           text: t.buffer, workingDir: state.workingDir, sessionId: state.makerSession.id,
@@ -2846,6 +2850,11 @@ export function createTurnRunner(
       log.warn(
         `transpond finalize failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      state.pendingTranspondFinals -= 1;
+      if (sessionStates.get(state.makerSession.id) === state) {
+        maybeDispatchNextQueued(state, state.userId);
+      }
     }
   }
 
@@ -4096,6 +4105,7 @@ export function createTurnRunner(
         resolveDetachDrain: null,
         attached: false,
         scheduledTranspond: null,
+        pendingTranspondFinals: 0,
       };
       sessionStates.set(session.id, state);
       state.unsubscribers.push(session.onEvent(handleEventFor(session.id, userId)));

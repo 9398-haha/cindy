@@ -245,7 +245,7 @@ function streamingHandleStub() {
     messageId: 'C1|9.9',
     append: vi.fn(),
     replace: vi.fn(),
-    finalize: vi.fn(async () => undefined),
+    finalize: vi.fn(async (): Promise<void> => undefined),
     addExtraImageAbsPath: vi.fn(),
     close: vi.fn(),
   };
@@ -558,6 +558,69 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
 });
 
 describe('turnRunner 渠道任务后台结果回传', () => {
+  it.each(['next-background', 'dispose'] as const)('keeps delivery busy until the last result settles across %s', async (action) => {
+    const h = await channelAndIdle();
+    h.send.mockClear();
+    const stub = streamingHandleStub();
+    let release!: () => void;
+    stub.finalize.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    h.emit({ type: 'text', data: { text: 'first background' } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    if (action === 'next-background') {
+      h.emit({ type: 'text', data: { text: 'second background' } });
+      h.emit({ type: 'done', data: {} });
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(2));
+    }
+    await runTurn('100.1', 'arrives during delivery');
+    expect(h.send).not.toHaveBeenCalled();
+    if (action === 'dispose') await runner.disposeAllSessions();
+    release();
+    if (action === 'next-background') {
+      await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+      h.emit({ type: 'done', data: {} });
+    } else {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(h.send).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['done', 'error', 'settled'].flatMap((ending) => [false, true].map((fail) => ({ ending, fail }))))(
+    'holds queued input through background final delivery (ending=$ending, fail=$fail)', async ({ ending, fail }) => {
+    const h = await channelAndIdle();
+    h.send.mockClear();
+    const stub = streamingHandleStub();
+    let release!: () => void;
+    stub.finalize.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      release = () => fail ? reject(new Error('delivery failed')) : resolve();
+    }));
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    let settled!: () => void;
+    if (ending === 'settled') {
+      mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settled = cb; return vi.fn(); });
+    }
+    h.emit({ type: 'text', data: { text: 'background' } });
+    await runTurn('100.1', 'queued before completion');
+    if (ending === 'settled') {
+      h.emit({ type: 'done', data: { silentStop: true } });
+      settled();
+    } else if (ending === 'error') {
+      h.emit({ type: 'error', data: { message: 'failed', isTerminal: true } });
+    } else h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    await runTurn('100.1', 'queued during delivery');
+    expect(h.send).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    expect(h.send.mock.calls[0]![0]).toEqual(expect.objectContaining({
+      content: expect.stringContaining('queued before completion'),
+    }));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+    h.emit({ type: 'done', data: {} });
+  });
+
   it.each(['done', 'settled'] as const)('silent stop keeps queued input out of the resumed turn until %s', async (ending) => {
     const h = await channelAndIdle();
     h.send.mockClear();
