@@ -679,6 +679,32 @@ describe('BotGroupChatView', () => {
       await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
     });
 
+    it.each([true, false])('renders a human-signed plan with organizer and controls (self=%s)', async (isSelf) => {
+      const group = withPlan(plan());
+      group.messages = group.messages.map(message => message.kind === 'plan'
+        ? { ...message, authorKind: 'user', authorBotId: null, authorName: 'Human creator', isSelf } : message);
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+      renderView();
+      const card = await screen.findByTestId('bot-group-plan');
+      expect(card.closest('article')?.textContent).toContain('咪咪');
+      expect(card.closest('article')?.textContent).not.toContain('Human creator');
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.start' }));
+      await waitFor(() => expect(mocks.startBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+      await waitFor(() => expect((screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }) as HTMLButtonElement).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.plan.dismiss' }));
+      await waitFor(() => expect(mocks.dismissBotGroupPlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' }));
+    });
+
+    it('keeps human-signed superseded plans visible and read-only', async () => {
+      const group = withPlan(plan({ status: 'superseded' }));
+      group.messages = group.messages.map(message => message.kind === 'plan' ? { ...message, authorKind: 'user', authorBotId: null } : message);
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group });
+      renderView();
+      expect(await screen.findByText('bots.groupChat.plan.superseded')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'bots.groupChat.plan.start' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'bots.groupChat.plan.dismiss' })).toBeNull();
+    });
+
     it('explains a failed plan action and re-reads the group', async () => {
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(plan()) });
       mocks.startBotGroupPlan.mockResolvedValue({ ok: false, errorCode: 'PLAN_CLOSED', message: '' });

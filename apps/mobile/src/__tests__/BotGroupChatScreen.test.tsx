@@ -376,6 +376,39 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 0, action: 'remove' });
   });
 
+  it('renders human-signed plans as organizer cards with working actions and read-only old plans', async () => {
+    const data = group();
+    data.messages = data.messages.map(message => message.kind === 'plan'
+      ? { ...message, authorKind: 'user', authorBotId: null, authorName: 'Human creator' } : message);
+    await render(data);
+    expect(byId('botGroup.message.plan')?.textContent).toContain('咪咪');
+    expect(byId('botGroup.message.plan')?.textContent).not.toContain('Human creator');
+    await click('botGroup.plan.start');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-start', { planId: 'p1' });
+    await click('botGroup.plan.dismiss');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-dismiss', { planId: 'p1' });
+    data.plans[0]!.status = 'superseded';
+    data.openPlan = null;
+    await render(data);
+    expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
+    expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  it('removes a server human by actor identity without offering them as organizer', async () => {
+    const data = group({ serverBacked: true, supportsMemberRemoval: true });
+    data.members.push({ botId: 'person', actorId: 'actor-person', actorKind: 'human', name: 'Person', avatar: '', avatarColor: '', status: 'active' });
+    await render(data);
+    expect(byId('botGroup.plan.stepMenu.0.action.member:person')).toBeNull();
+    await click('botGroup.settingsButton');
+    expect(byId('botGroup.settings.memberMenu.person.action.organizer:person')).toBeNull();
+    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    expect(h.chat.act).toHaveBeenLastCalledWith('remove-member', { actorId: 'actor-person' });
+    h.chat.act.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
+    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    expect(node.textContent).toContain('groupChat.errors.permissionDenied');
+    expect(byId('botGroup.settings.member.person')).not.toBeNull();
+  });
+
   it('keeps at least one step and names the host’s reason when an action is refused', async () => {
     const data = group();
     data.plans[0]!.steps = [data.plans[0]!.steps[0]!];

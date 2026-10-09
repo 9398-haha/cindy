@@ -118,6 +118,54 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+  it.each(['ATTACHMENT_UNAVAILABLE', 'INVALID_PARAMS'] as const)('keeps a useful reason for prepare %s', async (errorCode) => {
+    deps.prepareAttachments = vi.fn(async () => ({ ok: false as const, errorCode, message: 'private details' }));
+    deps.log = { warn: vi.fn() };
+    const result = await service.sendMessage({ groupId: roomId, text: '', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{}] }, { controllerDeviceId: 'phone' });
+    expect(result).toMatchObject({ ok: false, errorCode: errorCode === 'INVALID_PARAMS' ? 'INVALID_ATTACHMENT' : errorCode });
+    expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toContain('private details');
+  });
+
+  it('returns a slow send receipt to duplicate attempts without consuming the phone upload again', async () => {
+    const commit = vi.fn();
+    let release!: () => void;
+    deps.prepareAttachments = vi.fn(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return { ok: true as const, attachments: [], commit, discard: vi.fn() };
+    });
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'saved-message' } };
+      return response(route);
+    });
+    const input = { groupId: roomId, text: 'photo', clientId: 'phone-send-1', mentions: { all: false, botIds: [] }, attachments: [{ id: 'annotated-photo', name: 'annotated-100.png', originalName: 'annotated-100.png' }] };
+    const first = service.sendMessage(input, { controllerDeviceId: 'phone' });
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(release).toBeTypeOf('function');
+    const regenerated = { ...input, attachments: [{ id: 'annotated-photo', name: 'annotated-200.png', originalName: 'annotated-200.png' }] };
+    const retry = service.sendMessage(regenerated, { controllerDeviceId: 'phone' });
+    release();
+    expect(await first).toEqual({ ok: true, messageId: 'saved-message' });
+    expect(await retry).toEqual(await first);
+    expect(await service.sendMessage(regenerated, { controllerDeviceId: 'phone' })).toEqual(await first);
+    expect(deps.prepareAttachments).toHaveBeenCalledTimes(1);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST')).toHaveLength(1);
+  });
+
+  it('reports an HTTP send failure with safe route, code and status', async () => {
+    deps.log = { warn: vi.fn() };
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return { status: 500, body: { error: { code: 'UPSTREAM_FAILED', message: 'secret text' } } };
+      return response(route);
+    });
+    expect(await service.sendMessage({ groupId: roomId, text: 'private body', clientId: 'send-500-test', mentions: { all: false, botIds: [] } }))
+      .toMatchObject({ ok: false, errorCode: 'SERVICE_ERROR' });
+    expect(deps.log.warn).toHaveBeenCalledWith('Chat request failed', expect.objectContaining({ route: '/conversations/:id/messages', status: 500, code: 'UPSTREAM_FAILED' }));
+    expect(JSON.stringify(vi.mocked(deps.log.warn).mock.calls)).not.toMatch(/private body|secret text/);
+  });
+
   async function start() {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
@@ -819,10 +867,11 @@ describe('Chat Server directed sends', () => {
   const rootId = '50000000-0000-4000-8000-000000000001';
   let service: BotGroupChatService;
   let responseMode: 'all' | 'mentioned';
+  let nextSendId: number;
   let members: Array<{ id: string; kind: string; state: string }>;
   beforeEach(() => {
     vi.useFakeTimers();
-    fixture.packaged = true; responseMode = 'all';
+    fixture.packaged = true; responseMode = 'all'; nextSendId = 0;
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
     members = [{ id: selfId, kind: 'human', state: 'joined' },
       { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
@@ -840,7 +889,7 @@ describe('Chat Server directed sends', () => {
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.clearAllMocks(); });
   const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
   const send = (entry: string, mentions = { all: false, botIds: ['local-bot'] }) => {
-    const input = { groupId: roomId, text: '@Bot hello', clientId: 'directed-send-1', mentions };
+    const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++nextSendId}`, mentions };
     return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
   };
 

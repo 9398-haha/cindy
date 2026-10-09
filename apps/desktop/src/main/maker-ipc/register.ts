@@ -10503,7 +10503,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setBotRemoteMessageService(botDirectMessageServiceHolder);
   botGroupChatServiceHolder?.dispose();
   // 分工 steps run in the group's folder, the 项目文件夹, or one worktree per plan (bot-group-chat.md §7.5).
-  const botGroupAttachments = createBotGroupAttachmentStore({ ownerRoot: () => ownerScopedUserDataPath() });
+  const botGroupAttachments = createBotGroupAttachmentStore({ ownerRoot: () => ownerScopedUserDataPath(), log });
   const botGroupWorkDir = createBotGroupWorkDir({
     ownerRoot: () => ownerScopedUserDataPath(),
     detectRepo: async (dir) => {
