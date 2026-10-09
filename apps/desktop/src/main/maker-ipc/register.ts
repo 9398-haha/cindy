@@ -876,6 +876,7 @@ import { tryInjectProjectContext } from './projectContextInject.js';
 import { registerMakerSessionCreateHandler } from './sessionCreateHandler.js';
 import {
   createOrcaRemoteWorkerHost,
+  createOrcaRemoteWorkerSessionOpener,
   registerOrcaRemoteWorkerHandlers,
 } from './orcaRemoteWorkerHost.js';
 import { createOrcaRemoteWorkers, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
@@ -8393,23 +8394,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
       };
     },
-    openSession: async (request, lead) => {
-      const workspaceKind = request.workingDir ? 'project' : 'dialogue';
-      const { row } = await openSession({
-        id: request.sessionId,
-        body: {
-          title: request.title,
-          agentKind: request.agentKind === 'claude-code' ? 'cc' : request.agentKind,
-          model: request.model,
-          providerId: request.providerId,
-          effort: request.effort,
-          fastMode: request.fastMode,
-          permissionMode: request.permissionMode,
-          workspaceKind,
-          workingDir: request.workingDir,
-          orcaRemoteLead: lead,
-        },
-      }, async (opened, assertCurrent) => {
+    openSession: createOrcaRemoteWorkerSessionOpener({
+      openSession,
+      insertSession: async (row) => {
+        await getDbClient().drizzle.insert(sessions).values(row).run();
+      },
+      bootstrapSession: async (opened, assertCurrent) => {
         const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
           ? opened.agentKind
           : 'claude-code';
@@ -8426,16 +8416,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           permissionMode: opened.permissionMode as CreateOpts['permissionMode'],
           title: opened.title,
         }), assertCurrent);
-        // maker.createSession 只写通用列；来源标记在广播 created 之前补上。
-        await getDbClient()
-          .drizzle.update(sessions)
-          .set({ orcaRemoteLead: serializeOrcaRemoteLead(lead) })
-          .where(eq(sessions.id, opened.id));
-      });
-      broadcastSessionCreated(row.id);
-      const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
-      return { workingDir: row.workingDir ?? '', model: row.model, agentKind };
-    },
+      },
+      broadcastSessionCreated,
+    }),
     writeRemoteLead: writeOrcaRemoteLead,
     withSessionLock: withSendToSessionLock,
     now: Date.now,

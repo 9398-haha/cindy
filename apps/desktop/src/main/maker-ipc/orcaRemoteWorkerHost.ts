@@ -20,6 +20,41 @@ import {
 
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import type { OpenedSessionRow, openSession } from '../localDb/sessionOpening.js';
+
+/** 先以同一 INSERT 保存任务和来源，再启动 Agent；启动失败也保留可幂等核对的身份。 */
+export function createOrcaRemoteWorkerSessionOpener(deps: {
+  openSession: typeof openSession;
+  insertSession(row: OpenedSessionRow): Promise<void>;
+  bootstrapSession(row: OpenedSessionRow, assertCurrent: () => void): Promise<unknown>;
+  broadcastSessionCreated(sessionId: string): void;
+}): OrcaRemoteWorkerHostDeps['openSession'] {
+  return async (request, lead) => {
+    const { row } = await deps.openSession({
+      id: request.sessionId,
+      body: {
+        title: request.title,
+        agentKind: request.agentKind === 'claude-code' ? 'cc' : request.agentKind,
+        model: request.model,
+        providerId: request.providerId,
+        effort: request.effort,
+        fastMode: request.fastMode,
+        permissionMode: request.permissionMode,
+        workspaceKind: request.workingDir ? 'project' : 'dialogue',
+        workingDir: request.workingDir,
+        orcaRemoteLead: lead,
+      },
+    }, async (opened, assertCurrent) => {
+      assertCurrent();
+      await deps.insertSession(opened);
+      assertCurrent();
+      await deps.bootstrapSession(opened, assertCurrent);
+    });
+    deps.broadcastSessionCreated(row.id);
+    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
+    return { workingDir: row.workingDir ?? '', model: row.model, agentKind };
+  };
+}
 
 export interface OrcaRemoteWorkerCaller {
   controllerDeviceId: string;
@@ -39,7 +74,7 @@ export interface OrcaRemoteWorkerHostDeps {
   getCaller(): OrcaRemoteWorkerCaller | null;
   readSession(sessionId: string): Promise<OrcaRemoteWorkerExistingSession | null>;
   /**
-   * 新建任务并启动 Agent(复用普通开任务事务与模型准入)，随后写入远端 Worker 标记并广播。
+   * 任务与远端 Worker 标记一起落库，再启动 Agent(复用普通开任务与模型准入)并广播。
    * 未给 workingDir 时由本机按自身设置分配任务目录。
    */
   openSession(

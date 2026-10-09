@@ -397,6 +397,10 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 Worker 关联共用任务锁，锁内复查后仅解除未关联标记，保留任务、文件及用户发起的工作。
 本机代理任务行在 Worker 关联时才创建，与 Worker、远端路由及 open 收据在同一事务提交；
 open 成功后未关联即退出时，本机没有半成品代理，仅按持久 open 身份解除远端标记。
+运行设备的真实任务与 `orcaRemoteLead` 在同一 INSERT 写入，再启动 Agent；启动失败或
+进程在两者之间退出时，同一来源与 Lead 仍能按任务 ID 对账，不留下无来源标记的普通任务。
+实现见 `orcaRemoteWorkerHost.ts` 的 `createOrcaRemoteWorkerSessionOpener`，回归见
+`apps/desktop/src/main/localDb/__tests__/sessionOpening.test.ts`。
 恢复完成前派发和本机启动入口
 不得按缺失的运行期路由回退到本机，读取失败或 owner 改变时应拒绝继续。
 创建回滚原子归档代理并释放名称与名额，未确认释放的 Worker 行保留供重启补发；正常
@@ -405,6 +409,12 @@ open 成功后未关联即退出时，本机没有半成品代理，仅按持久
 Desktop 和 Mobile 均隐藏协同入口，保留 `releasedAt` 的历史来源标记也不允许嵌套协同。
 Mobile 的入口读取和残留表单提交都检查该身份，元数据补齐标记后返回主面板；
 回归见 `apps/mobile/src/__tests__/orcaTeam.test.ts` 与 `useOrcaWorkerForm.test.tsx`。
+
+当前停止补偿的已知限制：`maker:abort-session` 只接受任务 ID，没有目标轮次与持久请求
+身份；若运行设备已停止但回执丢失，后续补偿可能停止用户新发起的轮次。现有传输去重
+不能覆盖新的请求或运行设备重启。不能把超时当成功、取消所有补偿，或用先查空闲再停止
+代替解决；后续应在 Orca 专用边界设计持久幂等停止、目标轮次条件与旧端能力协商，覆盖
+丢回执后新轮次、重启、并发重试及账号切换。当前实现尚未消除此风险。
 
 当前文档要求保留以下回归方向：
 
