@@ -9309,6 +9309,14 @@
           "default": {
             "label": "Default permissions",
             "description": "Cursor follows its native configured permission policy. Cindy shows only the approval requests Cursor sends; workspace edits may run without a prompt."
+          },
+          "auto": {
+            "label": "Auto-review",
+            "description": "Cindy automatically reviews approval requests from Cursor and asks you when needed. Cursor’s native permission policy still applies."
+          },
+          "bypassPermissions": {
+            "label": "Full access",
+            "description": "Cindy allows approval requests from Cursor without another confirmation. Highest risk; Cursor’s native permission policy still applies."
           }
         },
         "claude-code": {

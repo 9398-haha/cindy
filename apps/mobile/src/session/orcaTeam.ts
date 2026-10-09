@@ -64,7 +64,7 @@ export function orcaWorkerFormFromPrefs(
     role: 'developer',
     agent,
     model: { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
-    permissionMode: agent === 'cursor' ? 'ask' : prefs.workerPermissionMode,
+    permissionMode: prefs.workerPermissionMode,
     initialTask: '',
   };
 }
@@ -169,7 +169,7 @@ function formWireFields(form: OrcaWorkerFormValue) {
     // 「默认」模型(null)才省略,交给被控端一并解析。模型不支持 Fast 时被控端按 false 落。
     ...(model ? { fast: model.fast } : {}),
     ...(model?.providerId ? { providerId: model.providerId } : {}),
-    workerPermissionMode: form.agent === 'cursor' ? 'ask' : form.permissionMode,
+    workerPermissionMode: form.permissionMode,
   };
 }
 

@@ -33,6 +33,8 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     ? [
       { id: 'ask', displayName: '默认权限', description: 'Cursor native policy' },
       { id: 'default', displayName: '默认权限', description: 'Cursor native policy' },
+      { id: 'auto', displayName: '自动审批', description: 'Cursor auto-review' },
+      { id: 'bypassPermissions', displayName: '完全访问', description: 'Cursor full access' },
     ]
     : mockPermissionModes } }),
 }));
@@ -63,21 +65,22 @@ describe('PermissionSelector (MorphPopover pilot)', () => {
     fireEvent.click(getTrigger());
     await screen.findByRole('listbox');
     const options = screen.getAllByRole('option');
-    expect(options).toHaveLength(1);
+    expect(options).toHaveLength(3);
     expect(options[0].getAttribute('aria-selected')).toBe('true');
     expect(options[0].getAttribute('data-permission-mode')).toBe(permissionMode);
     fireEvent.click(options[0]);
     expect(onChange).toHaveBeenCalledWith(permissionMode);
   });
 
-  it('uses Cursor capabilities and never offers Claude auto or bypass modes', async () => {
-    renderSelector({ vendorKey: 'cursor' });
+  it('offers and selects Cursor auto-review and full access from its capabilities', async () => {
+    const { onChange } = renderSelector({ vendorKey: 'cursor' });
     fireEvent.click(getTrigger());
     await screen.findByRole('listbox');
-    expect(screen.getAllByRole('option')).toHaveLength(1);
-    expect(screen.queryByRole('option', { name: '自动审批' })).toBeNull();
-    expect(screen.queryByRole('option', { name: '完全访问' })).toBeNull();
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.getByRole('option', { name: '完全访问' })).toBeTruthy();
     expect(screen.getByRole('option', { name: '默认权限' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('option', { name: '自动审批' }));
+    expect(onChange).toHaveBeenCalledWith('auto');
   });
 
   // 2026-07-22:PermissionSelector 只在 composer 使用,已统一为「恒走脱身上浮 morph」——

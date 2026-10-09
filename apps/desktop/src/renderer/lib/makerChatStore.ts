@@ -13763,7 +13763,7 @@ export function buildCreateOptsForCurrentSession(
     workingDir,
     model,
     ...(effort ? { effort } : {}),
-    permissionMode: current.agentKind === 'cursor' ? 'ask' : permissionMode,
+    permissionMode,
     fastMode: current.fastMode,
     planMode: current.planModeEnabled,
     displayReasoning: 'summarized',

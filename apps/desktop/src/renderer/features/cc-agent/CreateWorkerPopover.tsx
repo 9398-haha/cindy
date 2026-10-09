@@ -287,18 +287,24 @@ export function CreateWorkerPopover({
     setFast(agentPrefs.fast);
     setProviderSource(deviceId ? null : agentPrefs.providerId);
     setInitialTask('');
-    setSelectedWorkerPermissionMode(stored.lastAgent === 'cursor' ? 'ask' : stored.workerPermissionMode);
+    setSelectedWorkerPermissionMode(stored.workerPermissionMode);
     setPrefsRestored(true);
   }, [deviceId, open]);
 
   useEffect(() => {
+    if (agent === 'cursor' && activeCaps?.permissionModes.length) {
+      const supported = activeCaps.permissionModes.some(({ id }) => id === selectedWorkerPermissionMode
+        || (selectedWorkerPermissionMode === 'ask' && id === 'default'));
+      if (!supported) setSelectedWorkerPermissionMode('ask');
+      return;
+    }
     if (
       !supportsWorkerPermissionModeSelection
       && selectedWorkerPermissionMode !== 'auto'
     ) {
       setSelectedWorkerPermissionMode('auto');
     }
-  }, [selectedWorkerPermissionMode, supportsWorkerPermissionModeSelection]);
+  }, [activeCaps, agent, selectedWorkerPermissionMode, supportsWorkerPermissionModeSelection]);
 
   // capabilities 可能尚未加载或模型被移除；加载后把当前选择收敛到可用模型和 effort。
   useEffect(() => {
@@ -365,7 +371,6 @@ export function CreateWorkerPopover({
       };
       setPrefs(snapshot);
       setAgent(nextAgent);
-      if (nextAgent === 'cursor') setSelectedWorkerPermissionMode('ask');
       const remembered = snapshot[nextAgent];
       setModel(remembered.model);
       setEffort(remembered.effort);
@@ -617,7 +622,7 @@ export function CreateWorkerPopover({
         providerId: submitProviderId,
         initialTask,
         ...(supportsWorkerPermissionModeSelection
-          ? { workerPermissionMode: agent === 'cursor' ? 'ask' : selectedWorkerPermissionMode }
+          ? { workerPermissionMode: selectedWorkerPermissionMode }
           : {}),
       });
     } finally {
@@ -865,8 +870,8 @@ export function CreateWorkerPopover({
               dense
               ariaContext={t('orca.createWorker.permissionLabel')}
               allowedModes={
-                agent === 'cursor' ? ['ask'] : supportsWorkerPermissionModeSelection
-                  ? ORCA_WORKER_PERMISSION_MODES.filter((mode) => mode !== 'ask')
+                agent === 'cursor' && !supportsWorkerPermissionModeSelection ? ['ask', 'default'] : supportsWorkerPermissionModeSelection
+                  ? ORCA_WORKER_PERMISSION_MODES.filter((mode) => agent === 'cursor' || mode !== 'ask')
                   : AUTO_ONLY_WORKER_PERMISSION_MODES
               }
             />

@@ -9294,6 +9294,14 @@
           "default": {
             "label": "默认权限",
             "description": "Cursor 遵循其原生配置的权限策略。Cindy 只展示 Cursor 发来的授权请求；工作区内的编辑可能无需确认便直接执行。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "Cindy 自动审核 Cursor 发来的授权请求，必要时由你确认。Cursor 原生权限策略仍生效。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "Cindy 直接允许 Cursor 发来的授权请求，无需再次确认。风险最高；Cursor 原生权限策略仍生效。"
           }
         },
         "claude-code": {

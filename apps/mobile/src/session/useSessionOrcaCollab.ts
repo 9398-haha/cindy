@@ -72,6 +72,7 @@ const ALL_AGENTS: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'
 // Cursor is optional and must be confirmed by the execution host before display.
 const LEGACY_AGENT_FALLBACK: readonly OrcaWorkerAgentKind[] = ['claude-code', 'codex', 'pi'];
 const EMPTY_MODEL_OPTIONS: readonly MobileModelOption[] = [];
+const CURSOR_WORKER_PERMISSION_MODES: readonly OrcaWorkerPermissionMode[] = ['ask', 'auto', 'bypassPermissions'];
 
 // ─── 团队状态 ────────────────────────────────────────────────────────────────
 
@@ -290,6 +291,7 @@ export function useOrcaWorkerForm(params: {
   const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(LEGACY_AGENT_FALLBACK);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelsByAgent, setModelsByAgent] = useState<Partial<Record<OrcaWorkerAgentKind, readonly MobileModelOption[]>>>({});
+  const [cursorPermissionModes, setCursorPermissionModes] = useState(CURSOR_WORKER_PERMISSION_MODES);
   const makerRef = useRef(maker);
   makerRef.current = maker;
   const formRef = useRef(form);
@@ -337,13 +339,14 @@ export function useOrcaWorkerForm(params: {
 
   /**
    * 按被控端能力收敛模型选择;能力读不到时保留原选择(提交时由被控端裁决)。
-   * 只改模型字段,且只有最近一次请求的结果生效(期间又收敛 / 用户又改了模型则丢弃)。
+   * Cursor 权限同样按这台电脑实际支持的档位收敛；只有最近一次请求的结果生效。
    */
   const converge = useCallback((agent: OrcaWorkerAgentKind) => {
     const generation = ++convergeGenRef.current;
     const source = makerRef.current;
     source.getCapabilities(agent)
       .then((raw) => {
+        if (makerRef.current !== source) return;
         const capabilities = normalizeMobileAgentCapabilities(raw);
         // 能力按 Agent 缓存,供老被控端(没有来源目录)时模型选择器的扁平回退列表使用。
         // 只缓存当前这台电脑的结果:换电脑后迟到的上一台响应不写入。
@@ -351,8 +354,14 @@ export function useOrcaWorkerForm(params: {
           setModelsByAgent((current) => ({ ...current, [agent]: capabilities.availableModels }));
         }
         if (generation !== convergeGenRef.current) return;
+        const modes = agent === 'cursor' && capabilities?.permissionModes.length
+          ? CURSOR_WORKER_PERMISSION_MODES.filter(mode => capabilities.permissionModes.some(option =>
+            option.id === mode || (mode === 'ask' && option.id === 'default')))
+          : undefined;
+        if (modes) setCursorPermissionModes(modes.length ? modes : ['ask']);
         setForm((current) => (current.agent === agent
-          ? { ...current, model: convergeOrcaWorkerModel(current.model, capabilities) }
+          ? { ...current, model: convergeOrcaWorkerModel(current.model, capabilities),
+            ...(modes && !modes.includes(current.permissionMode) ? { permissionMode: 'ask' as const } : {}) }
           : current));
       })
       .catch(() => undefined);
@@ -367,6 +376,7 @@ export function useOrcaWorkerForm(params: {
     agentsRef.current = LEGACY_AGENT_FALLBACK;
     setAgents(LEGACY_AGENT_FALLBACK);
     setModelsByAgent({});
+    setCursorPermissionModes(CURSOR_WORKER_PERMISSION_MODES);
   }, [maker]);
 
   // 读被控端实际注册的 Agent。复位时列表可能还是乐观的三个:结果回来后,当前 Agent 不在这台
@@ -397,7 +407,6 @@ export function useOrcaWorkerForm(params: {
         setForm((value) => ({
           ...value,
           agent: switched,
-          permissionMode: switched === 'cursor' ? 'ask' : value.permissionMode,
           model: { id: agentPrefs.model, providerId: null, effort: agentPrefs.effort, fast: agentPrefs.fast },
         }));
         converge(switched);
@@ -413,7 +422,7 @@ export function useOrcaWorkerForm(params: {
     convergeGenRef.current += 1;
     touchedRef.current = true;
     setCustomRoleMode(!isPredefinedOrcaRole(value.role.trim().toLowerCase()));
-    setForm(value.agent === 'cursor' ? { ...value, permissionMode: 'ask' } : value);
+    setForm(value);
   }, []);
 
   /** 恢复记忆(上次的 Agent 不在当前电脑上时取第一个可用 Agent)。初始任务不记忆。 */
@@ -450,7 +459,6 @@ export function useOrcaWorkerForm(params: {
     setForm((current) => ({
       ...current,
       agent,
-      permissionMode: agent === 'cursor' ? 'ask' : current.permissionMode,
       model: { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
     }));
     converge(agent);
@@ -493,7 +501,6 @@ export function useOrcaWorkerForm(params: {
     setForm((current) => ({
       ...current,
       agent: config.agent as OrcaWorkerAgentKind,
-      permissionMode: config.agent === 'cursor' ? 'ask' : current.permissionMode,
       model: {
         id: config.modelId,
         providerId: config.providerId || null,
@@ -531,6 +538,7 @@ export function useOrcaWorkerForm(params: {
     changeAgent,
     changePermission,
     agents,
+    permissionModes: form.agent === 'cursor' ? cursorPermissionModes : ['auto', 'bypassPermissions'] as readonly OrcaWorkerPermissionMode[],
     pickerAgents,
     valid: canSubmitOrcaWorkerForm(form, customRoleMode),
     reset,

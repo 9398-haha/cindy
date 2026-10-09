@@ -5,15 +5,17 @@ import { describe, expect, it } from 'vitest';
 const locales = ['en', 'zh-CN', 'zh-TW', 'ja', 'ko'] as const;
 
 describe('Cursor native permission copy', () => {
-  it.each(locales)('describes both native modes independently of Pi in %s', (locale) => {
+  it.each(locales)('describes all Cursor approval modes independently of Pi in %s', (locale) => {
     const desktop = JSON.parse(readFileSync(resolve('src/renderer/i18n/locales', locale, 'common.json'), 'utf8'));
     const mobile = JSON.parse(readFileSync(resolve('../mobile/src/i18n/locales', locale, 'session.json'), 'utf8'));
     const modes = desktop.newChat.permissionSelector.modes;
-    for (const mode of ['ask', 'default']) {
+    for (const mode of ['ask', 'default', 'auto', 'bypassPermissions']) {
       expect(modes.cursor[mode].label.trim()).not.toBe('');
       expect(modes.cursor[mode].description).toContain('Cursor');
       expect(modes.cursor[mode].description).not.toBe(modes.pi.ask.description);
-      expect(mobile.collab.permissionAskHint).toBe(modes.cursor[mode].description);
+      const mobileHint = mode === 'auto' ? mobile.collab.cursorPermissionAutoHint
+        : mode === 'bypassPermissions' ? mobile.collab.cursorPermissionFullHint : mobile.collab.permissionAskHint;
+      expect(mobileHint).toBe(modes.cursor[mode].description);
     }
   });
 

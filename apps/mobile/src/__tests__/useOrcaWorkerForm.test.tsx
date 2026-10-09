@@ -353,7 +353,7 @@ it('restores the remembered Agent after a device switch instead of the previous 
   expect(latest!.form.agent).toBe('claude-code');
 });
 
-it('offers Cursor only after the host confirms it and uses Ask on roster restoration', async () => {
+it('offers Cursor only after the host confirms it and preserves permission on roster restoration', async () => {
   const maker = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['cursor']) } as unknown as MobileMakerTransport;
   function NativeProbe() {
     latest = useOrcaWorkerForm({ maker, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined });
@@ -362,14 +362,29 @@ it('offers Cursor only after the host confirms it and uses Ask on roster restora
   await act(async () => { root.render(<NativeProbe />); await flush(); });
   expect(latest!.agents).toEqual(['cursor']);
   expect(latest!.form.agent).toBe('cursor');
-  expect(latest!.form.permissionMode).toBe('ask');
+  expect(latest!.form.permissionMode).toBe('bypassPermissions');
 });
 
-it('normalizes a confirmed Cursor model choice to Ask', async () => {
+it('preserves the permission mode when confirming a Cursor model choice', async () => {
   await act(async () => root.render(<Probe maker={fakeMaker()} />));
   await act(async () => { await latest!.modelPicker.select({ agent: 'cursor', providerId: 'cursor', modelId: 'cursor-default', effort: '', fast: false }); });
   expect(latest!.form.agent).toBe('cursor');
+  expect(latest!.form.permissionMode).toBe('bypassPermissions');
+});
+
+it.each(['ask', 'default'])('keeps an older Cursor host with only %s approvals usable', async mode => {
+  const maker = { ...fakeMaker(),
+    listAvailableAgents: vi.fn(async () => ['cursor']),
+    getCapabilities: vi.fn(async () => ({ permissionModes: [{ id: mode, displayName: 'Default permissions' }] })),
+  } as unknown as MobileMakerTransport;
+  function NativeProbe() {
+    latest = useOrcaWorkerForm({ maker, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined });
+    return null;
+  }
+  await act(async () => { root.render(<NativeProbe />); await flush(); });
+  expect(latest!.form.agent).toBe('cursor');
   expect(latest!.form.permissionMode).toBe('ask');
+  expect(latest!.permissionModes).toEqual(['ask']);
 });
 
 it('lets a Worker task archive itself back to the Lead', async () => {

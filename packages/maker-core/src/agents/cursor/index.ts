@@ -22,6 +22,15 @@ import type { AgentEvent, InteractionDecision, InteractionRequest, InteractionRe
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CursorTranslator, cursorToolInput, cursorToolName } from './translator.js';
+import { cursorReviewAction } from './permissions.js';
+import type { ReviewableAction } from '../shared/auto-review.js';
+import {
+  appendAutoReviewUserIntent, normalizeAutoReviewUserIntent, createAutoReviewActionContext,
+  resolveAutoReviewDecision, withAutoReviewContext, createAutoReviewUnavailableNotice,
+  createAutoReviewConfirmUndeliveredNotice, annotatePermissionRequestForUnavailableReview,
+  isSystemPermissionDenialReason, composeAutoReviewIntentWithApprovedPlan,
+  composeAutoReviewIntentWithClarification, type AutoReviewUserIntent,
+} from '../shared/auto-review-decision.js';
 import { CURSOR_DEFAULT_MODEL, readCursorModels, readCursorModelControls, record, type AcpRecord, type CursorConfigOption } from './models.js';
 
 export { CURSOR_DEFAULT_MODEL, cursorDefaultModel } from './models.js';
@@ -44,6 +53,8 @@ export class CursorAgent extends BaseAgent {
     permissionModes: [
       { id: 'ask', displayName: 'Default permissions', description: NATIVE_PERMISSION_DESCRIPTION },
       { id: 'default', displayName: 'Default permissions', description: NATIVE_PERMISSION_DESCRIPTION },
+      { id: 'auto', displayName: 'Auto-review', description: `Cindy automatically reviews the approval requests Cursor sends. ${NATIVE_PERMISSION_DESCRIPTION}` },
+      { id: 'bypassPermissions', displayName: 'Full access', description: `Cindy allows the approval requests Cursor sends without confirmation. ${NATIVE_PERMISSION_DESCRIPTION}` },
     ],
     setPermissionModeMidSession: yes,
     // ACP approvals cover native permission requests, not every tool invocation.
@@ -163,29 +174,89 @@ export class CursorAgent extends BaseAgent {
     let defaultModel: string | undefined;
     let unregisterProcess: (() => void) | undefined;
     let configuring = false;
-    const pending = new Map<string, () => void>();
+    let permissionGeneration = 0;
+    let userIntent: AutoReviewUserIntent = '';
+    const actionContext = createAutoReviewActionContext();
+    const pending = new Map<string, { cancel(): void; modeChanged?(): void }>();
     const emit = (event: AgentEvent) => {
       if (!closed) queue.push({ ...event, source: 'cursor', turnAttemptToken: turnOptions?.turnAttemptToken });
     };
     const translator = new CursorTranslator(emit);
+    const emitReviewNotice = (message: string) => emit({ type: 'error', data: { message, isTerminal: false } });
+    const reviewUnavailable = createAutoReviewUnavailableNotice(emitReviewNotice);
+    const confirmUndelivered = createAutoReviewConfirmUndeliveredNotice(emitReviewNotice);
+    const reviewAutoAction = async (action: ReviewableAction) => {
+      if (closed || fenced || cancelled || !running) {
+        return { verdict: 'block' as const, reason: 'Cursor has no active authorized turn.' };
+      }
+      const intent = userIntent;
+      const generation = permissionGeneration;
+      const request = { sessionId: opts.sessionId, agentKind: 'cursor' as const, providerId: opts.providerId,
+        model, userIntent: intent, precedingBlockedActions: actionContext.precedingBlockedActions,
+        action, workspaceRoots: [opts.workingDir], writableRoots: [opts.workingDir], platform: process.platform };
+      const decision = await withAutoReviewContext(request, this.deps.reviewAutoPermissionAction,
+        prepared => resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction));
+      if (closed || fenced || cancelled || !running || intent !== userIntent
+        || generation !== permissionGeneration || model !== request.model) {
+        return { verdict: 'block' as const, reason: 'Cursor authorization changed; retry against the current request.' };
+      }
+      actionContext.record(action, decision);
+      return decision;
+    };
     const clearInteractions = () => {
-      for (const cancel of pending.values()) cancel();
+      for (const interaction of pending.values()) interaction.cancel();
       pending.clear();
     };
-    const interact = async (request: InteractionRequest): Promise<InteractionDecision | undefined> => {
-      if (closed || cancelled || !resolver) return undefined;
-      emit({ type: 'interaction_request', data: request });
+    const interact = async (request: InteractionRequest, action?: ReviewableAction): Promise<InteractionDecision | undefined> => {
+      if (closed || fenced || cancelled) return undefined;
       return new Promise(resolve => {
         let settled = false;
+        let offered = false;
+        let attempt = 0;
         const finish = (decision?: InteractionDecision) => {
           if (settled) return;
           settled = true;
+          attempt++;
           pending.delete(request.requestId);
-          emit({ type: 'interaction_dismissed', data: { requestId: request.requestId, reason: decision ? 'resolved' : 'cancelled' } });
+          if (offered) emit({ type: 'interaction_dismissed', data: { requestId: request.requestId, reason: decision ? 'resolved' : 'cancelled' } });
           resolve(decision);
         };
-        pending.set(request.requestId, () => finish());
-        Promise.resolve().then(() => resolver!(request)).then(finish, () => finish());
+        const decide = async () => {
+          const token = ++attempt;
+          if (offered) {
+            offered = false;
+            emit({ type: 'interaction_dismissed', data: { requestId: request.requestId, reason: 'permission_mode_changed' } });
+          }
+          if (settled || closed || fenced || cancelled) { finish(); return; }
+          let displayRequest = request;
+          let unavailable = false;
+          if (request.kind === 'permission' && action) {
+            if (mode === 'bypassPermissions') { finish({ kind: 'permission', behavior: 'allow' }); return; }
+            if (mode === 'auto') {
+              const decision = await reviewAutoAction(action);
+              if (settled || token !== attempt) return;
+              if (closed || fenced || cancelled) { finish(); return; }
+              if (decision.verdict !== 'ask') {
+                finish({ kind: 'permission', behavior: decision.verdict === 'allow' ? 'allow' : 'deny', reason: decision.reason });
+                return;
+              }
+              unavailable = decision.unavailable === true;
+              if (unavailable) { reviewUnavailable.notify(); displayRequest = annotatePermissionRequestForUnavailableReview(request); }
+            }
+          }
+          if (!resolver) { if (unavailable) confirmUndelivered.notify(); finish(); return; }
+          offered = true;
+          emit({ type: 'interaction_request', data: displayRequest });
+          Promise.resolve().then(() => resolver!(displayRequest)).then(decision => {
+            if (settled || token !== attempt) return;
+            if (unavailable && decision.kind === 'permission' && decision.behavior === 'deny'
+              && isSystemPermissionDenialReason(decision.reason)) confirmUndelivered.notify();
+            finish(decision);
+          }, () => { if (!settled && token === attempt) { if (unavailable) confirmUndelivered.notify(); finish(); } });
+        };
+        pending.set(request.requestId, { cancel: () => finish(),
+          ...(request.kind === 'permission' ? { modeChanged: () => { void decide(); } } : {}) });
+        void decide();
       });
     };
     const onRequest = async (method: string, raw: unknown): Promise<unknown> => {
@@ -204,7 +275,7 @@ export class CursorAgent extends BaseAgent {
           toolUseId: typeof tool.toolCallId === 'string' ? tool.toolCallId : undefined,
           toolName: cursorToolName(tool), input: cursorToolInput(tool),
           title: typeof tool.title === 'string' ? tool.title : undefined,
-        });
+        }, cursorReviewAction(tool, opts.workingDir));
         if (!decision || cancelled || closed) return cancelledResult;
         const allow = decision.kind === 'permission' && decision.behavior === 'allow';
         const options = Array.isArray(params.options) ? params.options.map(record) : [];
@@ -221,9 +292,10 @@ export class CursorAgent extends BaseAgent {
         if (!decision || cancelled || closed) return cancelledResult;
         // An edited plan cannot be silently represented as acceptance of the
         // original: Cursor's extension has no edited-plan response field.
-        return decision.kind === 'plan_review' && decision.behavior === 'allow' &&
-          (!decision.editedPlan || decision.editedPlan === params.plan)
-          ? { outcome: { outcome: 'accepted' } }
+        const accepted = decision.kind === 'plan_review' && decision.behavior === 'allow' &&
+          (!decision.editedPlan || decision.editedPlan === params.plan);
+        if (accepted) userIntent = composeAutoReviewIntentWithApprovedPlan(userIntent, params.plan);
+        return accepted ? { outcome: { outcome: 'accepted' } }
           : { outcome: { outcome: 'rejected', reason: decision.kind === 'plan_review'
             ? decision.editedPlan ?? decision.reason ?? 'Plan not approved' : 'Plan not approved' } };
       }
@@ -240,7 +312,13 @@ export class CursorAgent extends BaseAgent {
           })) });
         if (!decision || cancelled || closed || (decision.kind === 'ask_user_question' && decision.dismissed)) return cancelledResult;
         if (decision.kind !== 'ask_user_question') return { outcome: { outcome: 'skipped' } };
-        return cursorAnswers(questions, decision.answers);
+        const answers = cursorAnswers(questions, decision.answers);
+        if (record(record(answers).outcome).outcome === 'answered') {
+          userIntent = composeAutoReviewIntentWithClarification(userIntent, questions.map(question => ({
+            question: String(question.prompt), answer: decision.answers[String(question.id)] ?? decision.answers[String(question.prompt)],
+          })));
+        }
+        return answers;
       }
       // Unsupported blocking extension calls receive an explicit response.
       throw new AcpRpcError(-32601, `Unsupported ACP method: ${method}`);
@@ -365,7 +443,7 @@ export class CursorAgent extends BaseAgent {
       if (opts.remoteHostId || opts.deviceHosted) throw new Error('Cursor ACP currently runs only on the task host computer');
       if (!path.isAbsolute(opts.workingDir)) throw new Error('Cursor ACP requires an absolute working directory');
       if (opts.thinkingEnabled !== undefined) throw new Error('Cursor ACP does not advertise a generic thinking switch');
-      if (!['ask', 'default'].includes(mode)) throw new NotSupportedError('permissionMode', no);
+      if (!this.capabilities.permissionModes.some(option => option.id === mode)) throw new NotSupportedError('permissionMode', no);
       const auth = await this.deps.auth.getState();
       if (!auth.authenticated) throw new AgentNotAuthenticatedError('cursor', 'Cursor Agent is not authenticated. Run agent login on the task host computer.');
       const env = { ...process.env, ...await this.deps.auth.getAuthEnv() };
@@ -490,6 +568,7 @@ export class CursorAgent extends BaseAgent {
         events: () => queue,
         getUsageSnapshot: () => ({ ...translator.usage }),
         setInteractionResolver: next => { resolver = next; },
+        reviewAutoPermissionAction: reviewAutoAction,
         validateSendOptions: validateSend,
         isTurnRunning: () => running,
         async send(message: UserMessage, options: SendOptions = {}) {
@@ -507,6 +586,10 @@ export class CursorAgent extends BaseAgent {
             if (options.planMode !== undefined) await setPlanMode(options.planMode, true);
             const blocks = await promptBlocks(message, promptCapabilities);
             if (closed || cancelled || options.signal?.aborted) throw new Error('Cursor send cancelled before dispatch');
+            const nextIntent = appendAutoReviewUserIntent(firstPrompt ? undefined : userIntent, message.content, options);
+            actionContext.advance(typeof nextIntent !== 'string');
+            userIntent = normalizeAutoReviewUserIntent(nextIntent);
+            reviewUnavailable.reset(); confirmUndelivered.reset();
             if (firstPrompt && context) blocks.unshift({ type: 'text', text: context });
             emit({ type: 'status', data: { ...translator.usage, isRunning: true, status: 'Working' } });
             // ACP prompt returns only at the END of the turn. Dispatch promptly;
@@ -589,8 +672,14 @@ export class CursorAgent extends BaseAgent {
         setEffort, setFastMode,
         getFastMode: () => { const value = readCursorModelControls(sessionState.configOptions).fast?.currentValue; return value === true || value === 'true'; },
         async setPermissionMode(next) {
-          if (!['ask', 'default'].includes(next)) throw new NotSupportedError('permissionMode', no);
-          mode = next; // No pending approval, especially plan approval, is auto-resolved.
+          if (closed || fenced) throw new Error('Cursor session is closed');
+          if (!['ask', 'default', 'auto', 'bypassPermissions'].includes(next)) throw new NotSupportedError('permissionMode', no);
+          if (mode === next) return;
+          mode = next;
+          permissionGeneration++;
+          reviewUnavailable.reset(); confirmUndelivered.reset();
+          // Re-evaluate only tool approvals. Plans and questions still need an explicit answer.
+          for (const interaction of pending.values()) interaction.modeChanged?.();
         },
         setPlanMode, getPlanMode: () => planMode, getExecutionPlanMode: () => planMode,
       };

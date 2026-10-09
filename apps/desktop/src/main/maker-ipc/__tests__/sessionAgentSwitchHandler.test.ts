@@ -1348,7 +1348,17 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
 
 
 describe('Cursor switch capability normalization', () => {
-  it('commits native Ask and disables Fast instead of inheriting the previous harness permission', async () => {
+  it.each(['ask', 'default', 'auto', 'bypassPermissions'] as const)('preserves supported permission %s when switching to Cursor', async permissionMode => {
+    const { deps } = makeDeps({ getSessionRow: async () => makeRow({ permissionMode }) });
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', providerId: 'cursor', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'cursor', permissionMode }));
+  });
+  it.each(['acceptEdits', 'plan'] as const)('tightens unsupported %s permission to Ask when switching to Cursor', async permissionMode => {
+    const { deps } = makeDeps({ getSessionRow: async () => makeRow({ permissionMode }) });
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ permissionMode: 'ask' }));
+  });
+  it('defaults missing permission to Ask and disables unspecified Fast', async () => {
     const { deps } = makeDeps();
     await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', providerId: 'cursor', applyNow: true });
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({

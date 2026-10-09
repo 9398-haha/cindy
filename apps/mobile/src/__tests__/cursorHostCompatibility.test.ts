@@ -13,9 +13,9 @@ describe('Cursor host compatibility', () => {
     expect(draft.permissionMode).toBe('ask');
     const restored = { ...draft, model: 'account-model', providerId: 'cursor', permissionMode: 'auto', effort: 'medium', fastMode: true };
     const options = buildRemoteCreateSessionOptions(restored);
-    expect(options).toMatchObject({ agentKind: 'cursor', model: 'account-model', providerId: 'cursor', permissionMode: 'ask', fastMode: true, effort: 'medium' });
+    expect(options).toMatchObject({ agentKind: 'cursor', model: 'account-model', providerId: 'cursor', permissionMode: 'auto', fastMode: true, effort: 'medium' });
     expect(withAgentDefaults(restored, 'cursor').fastMode).toBe(true);
-    expect(withAgentDefaults(restored, 'cursor').permissionMode).toBe('ask');
+    expect(withAgentDefaults(restored, 'cursor').permissionMode).toBe('auto');
   });
   it('preserves the native identity in persisted sessions and switching intents', () => {
     expect(sessionAgentKind({ agentKind: 'cursor' })).toBe('cursor');

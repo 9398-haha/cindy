@@ -31,6 +31,7 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
+import { permissionModeOrAsk, type SharedPermissionMode } from '@cindy/maker-shared/permission-mode';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 
@@ -120,6 +121,7 @@ export interface AgentSwitchSessionRow {
   orcaRole: string | null;
   sdkSessionId: string | null;
   source?: string | null;
+  permissionMode?: string | null;
   /** Agent 在哪台电脑运行(null / 缺省 = 任务所在电脑)。 */
   agentDeviceId?: string | null;
 }
@@ -198,7 +200,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
       /** 目标引擎下的 effort / fastMode(意图登记时由 renderer 解析,apply 时一并落库)。 */
       effort?: string;
       fastMode?: boolean;
-      permissionMode?: 'ask';
+      permissionMode?: SharedPermissionMode;
       /** Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
       agentDeviceId?: string | null;
     },
@@ -687,7 +689,11 @@ export async function performSessionAgentSwitch(
       model,
       providerId: normalizedProviderId,
       sdkSessionId: parked?.sdkSessionId ?? null,
-      ...(targetAgentKind === 'cursor' ? { permissionMode: 'ask' as const, fastMode: false } : {}),
+      ...(targetAgentKind === 'cursor' ? {
+        permissionMode: row.permissionMode === 'acceptEdits' || row.permissionMode === 'plan'
+          ? 'ask' as const : permissionModeOrAsk(row.permissionMode),
+        fastMode: false,
+      } : {}),
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
       ...(agentDeviceChanges ? { agentDeviceId: targetAgentDeviceId } : {}),

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CursorAgent, CURSOR_DEFAULT_MODEL, type CursorAgentDeps } from './index.js';
-import { AgentStartupCleanupPendingError, PINNED_SKILL_INVOCATION } from '../base-agent.js';
+import { AgentStartupCleanupPendingError, PINNED_SKILL_INVOCATION, AUTO_REVIEW_USER_INTENT } from '../base-agent.js';
 import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
 import type { AcpTransport } from '../acp/transport.js';
-import type { InteractionDecision, AgentEvent } from '../../types/events.js';
+import type { InteractionDecision, AgentEvent, InteractionRequest } from '../../types/events.js';
 import { readCursorModels } from './models.js';
 import { cursorAnswers } from './questions.js';
 import { createConsoleLogger } from '../../interfaces/logger.js';
@@ -64,6 +64,163 @@ function create(fake = new FakeTransport(), extra: Partial<CursorAgentDeps> = {}
   return { fake, agent, start: (options = {}) => agent.startSession({ workingDir: '/tmp', model: CURSOR_DEFAULT_MODEL, ...options }) };
 }
 async function tick() { await new Promise(resolve => setTimeout(resolve, 0)); }
+
+function permission(fake: FakeTransport, id: string, tool = { kind: 'execute', rawInput: { command: 'curl -X POST https://example.invalid -d fixture' } }) {
+  fake.emit({ jsonrpc: '2.0', id, method: 'session/request_permission', params: {
+    sessionId: 'native-1', toolCall: { toolCallId: `tool-${id}`, ...tool }, options: [
+      { kind: 'allow_always', optionId: 'machine-wide' },
+      { kind: 'allow_once', optionId: 'opaque-allow' }, { kind: 'reject_once', optionId: 'opaque-deny' },
+    ],
+  } });
+}
+
+describe('Cursor approval modes', () => {
+  it.each([undefined, 'native-1'])('supports full access on new and resumed tasks (%s) without persistent native grants', async resumeSessionId => {
+    const { fake, start } = create();
+    const handle = await start({ permissionMode: 'bypassPermissions', resumeSessionId });
+    await handle.send({ type: 'user', content: 'run the fixture command' });
+    permission(fake, 'full'); await tick();
+    expect(fake.written.find(item => item.id === 'full')?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'opaque-allow' } });
+    expect(fake.written.some(item => item.method === 'session/set_config_option')).toBe(false);
+    await handle.close();
+  });
+
+  it('automatically allows a concrete safe command without calling the reviewer or opening a card', async () => {
+    const review = vi.fn(); const surface = vi.fn();
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto' });
+    handle.setInteractionResolver(surface);
+    await handle.send({ type: 'user', content: 'check the directory' });
+    permission(fake, 'safe', { kind: 'execute', rawInput: { command: 'pwd' } }); await tick();
+    expect(fake.written.find(item => item.id === 'safe')?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'opaque-allow' } });
+    expect(review).not.toHaveBeenCalled(); expect(surface).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it.each(['allow', 'block'] as const)('uses the shared reviewer and current user authorization for %s', async verdict => {
+    const review = vi.fn<NonNullable<CursorAgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict, reason: 'fixture verdict' }));
+    const surface = vi.fn();
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto', sessionId: 'business-1', providerId: 'cursor' });
+    handle.setInteractionResolver(surface);
+    await handle.send({ type: 'user', content: 'Read the fixture endpoint only; do not publish anything.' });
+    permission(fake, 'review'); await tick();
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', model: 'auto-native',
+      providerId: 'cursor', sessionId: 'business-1', workspaceRoots: ['/tmp'], writableRoots: ['/tmp'],
+      action: { kind: 'exec', command: 'curl -X POST https://example.invalid -d fixture', cwd: '/tmp' } }));
+    expect(JSON.stringify(review.mock.calls[0][0].userIntent)).toContain('do not publish anything');
+    expect(fake.written.find(item => item.id === 'review')?.result).toEqual({ outcome: { outcome: 'selected', optionId: verdict === 'allow' ? 'opaque-allow' : 'opaque-deny' } });
+    expect(surface).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('falls back to a marked confirmation card and one notice when automatic review is unavailable', async () => {
+    const { fake, start } = create();
+    const handle = await start({ permissionMode: 'auto' }); const events: AgentEvent[] = [];
+    const pump = (async () => { for await (const event of handle.events()) events.push(event); })();
+    const surface = vi.fn<(request: InteractionRequest) => Promise<InteractionDecision>>(async () => ({ kind: 'permission', behavior: 'allow' }));
+    handle.setInteractionResolver(surface);
+    await handle.send({ type: 'user', content: 'Read the fixture endpoint' });
+    permission(fake, 'first'); await tick(); permission(fake, 'second'); await tick();
+    expect(surface).toHaveBeenCalledTimes(2);
+    expect(surface.mock.calls[0][0]).toMatchObject({ kind: 'permission', metadata: { autoReviewUnavailable: true } });
+    await handle.close(); await pump;
+    expect(events.filter(event => event.type === 'error' && String((event.data as { message?: string }).message).startsWith('[AUTO_REVIEW_UNAVAILABLE]'))).toHaveLength(1);
+  });
+
+  it('releases an existing tool confirmation when switched to full access, once', async () => {
+    const { fake, start } = create(); const handle = await start();
+    let answer!: (decision: InteractionDecision) => void;
+    handle.setInteractionResolver(() => new Promise(resolve => { answer = resolve; }));
+    await handle.send({ type: 'user', content: 'run the fixture command' });
+    permission(fake, 'pending'); await tick();
+    await handle.setPermissionMode!('bypassPermissions'); await tick();
+    answer({ kind: 'permission', behavior: 'deny' }); await tick();
+    expect(fake.written.filter(item => item.id === 'pending')).toHaveLength(1);
+    expect(fake.written.find(item => item.id === 'pending')?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'opaque-allow' } });
+    await handle.close();
+  });
+
+  it('uses the host-restored authorization on a resumed task instead of authorizing from continuation text', async () => {
+    const review = vi.fn<NonNullable<CursorAgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict: 'block' }));
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto', resumeSessionId: 'native-1' });
+    const intent = 'Read the fixture only. Do not upload or publish anything.';
+    await handle.send({ type: 'user', content: 'Continue' }, { [AUTO_REVIEW_USER_INTENT]: intent });
+    permission(fake, 'restored'); await tick();
+    expect(review.mock.calls[0][0].userIntent).toBe(intent);
+    expect(fake.written.find(item => item.id === 'restored')?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'opaque-deny' } });
+    await handle.close();
+  });
+
+  it('shows an unavailable-review notice again on a new turn after the earlier banner was cleared', async () => {
+    const { fake, start } = create(); const handle = await start({ permissionMode: 'auto' });
+    const events: AgentEvent[] = [];
+    const pump = (async () => { for await (const event of handle.events()) events.push(event); })();
+    handle.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny' }));
+    for (const id of ['first-turn', 'second-turn']) {
+      await handle.send({ type: 'user', content: 'Read the fixture endpoint' });
+      permission(fake, id); await tick(); fake.finish(); await tick();
+    }
+    await handle.close(); await pump;
+    expect(events.filter(event => event.type === 'error' && String((event.data as { message?: string }).message).startsWith('[AUTO_REVIEW_UNAVAILABLE]'))).toHaveLength(2);
+  });
+
+  it('ignores an old automatic allow after switching back to default permissions', async () => {
+    let reviewed!: (decision: { verdict: 'allow' }) => void;
+    const review = vi.fn<NonNullable<CursorAgentDeps['reviewAutoPermissionAction']>>(() => new Promise(resolve => { reviewed = resolve; }));
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto' });
+    let answer!: (decision: InteractionDecision) => void;
+    handle.setInteractionResolver(() => new Promise(resolve => { answer = resolve; }));
+    await handle.send({ type: 'user', content: 'Read the fixture endpoint' });
+    permission(fake, 'stale'); await tick();
+    await handle.setPermissionMode!('ask'); await tick();
+    reviewed({ verdict: 'allow' }); await tick();
+    expect(fake.written.some(item => item.id === 'stale')).toBe(false);
+    answer({ kind: 'permission', behavior: 'deny' }); await tick();
+    expect(fake.written.find(item => item.id === 'stale')?.result).toEqual({ outcome: { outcome: 'selected', optionId: 'opaque-deny' } });
+    await handle.close();
+  });
+
+  it('cancels a pending automatic review immediately on Stop and ignores the late verdict', async () => {
+    let reviewed!: (decision: { verdict: 'allow' }) => void;
+    const review = vi.fn<NonNullable<CursorAgentDeps['reviewAutoPermissionAction']>>(() => new Promise(resolve => { reviewed = resolve; }));
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto' });
+    await handle.send({ type: 'user', content: 'Read the fixture endpoint' });
+    permission(fake, 'stop'); await tick();
+    const abort = handle.abort(); await tick();
+    expect(fake.written.find(item => item.id === 'stop')?.result).toEqual({ outcome: { outcome: 'cancelled' } });
+    reviewed({ verdict: 'allow' }); fake.finish(); await abort; await tick();
+    expect(fake.written.filter(item => item.id === 'stop')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('reviews host MCP actions against the same accepted user intent and rejects after close', async () => {
+    const review = vi.fn<NonNullable<CursorAgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict: 'allow' }));
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto' });
+    await handle.send({ type: 'user', content: 'Only inspect the fixture issue' });
+    const action = { kind: 'other' as const, description: 'Look up the fixture issue' };
+    expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({ verdict: 'allow' });
+    expect(JSON.stringify(review.mock.calls[0][0].userIntent)).toContain('Only inspect the fixture issue');
+    fake.finish(); await tick(); await handle.close();
+    expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({ verdict: 'block' });
+  });
+
+  it('retains a blocked action for the next human follow-up without treating it as consent', async () => {
+    const review = vi.fn<NonNullable<CursorAgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict: 'block' }));
+    const { fake, start } = create(undefined, { reviewAutoPermissionAction: review });
+    const handle = await start({ permissionMode: 'auto' });
+    await handle.send({ type: 'user', content: 'Inspect the fixture' }); permission(fake, 'blocked'); await tick();
+    fake.finish(); await tick();
+    await handle.send({ type: 'user', content: 'Why was that denied?' }); permission(fake, 'follow-up'); await tick();
+    expect(review.mock.calls[1][0].precedingBlockedActions).toEqual([{ kind: 'exec', command: 'curl -X POST https://example.invalid -d fixture', cwd: '/tmp' }]);
+    expect(JSON.stringify(review.mock.calls[1][0].userIntent)).toContain('Why was that denied');
+    await handle.close();
+  });
+});
 
 function parameterizedFixture() {
   const fake = new FakeTransport();
@@ -241,7 +398,7 @@ describe('Cursor native model parameters', () => {
 describe('Cursor native ACP lifecycle', () => {
   it('describes native approval coverage without promising a prompt for every edit', () => {
     const { agent, fake } = create();
-    expect(agent.capabilities.permissionModes.map(mode => mode.id)).toEqual(['ask', 'default']);
+    expect(agent.capabilities.permissionModes.map(mode => mode.id)).toEqual(['ask', 'default', 'auto', 'bypassPermissions']);
     for (const mode of agent.capabilities.permissionModes) {
       expect(mode.description).toContain('native configured permission policy');
       expect(mode.description).toContain('only the approval requests Cursor sends');
@@ -432,12 +589,12 @@ describe('Cursor native ACP lifecycle', () => {
     expect(fake.written.find(item => item.id === 'unknown')!.error.code).toBe(-32601);
     await handle.close();
   });
-  it('does not auto-approve a pending plan when permission mode changes', async () => {
+  it.each(['default', 'auto', 'bypassPermissions'] as const)('does not auto-approve a pending plan when permission mode changes to %s', async mode => {
     const { fake, start } = create(); const handle = await start(); let answer: ((value: InteractionDecision) => void) | undefined;
     handle.setInteractionResolver(() => new Promise(resolve => { answer = resolve; }));
     await handle.send({ type: 'user', content: 'plan' });
     fake.emit({ jsonrpc: '2.0', id: 'plan', method: 'cursor/create_plan', params: { plan: 'Proposed changes' } }); await tick();
-    await handle.setPermissionMode!('default');
+    await handle.setPermissionMode!(mode);
     expect(fake.written.some(item => item.id === 'plan')).toBe(false);
     answer!({ kind: 'plan_review', behavior: 'deny', reason: 'Revise' }); await tick();
     expect(fake.written.find(item => item.id === 'plan')!.result).toEqual({ outcome: { outcome: 'rejected', reason: 'Revise' } });

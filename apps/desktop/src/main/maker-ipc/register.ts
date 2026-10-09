@@ -9070,6 +9070,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sdkSessionId: sessions.sdkSessionId,
           source: sessions.source,
           agentDeviceId: sessions.agentDeviceId,
+          permissionMode: sessions.permissionMode,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))

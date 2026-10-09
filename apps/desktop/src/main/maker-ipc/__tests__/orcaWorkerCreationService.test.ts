@@ -3284,20 +3284,23 @@ it('rejects a plan changed during preparation without reserving or bootstrapping
 
 
 describe('Cursor native worker admission', () => {
-  it('uses Ask for native workers without inheriting a full-access preference', async () => {
+  it('preserves the selected worker permission preference for Cursor', async () => {
     const { deps, service } = createDeps({
       getAvailableModels: () => [{ id: 'native', efforts: [], defaultEffort: null }],
       getProviderRoutingContext: async () => providerRoutingContext({ cursor: [{ id: 'cursor', name: 'Cursor', models: ['native'] }] }),
     });
     const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor', model: 'native', providerId: 'cursor' });
     expect(result).toMatchObject({ ok: true });
-    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', permissionMode: 'ask' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', permissionMode: 'auto' }));
   });
-  it('rejects unsupported explicit permissions before creating a worker', async () => {
-    const { deps, service } = createDeps();
-    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor', workerPermissionMode: 'auto' });
-    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
-    expect(deps.bootstrapSession).not.toHaveBeenCalled();
-    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+  it.each(['ask', 'auto', 'bypassPermissions'] as const)('honors explicit Cursor worker permission %s', async workerPermissionMode => {
+    const { deps, service } = createDeps({
+      getAvailableModels: () => [{ id: 'native', efforts: [], defaultEffort: null }],
+      getProviderRoutingContext: async () => providerRoutingContext({ cursor: [{ id: 'cursor', name: 'Cursor', models: ['native'] }] }),
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', role: 'worker', label: 'cursor', agent: 'cursor',
+      workerPermissionMode, model: 'native', providerId: 'cursor' });
+    expect(result).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'cursor', permissionMode: workerPermissionMode }));
   });
 });

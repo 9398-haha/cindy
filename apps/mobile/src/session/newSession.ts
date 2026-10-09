@@ -216,7 +216,7 @@ export function withAgentDefaults(
   draft: NewSessionDraft,
   agentKind: NewSessionAgentKind,
 ): NewSessionDraft {
-  if (draft.agentKind === agentKind) return agentKind === 'cursor' ? { ...draft, permissionMode: 'ask' } : draft;
+  if (draft.agentKind === agentKind) return draft;
   return {
     ...draft,
     agentKind,
@@ -1008,7 +1008,7 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     model: draft.model.trim(),
-    permissionMode: draft.agentKind === 'cursor' ? 'ask' : draft.permissionMode,
+    permissionMode: draft.permissionMode,
     fastMode: draft.fastMode,
     ...(effort ? { effort } : {}),
     // 仅显式选了非空来源才带 providerId(空 = NULL = 被控端默认路由,对齐桌面 deviceLinkCreateArgs)。
@@ -1066,7 +1066,7 @@ export function sessionFromCreateResult(
     workspaceKind: fallback.workspaceKind,
     model: fallback.model,
     effort: fallback.effort,
-    permissionMode: fallback.agentKind === 'cursor' ? 'ask' : fallback.permissionMode,
+    permissionMode: fallback.permissionMode,
     fastMode: fallback.fastMode,
     status: 'active',
     agentKind: fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind,

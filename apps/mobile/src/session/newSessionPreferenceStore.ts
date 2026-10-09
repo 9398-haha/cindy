@@ -141,7 +141,7 @@ function normalizePermissionModeByAgent(value: unknown): Partial<Record<NewSessi
   for (const agent of ['claude-code', 'codex', 'pi', 'cursor'] as const) {
     const mode = readString(record[agent]);
     if (mode && isRememberablePermissionMode(mode)) {
-      out[agent] = agent === 'cursor' ? 'ask' : mode;
+      out[agent] = mode;
     }
   }
   return out;

@@ -123,11 +123,10 @@ describe('makerChatStore.mirrorSessionFields', () => {
 });
 
 describe('Cursor native send options', () => {
-  it('preserves discovered plan mode while dropping unsupported reasoning and Fast', () => {
+  it('preserves Cursor permission, plan mode, effort and Fast on task recovery', () => {
     const s = sid();
     makerChatStore.setSessionRuntime(s, { agentKind: 'cursor', fastMode: true, planModeEnabled: true });
     const options = buildCreateOptsForCurrentSession(s, 'account-model', 'medium', 'auto', '/tmp');
-    expect(options).toMatchObject({ agentKind: 'cursor', model: 'account-model', permissionMode: 'ask', fastMode: false, planMode: true });
-    expect(options).not.toHaveProperty('effort');
+    expect(options).toMatchObject({ agentKind: 'cursor', model: 'account-model', permissionMode: 'auto', effort: 'medium', fastMode: true, planMode: true });
   });
 });

@@ -94,13 +94,31 @@ CLI. The client does not advertise filesystem or terminal RPC implementations.
 
 ## Approval and extensions
 
-Only Ask/Default approval modes are implemented. Every permission request Cursor
-actually sends is delegated to Cindy's existing interaction resolver. The exact
-advertised `allow_once`/`reject_once` option ID is returned; native persistent
-`allow_always` grants are never synthesized. Cursor's pre-existing native grants
-and policies remain authoritative, so this is not an interception guarantee for
-every native tool. Cindy per-turn policies requiring interception of every tool
-are explicitly unsupported. Restricted Reviewer and Bot runtime profiles are rejected
+Ask/Default, Auto-review, and Full access are implemented for native approval
+requests. Ask/Default forwards them to Cindy's existing interaction resolver.
+Auto-review uses the shared deterministic classifier and host reviewer against the
+accepted user authorization; an unavailable reviewer produces the existing notice
+and a marked confirmation card. Full access allows these requests directly. All
+three return the exact advertised `allow_once`/`reject_once` option ID; native
+persistent `allow_always` grants are never synthesized. A permission-mode change
+re-evaluates pending tool approvals and invalidates stale automated decisions.
+Stop/close cancels approvals even while review is running. Plan approval and
+questions remain explicit in every permission mode.
+
+Creation, task recovery, engine switching, device-link control, mobile preferences,
+and Orca worker creation preserve supported selected permission modes. An
+unsupported legacy mode is tightened to Ask on engine switching; existing Ask
+choices and the interactive Cursor seed default are unchanged. No native global
+configuration, sandbox, or persistent allowlist is rewritten.
+Remote worker forms use the execution host's advertised permission subset, so
+older Cursor hosts remain usable with Ask/Default.
+Independent schedules use the same existing Full access default as other
+harnesses so native approvals do not strand unattended work. Bound task heartbeats
+retain the task's saved permission and plan mode.
+
+Cursor's pre-existing native grants and policies remain authoritative, so this is
+not an interception guarantee for every native tool. Cindy per-turn policies
+requiring interception of every tool are explicitly unsupported. Restricted Reviewer and Bot runtime profiles are rejected
 before native startup because their read-only/tool/Skill policy cannot be enforced
 through the currently implemented ACP interface. Nonempty additional directory grants,
 read-only Library roots, and pinned Skill invocations are likewise rejected rather

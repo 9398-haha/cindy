@@ -640,16 +640,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       teamId: team.id,
       workerPermissionMode:
         params.workerPermissionMode === undefined
-          ? params.agent === 'cursor' ? 'ask' : deps.getWorkerPermissionMode()
+          ? deps.getWorkerPermissionMode()
           : resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
     }, assertCurrent);
   }
 
   async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
-    if (params.agent === 'cursor' && params.workerPermissionMode !== 'ask') {
-      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'Cursor workers require Ask permission mode' };
-    }
     const role = normalizeRequiredText(params.role, 'role');
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     if (role.value.length > 32) {

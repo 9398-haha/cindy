@@ -9530,6 +9530,7 @@ export default function SessionScreen() {
           ) : contextSheetView === 'collab' || contextSheetView === 'collab-create' ? (
             <OrcaWorkerFormView
               agents={collab.workerForm.agents}
+              permissionModes={collab.workerForm.permissionModes}
               busy={collab.busy}
               customRoleMode={collab.workerForm.customRoleMode}
               error={collab.error}

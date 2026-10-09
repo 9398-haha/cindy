@@ -65,6 +65,7 @@ export interface OrcaWorkerFormViewProps {
   /** 权限切换交给页面:进入完全访问前需要确认。 */
   onPermissionChange(mode: OrcaWorkerPermissionMode): void;
   agents: readonly OrcaWorkerAgentKind[];
+  permissionModes?: readonly OrcaWorkerPermissionMode[];
   onPickModel(): void;
   busy: boolean;
   notice?: string | null;
@@ -79,6 +80,7 @@ export function OrcaWorkerFormView({
   onAgentChange,
   onPermissionChange,
   agents,
+  permissionModes,
   onPickModel,
   busy,
   notice,
@@ -154,14 +156,18 @@ export function OrcaWorkerFormView({
           disabled={busy}
           label={t('session.collab.permissionLabel')}
           onChange={onPermissionChange}
-          options={form.agent === 'cursor' ? [{ id: 'ask' as const, label: t('session.collab.permissionAsk') }] : [
+          options={[
+            ...(form.agent === 'cursor' ? [{ id: 'ask' as const, label: t('session.collab.permissionAsk') }] : []),
             { id: 'auto' as const, label: t('session.collab.permissionAuto') },
             { id: 'bypassPermissions' as const, label: t('session.collab.permissionFull') },
-          ]}
+          ].filter(option => !permissionModes || permissionModes.includes(option.id))}
           testID="collab.permissionOptions"
           value={form.permissionMode}
         />
-        <ContextSheetNote text={t(form.agent === 'cursor' ? 'session.collab.permissionAskHint' : form.permissionMode === 'auto'
+        <ContextSheetNote text={t(form.agent === 'cursor'
+          ? form.permissionMode === 'auto' ? 'session.collab.cursorPermissionAutoHint'
+            : form.permissionMode === 'bypassPermissions' ? 'session.collab.cursorPermissionFullHint' : 'session.collab.permissionAskHint'
+          : form.permissionMode === 'auto'
           ? 'session.collab.permissionAutoHint'
           : 'session.collab.permissionFullHint')}
         />

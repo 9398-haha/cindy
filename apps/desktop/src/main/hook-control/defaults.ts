@@ -149,7 +149,7 @@ export function resolveHookSessionConfig(
   //    (claude-code: ask/acceptEdits/auto/bypassPermissions; codex: ask/auto/
   //    bypassPermissions), 故取 [0] 即最严档。
   //    只有「从未填过显式档」才走 bypass 历史默认, 该行为保持不变。
-  // Cursor keeps native ACP permission requests; it does not implement bypass.
+  // Keep Cursor's conservative unconfigured hook default; explicit Auto/Full access is supported.
   let permissionMode = agentKind === 'cursor' ? 'ask' : 'bypassPermissions';
   if (overrides.permissionMode !== null) {
     const supported = deps.getPermissionModes(agentKind);

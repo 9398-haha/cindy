@@ -2620,7 +2620,7 @@ export default function NewRemoteSessionScreen() {
     const targetCapabilities = normalizeMobileAgentCapabilities(await maker.getCapabilities(config.agent));
     if (!targetCapabilities) return false;
     const storedPermission = newSessionPreferences?.permissionModeByAgent[config.agent];
-    const permission = config.agent === 'cursor' ? 'ask' : config.agent === draft.agentKind ? draft.permissionMode
+    const permission = config.agent === draft.agentKind ? draft.permissionMode
       : storedPermission ?? defaultPermissionModeForNewSessionAgent(config.agent);
     if (config.agent !== draft.agentKind && !await confirmFullAccessChange(draft.permissionMode, permission, {
       restoringRememberedChoice: storedPermission !== undefined,
@@ -6657,6 +6657,7 @@ export default function NewRemoteSessionScreen() {
           <>
             <OrcaWorkerFormView
               agents={collabForm.agents}
+              permissionModes={collabForm.permissionModes}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
               form={collabForm.form}

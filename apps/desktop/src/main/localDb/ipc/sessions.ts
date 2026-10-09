@@ -23,6 +23,7 @@ import {
   writePiSubagentDeletedTombstone,
 } from '@cindy/maker-core/pi-subagent-runs';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import type { SharedPermissionMode } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
@@ -643,7 +644,7 @@ export async function applyAgentSwitchToSessionRow(
     /** 目标引擎下的 effort / fastMode(意图登记时 renderer 按目标目录解析,apply 一并落库)。 */
     effort?: string;
     fastMode?: boolean;
-    permissionMode?: 'ask';
+    permissionMode?: SharedPermissionMode;
     contextWindow?: number | null;
     /** 远程 Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
     agentDeviceId?: string | null;

@@ -201,13 +201,11 @@ const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
  * ⚠️ 必须与 UI 显示的空值回退一致（ModelEffortChip 也走 getScheduleDefaultModel），
  * 否则用户看到"已选 X"实际跑的却是 Y（2026-06 实际踩坑：UI 显示 Opus 4.8、跑的 4.7）。
  *
- * 普通 schedule 的 permissionMode 两个 agent 都用 'bypassPermissions'（types/common.ts:23 注释确认
- * codex 支持子集 ask/auto/bypassPermissions）—— 调度本质是 unattended，bypass 是
+ * 普通 schedule 的 permissionMode 各引擎都用 'bypassPermissions' —— 调度本质是 unattended，bypass 是
  * 既有独立调度策略。绑定任务的心跳与伙伴例行任务不使用此默认值，继承原任务的权限与计划模式。
  */
-function defaultPermissionModeForSchedule(agentKind: AgentKind): PermissionMode {
-  // Cursor preserves native ACP permission prompts; other harness defaults are unchanged.
-  return agentKind === 'cursor' ? 'ask' : 'bypassPermissions';
+function defaultPermissionModeForSchedule(): PermissionMode {
+  return 'bypassPermissions';
 }
 
 /**
@@ -1356,7 +1354,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       permissionMode:
         routinePermissions?.permissionMode ??
         heartbeatPermissions?.permissionMode ??
-        defaultPermissionModeForSchedule(effectiveAgentKind),
+        defaultPermissionModeForSchedule(),
       ...((routinePermissions ?? heartbeatPermissions)
         ? { planMode: (routinePermissions ?? heartbeatPermissions)!.planMode }
         : {}),

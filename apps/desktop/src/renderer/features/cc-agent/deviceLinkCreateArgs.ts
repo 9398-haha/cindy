@@ -90,7 +90,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     workspaceKind: dir ? 'project' : 'dialogue',
     model: p.model,
     ...(p.effort ? { effort: p.effort } : {}),
-    permissionMode: p.agentKind === 'cursor' ? 'ask' : p.permissionMode,
+    permissionMode: p.permissionMode,
     fastMode: p.fastMode,
     ...(p.planModeEnabled ? { planMode: true } : {}),
     // 空 / 缺省不放进 args:payload 干净,且被控端 bootstrapSession 也只在非空时才校验。
