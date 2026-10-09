@@ -58,9 +58,9 @@ async function listRouteGuardProviders(
   return getDesktopProviderService().listProviders({ catalog });
 }
 
-/** New-route admission consumes the same native membership as the model picker. */
+/** Native membership plus the admission-only alias required by older saved routes. */
 function routeGuardCatalog() {
-  return withCursorDiscoveredModels(getActiveCatalog());
+  return withCursorDiscoveredModels(getActiveCatalog(), { includeLegacyDefault: true });
 }
 
 function tombstoneGuardOptions(

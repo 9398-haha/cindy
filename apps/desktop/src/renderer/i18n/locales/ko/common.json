@@ -9275,6 +9275,10 @@
         "railSameEngine": "{{agent}} 전용",
         "crossEngineWarning": "엔진을 전환하면 컨텍스트가 다시 구성되어 내용이 사라질 수 있습니다",
         "favoritesSyncFailed": "즐겨찾기를 동기화할 수 없습니다. 선택 화면을 다시 여세요. 원격 컴퓨터를 업데이트해야 할 수 있습니다."
+      },
+      "cursorGroups": {
+        "models": "Cursor Models",
+        "other": "Other Models"
       }
     },
     "permissionSelector": {

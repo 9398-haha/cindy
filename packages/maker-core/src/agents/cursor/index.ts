@@ -22,7 +22,7 @@ import type { AgentEvent, InteractionDecision, InteractionRequest, InteractionRe
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CursorTranslator, cursorToolInput, cursorToolName } from './translator.js';
-import { CURSOR_DEFAULT_MODEL, cursorDefaultModel, readCursorModels, readCursorModelControls, record, type AcpRecord, type CursorConfigOption } from './models.js';
+import { CURSOR_DEFAULT_MODEL, readCursorModels, readCursorModelControls, record, type AcpRecord, type CursorConfigOption } from './models.js';
 
 export { CURSOR_DEFAULT_MODEL, cursorDefaultModel } from './models.js';
 const yes = { supported: true } as const;
@@ -252,8 +252,8 @@ export class CursorAgent extends BaseAgent {
       if (typeof modes.currentModeId === 'string') planMode = modes.currentModeId === 'plan';
       this.capabilities.planMode = Array.isArray(modes.availableModes) && modes.availableModes.some(mode => record(mode).id === 'plan') ? yes : no;
       this.capabilities.switchModel = catalog.configId ? yes : no;
-      this.capabilities.availableModels = catalog.models.length
-        ? [cursorDefaultModel, ...catalog.models] : [cursorDefaultModel];
+      // The legacy sentinel remains an accepted input, never a second Auto row.
+      this.capabilities.availableModels = catalog.models;
       this.capabilities.hasFastMode = catalog.models.some(item => item.supportsFastMode === true);
       const efforts = [...new Set(catalog.models.flatMap(item => item.efforts))];
       this.capabilities.effort = efforts.length ? yes : no;
@@ -306,12 +306,12 @@ export class CursorAgent extends BaseAgent {
       if (options?.effort && !catalog.models.find(item => item.id === target)?.efforts.includes(options.effort)) {
         throw new NotSupportedError('effort', { supported: false, reason: 'sdk-missing' });
       }
-      if (target && target === catalog.currentModel) { model = next; if (options?.effort) await setEffort(options.effort); return; }
+      if (target && target === catalog.currentModel) { model = target; if (options?.effort) await setEffort(options.effort); return; }
       if (!target || !catalog.configId || !catalog.models.some(item => item.id === target)) {
         throw new NotSupportedError('setModel', { supported: false, reason: 'sdk-missing' });
       }
       await setConfigOption({ id: catalog.configId, type: 'select', currentValue: catalog.currentModel, options: [] }, target);
-      model = next;
+      model = target;
       if (options?.effort) await setEffort(options.effort);
     };
     const setPlanMode = async (enabled: boolean, preparing = false) => {
@@ -466,7 +466,7 @@ export class CursorAgent extends BaseAgent {
       loading = false;
       defaultModel = readCursorModels(sessionState).currentModel;
       const requestedModel = model;
-      model = CURSOR_DEFAULT_MODEL;
+      model = defaultModel ?? CURSOR_DEFAULT_MODEL;
       if (requestedModel !== CURSOR_DEFAULT_MODEL) await setModel(requestedModel);
       if (opts.effort) await setEffort(opts.effort);
       if (opts.fastMode !== undefined) await setFastMode(opts.fastMode);

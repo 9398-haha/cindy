@@ -101,6 +101,8 @@ describe('Cursor native model parameters', () => {
   it('negotiates the native parameterized picker and advertises each model’s actual controls', async () => {
     const { fake, agent, start } = parameterizedFixture();
     const handle = await start();
+    expect(handle.model).toBe('auto-native');
+    expect(agent.capabilities.availableModels.some(model => model.id === CURSOR_DEFAULT_MODEL)).toBe(false);
     expect(fake.written.find(message => message.method === 'initialize')!.params.clientCapabilities)
       .toMatchObject({ _meta: { parameterizedModelPicker: true }, session: { configOptions: { boolean: {} } } });
     expect(agent.capabilities.hasFastMode).toBe(true);
@@ -112,6 +114,17 @@ describe('Cursor native model parameters', () => {
     expect(agent.capabilities.availableModels.find(model => model.id === 'auto-native'))
       .toMatchObject({ efforts: [], defaultEffort: null, supportsFastMode: false });
     expect(fake.written.some(message => message.method === 'session/prompt')).toBe(false);
+    await handle.close();
+  });
+  it('resolves old default selections to the native current model without advertising a synthetic choice', async () => {
+    const { agent, start } = parameterizedFixture();
+    const handle = await start({ resumeSessionId: 'native-1', model: CURSOR_DEFAULT_MODEL });
+    expect(handle.model).toBe('auto-native');
+    await handle.setModel!('model-b');
+    expect(handle.model).toBe('model-b');
+    await handle.setModel!(CURSOR_DEFAULT_MODEL);
+    expect(handle.model).toBe('auto-native');
+    expect(agent.capabilities.availableModels.map(model => model.id)).not.toContain(CURSOR_DEFAULT_MODEL);
     await handle.close();
   });
   it('applies startup effort and explicit Fast off before the first prompt, using native IDs', async () => {
@@ -478,6 +491,20 @@ describe('Cursor native ACP lifecycle', () => {
 });
 
 describe('Cursor model and event contracts', () => {
+  it('preserves native grouping, descriptions and order while discovering only offered models', () => {
+    const result = readCursorModels({ configOptions: [{ id: 'model', category: 'model', currentValue: 'default', options: [
+      { value: 'default', name: 'Auto' },
+      { name: 'Cursor Models', options: [{ value: 'grok-4.7', name: 'Grok 4.7', description: 'Native description' }] },
+      { name: 'Other Models', options: [{ value: 'opaque-third-party', name: 'Native offer' }] },
+      { name: 'Experimental', options: [{ value: 'future', name: 'Future model' }] },
+    ] }] });
+    expect(result.models.map(model => [model.id, model.group, model.sortOrder])).toEqual([
+      ['default', 'cursor:auto', 0], ['grok-4.7', 'cursor:models', 1],
+      ['opaque-third-party', 'cursor:other', 2], ['future', 'cursor:native:Experimental', 3],
+    ]);
+    expect(result.models[1].description).toBe('Native description');
+    expect(result.models.some(model => model.id === CURSOR_DEFAULT_MODEL)).toBe(false);
+  });
   it('includes renderable status text on turn start and context usage updates', async () => {
     const { fake, start } = create();
     const handle = await start();

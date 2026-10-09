@@ -9275,7 +9275,11 @@
         "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
         "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。"
       },
-      "modelListAria": "模型清單"
+      "modelListAria": "模型清單",
+      "cursorGroups": {
+        "models": "Cursor Models",
+        "other": "Other Models"
+      }
     },
     "permissionSelector": {
       "triggerAria": "選擇權限模式：{{label}}",

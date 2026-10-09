@@ -58,4 +58,10 @@ describe('Cursor native model route admission', () => {
     await expect(pinExclusiveSessionProvider('cursor', 'native-cursor-model', 'cursor'))
       .resolves.toBeUndefined();
   });
+  it('continues accepting the historical default alias while enforcing its native source state', async () => {
+    await expect(verdictForModelRoute('cursor', 'cursor-default', 'cursor')).resolves.toEqual({ kind: 'pass' });
+    state.suspended = true;
+    await expect(verdictForModelRoute('cursor', 'cursor-default', 'cursor'))
+      .resolves.toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
+  });
 });

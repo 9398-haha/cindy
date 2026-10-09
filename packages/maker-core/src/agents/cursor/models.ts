@@ -1,12 +1,13 @@
 import type { ModelDescriptor } from '../../types/capabilities.js';
 import type { Effort } from '../../types/common.js';
+import { cursorModelGroup } from '@cindy/model-providers';
 
 export type AcpRecord = Record<string, unknown>;
 export function record(value: unknown): AcpRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as AcpRecord : {};
 }
-export interface CursorModelOption { id: string; name: string }
+export interface CursorModelOption { id: string; name: string; description?: string; group?: string }
 export interface CursorConfigOption {
   id: string;
   category?: string;
@@ -64,13 +65,16 @@ export function readCursorModels(session: unknown, parameterizedModels?: unknown
   const configs = Array.isArray(data.configOptions) ? data.configOptions : [];
   const config = configs.map(record).find(option => option.category === 'model');
   const choices: CursorModelOption[] = [];
-  function collect(options: unknown): void {
+  function collect(options: unknown, group?: string): void {
     if (!Array.isArray(options)) return;
     for (const raw of options) {
       const option = record(raw);
-      if (Array.isArray(option.options)) collect(option.options);
+      if (Array.isArray(option.options)) collect(option.options, typeof option.name === 'string' ? option.name : group);
       else if (typeof option.value === 'string' && option.value.trim()) {
-        choices.push({ id: option.value, name: typeof option.name === 'string' ? option.name : option.value });
+        choices.push({ id: option.value, name: typeof option.name === 'string' ? option.name : option.value,
+          ...(typeof option.description === 'string' ? { description: option.description } : {}),
+          ...(group ? { group } : {}),
+        });
       }
     }
   }
@@ -82,7 +86,9 @@ export function readCursorModels(session: unknown, parameterizedModels?: unknown
     for (const raw of legacy.availableModels) {
       const item = record(raw);
       if (typeof item.modelId === 'string' && item.modelId.trim()) {
-        choices.push({ id: item.modelId, name: typeof item.name === 'string' ? item.name : item.modelId });
+        choices.push({ id: item.modelId, name: typeof item.name === 'string' ? item.name : item.modelId,
+          ...(typeof item.description === 'string' ? { description: item.description } : {}),
+        });
       }
     }
   }
@@ -93,11 +99,15 @@ export function readCursorModels(session: unknown, parameterizedModels?: unknown
   return {
     configId: typeof config?.id === 'string' ? config.id : undefined,
     currentModel,
-    models: [...new Map(choices.map(item => [item.id, item])).values()].map(item => {
+    models: [...new Map(choices.map(item => [item.id, item])).values()].map((item, sortOrder) => {
       const defaults = readCursorModelControls(parameters.get(item.id));
       const controls = item.id === currentModel ? readCursorModelControls(configs) : defaults;
       const defaultEffort = defaults.effort?.currentValue ?? controls.effort?.currentValue;
+      const group = cursorModelGroup(item.id, item.name, item.group);
       return { id: item.id, displayName: item.name, contextWindow: 0,
+        sortOrder,
+        ...(group ? { group } : {}),
+        ...(item.description !== undefined ? { description: item.description } : {}),
         efforts: controls.efforts,
         defaultEffort: typeof defaultEffort === 'string' && controls.efforts.includes(defaultEffort as Effort) ? defaultEffort as Effort : null,
         supportsFastMode: controls.fast !== undefined,
@@ -112,5 +122,5 @@ export const CURSOR_DEFAULT_MODEL = 'cursor-default';
 export const cursorDefaultModel: ModelDescriptor = {
   id: CURSOR_DEFAULT_MODEL, displayName: 'Cursor Default', contextWindow: 0,
   efforts: [], defaultEffort: null, supportsFastMode: false,
-  newSessionDefault: ['cursor'],
+  defaultEnabled: false,
 };

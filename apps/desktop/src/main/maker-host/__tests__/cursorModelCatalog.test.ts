@@ -38,4 +38,15 @@ describe('Cursor ACP catalog projection', () => {
     expect(withCursorDiscoveredModels(BUNDLED_CATALOG).providers.find(p => p.id === 'cursor')?.models.cursor?.[0])
       .toMatchObject({ efforts: ['low', 'high', 'max'], defaultEffort: 'high', supportsFastMode: true });
   });
+  it('preserves native presentation metadata and limits the legacy alias to admission', () => {
+    const model = { ...discovered, group: 'cursor:models', sortOrder: 2, description: 'Native description' };
+    setCursorDiscoveredModels([model], state.owner);
+    const offers = (legacy = false) => withCursorDiscoveredModels(BUNDLED_CATALOG, { includeLegacyDefault: legacy })
+      .providers.find(provider => provider.id === 'cursor')!.models.cursor!;
+    expect(offers()).toMatchObject([{ id: model.id, group: model.group, sortOrder: 2, description: model.description }]);
+    expect(offers().some(model => model.id === 'cursor-default')).toBe(false);
+    expect(offers(true).find(model => model.id === 'cursor-default')).toMatchObject({ defaultEnabled: false, efforts: [], supportsFastMode: false });
+    state.owner = 'owner-b';
+    expect(offers(true)).toEqual([]);
+  });
 });

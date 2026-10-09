@@ -30,6 +30,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
+        'newChat.modelSelector.cursorGroups.models': 'Cursor Models',
+        'newChat.modelSelector.cursorGroups.other': 'Other Models',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -262,6 +264,29 @@ it('renders Cursor’s native effort slider and Fast toggle and forwards live ch
   expect(onEffortChange).toHaveBeenCalledWith('medium', FROM_PANEL);
   await act(async () => { fireEvent.click(within(flyout).getByRole('button', { name: 'newChat.modelSelector.unified.fastTip' })); });
   expect(onFastModeChange).toHaveBeenCalledWith(true);
+});
+
+it('keeps Cursor pools visible in an existing task and selects third-party models through Cursor', async () => {
+  const change = vi.fn();
+  const onCrossEngineSelect = vi.fn();
+  renderPanel({ vendorKey: 'cursor', modelId: 'grok-4.7', currentProviderId: 'cursor', effort: 'high',
+    actualRoute: true, unifiedAgents: ['cursor'], onProviderChange: change,
+    sessionEngineFilter: { currentAgent: 'cursor', runtimeAgent: 'cursor', onCrossEngineSelect },
+    providersOverride: [{ id: 'cursor', name: 'Cursor', source: 'builtin', connected: true, agents: ['cursor'],
+      auth: { method: 'none' }, routing: {}, models: { cursor: [
+        { id: 'default', name: 'Auto', contextWindow: 0, group: 'cursor:auto', sortOrder: 0, efforts: [], defaultEffort: null },
+        { id: 'grok-4.7', name: 'Grok 4.7', contextWindow: 0, group: 'cursor:models', sortOrder: 1, efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: true },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', contextWindow: 0, group: 'cursor:other', sortOrder: 2, efforts: ['low', 'medium'], defaultEffort: 'medium' },
+      ] } }],
+  });
+  const list = screen.getByRole('listbox');
+  expect(within(list).getAllByRole('group').map(group => group.getAttribute('aria-label')))
+    .toEqual(['Cursor', 'Cursor Models', 'Other Models']);
+  expect(within(list).queryByText('Cursor Default')).toBeNull();
+  expect(within(within(list).getByRole('group', { name: 'Cursor Models' })).getByText('Grok 4.7')).toBeTruthy();
+  await act(async () => fireEvent.click(rowFor('GPT-5.6 Sol')));
+  expect(change).toHaveBeenCalledWith('cursor', 'gpt-5.6-sol', 'medium', false);
+  expect(onCrossEngineSelect).not.toHaveBeenCalled();
 });
 
 async function openRowFlyout(name: string): Promise<HTMLElement> {

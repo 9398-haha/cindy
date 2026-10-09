@@ -41,14 +41,28 @@ not logged by the transport.
 
 Models come from the actual ACP session's model config options (or advertised
 legacy model state). `cursor-default` is only Cindy's route sentinel: it omits an
-explicit model override and is never sent as a model ID. It is displayed only
-after a successful native handshake. It does not claim that AUTO is available.
+explicit model override and is never sent as a model ID. It remains accepted for
+old saved tasks, but is absent from public catalogs and model pickers. After a
+successful handshake, the handle exposes the actual native current model ID;
+the admission-only alias still requires a connected, discovered Cursor source.
 Model mutations use the advertised config ID and exact value. Native AUTO is
 listed only when the CLI lists it. Unknown context windows remain unknown.
 Cindy negotiates Cursor's native `_meta.parameterizedModelPicker` capability and
 reads `cursor/list_available_models` to discover each offered model's parameter
 options without selecting models or sending prompts. Older CLIs that do not
 implement this optional extension retain their advertised model catalog.
+
+Native grouped choices, descriptions, and offered order survive catalog
+projection to desktop and mobile. Cursor's All view keeps Auto separate and
+shows `Cursor Models` / `Other Models` within the Cursor source, instead of
+flattening that source into generic recommendations. Native group names take
+precedence. When ACP omits headings, `cursorModelGroups.ts` classifies only
+offered IDs verified against Cursor's official usage-limits documentation
+(2026-10-09); unknown first-party versions stay unclassified. This display
+metadata never changes model membership, execution source, or routing. Auto may
+consume either pool according to the selected model; headings do not promise
+the eventual pool of Auto or subagent requests. Pool balances are not invented
+from model-list data.
 
 The existing desktop/mobile effort slider and Fast toggle use those native
 per-model options. Standard effort values map only from advertised
