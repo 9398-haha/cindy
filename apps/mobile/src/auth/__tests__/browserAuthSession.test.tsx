@@ -239,6 +239,59 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.storage.has(pendingKey)).toBe(false);
   });
 
+  it('keeps callback busy when Android dismiss arrives after the exchange has started', async () => {
+    let dismiss!: (value: { type: string }) => void;
+    let complete!: (value: typeof verifiedOutcome) => void;
+    native.open.mockImplementation(() => new Promise(resolve => { dismiss = resolve; }));
+    native.exchange.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    let action!: Promise<boolean>;
+    await act(async () => {
+      action = auth.dispatchLoginAction({ type: 'discover-sso-org', org: 'example.invalid' });
+    });
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(auth.isBusy).toBe(true);
+    await act(async () => { dismiss({ type: 'dismiss' }); await action; });
+    expect(auth.isBusy).toBe(true);
+    expect(native.storage.has(pendingKey)).toBe(true);
+    await act(async () => { complete(verifiedOutcome); });
+    expect(auth.isBusy).toBe(false);
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it.each(['success', 'failure'] as const)('reset and retry ignore the old exchange %s while the new exchange is running', async result => {
+    let completeOld!: (value: typeof verifiedOutcome) => void;
+    let rejectOld!: (error: Error) => void;
+    let completeNew!: (value: typeof verifiedOutcome) => void;
+    native.exchange
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { completeOld = resolve; rejectOld = reject; }))
+      .mockImplementationOnce(() => new Promise(resolve => { completeNew = resolve; }));
+    await start();
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    // Exercise the cancellation boundary directly, including an already queued
+    // reset event; disabling the rendered button is not an invalidation fence.
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    expect(auth.loginState?.step).toBe('identifier');
+    await start();
+    const pending = native.storage.get(pendingKey);
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledTimes(2);
+    expect(auth.isBusy).toBe(true);
+    await act(async () => {
+      if (result === 'success') completeOld(verifiedOutcome);
+      else rejectOld(new Error('fixture exchange failure'));
+    });
+    expect(auth.loginState?.step).toBe('browser-redirect');
+    expect(auth.authError).toBeNull();
+    expect(auth.isBusy).toBe(true);
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    await act(async () => { completeNew(verifiedOutcome); });
+    expect(auth.loginState?.step).toBe('sso-verification');
+    expect(auth.isBusy).toBe(false);
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
   it('still exchanges only once when Linking and the browser both report success', async () => {
     native.open.mockImplementation(async () => {
       const url = callbackUrl();

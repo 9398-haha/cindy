@@ -1788,6 +1788,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const dispatchLoginAction = useCallback(
     (action: MobileLoginAction): Promise<boolean> => {
+      // Cancellation must invalidate callbacks already exchanging a code, before
+      // any await or in-flight deduplication can attach reset to the old attempt.
+      if (action.type === 'reset') loginFlowEpochRef.current += 1;
       const expectedLoginFlowEpoch = loginFlowEpochRef.current;
       suspendSessionRecoveryForLogin();
       if (
