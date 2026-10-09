@@ -321,6 +321,36 @@ describe('providerModelMemory store', () => {
     expect(persisted['codex:openai']?.fastByModel['gpt-5.6-sol']).toBe(false);
   });
 
+  it('thinking 写盘失败后,另一窗口改了权威槽也必须让旧操作退休', async () => {
+    const m = await loadModule();
+    m.setProviderModelMemoryOwner('owner-a');
+    const ownerAKey = `${m.__STORAGE_KEY}:owner-a`;
+
+    memStorage.setWritesFail(true);
+    m.setProviderModelThinking('pi', 'glm-coding-plan', 'glm-5.3-flash', true);
+
+    memStorage.setWritesFail(false);
+    // 窗口 A 把同一 (agent, model) 的权威槽 thinking 改成 false 并成功落盘。
+    memStorage.setItem(
+      ownerAKey,
+      JSON.stringify({
+        'pi:*': {
+          lastModel: '',
+          effortByModel: {},
+          fastByModel: {},
+          thinkingByModel: { 'glm-5.3-flash': false },
+        },
+      }),
+    );
+    // 触发一次读取,重放 pending;B 的旧 pending=true 必须退休,不覆盖窗口 A 的选择。
+    m.setProviderModelThinking('claude-code', 'anthropic', 'claude-opus-5', true);
+    const persisted = JSON.parse(memStorage.getItem(ownerAKey) ?? '{}') as Record<
+      string,
+      { thinkingByModel: Record<string, boolean> }
+    >;
+    expect(persisted['pi:*']?.thinkingByModel['glm-5.3-flash']).toBe(false);
+  });
+
   it('选模写盘失败后再调 effort，不会丢失独立的 lastModel 意图', async () => {
     const m = await loadModule();
     m.setProviderModelMemoryOwner('owner-a');
@@ -540,6 +570,28 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     expect(fallback.getProviderModelEffort('claude-code', 'xd', 'gpt-5.5')).toBe('xhigh');
   });
 
+  it('历史回填同时补齐 effort / fast / thinking 三个维度(逐个合并,不被链式短路漏掉)', async () => {
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'pi:glm-coding-plan': {
+          lastModel: 'glm-5.3-flash',
+          effortByModel: { 'glm-5.3-flash': 'low' },
+          fastByModel: { 'glm-5.3-flash': true },
+          thinkingByModel: { 'glm-5.3-flash': false },
+        },
+      }),
+    );
+    const m = await loadModule();
+    // 三个维度都必须进权威槽。写成 `merge(a) || merge(b) || merge(c)` 时,effort 一命中
+    // 就短路,fastByModel / thinkingByModel 停在空 —— 与回填要消灭的「跨来源丢档位」同类。
+    expect(m.snapshotForSeed()['pi:*']).toEqual({
+      effortByModel: { 'glm-5.3-flash': 'low' },
+      fastByModel: { 'glm-5.3-flash': true },
+      thinkingByModel: { 'glm-5.3-flash': false },
+    });
+  });
+
   it('v2 历史数据(只有来源槽)首次读取即回填权威槽,不丢任何既有预设', async () => {
     // 这正是用户机器上的真实形状:`*` 槽从未被写过,偏好全在来源槽里。
     memStorage.setItem(
@@ -572,6 +624,33 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
       memStorage.getItem('xdt:providerModelMemory:v2') as string,
     ) as Record<string, { effortByModel: Record<string, string> }>;
     expect(persisted['pi:*'].effortByModel['glm-5.3-flash']).toBe('max');
+  });
+
+  it('来源槽已是目标值时,权威槽陈旧也要补写(双写不被半短路)', async () => {
+    // 两处分歧:旧客户端只把来源槽写成 low,权威槽停在 medium(回填只补空缺不覆盖,
+    // 这种不一致可以合法共存)。用户再次显式选 low 时必须把权威槽也带过来 ——
+    // 只看来源槽就短路的话,其它来源仍被 medium 拽走。
+    memStorage.setItem(
+      'xdt:providerModelMemory:v2',
+      JSON.stringify({
+        'pi:glm-coding-plan': {
+          lastModel: '',
+          effortByModel: { 'glm-5.3-flash': 'low' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+        'pi:*': {
+          lastModel: '',
+          effortByModel: { 'glm-5.3-flash': 'medium' },
+          fastByModel: {},
+          thinkingByModel: {},
+        },
+      }),
+    );
+    const m = await loadModule();
+    m.setProviderModelEffort('pi', 'glm-coding-plan', 'glm-5.3-flash', 'low');
+    expect(m.snapshotForSeed()['pi:*']?.effortByModel['glm-5.3-flash']).toBe('low');
+    expect(m.snapshotForSeed()['pi:glm-coding-plan']?.effortByModel['glm-5.3-flash']).toBe('low');
   });
 
   it('snapshot 同时含权威槽与来源兼容副本', async () => {

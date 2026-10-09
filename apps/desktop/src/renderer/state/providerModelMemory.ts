@@ -149,10 +149,12 @@ function backfillGlobalPresets(map: Record<string, ProviderMemory>): Record<stri
     const nextEffort: Record<string, Effort> = { ...(existing?.effortByModel ?? {}) };
     const nextFast: Record<string, boolean> = { ...(existing?.fastByModel ?? {}) };
     const nextThinking: Record<string, boolean> = { ...(existing?.thinkingByModel ?? {}) };
-    const touched =
-      merge(nextEffort, effort) ||
-      merge(nextFast, presetFast.get(presetKey)) ||
-      merge(nextThinking, presetThinking.get(presetKey));
+    // 三个维度必须**逐个**合并:写成 `merge(a) || merge(b) || merge(c)` 会因为短路
+    // 在第一个命中后就跳过剩下的 —— 只回填 effort 而漏掉 fast / thinking,与回填本身
+    // 要消灭的「跨来源丢档位」是同一类缺陷。
+    let touched = merge(nextEffort, effort);
+    touched = merge(nextFast, presetFast.get(presetKey)) || touched;
+    touched = merge(nextThinking, presetThinking.get(presetKey)) || touched;
     if (!touched) continue;
     out[presetKey] = {
       lastModel: existing?.lastModel ?? '',
@@ -365,7 +367,14 @@ function applyProviderMemoryOp(
   const providerKey = keyOf(op.agent, op.providerId);
   const provider = map[providerKey];
   if (op.kind === 'set-effort') {
-    if (provider?.effortByModel[op.model] === op.effort) return map;
+    // 双写的两个槽都到达目标值才算「无事可做」。只看来源槽会漏写权威槽:两处不同步时
+    // (旧客户端只写来源槽、或回填只补空缺造成的分歧)用户这次显式选择会被短路丢掉。
+    if (
+      provider?.effortByModel[op.model] === op.effort &&
+      map[presetKeyOf(op.agent)]?.effortByModel[op.model] === op.effort
+    ) {
+      return map;
+    }
     return {
       ...map,
       [providerKey]: {
@@ -390,7 +399,12 @@ function applyProviderMemoryOp(
     };
   }
   if (op.kind === 'set-fast') {
-    if (provider?.fastByModel?.[op.model] === op.enabled) return map;
+    if (
+      provider?.fastByModel?.[op.model] === op.enabled &&
+      map[presetKeyOf(op.agent)]?.fastByModel?.[op.model] === op.enabled
+    ) {
+      return map;
+    }
     return {
       ...map,
       [providerKey]: {
@@ -403,7 +417,12 @@ function applyProviderMemoryOp(
     };
   }
   if (op.kind === 'set-thinking') {
-    if (provider?.thinkingByModel?.[op.model] === op.enabled) return map;
+    if (
+      provider?.thinkingByModel?.[op.model] === op.enabled &&
+      map[presetKeyOf(op.agent)]?.thinkingByModel?.[op.model] === op.enabled
+    ) {
+      return map;
+    }
     return {
       ...map,
       [providerKey]: {
@@ -453,14 +472,16 @@ function captureOpConflictBaseline(
       presetValue: undefined,
     };
   }
+  // 三个模型级维度的写集都是「权威槽 + 来源槽」两处,基线必须两处都取 —— 只取来源槽
+  // 会让权威槽的冲突检查恒通过(两侧都是 undefined),该退休的旧操作不退休。
+  const preset = map[presetKeyOf(op.agent)];
   if (opDimension(op) === 'thinking') {
     return {
       providerValue: provider?.thinkingByModel[op.model],
       lastModel: provider?.lastModel ?? '',
-      presetValue: undefined,
+      presetValue: preset?.thinkingByModel[op.model],
     };
   }
-  const preset = map[presetKeyOf(op.agent)];
   if (opDimension(op) === 'fast') {
     return {
       providerValue: provider?.fastByModel[op.model],
@@ -475,7 +496,6 @@ function captureOpConflictBaseline(
   };
 }
 
-/** 只比较最终 op 真正会写的字段；其它模型/维度变化可安全合并。 */
 function matchesOpConflictBaseline(
   map: Record<string, ProviderMemory>,
   pending: PendingProviderMemoryOp,
