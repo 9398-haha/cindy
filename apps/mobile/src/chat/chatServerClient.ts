@@ -18,7 +18,7 @@ export interface ChatMessage {
   content: Array<{ type: string; text?: string; fallback?: string; mediaId?: string; caption?: string;
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
-export interface ChatSnapshot { room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string }
+export interface ChatSnapshot { room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string }> }
 export interface ChatPage { snapshot: ChatSnapshot; messages: ChatMessage[]; before: string | null }
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST', body?: unknown) => Promise<T>;
 
@@ -44,7 +44,7 @@ const contentText = (message: ChatMessage) => message.deleted ? '' : message.con
   .map(block => block.text ?? block.fallback ?? (block.type === 'media' ? block.caption ?? '' : '')).join('\n');
 
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
-export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot): HostedRemoteCollectionItem {
+export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: string): HostedRemoteCollectionItem {
   const members = snapshot?.members.filter(member => member.state === 'joined') ?? [];
   const last = snapshot?.messages.filter(message => !message.threadRootId && !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? 1 : -1)[0];
@@ -53,10 +53,24 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot): HostedRemo
     revision: String(room.head ?? room.revision), display: { title: room.name,
       subtitle: members.map(memberName).join(' · '),
       ...(snapshot ? { preview: last ? contentText(last).slice(0, 160) || members.map(memberName).join(' · ') : '' } : {}),
-      timestamp: Date.parse(last?.createdAt ?? room.updated_at) },
+      timestamp: Date.parse(last?.createdAt ?? room.updated_at),
+      lastReplyAt: snapshot && selfId ? chatLastReplyAt(snapshot.messages, selfId) : undefined },
     links: members.map(member => ({ rel: 'member', label: memberName(member),
       target: { kind: 'resource', ref: { collectionId: 'teammates', kind: 'bot', id: member.id } } })),
   } };
+}
+
+/** Only incoming main-timeline messages count; a system notice or our own send is not a reply. */
+export function chatLastReplyAt(messages: readonly ChatMessage[], selfId: string): number {
+  return messages.reduce((latest, message) => !message.deleted && !message.threadRootId
+    && message.origin !== 'system' && message.authorId !== selfId
+    ? Math.max(latest, Date.parse(message.createdAt)) : latest, 0);
+}
+
+/** Import only the server's acknowledged position, never mark an unseen reply as read. */
+export function chatReadAt(snapshot: ChatSnapshot, selfId: string): number {
+  const sequence = snapshot.reads?.find(read => read.thread_key === 'main')?.read_seq ?? '0';
+  return chatLastReplyAt(snapshot.messages.filter(message => BigInt(chatCursor(message.seq)) <= BigInt(chatCursor(sequence))), selfId);
 }
 
 /** Sequence strings stay on the wire; numeric positions below are presentation order only. */
@@ -106,6 +120,7 @@ export function createChatServerClient(request: ChatRequest) {
         if (!Array.isArray(page)) throw new Error('INVALID_CHAT_LIST');
         for (const room of page) {
           chatId(room.id);
+          if (!['direct', 'group', 'channel'].includes(room.kind)) throw new Error('INVALID_CHAT_LIST');
           if (room.state === 'joined' && room.kind === 'group') rooms.set(room.id, room);
         }
         const next = page.length === 100 ? chatId(page.at(-1)!.id) : undefined;

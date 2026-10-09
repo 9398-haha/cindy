@@ -6,10 +6,11 @@ const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1, apiFetch: vi.fn(), getAccessToken: vi.fn(async () => 'fixture') },
   link: { status: 'offline', connectionEpoch: 1, presenceVersion: 1, invoke: vi.fn(), openLink: vi.fn(),
     getPresenceAvailability: () => false, onRemoteResourceChanged: () => () => {}, subscribe: vi.fn(), unsubscribe: vi.fn() },
-  legacy: { items: [] as any[], loading: false, refreshing: false, error: null as string | null, isOnline: () => false, refresh: vi.fn() },
+  legacy: { items: [] as any[], loading: false, refreshing: false, error: null as string | null, isOnline: vi.fn(() => false), refresh: vi.fn() },
   targets: [] as { deviceId: string; deviceName: string }[],
   foreground: new Set<(state: string) => void>(),
 }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}) } }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
@@ -35,7 +36,7 @@ function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useB
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
-  vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = [];
+  vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
   vi.stubGlobal('WebSocket', class { close() {} });
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     options.assertCurrent();
@@ -47,7 +48,7 @@ beforeEach(() => {
     throw new Error('Unexpected request');
   });
 });
-afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root?.unmount()); root = undefined; vi.unstubAllGlobals(); vi.useRealTimers(); });
 it('lists and opens an existing joined server group with all computers and the relay offline', async () => {
   await render();
   expect(roster.items).toHaveLength(1);
@@ -62,6 +63,7 @@ it('lists and opens an existing joined server group with all computers and the r
 });
 it('deduplicates server copies from multiple computers while retaining a local legacy group', async () => {
   h.legacy.items = ['mac', 'pc'].map(deviceId => ({ key: deviceId, host: { deviceId, deviceName: deviceId }, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Discussion' }, links: [] } }));
+  h.legacy.isOnline.mockReturnValue(true);
   h.targets = ['mac', 'pc'].map(deviceId => ({ deviceId, deviceName: deviceId }));
   h.legacy.items.push({ ...h.legacy.items[0], key: 'local', item: { ...h.legacy.items[0].item, ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'old-local-group' } } });
   await render(); expect(roster.items.map(row => row.item.ref.id)).toEqual([id, 'old-local-group']);
@@ -84,4 +86,42 @@ it('ignores an old account response after switching accounts', async () => {
   h.auth.apiFetch.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   await render(); h.auth.accountGeneration++; h.auth.apiFetch.mockResolvedValue([]); await render();
   await act(async () => finish([room])); expect(roster.items).toEqual([]);
+});
+
+
+it('does not restore unverified computer cache rows on a cold offline mount', async () => {
+  h.targets = [{ deviceId: 'mac', deviceName: 'Mac' }];
+  h.legacy.items = [{ key: 'cached', host: h.targets[0], item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Removed' }, links: [] } }];
+  h.auth.apiFetch.mockImplementation(async path => path === '/v1/me' ? { actor: { id: self } } : []);
+  await render(); expect(roster.items).toEqual([]);
+});
+
+
+it('rebuilds realtime after membership returns while the same group page remains open', async () => {
+  vi.useFakeTimers();
+  const sockets: any[] = [];
+  vi.stubGlobal('WebSocket', class {
+    readyState = 1; onopen?: Function; onmessage?: Function; onclose?: Function; onerror?: Function;
+    send = vi.fn();
+    constructor() { sockets.push(this); }
+    close() { this.onclose?.({}); }
+  });
+  const receive = async (socket: any, value: unknown) => {
+    await act(async () => { socket.onmessage({ data: JSON.stringify(value) }); });
+  };
+  showChat = true; await render();
+  await receive(sockets[0], { type: 'ready', actorId: self });
+  const allowed = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockRejectedValue(Object.assign(new Error('NOT_MEMBER'), { status: 403 }));
+  await receive(sockets[0], { type: 'scope_error', scope: `conversation:${id}`, error: { code: 'NOT_MEMBER' } });
+  expect(chat.state.kind).toBe('missing');
+  h.auth.apiFetch.mockImplementation(allowed);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+  expect(sockets).toHaveLength(2);
+  await receive(sockets[1], { type: 'ready', actorId: self });
+  expect(sockets[1].send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${id}`, after: '1' }));
+  const previous = h.auth.apiFetch.mock.calls.length;
+  await receive(sockets[1], { type: 'changes', scope: `conversation:${id}`, cursor: '2', changes: [] });
+  expect(h.auth.apiFetch.mock.calls.length).toBeGreaterThan(previous);
+  expect(chat.state.kind).toBe('ready');
 });

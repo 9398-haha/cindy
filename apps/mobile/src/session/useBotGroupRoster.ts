@@ -16,8 +16,10 @@ export function useBotGroupRoster(targets: readonly RemoteResourceHostTarget[], 
   const list = useRemoteResourceList(BOT_GROUP_REMOTE_COLLECTION_ID, hosts, enabled && hosts.length > 0);
   // A removed server membership must not reappear through a stale computer cache.
   const serverIds = server.serverIds;
+  // Old cached rows carry no server/local discriminator. Only a current-epoch
+  // authenticated collection reply can authorize the compatibility projection.
   const legacy = list.items.filter((row) => row.item.ref.kind === BOT_GROUP_REMOTE_RESOURCE_KIND
-    && !serverIds.has(row.item.ref.id) && !revoked.has(row.host.deviceId) && hosts.some((host) => host.deviceId === row.host.deviceId));
+    && list.isOnline(row.host) && !serverIds.has(row.item.ref.id) && !revoked.has(row.host.deviceId) && hosts.some((host) => host.deviceId === row.host.deviceId));
   return {
     items: [...server.items, ...legacy],
     loading: server.loading || (hosts.length > 0 && list.loading),

@@ -142,7 +142,8 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     if (measured.owner !== viewportOwner || measured.measuredGroup !== group
       || measured.viewportHeight <= 0 || measured.contentHeight <= 0
       || measured.contentHeight - measured.offsetY - measured.viewportHeight >= STICK_TO_BOTTOM_PX) return;
-    const at = group.messages.reduce((latest, message) => message.kind === 'message' && message.authorKind === 'bot'
+    const at = group.messages.reduce((latest, message) => message.kind === 'message' && message.isSelf !== true
+      && (message.authorKind === 'bot' || (message.authorKind === 'user' && message.isSelf === false))
       ? Math.max(latest, message.createdAt) : latest, 0);
     if (at > 0) void markRemoteResourceRead(user?.id ?? '', deviceId, groupId, at);
   }, [focused, group, user?.id, deviceId, groupId, viewportOwner]);
@@ -291,7 +292,9 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     >
       {!chat.online ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t(offlineKey)}</Text> : null}
       <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={styles.timeline} keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive" onScroll={onScroll} scrollEventThrottle={64}
+        keyboardDismissMode="interactive"
+        maintainVisibleContentPosition={chat.server ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
+        onScroll={onScroll} scrollEventThrottle={64}
         onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; acknowledge(); }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;

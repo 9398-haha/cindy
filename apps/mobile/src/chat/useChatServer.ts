@@ -5,9 +5,10 @@ import type { RemoteActionInvokeResponse } from '@cindy/device-link';
 import type { BotGroupAttachment, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { getActiveMobileSessionRealm, getMobileEndpointForRealm } from '@/config/env';
+import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, createChatServerClient, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatHttpsUrl, chatRoomRow, chatReadAt, createChatServerClient, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import { subscribeChatServer } from './chatServerSubscription';
 
 function useChatClient() {
@@ -26,7 +27,7 @@ function useChatClient() {
       const result = await deps.current.apiFetch<T>(`/v1${path}`, { baseUrl: baseUrl(), method, cache: 'no-store', ...(body !== undefined ? { body } : {}), assertCurrent: check });
       check(); return result;
     };
-    return { owner, current, baseUrl, request, client: createChatServerClient(request),
+    return { owner, userId: auth.user?.id ?? '', current, baseUrl, request, client: createChatServerClient(request),
       token: async () => { check(); await request('/me'); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
 }
@@ -42,7 +43,7 @@ export function useChatServerRoster(enabled: boolean) {
     if (!api.enabled || !enabled) return;
     setState(old => ({ ...old, refreshing: run.reasons.includes('visible') }));
     try {
-      const rooms = await api.client.list();
+      const [rooms, self] = await Promise.all([api.client.list(), api.client.me()]);
       const rows: ReturnType<typeof chatRoomRow>[] = [];
       const fresh = new Map<string, { owner: string; head: string | undefined; value: ChatSnapshot }>();
       let partial = false;
@@ -52,9 +53,10 @@ export function useChatServerRoster(enabled: boolean) {
           try {
             const cached = snapshots.current.get(room.id);
             const value = cached?.owner === api.owner && room.head !== undefined && cached.head === room.head
+              && !run.reasons.some(reason => ['changed', 'connected', 'visible'].includes(reason))
               ? cached.value : await api.client.snapshot(room.id);
             fresh.set(room.id, { owner: api.owner, head: room.head, value });
-            rows.push(chatRoomRow(room, value));
+            rows.push(chatRoomRow(room, value, self));
           } catch (error) {
             if (!chatAccessLost(error)) { partial = true; rows.push(chatRoomRow(room)); }
           }
@@ -62,6 +64,13 @@ export function useChatServerRoster(enabled: boolean) {
         if (run.isStale() || !api.current()) return;
       }
       if (!run.isStale() && api.current()) {
+        // Reuse the existing account-scoped local read mirror, without persisting messages
+        // or making a server read-state mutation just because the roster was fetched.
+        for (const [id, snapshot] of fresh) {
+          if (run.isStale() || !api.current()) return;
+          await markRemoteResourceRead(api.userId, '', id, chatReadAt(snapshot.value, self));
+        }
+        if (run.isStale() || !api.current()) return;
         snapshots.current = fresh;
         for (const room of rooms) known.current.ids.add(room.id);
         setState({ owner: api.owner, rooms: rows, loading: false, refreshing: false, error: partial ? 'CHAT_LIST_FAILED' : null });
@@ -135,20 +144,21 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
   useFocusEffect(useCallback(() => {
     if (!enabled || !api.enabled || !groupId) return;
     let stop: (() => void) | undefined;
+    let subscribed = false;
     let recovery: ReturnType<typeof setInterval> | undefined;
     const start = () => {
-      stop?.(); clearInterval(recovery);
+      stop?.(); subscribed = false; clearInterval(recovery);
       if (AppState.currentState !== 'active') return;
       reload();
       // A failed read after an acknowledged event must recover even without another event.
-      recovery = setInterval(() => { if (!freshRead.current) reload(); }, 30000);
+      recovery = setInterval(() => { if (!subscribed) start(); else if (!freshRead.current) reload(); }, 30000);
       try { stop = subscribeChatServer({ baseUrl: api.baseUrl(), token: api.token, current: () => api.current() && active.current === identity,
         socket: url => new WebSocket(url), ready: async () => {
           await request({ reason: 'connected' });
           const latest = page.current;
           if (!freshRead.current || !latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
           return { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor };
-        }, changed: reload, unavailable: () => { freshRead.current = false; if (api.current() && active.current === identity) setState(old => ({ ...old, online: false })); } }); } catch { /* Read presents errors. */ }
+        }, changed: reload, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; if (api.current() && active.current === identity) setState(old => ({ ...old, online: false })); } }); } catch { /* Read presents errors. */ }
     };
     start();
     const foreground = AppState.addEventListener('change', value => { if (value === 'active') start(); else { stop?.(); clearInterval(recovery); } });

@@ -782,6 +782,7 @@ describe('direct server group presentation', () => {
     await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
     expect(all('botGroup.message.user')).toHaveLength(0);
     expect(node.textContent).toContain('Other member');
+    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
     await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
@@ -795,4 +796,17 @@ describe('direct server group presentation', () => {
     await click('attachment.file'); expect(h.chat.media).toHaveBeenCalledExactlyOnceWith('media');
     expect(byId('lightbox')?.getAttribute('data-url')).toBe(attachment.url);
   });
+});
+
+
+it('acknowledges other humans only once their messages reach the measured visible tail', async () => {
+  h.chat.server = true;
+  await render(group({ messages: [message('incoming-human', 12, { authorKind: 'user', isSelf: false, content: 'hello' }),
+    message('mine', 13, { authorKind: 'user', isSelf: true, content: 'reply' })], plans: [], openPlan: null }));
+  expect(h.markRead).not.toHaveBeenCalled();
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+    h.scroll.onContentSizeChange(400, 400);
+  });
+  expect(h.markRead).toHaveBeenLastCalledWith('owner', 'mac', 'g1', 12000);
 });

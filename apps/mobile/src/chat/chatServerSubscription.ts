@@ -14,7 +14,7 @@ export function subscribeChatServer(options: {
   baseUrl: string; token(): Promise<string | null>; current(): boolean;
   socket(url: string): ChatSocket;
   ready(actorId: string): Promise<{ scope: string; cursor: string }>;
-  changed(): void; unavailable(): void;
+  changed(): void; unavailable(): void; available?(): void;
 }) {
   let stopped = false;
   let socket: ChatSocket | undefined;
@@ -43,6 +43,7 @@ export function subscribeChatServer(options: {
             if (current(ws) && ws.readyState === 1) {
               scope = subscription.scope; delay = 1000;
               ws.send(JSON.stringify({ type: 'subscribe', scope, after: chatCursor(subscription.cursor) }));
+              options.available?.();
             }
           } else if (value.type === 'changes' && scope && value.scope === scope) {
             options.changed();

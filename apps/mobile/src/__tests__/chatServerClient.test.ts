@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
+import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
   revision: 1, created_at: '2026-10-01', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' });
@@ -67,6 +67,22 @@ describe('direct Chat Server client', () => {
     const page = await createChatServerClient(request).load(id(1), message(100).seq);
     expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
     expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);
+  });
+
+  it('counts only other members as unread and maps the server read cursor exactly', () => {
+    const incoming = { ...message(101), createdAt: '2026-10-09T01:00:00Z' };
+    const mine = { ...message(102), authorId: id(11), createdAt: '2026-10-09T02:00:00Z' };
+    const notice = { ...message(103), origin: 'system', createdAt: '2026-10-09T03:00:00Z' };
+    const value = { ...snapshot(), messages: [notice, mine, incoming], reads: [{ thread_key: 'main', read_seq: message(100).seq }] };
+    expect(chatRoomRow(value.room, value, id(11)).item.display.lastReplyAt).toBe(Date.parse(incoming.createdAt));
+    expect(chatReadAt(value, id(11))).toBe(0);
+    value.reads[0].read_seq = incoming.seq;
+    expect(chatReadAt(value, id(11))).toBe(Date.parse(incoming.createdAt));
+  });
+
+  it('reports malformed list contracts instead of silently treating them as an empty roster', async () => {
+    const request = vi.fn().mockResolvedValue([{ ...room(), kind: undefined }]);
+    await expect(createChatServerClient(request).list()).rejects.toThrow('INVALID_CHAT_LIST');
   });
 
 });
