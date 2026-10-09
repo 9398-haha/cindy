@@ -97,6 +97,12 @@ V1–V3 解析保持原有契约；新媒体字段、媒体原生协议和空 Ag
 
 ### 发布前置条件
 
+账号模型目录 `/api/model-access/models?schemaVersion=5` 的语音合成扩展使用请求头
+`X-Cindy-Model-Capabilities: audio_speech` 显式声明客户端能解析独立音频条目。
+服务端仅向声明该能力的 V5 请求下发 Gateway 中的 `audio_speech`，旧客户端维持原列表；
+旧服务端忽略该请求头，当前客户端继续接受原有 V5 响应。该能力声明不改变 Gateway 授权、
+付费解锁或组织权限，也不声明客户端已有 TTS 执行器。
+
 相同 `registrySchemaVersion=4` 或 `schemaVersion=5` 请求不能证明
 客户端认识本次扩展。公共目录请求必须同时声明 `registryMedia=1`，服务端只向明确声明
 该能力的 V4/V5 请求返回完整目录（V4 仍展开 V5 官方价格）。无标识、未知标识、重复参数

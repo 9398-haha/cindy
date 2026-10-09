@@ -75,13 +75,15 @@ export function withModelsSyncOverallDeadline<T>(
 
 export function buildModelsSyncRequest(baseUrl: string | (() => string)): {
   path: typeof XD_MODELS_SYNC_PATH;
-  options: { baseUrl: string | (() => string); timeoutMs: number; cache: 'no-store' };
+  options: { baseUrl: string | (() => string); timeoutMs: number; cache: 'no-store'; headers: Record<string, string> };
 } {
   return {
     path: XD_MODELS_SYNC_PATH,
     options: {
       baseUrl,
       timeoutMs: XD_MODELS_SYNC_TIMEOUT_MS,
+      // Older v5 clients reject standalone audio; older servers safely ignore this opt-in.
+      headers: { 'X-Cindy-Model-Capabilities': 'audio_speech' },
       // 模型权限随订阅权益变化，强制刷新不能命中 Electron HTTP cache。
       cache: 'no-store',
     },
