@@ -30,6 +30,8 @@ export interface OrcaWorkerPanelProps {
    * 避免冷启动 / relay 重连竞态把远端上限误当成本机可调。
    */
   deviceId?: string | null;
+  /** Lead 的 Agent 运行设备：null = 已确认本机，undefined = 任务信息尚未解析。 */
+  agentDeviceId?: string | null;
   /** SSH 远程 Lead:worker 创建面板的模型清单按 SSH 口径过滤(见 CreateWorkerPopover.sshRemote)。 */
   sshRemote?: boolean;
   /** tab active && RSB 未折叠 && 窗口可见。挂载但不可见时不能清红点 / ack 消息。 */
@@ -56,6 +58,7 @@ function sameVisibleSessionPayload(
 export function OrcaWorkerPanel({
   leadSessionId,
   deviceId,
+  agentDeviceId,
   sshRemote,
   viewVisible,
   chatRealtime = true,
@@ -226,8 +229,8 @@ export function OrcaWorkerPanel({
         onCreate={handleCreateWorker}
         deviceId={deviceId ?? undefined}
         sshRemote={sshRemote}
-        // 运行设备只在本机 Lead 上可选：远程控制或 SSH 的 Lead 由所在电脑自己决定。
-        executionDevicesEnabled={deviceId === null && !sshRemote}
+        // 仅任务与 Agent 均已确认在本机的 Lead 可选择 Worker 运行设备，与主进程限制一致。
+        executionDevicesEnabled={deviceId === null && agentDeviceId === null && !sshRemote}
       />
     </div>
   );
