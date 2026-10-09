@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
+  type BotGroupAttachment,
   type BotGroupMemberView,
   type BotGroupMessageView,
   type BotGroupPlanAction,
@@ -173,9 +174,10 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     if (hasGroupRef.current) { leaveAfterSettings.current = true; setSettings(false); } else leave();
   }, [leave]);
 
+  const offlineKey = chat.server ? 'groupChat.server.offline' : 'devices.resources.hostOffline';
   const report = useCallback((error: unknown, fallbackKey: string) => {
-    Alert.alert(chat.online ? botGroupActionErrorText(t, error, fallbackKey) : t('devices.resources.hostOffline'));
-  }, [chat.online, t]);
+    Alert.alert(chat.online ? botGroupActionErrorText(t, error, fallbackKey) : t(offlineKey));
+  }, [chat.online, offlineKey, t]);
 
   const continueRound = async () => {
     if (continuing) return;
@@ -259,7 +261,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   if (chat.state.kind === 'loading' && !chat.online) {
     // Nothing to show until the computer is reachable again; the screen re-reads on reconnect.
     body = <View style={styles.center}>
-      <MainWindowEmptyState centered testID="botGroup.offline" title={t('groupChat.loadFailedTitle')} copy={t('devices.resources.hostOffline')}>
+      <MainWindowEmptyState centered testID="botGroup.offline" title={t('groupChat.loadFailedTitle')} copy={t(offlineKey)}>
         <View style={styles.emptyActions}>
           <MainWindowActionButton action={{ label: t('shared.back'), onPress: leave, testID: 'botGroup.leave' }} />
         </View>
@@ -272,7 +274,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     body = <View style={styles.center}>
       <MainWindowEmptyState centered testID={failed ? 'botGroup.loadFailed' : 'botGroup.unavailable'}
         title={t(failed ? 'groupChat.loadFailedTitle' : 'groupChat.unavailableTitle')}
-        copy={t(failed ? 'groupChat.loadFailedDescription' : 'groupChat.unavailableDescription')}>
+        copy={t(failed ? (chat.server ? 'groupChat.server.loadFailed' : 'groupChat.loadFailedDescription') : 'groupChat.unavailableDescription')}>
         <View style={styles.emptyActions}>
           <MainWindowActionButton action={{ label: t('shared.back'), onPress: leave, testID: 'botGroup.leave' }} />
           {failed ? <MainWindowActionButton action={{ label: t('devices.resources.retry'), tone: 'primary', onPress: chat.reload, testID: 'botGroup.retry' }} /> : null}
@@ -287,7 +289,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
         Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
       )}
     >
-      {!chat.online ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t('devices.resources.hostOffline')}</Text> : null}
+      {!chat.online ? <Text accessibilityRole="alert" style={styles.offline} testID="botGroup.offlineNote">{t(offlineKey)}</Text> : null}
       <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={styles.timeline} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive" onScroll={onScroll} scrollEventThrottle={64}
         onLayout={event => { viewport.current.viewportHeight = event.nativeEvent.layout.height; acknowledge(); }}
@@ -299,15 +301,17 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
         }}
         testID="botGroup.timeline">
         <BotGroupTimeline group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
-          resolveMedia={resolveMedia} continuing={continuing} planPending={planPending}
+          resolveMedia={resolveMedia} resolveServerMedia={chat.media}
+          loadOlder={chat.loadOlder ? () => { stickToBottom.current = false; void chat.loadOlder!().catch(error => report(error, 'groupChat.loadFailedTitle')); } : undefined}
+          loadingOlder={chat.loadingOlder} continuing={continuing} planPending={planPending}
           onContinue={() => void continueRound()}
           onPlanAction={(action, planId) => void runPlanAction(action, planId)}
           onEditStep={(planId, step, action, botId) => void editPlanStep(planId, step, action, botId)}
           onInteractionError={(message) => { if (message) Alert.alert(message); }} />
       </ScrollView>
-      <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={chat.online}
+      <BotGroupComposer members={group.members} identityFor={identityFor} deviceId={deviceId} online={chat.online && !group.archived}
         running={group.round.status === 'running'} planState={botGroupComposerPlanState(openBotGroupPlan(group))}
-        attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
+        divisionSupported={!chat.server} attachmentsSupported={group.supportsAttachments === true} onSend={send} onStop={stop} />
     </KeyboardAvoidingView>;
   }
 
@@ -315,7 +319,7 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
     <Stack.Screen options={{ headerShown: false }} />
     {header}
     {body}
-    {group ? <BotGroupSettingsSheet visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
+    {group ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
       act={chat.act} onClose={() => setSettings(false)}
       onClosed={() => { if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
       onDeleted={onGroupDeleted} /> : null}
@@ -331,7 +335,7 @@ function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUp
 }
 
 export function BotGroupTimeline({
-  group, deviceId, online, identityFor, resolveMedia, continuing, planPending, onContinue, onPlanAction, onEditStep, onInteractionError,
+  group, deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep, onInteractionError,
 }: {
   group: BotGroupRemoteChatData;
   deviceId: string;
@@ -339,6 +343,9 @@ export function BotGroupTimeline({
   identityFor: BotGroupIdentityLookup;
   /** Reads a picture attached to a message from the computer. */
   resolveMedia: ResolveRemoteMediaFn;
+  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
+  loadOlder?: () => void;
+  loadingOlder?: boolean;
   continuing: boolean;
   planPending: PlanPending | null;
   onContinue(): void;
@@ -363,7 +370,7 @@ export function BotGroupTimeline({
     : [];
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
   return <>
-    {group.hasMoreBefore ? <Text style={styles.olderNote} testID="botGroup.olderOnComputer">{t('groupChat.timeline.olderOnComputer')}</Text> : null}
+    {group.hasMoreBefore && loadOlder ? <MainWindowActionButton action={{ label: t('groupChat.server.loadOlder'), busy: loadingOlder, onPress: loadOlder, testID: 'botGroup.loadOlder' }} /> : group.hasMoreBefore ? <Text style={styles.olderNote} testID="botGroup.olderOnComputer">{t('groupChat.timeline.olderOnComputer')}</Text> : null}
     {messages.length === 0 && !running ? <MainWindowEmptyState centered testID="botGroup.empty"
       title={t('groupChat.timeline.emptyTitle')} copy={t('groupChat.timeline.emptyDescription')} /> : null}
     {messages.map((message, index) => {
@@ -377,7 +384,7 @@ export function BotGroupTimeline({
         <CompanionEntering id={message.id} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
         <BotGroupTimelineItem message={message} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
-          resolveMedia={resolveMedia}
+          resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
           plan={message.planId ? planById.get(message.planId) : undefined}
           planActionable={message.kind === 'plan' && openPlan?.id === message.planId && openPlan.status === 'proposed'}
@@ -406,7 +413,7 @@ export function BotGroupTimeline({
 }
 
 function BotGroupTimelineItem({
-  message, continued = false, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, canContinue, continuing, onContinue,
+  message, continued = false, member, members, deviceId, online, identityFor, mentionLabels, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
   plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep,
 }: {
   message: BotGroupMessageView;
@@ -419,6 +426,7 @@ function BotGroupTimelineItem({
   identityFor: BotGroupIdentityLookup;
   mentionLabels: readonly string[];
   resolveMedia: ResolveRemoteMediaFn;
+  resolveServerMedia?: (id: string) => Promise<BotGroupAttachment>;
   canContinue: boolean;
   continuing: boolean;
   onContinue(): void;
@@ -445,7 +453,7 @@ function BotGroupTimelineItem({
     const variant = botGroupNoticeVariant(message.noticeCode, message.planId !== null);
     return <Text style={styles.notice} testID="botGroup.notice">{variant ? t(`groupChat.notice.${variant}`, { name }) : message.content}</Text>;
   }
-  if (message.authorKind === 'user') {
+  if (message.authorKind === 'user' && message.isSelf !== false) {
     // Older computers send no attachments; a message with only attachments has no bubble.
     const attachments = message.attachments ?? [];
     const bubble = message.content.trim().length > 0 || attachments.length === 0;
@@ -454,7 +462,7 @@ function BotGroupTimelineItem({
     return <View style={styles.userRow} testID="botGroup.message.user">
       <View style={styles.userColumn}>
         {attachments.length > 0
-          ? <BotGroupMessageAttachments messageId={message.id} attachments={attachments} onResolveRemoteMedia={resolveMedia} />
+          ? <BotGroupMessageAttachments messageId={message.id} attachments={attachments} onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
           : null}
         {bubble ? <View style={[styles.userBubble, compact && styles.userBubbleCompact]} testID="botGroup.message.userBubble">
           <BotGroupUserText content={message.content} mentionLabels={mentionLabels} />
@@ -479,6 +487,7 @@ function BotGroupTimelineItem({
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
           onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
         : <>
+          {message.attachments?.length ? <BotGroupMessageAttachments messageId={message.id} attachments={message.attachments} onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
           {message.content.trim() ? <BotGroupMarkdownText content={message.content} /> : null}
           <BotGroupHandoffFiles files={message.files} />
         </>}

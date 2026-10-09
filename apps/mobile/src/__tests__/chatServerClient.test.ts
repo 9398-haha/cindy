@@ -1,0 +1,72 @@
+import { describe, expect, it, vi } from 'vitest';
+import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
+const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
+  revision: 1, created_at: '2026-10-01', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' });
+const message = (n: number): ChatMessage => ({ id: id(n), seq: String(9007199254740992n + BigInt(n)), authorId: id(10),
+  author: { kind: 'human', name: 'Other member' }, createdAt: '2026-10-09', deleted: false, threadRootId: null,
+  content: [{ type: 'text', text: String(n) }] });
+const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099', messages: [], members: [
+  { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
+] });
+
+describe('direct Chat Server client', () => {
+  it('pages joined groups without devices, local bots, registration, imports or duplicated host copies', async () => {
+    const first = Array.from({ length: 100 }, (_, n) => room(n + 1, n === 0 ? 'invited' : 'joined'));
+    const request = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce([room(101)]);
+    const groups = await createChatServerClient(request).list();
+    expect(groups).toHaveLength(100);
+    expect(groups.some(group => group.id === id(1))).toBe(false);
+    expect(request.mock.calls.map(call => call[0])).toEqual(['/conversations?limit=100', `/conversations?limit=100&after=${id(100)}`]);
+    expect(chatRoomRow(groups[0]).host.deviceId).toBe('');
+  });
+  it('keeps empty success distinct from denied/failed list reads', async () => {
+    const request = vi.fn().mockResolvedValueOnce([]).mockRejectedValueOnce(Object.assign(new Error('FORBIDDEN'), { status: 403 }));
+    const client = createChatServerClient(request);
+    expect(await client.list()).toEqual([]);
+    await expect(client.list()).rejects.toMatchObject({ status: 403 });
+  });
+  it('opens and paginates main history, preserving exact sequence cursors and author identity', async () => {
+    const messages = Array.from({ length: 100 }, (_, n) => message(200 - n));
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(messages).mockResolvedValueOnce([message(100)]);
+    const client = createChatServerClient(request);
+    const page = await client.load(id(1));
+    expect(page.before).toBe(messages.at(-1)!.seq);
+    const older = await client.older(id(1), page);
+    expect(request.mock.calls[2][0]).toBe(`/conversations/${id(1)}/messages?limit=100&before=${messages.at(-1)!.seq}`);
+    expect(older.before).toBeNull();
+    const view = chatGroupView(older, id(11));
+    expect(view.messages).toHaveLength(101);
+    expect(view.messages[0]).toMatchObject({ content: '100', authorKind: 'user', isSelf: false });
+    expect(view.members[0].actorKind).toBe('human');
+  });
+  it('rechecks media authorization on every open and accepts only HTTPS signed downloads', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ name: 'report.pdf', type: 'application/pdf', size: '42', url: 'https://media.example.invalid/report?signature=test' })
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 }))
+      .mockResolvedValueOnce({ name: 'bad', type: 'text/plain', size: 1, url: 'file:///private/test' });
+    const client = createChatServerClient(request);
+    expect(await client.media(id(1), id(2))).toMatchObject({ category: 'file', path: null, size: 42 });
+    await expect(client.media(id(1), id(2))).rejects.toMatchObject({ status: 403 });
+    await expect(client.media(id(1), id(2))).rejects.toThrow('INVALID_CHAT_URL');
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+  it('sends text with the original operation ID and never registers an executor', async () => {
+    const request = vi.fn().mockResolvedValue({ id: id(9) });
+    const client = createChatServerClient(request);
+    const input = { text: 'hello', clientId: 'same-operation', mentions: { all: false, botIds: [id(3)] } };
+    await client.send(id(1), input); await client.send(id(1), input);
+    expect(request).toHaveBeenNthCalledWith(1, `/conversations/${id(1)}/messages`, 'POST', {
+      operationId: 'same-operation', content: [{ type: 'text', text: 'hello' }], mentions: [id(3)],
+    });
+    expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+  });
+  it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
+    const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
+    const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce([{ ...message(100), content: [{ type: 'text', text: 'edited' }] }]);
+    const page = await createChatServerClient(request).load(id(1), message(100).seq);
+    expect(chatGroupView(page, id(10)).messages[0].content).toBe('edited');
+    expect(request.mock.calls[2][0]).toContain(`before=${message(101).seq}`);
+  });
+
+});

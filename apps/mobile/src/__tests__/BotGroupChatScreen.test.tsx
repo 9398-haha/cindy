@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   platform: { OS: 'ios' },
 }));
 
+vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
@@ -767,5 +768,31 @@ describe('offline computer', () => {
     expect(byId('botGroup.plan.start')?.disabled).toBe(true);
     expect(byId('botGroup.continue')?.disabled).toBe(true);
     expect(h.row.editable).toBe(false);
+  });
+});
+
+
+describe('direct server group presentation', () => {
+  it('uses server failure copy, keeps other humans incoming and loads older history', async () => {
+    h.chat = { ...h.chat, server: true, online: false, loadOlder: vi.fn(async () => {}) };
+    await render(null, 'error');
+    expect(byId('botGroup.loadFailed')?.textContent).toContain('groupChat.server.loadFailed');
+    expect(node.textContent).not.toContain('devices.resources.hostOffline');
+    h.chat.online = true;
+    await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
+    expect(all('botGroup.message.user')).toHaveLength(0);
+    expect(node.textContent).toContain('Other member');
+    await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
+    await click('botGroup.settingsButton');
+    expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
+    expect(byId('botGroup.settings.replyMode.mentioned')?.disabled).toBe(true);
+  });
+  it('reauthorizes a server attachment on tap and opens the existing image viewer', async () => {
+    const attachment = { id: 'media', name: 'picture.png', mimeType: 'image/png', size: 10, category: 'image' as const, url: 'https://media.example.invalid/one-use', path: null };
+    h.chat = { ...h.chat, server: true, media: vi.fn(async () => attachment) };
+    await render(group({ messages: [message('picture', 1, { authorKind: 'user', isSelf: false, attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }));
+    expect(h.chat.media).not.toHaveBeenCalled();
+    await click('attachment.file'); expect(h.chat.media).toHaveBeenCalledExactlyOnceWith('media');
+    expect(byId('lightbox')?.getAttribute('data-url')).toBe(attachment.url);
   });
 });

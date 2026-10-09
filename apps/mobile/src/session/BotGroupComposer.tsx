@@ -72,7 +72,7 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  members, identityFor, deviceId, online, running, planState, attachmentsSupported, onSend, onStop,
+  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, onSend, onStop,
 }: {
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
@@ -82,6 +82,7 @@ export function BotGroupComposer({
   planState: BotGroupComposerPlanState | null;
   /** The computer takes attachments on `send` (`BotGroupRemoteChatData.supportsAttachments`). */
   attachmentsSupported: boolean;
+  divisionSupported?: boolean;
   /** Rejects with the host's error; the draft (and its tag) come back and the attachments stay. */
   onSend(input: BotGroupSendInput): Promise<void>;
   onStop(): Promise<void>;
@@ -241,7 +242,7 @@ export function BotGroupComposer({
     testID="botGroup.composer.more">
     <Plus size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
   </Pressable>;
-  const plus = attachmentsEnabled
+  const plus = !divisionSupported && !attachmentsSupported ? null : attachmentsEnabled
     // The same panel as a 1:1 chat's 「+」: attachments, then the group's own 安排分工.
     ? plusButton(() => { tray.armMediaTap(); setSheetOpen(true); })
     : divisionBlocked

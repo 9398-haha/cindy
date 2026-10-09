@@ -122,7 +122,7 @@ export function TeammateList({ items, loading, refreshing, error, isOnline, conn
       </Pressable> : null}
     </View>
     {error ? <View style={styles.noticeRow}>
-      <Text accessibilityRole="alert" style={[styles.notice, styles.noticeText]} testID="teammates.error">{t(items.length ? 'devices.companions.stale' : 'devices.resources.loadFailed')}</Text>
+      <Text accessibilityRole="alert" style={[styles.notice, styles.noticeText]} testID="teammates.error">{t(items.length + (groups?.items.length ?? 0) ? 'devices.companions.stale' : 'devices.resources.loadFailed')}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel={t('devices.resources.retry')} disabled={refreshing}
         onPress={onRefresh} style={styles.retry} testID="teammates.refresh">
         {refreshing ? <ActivityIndicator color={colors.textSecondary} /> : <RefreshCw size={iconSize.sm} color={colors.textSecondary} />}

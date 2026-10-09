@@ -174,5 +174,12 @@
   "followUp": {
     "next": "分工 · 下一步",
     "failedStep": "第 {{step}} 步沒做完"
+  },
+  "server": {
+    "offline": "暫時無法連線群聊，請重試。",
+    "loadFailed": "暫時無法讀取群聊，請重試。",
+    "loadOlder": "載入更早的訊息",
+    "attachmentFailed": "附件開啟失敗，請重試。",
+    "previewUnavailable": "暫時無法讀取訊息預覽"
   }
 }
