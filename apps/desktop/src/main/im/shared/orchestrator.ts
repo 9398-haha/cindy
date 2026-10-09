@@ -16,6 +16,7 @@ import { getDbClient } from '../../localDb/client/current';
 import { sessions } from '../../localDb/schema';
 import { onChannelTurn } from '../../maker-ipc/channelTurnSignal';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
+import { bindingStore } from '../binding';
 import {
   acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend,
@@ -56,13 +57,17 @@ onChannelTurn(async (session, phase) => {
   const [row] = await getDbClient().drizzle.select().from(sessions)
     .where(eq(sessions.id, session.id)).limit(1);
   if (!row || row.status === 'deleted' || row.status === 'archived' || !isImAccountGenerationCurrent(generation)) return;
-  const orchestrator = registry.get(row.source as ImChannelName);
+  const binding = bindingStore.findByTarget(session.id);
+  const orchestrator = registry.get((binding?.channel ?? row.source) as ImChannelName);
   if (!orchestrator) return;
   const status = orchestrator.adapter.im.getStatus();
-  const botId = row.source === 'feishu' ? row.feishuBotAppId : row.imBotContextId;
+  const botId = binding?.botContextId ?? (row.source === 'feishu' ? row.feishuBotAppId : row.imBotContextId);
   if (status.kind !== 'connected' || status.appId !== botId) return;
-  const userId = row.source === 'feishu' ? row.feishuOpenId : row.imUserId;
-  if (userId) orchestrator.turnRunner.attachSessionOutput(session, userId);
+  const userId = binding?.userId ?? (row.source === 'feishu' ? row.feishuOpenId : row.imUserId);
+  if (userId) orchestrator.turnRunner.attachSessionOutput(session, userId, {
+    attached: binding !== null,
+    scopeKey: binding?.scopeKey,
+  });
 });
 
 /**

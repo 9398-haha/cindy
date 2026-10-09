@@ -513,7 +513,7 @@ export type ImTurnDispatch =
 
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
 export interface ImTurnRunner {
-  attachSessionOutput(session: MakerSession, userId: string): void;
+  attachSessionOutput(session: MakerSession, userId: string, route?: { attached: boolean; scopeKey?: string }): void;
   runAgentTurn(args: ImRunAgentTurnArgs): Promise<void>;
   /**
    * 把渠道用户消息**提前**写进本地 messages 表 —— 只给「dispatch 之前还有重活」
@@ -4084,18 +4084,25 @@ export function createTurnRunner(
   }
 
   return {
-    attachSessionOutput: (session, userId) => {
+    attachSessionOutput: (session, userId, route) => {
       const existing = sessionStates.get(session.id);
-      if (existing?.makerSession === session) return;
       if (existing) {
-        rebindSessionOutput(existing, session, userId);
+        const userChanged = existing.userId !== userId;
+        if (route?.attached) {
+          existing.attached = true;
+          existing.preserveSessionConfig = true;
+          existing.userId = userId;
+          existing.scopeKey = route.scopeKey;
+        }
+        if (existing.makerSession !== session || userChanged) rebindSessionOutput(existing, session, userId);
         return;
       }
       ensureMakerCloseSubscription(getMaker());
       const state: SessionState = {
         makerSession: session,
-        preserveSessionConfig: false,
+        preserveSessionConfig: route?.attached === true,
         userId,
+        scopeKey: route?.scopeKey,
         workingDir: session.workDir,
         queue: [],
         sendQueue: [],
@@ -4103,7 +4110,7 @@ export function createTurnRunner(
         unsubscribers: [],
         detachDrainPromise: null,
         resolveDetachDrain: null,
-        attached: false,
+        attached: route?.attached === true,
         scheduledTranspond: null,
         pendingTranspondFinals: 0,
       };

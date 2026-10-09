@@ -769,6 +769,36 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     expect(mocks.getMaker().createSession).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('cold takeover restores scheduler-only topic output (replace runtime: %s)', async (replace) => {
+    const old = makeSessionHarness('cold-takeover');
+    const route = { attached: true, scopeKey: '300.3' };
+    runner.attachSessionOutput(old.session, 'U1', route);
+    const h = replace ? makeSessionHarness(old.session.id) : old;
+    runner.attachSessionOutput(h.session, 'U1', route);
+    if (replace) expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    old.emit({ type: 'text', data: { text: 'desktop input' } });
+    old.emit({ type: 'done', data: {} });
+    h.emit({ type: 'text', data: { text: 'cross-session input' } });
+    h.emit({ type: 'done', data: {} });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    const turnOrigin = { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily' };
+    h.emit({ type: 'text', turnOrigin, data: { text: 'scheduled result', isFinal: true } });
+    h.emit({ type: 'done', turnOrigin, data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    expect(stub.finalize).toHaveBeenCalledWith(expect.stringContaining('scheduled result'));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '300.3' });
+    expect(mocks.getMaker().createSession).not.toHaveBeenCalled();
+    expect(h.session.setInteractionListener).not.toHaveBeenCalled();
+    runner.detachFromSession(h.session.id);
+    mocks.slackIm.startStreamingText.mockClear();
+    h.emit({ type: 'text', turnOrigin, data: { text: 'after detach' } });
+    h.emit({ type: 'done', turnOrigin, data: {} });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    expect(h.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   async function channelAndIdle(): Promise<SessionHarness> {
     await runTurn('100.1');
     const h = harnesses.get(sessionIdFor('T1', 'U1', '100.1'))!;
