@@ -264,7 +264,8 @@ SSH 任务不把远端路径或托管媒体引用当作本地文件上传；个�
 已销毁的任务不会因迟到的发送完成回调再次派发。
 
 官方 Telegram、Slack 复用已有 hook binding、轮次观察和附件收集；双方宣告 `session-result-v1`
-后用 `turn.end(background: true)` 发送结果，服务端在原私聊或话题新发消息。普通 IM 轮次和
+后，后台回传与任务派发共用渠道 key 判定，兼容既有 Slack 前缀、team-slack、旧频道和 DM key；X 不回传。
+结果用 `turn.end(background: true)` 发送，服务端在原私聊或话题新发消息。普通 IM 轮次和
 已有 retry/reopen 轮次不另发一份。发送前复核账号代次、连接、目录授权与会话绑定；服务端
 再核对设备绑定、聊天归属及 `/new` 代次。Telegram 保存新消息 route，回复结果仍回到原 lane。
 

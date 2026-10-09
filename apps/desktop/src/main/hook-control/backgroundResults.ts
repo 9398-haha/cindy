@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { makeTurnEnd, type HookMessage } from '@cindy/slack-hook-protocol';
 import type { HookSessionRunner } from './dispatcher';
 import type { HookBindingStore } from './bindings';
+import { providerForExternalKey } from './providerRouting.js';
 
 /** Shares the normal observer/final attachment collector; no task replay or outbox. */
 export function createBackgroundResults(deps: {
@@ -17,8 +18,10 @@ export function createBackgroundResults(deps: {
   return {
     start(sessionId: string, workingDir: string) {
       if (deps.owned(sessionId) || watches.has(sessionId) || !deps.runner.watchContinuation) return;
-      const targets = (deps.bindings.findBySession?.(sessionId) ?? []).filter(({ connectionId, externalKey }) =>
-        /^(telegram|slack):/.test(externalKey) && deps.allowed(connectionId, workingDir));
+      const targets = (deps.bindings.findBySession?.(sessionId) ?? []).filter(({ connectionId, externalKey }) => {
+        const provider = providerForExternalKey(externalKey);
+        return (provider === 'telegram' || provider === 'slack') && deps.allowed(connectionId, workingDir);
+      });
       if (!targets.length) return;
       const senders = targets.map((target) => ({ ...target, send: deps.sender(target.connectionId) })).filter((t) => t.send);
       if (!senders.length) return;

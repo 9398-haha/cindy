@@ -23,7 +23,10 @@ function fixture(key = 'telegram:dm:bot:user:g0') {
 const result = { status: 'ok' as const, finalText: '自动执行结果', errorMessage: null, durationMs: 10 };
 
 describe('IM session background results', () => {
-  it.each(['telegram:dm:bot:user:g0', 'slack:T:C:1.2'])('forwards %s once, including attachments', (key) => {
+  it.each([
+    'telegram:dm:bot:user:g0', 'slack:T:C:1.2', 'slack:dm:T1:U1:g2',
+    'team-slack:C1:1.1', 'T1:C1:1.1', 'dm:U1:g2', 'dm:T1:U1:g2',
+  ])('forwards %s once, including attachments', (key) => {
     const f = fixture(key);
     f.output.start('session', '/work');
     f.output.start('session', '/work');
@@ -38,10 +41,16 @@ describe('IM session background results', () => {
     }) }));
   });
 
-  it('excludes X, old servers, and turns already owned by normal IM/reopen delivery', () => {
-    const x = fixture('x:post:1');
-    x.output.start('session', '/work');
-    expect(x.watchContinuation).not.toHaveBeenCalled();
+  it.each(['x:post:1', 'discord:channel-1', 'arbitrary', 'dm:U1:invalid', 'T1:C1:invalid'])(
+    'does not observe unsupported lane %s', (key) => {
+      const f = fixture(key);
+      f.output.start('session', '/work');
+      expect(f.watchContinuation).not.toHaveBeenCalled();
+      expect(f.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it('excludes old servers and turns already owned by normal IM/reopen delivery', () => {
     const f = fixture();
     f.owned.mockReturnValue(true);
     f.output.start('session', '/work');
