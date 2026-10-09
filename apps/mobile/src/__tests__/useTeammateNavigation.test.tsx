@@ -135,13 +135,22 @@ describe('header/home shared navigation', () => {
 it.each([
   { routes: [{ name: 'index' }, { name: 'sessions/[sessionId]' }], href: '/' },
   { routes: [{ name: 'devices/index' }, { name: 'sessions/[sessionId]' }], href: '/devices' },
-  { routes: [{ name: 'resources/[collectionId]', params: { collectionId: 'teammates' } }, { name: 'sessions/[sessionId]' }], href: '/resources/teammates' },
 ])('returns to the mounted list at $href instead of replacing the chat with a new home', async ({ routes, href }) => {
   h.routes = routes;
   await render();
   await act(async () => result.chooseMode('teammates'));
   expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(1);
   expect(h.dismissTo).not.toHaveBeenCalled();
+});
+it('replaces a retired teammate collection entry instead of returning to it', async () => {
+  h.routes = [
+    { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+    { name: 'sessions/[sessionId]' },
+  ];
+  await render();
+  await act(async () => result.chooseMode('teammates'));
+  expect(h.dismiss).not.toHaveBeenCalled();
+  expect(h.dismissTo).toHaveBeenCalledWith('/devices');
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {
   const { readRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');

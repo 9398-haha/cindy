@@ -136,6 +136,19 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(nativeHeader).toContain('<Stack.Toolbar.Menu icon="ellipsis"');
   });
 
+  it("opens Teammates from both scope menus through the teammate home path", () => {
+    const home = readSource("src/session/HomeSurface.tsx");
+    const sharedHandler = home.slice(
+      home.indexOf("const openRemoteCollection"),
+      home.indexOf("const homeScopePullDownActions"),
+    );
+    expect(sharedHandler).toContain("collection.id === TEAMMATE_COLLECTION_ID");
+    expect(sharedHandler).toContain("void homeNavigation.setMode('teammates')");
+    expect(sharedHandler).toContain("guardedPush('/devices')");
+    expect(sharedHandler).toContain("onModeChange?.('teammates')");
+    expect(home.match(/openRemoteCollection\(collection\)/g)).toHaveLength(2);
+  });
+
   it("routes settings pickers and local-log options through the pull-down on Android", () => {
     const settings = readSource("app/settings.tsx");
     // 只按 MenuView 是否可用分流,不按平台:Android 与 iOS 同走系统下拉,自绘 sheet / Alert 仅作回退。

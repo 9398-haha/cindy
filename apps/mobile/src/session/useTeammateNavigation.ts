@@ -31,8 +31,8 @@ export function useTeammateNavigation() {
       await preferences.setMode(mode);
       if (mounted.current && current.current === accountGeneration) {
         const state = navigation.getState();
-        const count = homeDismissCount(state?.routes.slice(0, state.index + 1) ?? [], mode);
-        // Pop by position: dismissTo would overwrite a legacy collection's target params.
+        const count = homeDismissCount(state?.routes.slice(0, state.index + 1) ?? []);
+        // Pop by position to preserve the mounted home's state.
         if (count === null) router.dismissTo('/devices');
         else if (count > 0) router.dismiss(count);
       }
