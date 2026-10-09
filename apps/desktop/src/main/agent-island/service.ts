@@ -176,6 +176,7 @@ interface AgentIslandUserPromptDebugMeta {
 }
 
 export interface AgentIslandServiceDeps {
+  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   getMainWindow: () => BrowserWindow | null;
   nativeHost?: AgentIslandNativeRenderer;
   /** Main-process upgrade window used to classify remote daemon shutdowns. */
@@ -360,15 +361,16 @@ export class AgentIslandService {
     sessionId: string;
     request: Extract<InteractionRequest, { kind: 'permission' }>;
   }>();
-  private readonly sessionActivityRelay = new SessionActivityRelay((payload) => {
-    tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
-  });
+  private readonly sessionActivityRelay: SessionActivityRelay;
   private permissionResolver: ((requestId: string, decision: AgentIslandPermissionDecision) => boolean) | null = null;
   private shouldDeferCompletion: ((sessionId: string) => boolean) | null = null;
   private layoutPreferenceWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private streamingPreviewPublishTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: AgentIslandServiceDeps) {
+    this.sessionActivityRelay = new SessionActivityRelay((payload) => {
+      tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
+    }, { isCompletionHandledByTeammate: deps.isCompletionHandledByTeammate });
     // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();

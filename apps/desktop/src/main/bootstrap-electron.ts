@@ -745,6 +745,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  tryGetBotDelegationService,
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
   isSessionInTurn,
@@ -4311,12 +4312,18 @@ const registerIpcHandlers = () => {
   });
 
   // 系统级通知（CC Agent session 完成时弹出 / 可选飞书私聊）
+  const isCompletionHandledByTeammate = (sessionId: string): Promise<boolean> =>
+    tryGetBotDelegationService()?.isCompletionHandledByTeammate(sessionId) ?? Promise.resolve(false);
   initNotificationService({
+    isCompletionHandledByTeammate,
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
   initWecomGroupNotificationIpc();
   initAgentIslandService({
+    // Activity is published before the synchronous terminal adapter registers
+    // settlement. Defer the lookup until that adapter has run, without polling.
+    isCompletionHandledByTeammate: (sessionId) => Promise.resolve().then(() => isCompletionHandledByTeammate(sessionId)),
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {

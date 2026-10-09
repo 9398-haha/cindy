@@ -7,6 +7,7 @@ const MAX_REPLAY_TERMINAL_PAYLOADS = 200;
 type Timer = ReturnType<typeof setTimeout>;
 
 interface SessionActivityRelayOptions {
+  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   minIntervalMs?: number;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => Timer;
@@ -32,11 +33,16 @@ export class SessionActivityRelay {
   private readonly clearTimer: (timer: Timer) => void;
   private readonly entries = new Map<string, SessionActivityRelayEntry>();
   private readonly terminalReplayPayloads = new Map<string, SessionActivityPayload>();
+  private readonly completionChecks = new Map<string, {
+    startedAtMs: number | null; payload: SessionActivityPayload;
+  }>();
+  private readonly checkCompletion?: (sessionId: string) => Promise<boolean>;
 
   constructor(
     private readonly emit: (payload: SessionActivityPayload) => void,
     options: SessionActivityRelayOptions = {},
   ) {
+    this.checkCompletion = options.isCompletionHandledByTeammate;
     this.minIntervalMs = Math.max(0, options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS);
     this.now = options.now ?? (() => Date.now());
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
@@ -48,7 +54,13 @@ export class SessionActivityRelay {
     for (const activity of list) {
       if (!activity.sessionId) continue;
       activeSessionIds.add(activity.sessionId);
-      this.publishOne(toSessionActivityPayload(activity));
+      const payload = toSessionActivityPayload(activity);
+      if (this.checkCompletion && payload.phase === 'completed' && payload.attention) {
+        this.publishCompletion(activity, payload);
+      } else {
+        this.completionChecks.delete(activity.sessionId);
+        this.publishOne(payload);
+      }
     }
 
     for (const sessionId of [...this.entries.keys()]) {
@@ -61,6 +73,7 @@ export class SessionActivityRelay {
     for (const entry of this.entries.values()) {
       if (entry.timer) this.clearTimer(entry.timer);
     }
+    this.completionChecks.clear();
     this.entries.clear();
     this.terminalReplayPayloads.clear();
   }
@@ -70,6 +83,7 @@ export class SessionActivityRelay {
    * Runtime reset should not leave remote lists showing stale running rows.
    */
   reset(): void {
+    this.completionChecks.clear();
     for (const sessionId of [...this.entries.keys()]) {
       this.clear(sessionId);
     }
@@ -112,12 +126,32 @@ export class SessionActivityRelay {
     for (const activity of list) {
       if (!activity.sessionId) continue;
       seenSessionIds.add(activity.sessionId);
-      const payload = toSessionActivityPayload(activity);
+      const check = this.completionChecks.get(activity.sessionId);
+      const payload = activity.phase === 'completed' && activity.attention && check?.startedAtMs === activity.startedAtMs
+        ? check.payload : toSessionActivityPayload(activity);
       emit(isPublishableActivity(payload) ? payload : toTerminalActivityPayload(activity.sessionId));
     }
     for (const [sessionId, payload] of this.terminalReplayPayloads) {
       if (!seenSessionIds.has(sessionId)) emit(payload);
     }
+  }
+
+  private publishCompletion(activity: AgentIslandSessionActivity, payload: SessionActivityPayload): void {
+    const previous = this.completionChecks.get(activity.sessionId);
+    if (previous && previous.startedAtMs === activity.startedAtMs) {
+      previous.payload = { ...payload, completionNotification: previous.payload.completionNotification };
+      this.publishOne(previous.payload);
+      return;
+    }
+    const check = { startedAtMs: activity.startedAtMs, payload: { ...payload, completionNotification: 'pending' as const } as SessionActivityPayload };
+    this.completionChecks.set(activity.sessionId, check);
+    this.publishOne(check.payload);
+    void this.checkCompletion!(activity.sessionId).catch(() => false).then((handled) => {
+      // A new turn, read acknowledgement, reset or disposal invalidates the old check.
+      if (this.completionChecks.get(activity.sessionId) !== check) return;
+      check.payload = { ...check.payload, completionNotification: handled ? 'teammate' : undefined };
+      this.publishOne(check.payload);
+    });
   }
 
   private publishOne(payload: SessionActivityPayload): void {
@@ -166,6 +200,7 @@ export class SessionActivityRelay {
   }
 
   private clear(sessionId: string): void {
+    this.completionChecks.delete(sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     if (entry.timer) this.clearTimer(entry.timer);
@@ -248,6 +283,7 @@ function toTerminalActivityPayload(sessionId: string): SessionActivityPayload {
 function activitySignature(payload: SessionActivityPayload): string {
   return [
     payload.phase,
+    payload.completionNotification ?? '',
     payload.compactDetail,
     payload.workingPhase,
     payload.interactionKind ?? '',
