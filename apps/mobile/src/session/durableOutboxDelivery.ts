@@ -274,7 +274,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           },
           retrySafe: projection.inputDeliveryVersion === 1,
           enqueueStarted: record.enqueueStarted ?? (record.sendAtMs === undefined ? false : undefined),
-          clearBoundaryMs: projection.clearBoundaryMs ?? record.clearBoundaryMs,
+          clearBoundaryMs: projection.clearBoundaryMs !== undefined
+            ? projection.clearBoundaryMs : record.clearBoundaryMs,
           sendAtMs: record.sendAtMs ?? Date.now(),
         });
       }

@@ -196,7 +196,7 @@ describe("durable mobile outbox ownership", () => {
     new Error('[NOT_FOUND] Message 不存在'),
   ])('waits for host receipts when pending history is missing (%s)', async (error) => {
     const { store, deps, runner } = await setup();
-    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true, error: '[NOT_FOUND] Message 不存在' });
     deps.projection.mockResolvedValue(projection('id-1', 'pending'));
     deps.history.mockRejectedValue(error);
     await runner.run();
@@ -225,6 +225,20 @@ describe("durable mobile outbox ownership", () => {
     expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'check receipt' });
     expect(deps.enqueue).not.toHaveBeenCalled();
     expect(deps.cleanup).not.toHaveBeenCalled();
+  });
+
+  it('settles cleared legacy records without a saved boundary from the host receipt', async () => {
+    const { store, deps, runner } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    deps.projection.mockResolvedValue({ ...projection('id-1', 'removed'), clearBoundaryMs: 123 });
+    await runner.run();
+    runner.wake();
+    await runner.run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.projection).toHaveBeenCalledOnce();
+    expect(deps.history).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.anything(), false);
   });
 
   it('still reports other history lookup failures', async () => {
@@ -752,6 +766,8 @@ describe("app-owned delivery and reconciliation", () => {
     expect(deps.enqueue).toHaveBeenCalledTimes(1);
     expect(deps.enqueue.mock.calls[0]?.[0].prepared?.clientId).toBe("id-1");
     expect(store.getSnapshot()[0]?.state).toBe("host-owned");
+    expect(store.getSnapshot()[0]?.clearBoundaryMs).toBeNull();
+    expect(deps.enqueue.mock.calls[0]?.[0].clearBoundaryMs).toBeNull();
     runner.wake();
     deps.projection.mockResolvedValue(projection("id-1", "accepted"));
     deps.history.mockResolvedValue(true);
