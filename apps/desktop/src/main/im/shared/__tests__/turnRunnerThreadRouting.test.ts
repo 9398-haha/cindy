@@ -755,6 +755,49 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     expect(mocks.slackIm.sendFile).not.toHaveBeenCalled();
   });
 
+  it.each((['rich-card', 'chunked-text'] as const).flatMap((kind) =>
+    [false, true].flatMap((remote) => ['done', 'error'].map((ending) => ({ kind, remote, ending }))),
+  ))('strips background citations across split deltas and final snapshots ($kind, remote=$remote, $ending)', async ({ kind, remote, ending }) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    if (kind === 'chunked-text') {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+    }
+    const h = makeSessionHarness('citation-background');
+    if (remote) Object.assign(h.session, { remoteHostId: 'ssh-host' });
+    runner.attachSessionOutput(h.session, 'U1');
+    const turnOrigin = remote
+      ? { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily' }
+      : undefined;
+    for (const text of ['结果\uE200ci', 'te\uE202turn0search0', '\uE201。']) {
+      const previousCalls = stub.replace.mock.calls.length;
+      h.emit({ type: 'text', data: { text }, turnOrigin });
+      if (kind === 'rich-card') {
+        await vi.waitFor(() => expect(stub.replace.mock.calls.length).toBeGreaterThan(previousCalls));
+        expect(stub.replace.mock.calls.at(-1)![0]).not.toMatch(/[\uE200-\uE202]|turn0search0/);
+      }
+    }
+    h.emit({ type: 'text', data: {
+      text: '结果\uE200cite\uE202turn0search0\uE201。[来源](https://example.com)\uE200cite\uE202unfinished',
+      isFinal: true,
+    }, turnOrigin });
+    h.emit(ending === 'done'
+      ? { type: 'done', data: {}, turnOrigin }
+      : { type: 'error', data: { message: 'failed', isTerminal: true }, turnOrigin });
+    const body = `${remote ? '🤖 自动任务「daily」\n\n' : ''}结果。[来源](https://example.com)`;
+    const expected = ending === 'error' ? `${body}\n\n${slackUi.agent.runtimeError('failed')}` : body;
+    if (kind === 'rich-card') {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith(expected));
+    } else {
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledExactlyOnceWith(
+        'U1', expected, { threadTs: undefined },
+      ));
+    }
+    await runner.disposeAllSessions();
+  });
+
   it('重启后仅恢复输出监听，不新建会话；重复恢复不会重复回复', async () => {
     const h = makeSessionHarness('cold-session');
     const stub = streamingHandleStub();

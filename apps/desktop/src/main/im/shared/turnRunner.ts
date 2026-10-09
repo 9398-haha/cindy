@@ -2648,11 +2648,12 @@ export function createTurnRunner(
   /** 转播卡正文:运行中 = 头 + 步骤时间线 + 正文;收口 = 头 + 正文(去步骤)。 */
   function composeTranspondView(state: SessionState, t: ScheduledTranspond, final: boolean): string {
     const header = t.header;
+    const publicBody = stripInternalWebCitations(t.buffer);
     // Rich transports resolve managed refs themselves. A remote session's refs
     // must stay text, never reach those host-local file/media resolvers.
     const body = state.makerSession.remoteHostId
-      ? transformXdtRefs(t.buffer, { image: (ref) => ref.alt, file: (ref) => ref.alt })
-      : t.buffer;
+      ? transformXdtRefs(publicBody, { image: (ref) => ref.alt, file: (ref) => ref.alt })
+      : publicBody;
     if (final) {
       return [header, body].filter(Boolean).join('\n\n');
     }
