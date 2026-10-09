@@ -60,13 +60,19 @@ function setup(device: Partial<FakeDevice> = {}) {
           fastMode: false,
           sdkSessionId: 'sdk-1',
         };
-      case 'local-db:history:messages':
+      case 'local-db:history:messages': {
+        // 与运行设备的入参校验一致(localDb/ipc/history.ts)。
+        const limit = (args[0] as { contentCharLimit?: number | null }).contentCharLimit;
+        if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 8_000)) {
+          throw new Error('[INVALID_PARAMS] contentCharLimit must be an integer between 1 and 8000 or null');
+        }
         return {
           items: state.assistant ? [state.assistant] : [],
           hasMore: false,
           nextCursor: null,
           terminal: state.terminalError ? { status: 'error' } : null,
         };
+      }
       case 'maker:input:enqueue':
         if (state.enqueueError) throw state.enqueueError;
         state.enqueued.push(args[1]);

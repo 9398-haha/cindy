@@ -13439,7 +13439,8 @@
       "errorBadgeAria": "有 Worker 出錯",
       "executionDevice": "在 {{device}} 執行",
       "deviceUnreachable": "暫時無法取得狀態",
-      "unknownDevice": "另一台電腦"
+      "unknownDevice": "另一台電腦",
+      "archiveRemoteWorkerConfirmDesc": "它會從這個協同裡移除，並停止 {{device}} 上正在進行的這一輪。{{device}} 上的任務、記錄和檔案都會保留，標註「協同已結束」，可以在那台繼續查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",

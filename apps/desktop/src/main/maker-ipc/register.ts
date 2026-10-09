@@ -288,6 +288,7 @@ import {
   getCurrentDbClientSnapshot,
   getDbClient,
   isDbClientNotReadyError,
+  tryGetDbClient,
 } from '../localDb/client/current.js';
 import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
 import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
@@ -2450,6 +2451,22 @@ const botRuntimeRestoreCoordinator = createBotRuntimeRestoreCoordinator({
 
 export function restoreBotRuntimeForCurrentOwner(): Promise<boolean> {
   return botRuntimeRestoreCoordinator.restoreCurrentOwner();
+}
+
+/** 按当前账号恢复协同远端 Worker 的轮询；数据库未就绪时跳过，由接管后的调用补上。 */
+export async function restoreOrcaRemoteWorkersForCurrentOwner(): Promise<void> {
+  const remote = orcaRemoteWorkersForHost;
+  if (!remote || !tryGetDbClient()) return;
+  await remote.start().catch((err) =>
+    log.warn('orca remote workers: restore failed', {
+      err: err instanceof Error ? err.message : String(err),
+    }),
+  );
+}
+
+/** 账号边界：停掉上一账号远端 Worker 的轮询与补发，避免写进下一个账号的数据库。 */
+export function stopOrcaRemoteWorkersForOwnerBoundary(): void {
+  orcaRemoteWorkersForHost?.stop();
 }
 
 function markWorkerManualInterruptIfKnown(
@@ -12831,11 +12848,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   }));
   orcaTeamServiceForEvents = orcaTeamService;
-  void orcaRemoteWorkers.start().catch((err) =>
-    log.warn('orca remote workers: restore failed', {
-      err: err instanceof Error ? err.message : String(err),
-    }),
-  );
+  // 数据库可能晚于本注册就绪；bootstrap 在接管数据库后会再调一次，两种顺序都覆盖。
+  void restoreOrcaRemoteWorkersForCurrentOwner();
   ipcMain.handle(ORCA_EXECUTION_DEVICES_CHANNEL, async (event) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     // 共享任务访客看不到本账号的设备目录。

@@ -750,7 +750,7 @@ export function CreateWorkerPopover({
         style={WINDOW_DRAG_STYLE}
       >
       <Dialog.Content
-        className="modal-panel relative z-10 w-[500px] p-6 outline-none"
+        className="modal-panel relative z-10 max-h-[calc(100dvh-48px)] w-[500px] overflow-y-auto p-6 outline-none"
         aria-describedby={undefined}
         onPointerDownOutside={(event) => event.preventDefault()}
         onOpenAutoFocus={(event) => {
@@ -1093,10 +1093,9 @@ function ExecutionDeviceField({
           ))}
         </div>
         <p className="mt-1.5 text-11 leading-snug text-[var(--text-secondary)]">
-          {t('orca.createWorker.executionDeviceHint')}
           {selected
-            ? ` ${t('orca.createWorker.executionDeviceRemoteHint', { device: selected.name })}`
-            : ''}
+            ? t('orca.createWorker.executionDeviceRemoteHint', { device: selected.name })
+            : t('orca.createWorker.executionDeviceHint')}
         </p>
       </div>
       {selected ? (

@@ -13439,7 +13439,8 @@
       "errorBadgeAria": "有 Worker 出错",
       "executionDevice": "在 {{device}} 运行",
       "deviceUnreachable": "暂时无法获取状态",
-      "unknownDevice": "另一台电脑"
+      "unknownDevice": "另一台电脑",
+      "archiveRemoteWorkerConfirmDesc": "它会从这个协同里移除，并停止 {{device}} 上正在进行的这一轮。{{device}} 上的任务、记录和文件都会保留，标注「协同已结束」，可以在那台继续查看。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",

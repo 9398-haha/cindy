@@ -244,10 +244,15 @@ function useRequestArchiveWorker(onArchiveWorker: (workerId: string) => void) {
           name: displayName,
           defaultValue: 'Archive worker {{name}}?',
         }),
-        description: t('newChat.collaboration.archiveWorkerConfirmDesc', {
-          defaultValue:
-            'This stops the worker SDK session and hides it from the sidebar. History is kept as archived. There is no restore action in the current UI; create a new worker if you archived it by mistake.',
-        }),
+        // 在另一台电脑运行的 Worker：任务和文件留在那台，说清楚不会被删。
+        description: target.executionDevice
+          ? t('orca.rolePill.archiveRemoteWorkerConfirmDesc', {
+              device: workerDeviceName(t, target.executionDevice),
+            })
+          : t('newChat.collaboration.archiveWorkerConfirmDesc', {
+              defaultValue:
+                'This stops the worker SDK session and hides it from the sidebar. History is kept as archived. There is no restore action in the current UI; create a new worker if you archived it by mistake.',
+            }),
         confirmText: t('newChat.collaboration.archiveWorkerConfirmConfirm', {
           defaultValue: 'Archive worker',
         }),

@@ -162,6 +162,25 @@ describe('execution devices', () => {
       { deviceId: 'old-pc', name: 'Old PC', platform: 'win32', supported: false },
     ]);
   });
+
+  it('lists usable devices first in a stable order', async () => {
+    const { workers } = setup({
+      devices: [
+        device({ deviceId: 'old-pc', name: 'Old PC' }),
+        device({ deviceId: 'b', name: 'Beta' }),
+        device({ deviceId: 'a', name: 'Alpha' }),
+      ],
+      handle: (deviceId, channel) =>
+        channel === 'maker:orca:remote-worker:caps' && deviceId === 'old-pc'
+          ? fail('CHANNEL_NOT_ALLOWED', channel)
+          : undefined,
+    });
+    expect((await workers.listExecutionDevices()).map((d) => d.deviceId)).toEqual([
+      'a',
+      'b',
+      'old-pc',
+    ]);
+  });
 });
 
 describe('openRemoteWorker', () => {
@@ -215,6 +234,29 @@ describe('openRemoteWorker', () => {
     await expect(
       workers.openRemoteWorker({ ...openInput, workingDir: '/nope' }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('/nope') });
+  });
+});
+
+describe('start', () => {
+  it('rebuilds tracking for the current account each time it runs', async () => {
+    const row = {
+      workerId: 'w-1',
+      teamId: 'team-1',
+      leadSessionId: 'lead-1',
+      proxySessionId: 'proxy-1',
+      deviceId: 'mac-mini',
+      remoteSessionId: 'remote-1',
+      lastBridgedMessageId: null,
+    };
+    const { workers } = setup();
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([row] as never);
+    await workers.start();
+    expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+    // 换账号后重建：上一账号的 Worker 不再被当作远端处理。
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([] as never);
+    await workers.start();
+    expect(workers.runtime.isRemote('proxy-1')).toBe(false);
+    workers.stop();
   });
 });
 

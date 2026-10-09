@@ -178,8 +178,14 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
   return {
     runtime,
 
-    /** 启动时恢复仍在协同中的远端 Worker，并补发未送达的结束通知。 */
+    /**
+     * 按当前账号恢复仍在协同中的远端 Worker，并补发未送达的结束通知。可重入：每次先清空
+     * 上一账号的登记，数据库就绪后(及账号切换后)由宿主再调一次。
+     */
     async start(): Promise<void> {
+      runtime.reset();
+      if (releaseRetryTimer) clearInterval(releaseRetryTimer);
+      releaseRetryTimer = null;
       await refreshDeviceNames().catch(() => undefined);
       for (const row of await listActiveRemoteWorkers()) runtime.track(row);
       void retryPendingReleases();
@@ -199,19 +205,25 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     async listExecutionDevices(): Promise<OrcaExecutionDeviceView[]> {
       const devices = (await refreshDeviceNames()).filter(isExecutionDeviceCandidate);
       const supported = await Promise.all(devices.map((device) => probeSupported(device.deviceId)));
-      // 探测失败(超时等)视为暂时不可用，不列出；明确不支持的列为需要更新。
-      return devices.flatMap((device, index) =>
-        supported[index] === null
-          ? []
-          : [
-              {
-                deviceId: device.deviceId,
-                name: device.name,
-                platform: device.platform,
-                supported: supported[index] === true,
-              },
-            ],
-      );
+      // 探测失败(超时等)视为暂时不可用，不列出；明确不支持的列为需要更新。顺序固定：
+      // 可用的在前，再按名称，避免每次打开列表顺序跳动。
+      return devices
+        .flatMap((device, index) =>
+          supported[index] === null
+            ? []
+            : [
+                {
+                  deviceId: device.deviceId,
+                  name: device.name,
+                  platform: device.platform,
+                  supported: supported[index] === true,
+                },
+              ],
+        )
+        .sort(
+          (a, b) =>
+            Number(b.supported) - Number(a.supported) || a.name.localeCompare(b.name),
+        );
     },
 
     async openRemoteWorker(

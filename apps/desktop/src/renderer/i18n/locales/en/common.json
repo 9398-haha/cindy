@@ -13469,7 +13469,8 @@
       "errorBadgeAria": "A worker has an error",
       "executionDevice": "Runs on {{device}}",
       "deviceUnreachable": "Status unavailable",
-      "unknownDevice": "Another computer"
+      "unknownDevice": "Another computer",
+      "archiveRemoteWorkerConfirmDesc": "Removes it from this collaboration and stops the current round on {{device}}. The task, history and files on {{device}} are kept and marked “Collaboration ended”, so you can keep viewing them there."
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",

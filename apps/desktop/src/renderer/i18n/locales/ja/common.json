@@ -13439,7 +13439,8 @@
       "errorBadgeAria": "エラーが発生した Worker があります",
       "executionDevice": "{{device}} で実行",
       "deviceUnreachable": "状態を取得できません",
-      "unknownDevice": "別のコンピューター"
+      "unknownDevice": "別のコンピューター",
+      "archiveRemoteWorkerConfirmDesc": "この協同から外し、{{device}} で進行中のラウンドを停止します。{{device}} 上のタスク、履歴、ファイルは保持され「協同は終了しました」と表示されるので、そちらで引き続き確認できます。"
     },
     "split": {
       "leadLabel": "Lead ({{agent}})",

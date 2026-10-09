@@ -70,7 +70,8 @@ export const REMOTE_WORKER_FAST_POLL_MS = 2_000;
 export const REMOTE_WORKER_IDLE_POLL_MS = 15_000;
 /** 消息已进入对话、设备不在跑，但还没有新回复时，最多再等这么多轮才按异常收尾。 */
 const MISSING_REPLY_POLLS = 15;
-const MAX_REPORT_CHARS = 8_192;
+/** `local-db:history:messages` 的 contentCharLimit 只接受 1–8000。 */
+const MAX_REPORT_CHARS = 8_000;
 
 /** 视为「设备当前不可达」的错误码：relay / 链路 / 本机开关 / 熔断。其余错误按普通失败处理。 */
 const UNREACHABLE_CODES = new Set([
@@ -584,6 +585,15 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
 
     /** 测试与关闭时用：立即跑一轮。 */
     pollNow: pollOnce,
+
+    /** 账号切换后重建：清空登记与可达性，恢复调度(随后由调用方重新 track)。 */
+    reset(): void {
+      if (timer !== null) deps.clearTimeout(timer);
+      timer = null;
+      workers.clear();
+      unreachableDevices.clear();
+      stopped = false;
+    },
 
     stop(): void {
       stopped = true;

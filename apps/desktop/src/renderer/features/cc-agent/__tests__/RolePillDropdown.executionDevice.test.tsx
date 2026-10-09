@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WorkerInfo } from '../hooks/useWorkers';
 import { RolePillDropdown } from '../RolePillDropdown';
+
+const confirm = vi.hoisted(() =>
+  vi.fn(async (_opts: { description: string }) => false),
+);
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -15,7 +19,7 @@ vi.mock('@/hooks/useAppShortcut', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn(async () => false) }),
+  useConfirmDialog: () => ({ confirm }),
 }));
 
 function worker(overrides: Partial<WorkerInfo> = {}): WorkerInfo {
@@ -84,6 +88,25 @@ describe('RolePillDropdown worker on another computer', () => {
     );
     expect(screen.getAllByText('orca.rolePill.unknownDevice').length).toBeGreaterThan(0);
     expect(screen.getAllByText('orca.rolePill.deviceUnreachable').length).toBeGreaterThan(0);
+  });
+
+  it('explains that archiving keeps the task on the execution device', async () => {
+    openMenu(
+      worker({
+        executionDevice: {
+          deviceId: 'mac-mini',
+          remoteSessionId: 'remote-a',
+          deviceName: 'Mac mini',
+          reachable: true,
+          workingDir: null,
+        },
+      }),
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: 'orca.rolePill.archiveWorkerAria' })[0]!);
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(confirm.mock.calls.at(-1)![0].description).toBe(
+      'orca.rolePill.archiveRemoteWorkerConfirmDesc',
+    );
   });
 
   it('leaves local workers unchanged', () => {
