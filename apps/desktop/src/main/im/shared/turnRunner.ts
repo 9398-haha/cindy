@@ -379,6 +379,7 @@ interface ScheduledTranspond {
   activityTicker: ReturnType<typeof setInterval> | null;
   /** 自动任务这一轮 agent 的回复文本累加。 */
   buffer: string;
+  mediaAbsPaths: string[];
   streamingHandle: StreamingTextHandle | null;
   streamingHandlePromise: Promise<StreamingTextHandle> | null;
 }
@@ -1669,6 +1670,12 @@ export function createTurnRunner(
     }
     if (current === previous) return;
 
+    rebindSessionOutput(state, current, userId);
+    wireSessionToIpcExternal(current);
+  }
+
+  /** Rebind observation without discarding accepted or queued IM messages. */
+  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -1678,9 +1685,8 @@ export function createTurnRunner(
     }
     state.unsubscribers = [];
     state.makerSession = current;
-    wireSessionToIpcExternal(current);
-    state.unsubscribers.push(current.onEvent(handleEventFor(sessionId, userId)));
-    sessionStates.set(sessionId, state);
+    state.workingDir = current.workDir;
+    state.unsubscribers.push(current.onEvent(handleEventFor(current.id, userId)));
   }
 
   /**
@@ -2532,32 +2538,34 @@ export function createTurnRunner(
    */
   function handleToolResultFullEvent(turn: TurnState, event: AgentEvent): void {
     if (turn.allowedFileRoots.length === 0) return;
+    const extraAbsPaths = collectToolResultImages(turn.mediaAbsPaths, event);
+    if (extraAbsPaths.length === 0) return;
+    void ensureStreamingHandle(turn).then((handle) => {
+      for (const absPath of extraAbsPaths) handle?.addExtraImageAbsPath?.(absPath);
+    });
+  }
+
+  /** Both inbound and background turns resolve and deduplicate the same media ledger. */
+  function collectToolResultImages(mediaAbsPaths: string[], event: AgentEvent): string[] {
     const data = event.data as { fullText?: unknown } | null;
-    if (!data || typeof data.fullText !== 'string') return;
+    if (!data || typeof data.fullText !== 'string') return [];
     const urls = extractRenderableXdtImageUrls(data.fullText);
-    if (urls.length === 0) return;
     const extraAbsPaths: string[] = [];
     for (const url of urls) {
       try {
         const { absPath } = url.startsWith('cindy-media://')
           ? resolveCindyMediaUrl(url)
           : resolveXdtImageUrl(url);
-        extraAbsPaths.push(absPath);
-        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+        if (!mediaAbsPaths.includes(absPath)) {
+          mediaAbsPaths.push(absPath);
+          extraAbsPaths.push(absPath);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`[${channel}/turn] resolve managed image failed for ${url}: ${msg}`);
       }
     }
-    if (extraAbsPaths.length === 0) return;
-    // streamingHandle 可能还没 spawn (e.g. 工具调用先于任何 text delta) — 触发
-    // 一下 ensureStreamingHandle 让 card 先建出来, 再投递。投递接口本身是
-    // O(1) 同步 push, 不阻塞事件循环。终态群主流镜像读 turn.mediaAbsPaths,
-    // 所以 extra 图必须同步记到 turn 上, 不能只挂在句柄里。
-    void ensureStreamingHandle(turn).then((handle) => {
-      if (!handle?.addExtraImageAbsPath) return; // patchedCardHandle 不实现这个能力 / 创建失败(null)
-      for (const absPath of extraAbsPaths) handle.addExtraImageAbsPath(absPath);
-    });
+    return extraAbsPaths;
   }
 
   /**
@@ -2686,7 +2694,7 @@ export function createTurnRunner(
     // create or close a projection card.
     if (event.type === 'status') return;
     if (event.type === 'done' && isTurnContinuationBoundaryEvent(event)) return;
-    if (!['text', 'tool_use', 'done', 'error'].includes(event.type)) return;
+    if (!['text', 'tool_use', 'tool_result_full', 'done', 'error'].includes(event.type)) return;
     // 首条事件惰性建转播态(避免给空 turn 开卡)。
     if (!state.scheduledTranspond) {
       const origin = event.turnOrigin;
@@ -2697,12 +2705,24 @@ export function createTurnRunner(
         activity: createTurnActivity(Date.now()),
         activityTicker: null,
         buffer: '',
+        mediaAbsPaths: [],
         streamingHandle: null,
         streamingHandlePromise: null,
       };
     }
     const t = state.scheduledTranspond;
     switch (event.type) {
+      case 'tool_result_full': {
+        if (state.makerSession.remoteHostId) return;
+        const paths = collectToolResultImages(t.mediaAbsPaths, event);
+        if (paths.length && richIm) {
+          void ensureTranspondHandle(state, t).then((handle) => {
+            if (sessionStates.get(state.makerSession.id) !== state) return;
+            for (const absPath of paths) handle.addExtraImageAbsPath?.(absPath);
+          }).catch((err) => log.warn('transpond media failed (non-fatal)', err));
+        }
+        return;
+      }
       case 'text': {
         const data = event.data as { text?: string; isFinal?: boolean } | null;
         if (!data || typeof data.text !== 'string') return;
@@ -2773,16 +2793,31 @@ export function createTurnRunner(
     // 它不置 turn.done, composeStreamingView 会把 activity 一起写进正文。
     setActivityNotice(t.activity, null);
     // 没产出任何内容(无文本无步骤)且无错 → 不留空卡。
-    if (!t.streamingHandle && t.buffer.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
+    if (!t.streamingHandle && t.buffer.length === 0 && t.mediaAbsPaths.length === 0 && t.activity.totalSteps === 0 && !errMsg) {
       return;
     }
     try {
+      if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && t.buffer.includes('![')) {
+        const materialized = await materializeLocalMarkdownImages({
+          text: t.buffer, workingDir: state.workingDir, sessionId: state.makerSession.id,
+          maxImages: 4, existingAbsPaths: t.mediaAbsPaths,
+        });
+        t.buffer = materialized.text;
+        for (const absPath of materialized.absPaths) {
+          if (!t.mediaAbsPaths.includes(absPath)) t.mediaAbsPaths.push(absPath);
+        }
+      }
+      if (sessionStates.get(state.makerSession.id) !== state) return;
       const base = composeTranspondView(t, true);
       const body = errMsg ? [base, ui.agent.runtimeError(errMsg)].filter(Boolean).join('\n\n') : base;
       if (output.kind === 'chunked-text') {
         // 微信等文本渠道由适配器解析当前账号下该聊天最近的有效回复上下文。
         // 不伪造入站 taskId，也不占用另一次用户消息的 durable final。
         if (body) await im.sendMarkdownText(state.userId, body, { threadTs: state.scopeKey });
+        for (const absPath of t.mediaAbsPaths.slice(0, 4)) {
+          if (sessionStates.get(state.makerSession.id) !== state) return;
+          await im.sendFile(state.userId, absPath, undefined, { threadTs: state.scopeKey });
+        }
         return;
       }
       const handle = await ensureTranspondHandle(state, t);
@@ -4017,7 +4052,10 @@ export function createTurnRunner(
     attachSessionOutput: (session, userId) => {
       const existing = sessionStates.get(session.id);
       if (existing?.makerSession === session) return;
-      if (existing) cleanupSessionState(existing);
+      if (existing) {
+        rebindSessionOutput(existing, session, userId);
+        return;
+      }
       ensureMakerCloseSubscription(getMaker());
       const state: SessionState = {
         makerSession: session,

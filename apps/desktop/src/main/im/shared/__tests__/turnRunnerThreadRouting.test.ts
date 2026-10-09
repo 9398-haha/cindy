@@ -9,6 +9,7 @@
  *  5. binding(identity+scopeKey)命中 → attached 路由到 desktop session
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
 import type { AgentEvent, Session, SessionSendResult } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     removeMessageReaction: vi.fn(),
     sendText: vi.fn(),
     sendMarkdownText: vi.fn(),
+    sendFile: vi.fn(async () => ({ ok: true, messageId: 'file' })),
     startStreamingText: vi.fn(),
     patchMarkdownCard: vi.fn(),
     sendInteractiveCard: vi.fn(),
@@ -134,6 +136,7 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   );
   const session = {
     id: sessionId,
+    workDir: '/tmp/slack-wd',
     agentKind: 'claude-code',
     abort: vi.fn(async () => undefined),
     send,
@@ -243,6 +246,7 @@ function streamingHandleStub() {
     append: vi.fn(),
     replace: vi.fn(),
     finalize: vi.fn(async () => undefined),
+    addExtraImageAbsPath: vi.fn(),
     close: vi.fn(),
   };
 }
@@ -554,6 +558,62 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
 });
 
 describe('turnRunner 渠道任务后台结果回传', () => {
+  it('换执行实例只换绑监听，保留同话题已经排队的消息', async () => {
+    const old = await channelAndIdle();
+    vi.mocked(old.session.isTurnRunning).mockReturnValue(true);
+    await runTurn('100.1', 'queued after background');
+    const next = makeSessionHarness(old.session.id);
+    harnesses.set(old.session.id, next);
+    runner.attachSessionOutput(next.session, 'U1');
+    expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+    old.emit({ type: 'text', data: { text: 'stale result' } });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    next.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(next.send).toHaveBeenCalledTimes(1));
+    expect(next.send.mock.calls[0]![0]).toEqual(expect.objectContaining({
+      content: expect.stringContaining('queued after background'),
+    }));
+    next.emit({ type: 'done', data: {} });
+  });
+
+  it.each(['rich-card', 'chunked-text'] as const)('%s 回传纯工具图片并去重，不依赖最终正文', async (kind) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    if (kind === 'chunked-text') {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+    }
+    const h = makeSessionHarness('image-background');
+    runner.attachSessionOutput(h.session, 'U1');
+    const absPath = path.resolve('generated.png');
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath });
+    const event: AgentEvent = { type: 'tool_result_full', data: {
+      fullText: JSON.stringify({ xdt_image_url: 'xdt-image://generated' }),
+    } };
+    h.emit(event);
+    h.emit(event);
+    h.emit({ type: 'done', data: {} });
+    if (kind === 'rich-card') {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith(''));
+      expect(stub.addExtraImageAbsPath).toHaveBeenCalledExactlyOnceWith(absPath);
+      expect(stub.addExtraImageAbsPath.mock.invocationCallOrder[0]).toBeLessThan(stub.finalize.mock.invocationCallOrder[0]!);
+    } else {
+      await vi.waitFor(() => expect(mocks.slackIm.sendFile).toHaveBeenCalledExactlyOnceWith('U1', absPath, undefined, { threadTs: undefined }));
+      expect(mocks.slackIm.sendMarkdownText).not.toHaveBeenCalled();
+    }
+  });
+
+  it('远端后台轮次不把媒体路径作为本地文件发送', async () => {
+    const h = makeSessionHarness('remote-background');
+    Object.assign(h.session, { remoteHostId: 'ssh-host' });
+    runner.attachSessionOutput(h.session, 'U1');
+    h.emit({ type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://remote"}' } });
+    h.emit({ type: 'done', data: {} });
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+  });
+
   it('重启后仅恢复输出监听，不新建会话；重复恢复不会重复回复', async () => {
     const h = makeSessionHarness('cold-session');
     const stub = streamingHandleStub();
