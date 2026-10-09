@@ -218,12 +218,13 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(body.indexOf('void refreshRemoteDeviceSessions(')).toBeGreaterThan(finallyAt);
   });
 
-  it('narrows the device-link worker source against the selected Agent device catalog', () => {
-    // device-link 可选第三台电脑运行 Agent；沿已筛选的 Agent 目录收窄，
-    // 不能误用控制端 localProviders，也不能绕过 remoteAgentProviders 的开放范围。
+  it('narrows the device-link worker source against the controlled device catalog', () => {
+    // 草稿里持久化的来源/模型按**目标设备**的目录收窄:device-link 分支必须用
+    // agentCatalogProviders(由 deviceProviders 派生,Agent 在另一台电脑运行时再收窄到
+    // 那台开放远程调用的来源),拿控制端的 localProviders 收窄等于用错机器的目录。
     const collapsed = source.replace(/\s+/g, ' ');
-    expect(collapsed).toContain(
-      '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders)',
+    expect(source).toMatch(
+      /const agentCatalogProviders = useMemo\(\s*\(\) => \(effectiveAgentDeviceId \? remoteAgentProviders\(deviceProviders\) : deviceProviders\)/,
     );
     expect(
       collapsed.match(
