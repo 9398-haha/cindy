@@ -243,10 +243,15 @@ export function OrcaTeamPanelView({
       <ContextSheetGroup label={t('session.collab.workerCountSummary', { count: workers.length, running })}>
         {workers.map((worker) => (
           <ContextSheetRow
-            detail={[
-              orcaAgentLabel(worker.agentKind),
-              worker.model,
-            ].filter(Boolean).join(' · ')}
+            detail={(worker.executionDevice
+              ? [
+                  worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
+                  ...(worker.executionDevice.reachable === false
+                    ? [t('session.collab.deviceUnreachable')]
+                    : [orcaAgentLabel(worker.agentKind), worker.model]),
+                ]
+              : [orcaAgentLabel(worker.agentKind), worker.model]
+            ).filter(Boolean).join(' · ')}
             disabled={busy}
             icon={<WorkerStatusDot status={worker.status} />}
             key={worker.workerId}

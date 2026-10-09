@@ -2082,8 +2082,16 @@ export default function SessionScreen() {
   // 「复用 + 移到栈顶」,返回手势就落回 Worker,且每往返一次改写一次栈内 Screen 顺序
   // (Android 白屏)。已在栈里 → dismissTo 回退,不在栈里 → push。理由与不变量见
   // collabSessionNavigation.ts。
-  const openCollabSession = useCallback((targetSessionId: string) => {
+  const openCollabSession = useCallback((
+    targetSessionId: string,
+    target?: { deviceId: string; deviceName?: string | null },
+  ) => {
     if (!deviceId || !targetSessionId) return;
+    // 在另一台电脑运行的 Worker 打开那台上的真实任务；其余沿用当前电脑。
+    const targetDeviceId = target?.deviceId ?? deviceId;
+    const targetDeviceName = target
+      ? (target.deviceName ?? t('session.collab.otherComputer'))
+      : deviceName;
     navigateToCollabSession(
       {
         getState: () => navigation.getState(),
@@ -2104,10 +2112,10 @@ export default function SessionScreen() {
           },
         }),
       },
-      { sessionId: targetSessionId, deviceId, deviceName },
+      { sessionId: targetSessionId, deviceId: targetDeviceId, deviceName: targetDeviceName },
       sessionId,
     );
-  }, [deviceId, deviceName, navigation, router, sessionId]);
+  }, [deviceId, deviceName, navigation, router, sessionId, t]);
   // 来源目录在协同 hook 之后才取得(它依赖 Worker 选择器是否打开),经 ref 在提交时读。
   const collabProvidersRef = useRef<readonly ProviderView[] | null>(null);
   const collab = useSessionOrcaCollab({

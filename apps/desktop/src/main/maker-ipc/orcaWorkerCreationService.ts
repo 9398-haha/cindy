@@ -176,6 +176,8 @@ export type OrcaWorkerCreationResult =
       /** initial_task 入队(未直发)时回传:排队消息的可寻址句柄,供 lead 查看/修改/撤回。 */
       queuedMessageId?: string;
       limit?: OrcaWorkerLimitSnapshot;
+      /** 在另一台电脑运行的 Worker 才有；workerSessionId 此时是本机代理任务。 */
+      executionDeviceId?: string;
       resolved: {
         agent: AgentKind;
         model: string;
@@ -404,6 +406,13 @@ export function normalizeOrcaWorkerLabel(value: string): { ok: true; value: stri
 }
 
 const ORCA_WORKER_CREATION_RESERVATION_LEASE_MS = 5 * 60 * 1000;
+
+/** Worker 任务标题：label 与角色名相同时只写一次(「Worker · reader」而非「Worker · reader · reader」)。 */
+export function orcaWorkerTitle(role: string, label: string): string {
+  return role.trim().toLowerCase() === label.trim().toLowerCase()
+    ? `Worker · ${role}`
+    : `Worker · ${role} · ${label}`;
+}
 
 function isWorkerLabelConstraintError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -804,7 +813,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           ...(params.fast !== undefined ? { fast: params.fast } : {}),
           permissionMode,
           ...(requestedDir ? { workingDir: requestedDir } : {}),
-          title: `Worker · ${role} · ${label}`,
+          title: orcaWorkerTitle(role, label),
         });
         if (!result.ok) return { ok: false, errorCode: result.errorCode, message: result.message };
         opened = result;
@@ -864,6 +873,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         teamId: params.teamId,
         workerId,
         workerSessionId: opened.proxySessionId,
+        executionDeviceId: deviceId,
         softLimitExceeded,
         limit: limitSnapshot(settings.workerHardLimit, reservation.occupiedSlotsBefore + 1),
         resolved: {
@@ -1378,7 +1388,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         fastMode: resolved.fastMode,
         // 所有创建入口先解析 Worker 创建偏好，再统一透传到这里；不继承 Lead 权限。
         permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
-        title: `Worker · ${role.value} · ${label.value}`,
+        title: orcaWorkerTitle(role.value, label.value),
         orcaRole: 'worker',
         vendorOptions: workerVendorOptions,
       });

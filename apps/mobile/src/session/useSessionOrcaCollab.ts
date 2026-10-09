@@ -552,7 +552,8 @@ export function useSessionOrcaCollab(params: {
   sheetOpen: boolean;
   setSheetView(view: 'main' | CollabSheetView): void;
   setSheetOpen(open: boolean): void;
-  openSession(sessionId: string): void;
+  /** target 缺省 = 当前任务所在电脑；在另一台电脑运行的 Worker 传那台。 */
+  openSession(sessionId: string, target?: { deviceId: string; deviceName?: string | null }): void;
 }) {
   const { maker, deviceId, sessionId, session, prefsScope, connectionEpoch, getProviders, enabled, sheetView, sheetOpen, setSheetView, setSheetOpen, openSession } = params;
   const role = enabled ? session?.orcaRole ?? null : null;
@@ -724,13 +725,26 @@ export function useSessionOrcaCollab(params: {
     if (worker.status === 'done') {
       void makerRef.current.orca.acknowledgeDone(sessionId, worker.workerId).catch(() => undefined);
     }
+    // 在另一台电脑运行的 Worker：本机这条只是代理任务，打开那台上的真实任务。
+    const remote = worker.executionDevice;
+    if (remote) {
+      openSession(remote.remoteSessionId, {
+        deviceId: remote.deviceId,
+        deviceName: remote.deviceName,
+      });
+      return;
+    }
     openSession(worker.sessionId);
   }, [openSession, sessionId, setSheetOpen]);
 
   const confirmArchive = useCallback((worker: OrcaTeamWorker) => {
     Alert.alert(
       i18n.t('session.collab.archiveConfirmTitle', { name: orcaWorkerDisplayName(worker) }),
-      i18n.t('session.collab.archiveConfirmDesc'),
+      worker.executionDevice
+        ? i18n.t('session.collab.archiveRemoteConfirmDesc', {
+            device: worker.executionDevice.deviceName ?? i18n.t('session.collab.otherComputer'),
+          })
+        : i18n.t('session.collab.archiveConfirmDesc'),
       [
         { text: i18n.t('session.collab.cancel'), style: 'cancel' },
         {

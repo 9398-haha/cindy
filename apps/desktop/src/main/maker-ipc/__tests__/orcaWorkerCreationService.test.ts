@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildNoProviderMessage,
   createOrcaWorkerCreationService,
+  orcaWorkerTitle,
   providerRouteRequiresExplicitSelection,
   type OrcaWorkerCreationDeps,
   type OrcaWorkerCreateParams,
@@ -237,6 +238,15 @@ describe('SSH Codex Worker catalog', () => {
         model: model ?? 'remote-lead', providerId: 'openai', remoteHostId: 'remote-builder', effort: 'low', fastMode: false,
       }));
     }
+  });
+});
+
+describe('orcaWorkerTitle', () => {
+  it('names the role once when the label repeats it', () => {
+    expect(orcaWorkerTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerTitle('Reviewer', 'reviewer')).toBe('Worker · Reviewer');
+    expect(orcaWorkerTitle('developer', 'developer-2')).toBe('Worker · developer · developer-2');
+    expect(orcaWorkerTitle('转写', 'transcribe')).toBe('Worker · 转写 · transcribe');
   });
 });
 
@@ -1916,7 +1926,7 @@ describe('OrcaWorkerCreationService', () => {
       effort: 'high',
       fastMode: true,
       permissionMode: 'auto',
-      title: 'Worker · reviewer · reviewer',
+      title: 'Worker · reviewer',
       orcaRole: 'worker',
       vendorOptions: expect.objectContaining({
         orcaRole: 'worker',

@@ -400,9 +400,13 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     const remote = (sessionId: string) => runtime.isRemote(sessionId);
     const wrapped: OrcaTeamServiceDeps = {
       ...base,
+      // 远端 Worker 在本机永远没有活会话；只有运行设备正在跑时才视为在线，
+      // 否则按「已恢复」派发(恢复本身是空操作)，wake_kind 与实际一致。
       getLiveSession: (sessionId) =>
         remote(sessionId)
-          ? { isTurnRunning: () => runtime.isTurnRunning(sessionId) }
+          ? runtime.isTurnRunning(sessionId)
+            ? { isTurnRunning: () => true }
+            : null
           : base.getLiveSession(sessionId),
       resumeWorkerSession: async (worker, link) => {
         if (remote(worker.sessionId)) return;

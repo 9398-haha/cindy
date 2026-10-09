@@ -2428,6 +2428,10 @@ interface EnableOrcaOptions {
   workerPermissionMode?: OrcaWorkerPermissionMode;
   /** 新建 Lead 专用：先建 Worker，等首条 Lead 输入 accepted 且可查询后再派任务。 */
   deferDelegateTask?: boolean;
+  /** 首个 Worker 放到同账号另一台电脑运行；缺省 = 本机。 */
+  executionDeviceId?: string;
+  /** 运行设备上的工作目录；缺省由那台分配。只在指定运行设备时生效。 */
+  workingDir?: string;
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
@@ -7183,11 +7187,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   function createOrcaDiagnosticsDeps() {
+    const remoteRuntime = orcaRemoteWorkersForHost?.runtime;
     return {
       readActiveTeam: readActiveOrcaTeamByLeadReadOnly,
       listWorkersByLead,
-      getSessionStatus: orcaSessionStatus,
+      // 远端 Worker 的本机代理行从不运行；状态取运行设备的轮询投影。
+      getSessionStatus: (sessionId: string) =>
+        remoteRuntime?.isRemote(sessionId)
+          ? !remoteRuntime.isReachable(sessionId)
+            ? 'unreachable'
+            : remoteRuntime.isTurnRunning(sessionId) ? 'running' : 'idle'
+          : orcaSessionStatus(sessionId),
       getWorkerFlowStatus: async (sessionId: string) => {
+        if (remoteRuntime?.isRemote(sessionId)) {
+          const running = remoteRuntime.isTurnRunning(sessionId);
+          return { isWorking: running, willQueue: running, queuedCount: 0, queuePaused: false };
+        }
         await inputCoordinator.ensureQueueRestored(sessionId);
         const inspection = inputCoordinator.getQueueInspection(sessionId);
         const live = getStableSessionForTurnBoundary(sessionId);
@@ -7199,7 +7214,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           queuePaused: inputCoordinator.isQueuePaused(sessionId),
         };
       },
-      readLatestAssistantMessage: readLatestWorkerAssistantMessage,
+      readLatestAssistantMessage: (workerSessionId: string) =>
+        remoteRuntime?.isRemote(workerSessionId)
+          ? remoteRuntime.latestReply(workerSessionId)
+          : readLatestWorkerAssistantMessage(workerSessionId),
     };
   }
 
@@ -9470,6 +9488,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       delegateTask: opts.delegateTask,
       deferDelegateTask: opts.deferDelegateTask,
       workerPermissionMode: opts.workerPermissionMode,
+      ...(opts.executionDeviceId
+        ? {
+            executionDeviceId: opts.executionDeviceId,
+            ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
+          }
+        : {}),
     });
     if (!result.ok) throwOrcaServiceFailure(result);
     log.info('enableOrca done', {
@@ -12208,6 +12232,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         providerId?: unknown;
         workerPermissionMode?: unknown;
         deferDelegateTask?: unknown;
+        executionDeviceId?: unknown;
+        workingDir?: unknown;
       };
       const workerAgent: AgentKind =
         body.workerAgent === 'codex' ? 'codex' : body.workerAgent === 'pi' ? 'pi' : 'claude-code';
@@ -12236,6 +12262,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : undefined,
         workerPermissionMode: body.workerPermissionMode,
         deferDelegateTask: body.deferDelegateTask,
+        // 运行设备与那台上的目录(可选)；旧控制端不带，行为不变。
+        ...(typeof body.executionDeviceId === 'string' && body.executionDeviceId.trim()
+          ? {
+              executionDeviceId: body.executionDeviceId.trim(),
+              ...(typeof body.workingDir === 'string' && body.workingDir.trim()
+                ? { workingDir: body.workingDir.trim() }
+                : {}),
+            }
+          : {}),
       });
     },
   );
@@ -12288,11 +12323,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const result = await orcaTeamService.sendToWorker({
             callerLeadSessionId: leadSessionId,
             targetSessionId: workerSessionId,
-            message: buildUiAssignmentInitialTask({
-              leadSessionId,
-              initialTask: initialTask.trim(),
-              snapshotBeforeMs,
-            }),
+            // 远端 Worker 在另一台电脑，没有读取 Lead 历史的 Worker 桥，只发任务原文。
+            message: orcaRemoteWorkersForHost?.runtime.isRemote(workerSessionId)
+              ? initialTask.trim()
+              : buildUiAssignmentInitialTask({
+                  leadSessionId,
+                  initialTask: initialTask.trim(),
+                  snapshotBeforeMs,
+                }),
           }, assertCurrent);
           if (!result.ok) throwOrcaServiceFailure(result);
           return result;

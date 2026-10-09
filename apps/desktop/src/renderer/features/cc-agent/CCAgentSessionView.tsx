@@ -3089,6 +3089,12 @@ export function CCAgentSessionView({
           providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
           workerPermissionMode: form.workerPermissionMode,
+          ...(form.executionDeviceId
+            ? {
+                executionDeviceId: form.executionDeviceId,
+                ...(form.workingDir ? { workingDir: form.workingDir } : {}),
+              }
+            : {}),
         };
         const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) {
@@ -5951,6 +5957,10 @@ export function CCAgentSessionView({
         // openai-chat 桥接 Codex 只挂在本地 proxy),与 main 侧 remote-worker
         // guard 同规则(codex review R28)。
         sshRemote={!!session?.remoteHostId}
+        // 首个 Worker 也可放到另一台电脑：仅本机 Lead(非 SSH、Agent 也在本机)。
+        executionDevicesEnabled={
+          !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+        }
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，

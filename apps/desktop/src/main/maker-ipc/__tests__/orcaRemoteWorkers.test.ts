@@ -275,6 +275,13 @@ describe('wrapTeamDeps', () => {
     return ctx;
   }
 
+  it('treats an idle remote worker as not live so dispatch reports it as resumed', async () => {
+    const { workers } = await trackedWorker();
+    const wrapped = workers.wrapTeamDeps(baseDeps());
+    expect(wrapped.getLiveSession('proxy-1')).toBeNull();
+    workers.stop();
+  });
+
   it('leaves local workers on the existing path', async () => {
     const { workers } = await trackedWorker();
     const base = baseDeps();

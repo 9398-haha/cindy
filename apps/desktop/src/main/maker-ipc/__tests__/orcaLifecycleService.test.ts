@@ -704,6 +704,35 @@ describe('OrcaLifecycleService', () => {
     ]);
   });
 
+  it('places the first worker on another computer and sends its task as plain text', async () => {
+    const { deps, service } = createDeps();
+    const create = vi.mocked(deps.createWorkerInTeam);
+    const base = create.getMockImplementation()!;
+    create.mockImplementation(async (params, ...rest) => {
+      const created = await base(params, ...rest);
+      return created.ok ? { ...created, executionDeviceId: params.executionDeviceId } : created;
+    });
+
+    await expect(
+      service.enableTeam({
+        leadSessionId: 'lead-1',
+        workerAgent: 'codex',
+        role: 'reader',
+        delegateTask: '读取 notes.txt 第二行',
+        executionDeviceId: 'mac-mini',
+        workingDir: '/Users/demo/Interviews',
+      }),
+    ).resolves.toMatchObject({ ok: true, dispatched: true });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews' }),
+      undefined,
+      expect.any(Function),
+    );
+    // 运行设备上没有读取 Lead 历史的 Worker 桥：不包 UI Assignment。
+    expect(vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message).toBe('读取 notes.txt 第二行');
+  });
+
   it('keeps the worker role slug as the default label when a delegate task exists', async () => {
     const { calls, deps, service } = createDeps();
 

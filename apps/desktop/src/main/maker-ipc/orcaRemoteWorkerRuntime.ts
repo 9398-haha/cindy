@@ -549,6 +549,18 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       }
     },
 
+    /** 诊断用：运行设备上这条任务的最后一条回复(读不到返回空串)。 */
+    async latestReply(proxySessionId: string): Promise<string> {
+      const state = workers.get(proxySessionId);
+      if (!state) return '';
+      try {
+        return (await lastAssistantMessage(state.ref)).text;
+      } catch (err) {
+        if (deviceUnreachable(err)) setReachable(state.ref.deviceId, false);
+        return '';
+      }
+    },
+
     /** 停止运行设备上的当前一轮；任务与记录保留。 */
     async abort(proxySessionId: string): Promise<boolean> {
       const state = workers.get(proxySessionId);
