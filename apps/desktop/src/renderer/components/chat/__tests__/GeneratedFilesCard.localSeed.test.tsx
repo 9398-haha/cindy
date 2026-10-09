@@ -109,6 +109,34 @@ describe('local generated files remount', () => {
     await waitFor(() => expect(screen.queryByText('report.md')).toBeNull());
   });
 
+  it('keeps a seeded chip non-interactive until its re-check lands', async () => {
+    const pendingStat: Array<(stat: unknown) => void> = [];
+    const statPath = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingStat.push(resolve);
+        }),
+    );
+    stubStat(statPath);
+    const first = renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START });
+    await waitFor(() => expect(pendingStat).toHaveLength(1));
+    pendingStat[0]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() => expect(screen.getByText('report.md')).toBeTruthy());
+    first.unmount();
+
+    // The seeded chip holds the row height, but a stale stat must not make it
+    // clickable: DESIGN.md §14.5 decides local clickability by a real check.
+    renderCard({ renderItemKey: 'genfiles-a', turnStartMs: START });
+    const seeded = screen.getByText('report.md').closest('button');
+    expect(seeded).not.toBeNull();
+    expect(seeded!.disabled).toBe(true);
+    await waitFor(() => expect(pendingStat).toHaveLength(2));
+    pendingStat[1]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await waitFor(() =>
+      expect(screen.getByText('report.md').closest('button')!.disabled).toBe(false),
+    );
+  });
+
   it('re-checks a seeded path when another file finishes during the first check', async () => {
     const notes: GeneratedFileRef = {
       path: 'C:\\work\\notes.md',

@@ -19,7 +19,9 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * 的文件不出 chip,整卡为空则不渲染。远程会话经 verifyRemotePathCached 远端 stat
  * 复核:仅在远端明确确认是普通文件后呈现；检查中、断链或限流都不先展示一张
  * 可能无法打开的完成卡。首屏等检查完成再出现;本机路径若本次运行已 stat 过,重挂载时
- * 按当前时间窗同步判定先出卡,再整卡复核(见 seedLocalGeneratedFilesFromStatCache)。
+ * 按当前时间窗同步判定先出卡,再整卡复核(见 seedLocalGeneratedFilesFromStatCache);
+ * 复核落地前该 chip 不可交互 —— 历史 stat 不充当当前可点结论(同 §14.5:本机
+ * 会话以真实存在性检查决定可点态)。
  * 流式期间只 stat 已完成(ready !== false,或本轮已封口)且尚未确认的路径;内容指纹不变就不发 IPC,
  * 已确认的 chip 留在原地,避免 messages 换引用把整页带着跳。
  *
@@ -242,9 +244,12 @@ type GeneratedFilePresentation = 'default' | 'bot-primary' | 'bot-related';
 function GeneratedFileChip({
   file,
   presentation = 'default',
+  pending = false,
 }: {
   file: GeneratedFileRef;
   presentation?: GeneratedFilePresentation;
+  /** 首屏由 stat 缓存点亮、尚未被本次 stat 复核的路径:只占位,不可交互。 */
+  pending?: boolean;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
@@ -347,17 +352,25 @@ function GeneratedFileChip({
       <button
         type="button"
         title={file.path}
-        onClick={() => void open()}
-        onContextMenu={ctxMenu.onContextMenu}
+        disabled={pending}
+        onClick={pending ? undefined : () => void open()}
+        onContextMenu={pending ? undefined : ctxMenu.onContextMenu}
         className={cn(
           CHAT_FOCUS_CLASS,
           CHAT_COLOR_TRANSITION_CLASS,
           artifact || presentation === 'bot-primary'
             ? [
-                'group block cursor-pointer overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left hover:border-[var(--text-tertiary)]',
+                pending
+                  ? 'block overflow-hidden'
+                  : 'group block cursor-pointer overflow-hidden',
+                'rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-left',
+                pending ? undefined : 'hover:border-[var(--text-tertiary)]',
                 artifact ? 'w-full max-w-[420px]' : 'min-w-0 flex-1 basis-[220px]',
               ]
-            : 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]',
+            : cn(
+                'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-full bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)]',
+                pending ? undefined : 'hover:bg-[var(--cmd-palette-item-hover)]',
+              ),
         )}
       >
         {artifact ? (
@@ -761,6 +774,12 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       : seedLocalGeneratedFilesFromStatCache(files, turnStartMs, turnEndMs, turnSealed),
   );
   const [existing, setExisting] = useState<GeneratedFileRef[] | null>(initialVisible);
+  // 由 stat 缓存点亮的首屏路径,在本次 stat 真实落地前不算「已确认存在」
+  // (DESIGN.md §14.5:本机会话以真实存在性检查决定可点态):这些 chip 只占位、
+  // 不可交互,复核落地才点亮为可点。
+  const [pendingPaths, setPendingPaths] = useState<ReadonlySet<string>>(
+    () => new Set((initialVisible ?? []).map((file) => file.path)),
+  );
   const [expanded, setExpanded] = useState(false);
   const [relatedExpanded, setRelatedExpanded] = useState(false);
   const [remoteVerdictGen, setRemoteVerdictGen] = useState(0);
@@ -898,6 +917,16 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       // The seeded conclusion is now re-checked by real stats; only then does
       // the pending-review mark go away.
       seededRef.current = false;
+      setPendingPaths((previous) => {
+        if (previous.size === 0) return previous;
+        const checkedNow = new Set(toStat.map((file) => file.path));
+        const visibleNow = new Set(merged.map((file) => file.path));
+        const next = new Set<string>();
+        for (const path of previous) {
+          if (visibleNow.has(path) && !checkedNow.has(path)) next.add(path);
+        }
+        return next.size === previous.size ? previous : next;
+      });
     })();
 
     return () => {
@@ -934,7 +963,12 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
             </span>
             <div className="flex flex-wrap gap-2">
               {visiblePrimary.map((file) => (
-                <GeneratedFileChip key={file.path} file={file} presentation="bot-primary" />
+                <GeneratedFileChip
+                  key={file.path}
+                  file={file}
+                  presentation="bot-primary"
+                  pending={pendingPaths.has(file.path)}
+                />
               ))}
             </div>
             {hiddenPrimaryCount > 0 ? (
@@ -977,7 +1011,12 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
             {relatedExpanded ? (
               <div className="flex flex-wrap gap-2">
                 {related.map((file) => (
-                  <GeneratedFileChip key={file.path} file={file} presentation="bot-related" />
+                  <GeneratedFileChip
+                    key={file.path}
+                    file={file}
+                    presentation="bot-related"
+                    pending={pendingPaths.has(file.path)}
+                  />
                 ))}
               </div>
             ) : null}
@@ -1004,7 +1043,11 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
       )}
       <div className={cn('flex flex-wrap gap-2', hasArtifacts && 'flex-col')}>
         {visible.map((f) => (
-          <GeneratedFileChip key={f.path} file={f} />
+          <GeneratedFileChip
+            key={f.path}
+            file={f}
+            pending={pendingPaths.has(f.path)}
+          />
         ))}
         {hiddenCount > 0 && (
           <button
