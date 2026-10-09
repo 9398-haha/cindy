@@ -537,8 +537,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const plans = await api<ServerPlan[]>(`/conversations/${room}/plans?ids=${i.planId}`);
     const plan = plans.find(p => p.id === i.planId); if (!plan) throw new Error('PLAN_CLOSED');
     const botId = i.botId ? actors.find(a => a.externalId === i.botId)?.id ?? id.parse(i.botId) : undefined;
+    // The shared UI uses dismiss for both an unstarted proposal and ending a paused plan.
+    // Chat Server distinguishes these actions; preserve the local service's waiting semantics.
+    const serverAction = action === 'dismiss' && plan.status === 'waiting' ? 'stop' : i.action ?? action;
     await api(`/conversations/${room}/plans/${plan.id}`, 'POST', { operationId: randomUUID(), expectedRevision: plan.revision,
-      action: i.action ?? action, position: i.position, botId });
+      action: serverAction, position: i.position, botId });
     changed(room); return { ok: true as const };
   }
   async function decideArrangement(s: Snapshot, sourceId: string, text: string, forced: boolean, attachments: BotGroupAttachment[], intent: PlanIntent) {

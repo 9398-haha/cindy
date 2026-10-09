@@ -103,6 +103,23 @@ describe('server group feature parity', () => {
   }
   async function flush() { await vi.advanceTimersByTimeAsync(0); }
   it.each([
+    ['proposed', 'dismiss'],
+    ['waiting', 'stop'],
+  ])('dismisses a %s plan using the server %s action', async (status, expectedAction) => {
+    arrange({ ...proposed, status });
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => {
+      if (route === `/conversations/${roomId}/plans/${planId}` && method === 'POST') {
+        const accepted = status === 'waiting' ? data.action === 'stop' : data.action === 'dismiss';
+        return accepted ? { body: {} } : { status: 409, body: { error: { code: 'PLAN_CLOSED' } } };
+      }
+      return base(route, method, data);
+    });
+    expect(await service.dismissPlan({ groupId: roomId, planId })).toEqual({ ok: true });
+    expect(fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}/plans/${planId}` && method === 'POST')?.[2])
+      .toMatchObject({ action: expectedAction, expectedRevision: 1 });
+  });
+  it.each([
     ['ordinary request', {}, undefined],
     ['@all', { mentions: { all: true, botIds: [] } }, undefined],
   ])('asks the organizer for %s without changing server mentions', async (_name, input, roster) => {
