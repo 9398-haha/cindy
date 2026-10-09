@@ -395,6 +395,25 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState?.step).toBe('sso-verification');
   });
 
+  it.each(['initial-url', 'initialize'] as const)('does not restore an add-account attempt after restart (%s)', async entry => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const oldUrl = callbackUrl();
+    if (entry === 'initial-url') native.initialUrl.mockResolvedValueOnce(oldUrl);
+    await restartProvider();
+    await mountLoginScreen('cold-add-account');
+    expect(native.exchange).not.toHaveBeenCalled();
+    expect(native.storage.has(pendingKey)).toBe(false);
+    expect(auth.loginState?.step).toBe('identifier');
+    await emitLink(oldUrl);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {
     await start();
     const oldCallback = callbackUrl();

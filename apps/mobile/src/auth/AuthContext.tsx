@@ -278,6 +278,7 @@ interface PendingOAuth {
   createdAt: number;
   label: string;
   realm: AuthRegion;
+  additionalAccount?: boolean;
 }
 
 export interface AuthContextValue {
@@ -1752,6 +1753,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       assertLoginFlowCurrent(expectedLoginFlowEpoch);
       if (oauthCancelledRef.current) throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      // Adding an account needs its live route and account context. After a
+      // restart, keep the existing account rather than create a hidden flow.
+      if (pending.additionalAccount && !additionalLoginRef.current) {
+        oauthCancelledRef.current = true;
+        await persistPendingOAuth(null);
+        throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      }
       const concurrent = currentCompletion();
       if (concurrent) return concurrent;
       loginInitializationRef.current = null;
@@ -1900,6 +1908,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return null;
             });
             if (!isCurrent()) return false;
+            if (pending?.additionalAccount && !additionalLoginRef.current) {
+              oauthCancelledRef.current = true;
+              await persistPendingOAuth(null);
+              if (!isCurrent()) return false;
+            }
             if (pending && !oauthCancelledRef.current) {
               // Retained credentials belong to the browser attempt. Restore its
               // cancelable wait screen instead of offering an unrelated login.
@@ -1989,6 +2002,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               createdAt: Date.now(),
               label: input.label,
               realm: authorizationRealm,
+              additionalAccount: additionalLoginRef.current,
             });
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             oauthCancelledRef.current = false;
