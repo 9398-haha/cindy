@@ -345,6 +345,56 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.exchange).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { outcome: verifiedOutcome, action: {type: 'request-sso-verification-code'}, request: native.requestVerification, step: 'sso-verification', args: ['fixture-ticket'] },
+    { outcome: {status: 'select_account', loginTicket: 'fixture-ticket', accounts: []}, action: {type: 'select-account', accountId: 'fixture-account'}, request: native.selectAccount, step: 'account-selection', args: ['fixture-ticket', 'fixture-account'] },
+    { outcome: {status: 'binding_required', bindType: 'email', bindTicket: 'fixture-ticket'}, action: {type: 'request-binding-code', contact: 'user@example.invalid'}, request: native.requestBinding, step: 'binding', args: ['fixture-ticket', 'email', 'user@example.invalid'] },
+  ] as const)('allows $step actions before the browser settles without late cancel clearing new work', async fixture => {
+    native.exchange.mockResolvedValueOnce(fixture.outcome);
+    let finishBrowser!: (value: {type: 'cancel'}) => void;
+    native.open.mockImplementationOnce(() => new Promise(resolve => { finishBrowser = resolve; }));
+    let opening!: Promise<unknown>;
+    await act(async () => { opening = auth.dispatchLoginAction({type: 'start-social-browser', provider: 'wechat', label: 'WeChat'}).catch(e => e); });
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe(fixture.step);
+    let finishRequest!: () => void;
+    fixture.request.mockImplementationOnce(() => new Promise(resolve => { finishRequest = () => resolve(verifiedOutcome); }));
+    let requesting!: Promise<boolean>;
+    await act(async () => { requesting = auth.dispatchLoginAction(fixture.action); });
+    expect(fixture.request).toHaveBeenCalledExactlyOnceWith(...fixture.args);
+    expect(auth.isBusy).toBe(true);
+    await act(async () => { finishBrowser({type: 'cancel'}); await opening; });
+    expect(auth.loginState?.step).toBe(fixture.step);
+    expect(auth.isBusy).toBe(true);
+    await act(async () => { finishRequest(); expect(await requesting).toBe(true); });
+    expect(auth.isBusy).toBe(false);
+  });
+
+  it('retires expired credentials during cold initialization', async () => {
+    native.storage.set(pendingKey, JSON.stringify({state: 'expired', codeVerifier: 'fixture-verifier', deviceId: 'fixture-device', realm: 'cn', label: 'SSO', createdAt: Date.now() - 11 * 60 * 1000}));
+    await restartProvider();
+    await mountLoginScreen('expired-cold');
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it('queues expired cleanup before a newer browser credential write', async () => {
+    native.storage.set(pendingKey, JSON.stringify({state: 'expired', codeVerifier: 'fixture-verifier', deviceId: 'fixture-device', realm: 'cn', label: 'SSO', createdAt: Date.now() - 11 * 60 * 1000}));
+    await restartProvider();
+    let finishDelete!: () => void;
+    native.deleteSecure.mockImplementationOnce(() => new Promise<void>(resolve => {
+      finishDelete = () => { native.storage.delete(pendingKey); resolve(); };
+    }));
+    await mountLoginScreen('expired-cleanup');
+    let opening!: Promise<boolean>;
+    await act(async () => { opening = auth.dispatchLoginAction({type: 'reset'}).then(() => auth.dispatchLoginAction({type: 'start-social-browser', provider: 'wechat', label: 'WeChat'})); });
+    await act(async () => { finishDelete(); await opening; });
+    expect(auth.loginState?.step).toBe('browser-redirect');
+    expect(JSON.parse(native.storage.get(pendingKey)!).state).not.toBe('expired');
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {
     await start();
     const oldCallback = callbackUrl();

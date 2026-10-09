@@ -1755,6 +1755,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const concurrent = currentCompletion();
       if (concurrent) return concurrent;
       loginInitializationRef.current = null;
+      const browserAction = loginActionInFlightRef.current;
       suspendSessionRecoveryForLogin();
       const run = (async () => {
         setIsBusy(true);
@@ -1786,6 +1787,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             expectedLoginFlowEpoch,
           );
           assertLoginFlowCurrent(expectedLoginFlowEpoch);
+          // Release only the browser action that produced this continuation.
+          // Until exchange completes, native cancellation still cancels it.
+          if (loginActionInFlightRef.current === browserAction) {
+            loginActionInFlightRef.current = null;
+            loginActionInFlightEpochRef.current = null;
+          }
           setAuthError(null);
         } catch (error) {
           if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) throw error;
@@ -1883,9 +1890,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           try {
             const did = await (deviceIdRef.current ?? prepareBetaChannelForCurrentDevice());
             if (!isCurrent()) return false;
-            const pending = await readPendingOAuth().catch((error: unknown) => {
-              if (authErrorCode(error) === 'INVALID_AUTH_CODE') return null;
-              throw error;
+            const pending = await readPendingOAuth().catch(async (error: unknown) => {
+              if (authErrorCode(error) !== 'INVALID_AUTH_CODE') throw error;
+              // Only the still-current initializer may enqueue retirement.
+              // Serialized writes keep this cleanup ahead of any new attempt.
+              if (isCurrent() && error instanceof Error && 'expiredPendingOAuth' in error) {
+                await persistPendingOAuth(null);
+              }
+              return null;
             });
             if (!isCurrent()) return false;
             if (pending && !oauthCancelledRef.current) {
@@ -1998,6 +2010,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               MOBILE_REDIRECT_URL,
             );
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            // Linking may already have handed ownership to a continuation.
+            // A late native result must not cancel or mutate that newer work.
+            if (loginActionInFlightRef.current !== run) return true;
             if (result.type === 'success') {
               await completeOAuthCallback(result.url, expectedLoginFlowEpoch);
               return true;
@@ -3565,7 +3580,7 @@ async function readPendingOAuth(expectedState?: string): Promise<PendingOAuth> {
     throw authCodeError('STATE_MISMATCH');
   }
   if (Date.now() - parsed.createdAt > PENDING_OAUTH_MAX_AGE_MS) {
-    throw authCodeError('INVALID_AUTH_CODE');
+    throw Object.assign(authCodeError('INVALID_AUTH_CODE'), { expiredPendingOAuth: true });
   }
   return parsed as PendingOAuth;
 }
