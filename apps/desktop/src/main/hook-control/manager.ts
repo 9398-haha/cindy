@@ -23,6 +23,7 @@ import {
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
+  HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -692,6 +693,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     requiredFeatures: telegramProviderBaseFeatures,
     helloFeatures: [
       ...telegramProviderBaseFeatures,
+      HOOK_FEATURE_SESSION_RESULT,
       HOOK_FEATURE_GROUP_RELAY,
       HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,
@@ -1890,6 +1892,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
   /** Slack legacy 线的 hello 能力声明(provider-neutral 线各自在 config.helloFeatures)。 */
   const SLACK_HELLO_FEATURES: readonly string[] = [
+    HOOK_FEATURE_SESSION_RESULT,
     HOOK_FEATURE_MULTI_TEAM,
     HOOK_FEATURE_SESSION_PICKER,
   ];

@@ -11,6 +11,11 @@
  */
 
 import { createLogger } from '../../logger';
+import { eq } from 'drizzle-orm';
+import { getDbClient } from '../../localDb/client/current';
+import { sessions } from '../../localDb/schema';
+import { onChannelTurn } from '../../maker-ipc/channelTurnSignal';
+import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
 import {
   acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend,
@@ -41,6 +46,24 @@ export interface ImOrchestrator {
 
 /** 渠道名 → orchestrator 注册表 — composition root (im/index.ts) 查询用。 */
 const registry = new Map<ImChannelName, ImOrchestrator>();
+
+// Background sends can be the first activity after restart: restore only output
+// routing from the saved channel identity, without creating/resuming a session.
+onChannelTurn(async (session, phase) => {
+  if (phase !== 'starting') return;
+  const generation = captureImAccountGeneration();
+  if (generation === null || ![...registry.values()].some((o) => o.adapter.im.getStatus().kind === 'connected')) return;
+  const [row] = await getDbClient().drizzle.select().from(sessions)
+    .where(eq(sessions.id, session.id)).limit(1);
+  if (!row || row.status === 'deleted' || row.status === 'archived' || !isImAccountGenerationCurrent(generation)) return;
+  const orchestrator = registry.get(row.source as ImChannelName);
+  if (!orchestrator) return;
+  const status = orchestrator.adapter.im.getStatus();
+  const botId = row.source === 'feishu' ? row.feishuBotAppId : row.imBotContextId;
+  if (status.kind !== 'connected' || status.appId !== botId) return;
+  const userId = row.source === 'feishu' ? row.feishuOpenId : row.imUserId;
+  if (userId) orchestrator.turnRunner.attachSessionOutput(session, userId);
+});
 
 /**
  * 创建并接线一个渠道编排器:所有渠道订阅 im.onMessage；只有 rich-card

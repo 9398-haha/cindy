@@ -362,10 +362,8 @@ interface SessionState {
    */
   attached: boolean;
   /**
-   * 自动任务(scheduler)在本(被接管的)session 上发起的 turn 的转播态。
-   * 这类 turn 没有本渠道的 TurnState(走 stray 路径),为了让远程控制的用户在
-   * thread 里看到"系统自动发了什么 + 步骤 + 结果",单独开一张卡转播。null = 当前
-   * 没有进行中的自动任务转播。见 transpondScheduledEvent。
+   * 非 IM 入站轮次的转播态：渠道自有任务的自动执行、跨任务消息回复，以及
+   * 接管任务的 scheduler 输出。与正常入站 TurnState 分开，避免重复发送。
    */
   scheduledTranspond: ScheduledTranspond | null;
 }
@@ -375,8 +373,8 @@ interface SessionState {
  * 复用 turnActivity 的纯函数 + streamingHandle 原语,但用自己的卡片与渲染。
  */
 interface ScheduledTranspond {
-  /** 任务展示名(来自事件 turnOrigin.scheduleName)。 */
-  scheduleName: string | null;
+  /** 仅 scheduler 轮次显示自动任务标题，其它来源直接回复正文。 */
+  header: string | null;
   activity: TurnActivityState;
   activityTicker: ReturnType<typeof setInterval> | null;
   /** 自动任务这一轮 agent 的回复文本累加。 */
@@ -510,6 +508,7 @@ export type ImTurnDispatch =
 
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
 export interface ImTurnRunner {
+  attachSessionOutput(session: MakerSession, userId: string): void;
   runAgentTurn(args: ImRunAgentTurnArgs): Promise<void>;
   /**
    * 把渠道用户消息**提前**写进本地 messages 表 —— 只给「dispatch 之前还有重活」
@@ -2383,16 +2382,18 @@ export function createTurnRunner(
 
   function handleEventFor(localSessionId: string, userId: string) {
     return (event: AgentEvent) => {
-      if (isImSubagentEvent(event)) return;
+      if (isImSubagentEvent(event) || event.turnScope === 'background') return;
       const state = sessionStates.get(localSessionId);
       if (!state) return;
       const turn = state.queue[0];
       if (!turn) {
-        // 自动任务(scheduler)在被接管的共享 session 上发起的 turn — 本渠道没有
-        // TurnState(stray)。转播到远程控制 thread, 让用户看到"系统自动发了什么 +
-        // 步骤 + 结果"。turnOrigin 由 maker Session 打标(PR1)。仅 attached(确有
-        // 远程控制 thread)才转播;desktop 自己发起的 turn 无 origin, 不转播。
-        if (state.attached && event.turnOrigin?.kind === 'scheduler') {
+        // 渠道自有任务始终把回复送回自己的聊天；跨任务消息没有 scheduler
+        // turnOrigin，也不能丢弃。通知回复只临时使用普通任务，不建立持续转播。
+        // 接管普通任务仍仅转播 scheduler，保留其桌面输入的原有可见性。
+        if (
+          !state.preserveSessionConfig ||
+          (state.attached && event.turnOrigin?.kind === 'scheduler')
+        ) {
           transpondScheduledEvent(state, event);
         }
         // done / 终止型 error 同时是"session 空闲了"的信号 — 触发排队消息派发。
@@ -2624,22 +2625,23 @@ export function createTurnRunner(
   }
 
   // ── 自动任务转播 ─────────────────────────────────────────────────────────────
-  // 把 scheduler 在被接管 session 上发起的 turn 转播到远程控制 thread。与上面的
+  // 把非 IM 入站轮次转播到所属聊天。与上面的
   // 用户 turn 渲染完全隔离(独立卡 / 独立 buffer / 独立 ticker),不碰
   // composeStreamingView,避免回归 #118。
 
   /** 转播卡正文:运行中 = 头 + 步骤时间线 + 正文;收口 = 头 + 正文(去步骤)。 */
   function composeTranspondView(t: ScheduledTranspond, final: boolean): string {
-    const header = ui.agent.scheduledTaskHeader(t.scheduleName);
+    const header = t.header;
     if (final) {
-      return t.buffer ? `${header}\n\n${t.buffer}` : header;
+      return [header, t.buffer].filter(Boolean).join('\n\n');
     }
     const act = renderActivity(t.activity, Date.now());
-    const parts = [header];
+    const parts: string[] = header ? [header] : [];
     if (act) parts.push(act);
     if (t.buffer) parts.push(t.buffer);
-    // 头与(步骤/正文)之间空行分隔;步骤紧跟头。
-    return parts.length === 1 ? header : `${parts[0]}\n${parts.slice(1).join('\n\n')}`;
+    // 自动任务沿用标题紧接步骤的排版，其它轮次只显示步骤和正文。
+    if (header && parts.length > 1) return `${header}\n${parts.slice(1).join('\n\n')}`;
+    return parts.join('\n\n');
   }
 
   function ensureTranspondHandle(
@@ -2654,6 +2656,7 @@ export function createTurnRunner(
         threadTs: state.scopeKey,
       });
       t.streamingHandle = handle;
+      if (sessionStates.get(state.makerSession.id) !== state) handle.close();
       return handle;
     })();
     return t.streamingHandlePromise;
@@ -2668,26 +2671,29 @@ export function createTurnRunner(
 
   function refreshTranspondCard(state: SessionState): void {
     const t = state.scheduledTranspond;
-    if (!t) return;
-    void ensureTranspondHandle(state, t).then((h) => h.replace(composeTranspondView(t, false)));
+    if (!t || !richIm) return;
+    void ensureTranspondHandle(state, t)
+      .then((h) => {
+        if (state.scheduledTranspond === t) h.replace(composeTranspondView(t, false));
+      })
+      .catch((err) => log.warn('transpond refresh failed (non-fatal)', err));
   }
 
-  /** 处理一条 scheduler-origin stray 事件,转播到远程控制 thread。 */
+  /** 处理一条非 IM 入站事件，按原聊天 / 话题回传。 */
   function transpondScheduledEvent(state: SessionState, event: AgentEvent): void {
-    // Durable text channels need an inbound context token to address replies.
-    // A desktop-originated scheduler turn has no such token, so it cannot be
-    // safely mirrored and must never fall through to rich-card primitives.
-    if (output.kind === 'chunked-text') return;
     // Lifecycle status is not user-facing scheduler content. In particular,
     // the claim-bearing status(false) paired with an SDK boundary must not
     // create or close a projection card.
     if (event.type === 'status') return;
     if (event.type === 'done' && isTurnContinuationBoundaryEvent(event)) return;
+    if (!['text', 'tool_use', 'done', 'error'].includes(event.type)) return;
     // 首条事件惰性建转播态(避免给空 turn 开卡)。
     if (!state.scheduledTranspond) {
       const origin = event.turnOrigin;
       state.scheduledTranspond = {
-        scheduleName: origin?.kind === 'scheduler' ? (origin.scheduleName ?? null) : null,
+        header: origin?.kind === 'scheduler'
+          ? ui.agent.scheduledTaskHeader(origin.scheduleName ?? null)
+          : null,
         activity: createTurnActivity(Date.now()),
         activityTicker: null,
         buffer: '',
@@ -2720,7 +2726,7 @@ export function createTurnRunner(
           typeof data.toolUseId === 'string' ? data.toolUseId : undefined,
         );
         // 低频 ticker 刷新耗时(只刷已存在的卡)。
-        if (!t.activityTicker) {
+        if (richIm && !t.activityTicker) {
           t.activityTicker = setInterval(() => {
             t.streamingHandle?.replace(composeTranspondView(t, false));
           }, ACTIVITY_TICK_MS);
@@ -2771,9 +2777,16 @@ export function createTurnRunner(
       return;
     }
     try {
-      const handle = await ensureTranspondHandle(state, t);
       const base = composeTranspondView(t, true);
-      const body = errMsg ? `${base}\n\n${ui.agent.runtimeError(errMsg)}` : base;
+      const body = errMsg ? [base, ui.agent.runtimeError(errMsg)].filter(Boolean).join('\n\n') : base;
+      if (output.kind === 'chunked-text') {
+        // 微信等文本渠道由适配器解析当前账号下该聊天最近的有效回复上下文。
+        // 不伪造入站 taskId，也不占用另一次用户消息的 durable final。
+        if (body) await im.sendMarkdownText(state.userId, body, { threadTs: state.scopeKey });
+        return;
+      }
+      const handle = await ensureTranspondHandle(state, t);
+      if (sessionStates.get(state.makerSession.id) !== state) return;
       await handle.finalize(body);
     } catch (err) {
       log.warn(
@@ -3980,6 +3993,11 @@ export function createTurnRunner(
   function cleanupSessionState(state: SessionState): void {
     clearPendingSends(state);
     clearQueuedTurnTimers(state);
+    if (state.scheduledTranspond) {
+      clearTranspondTicker(state.scheduledTranspond);
+      state.scheduledTranspond.streamingHandle?.close();
+      state.scheduledTranspond = null;
+    }
     for (const u of state.unsubscribers) {
       try {
         u();
@@ -3996,6 +4014,28 @@ export function createTurnRunner(
   }
 
   return {
+    attachSessionOutput: (session, userId) => {
+      const existing = sessionStates.get(session.id);
+      if (existing?.makerSession === session) return;
+      if (existing) cleanupSessionState(existing);
+      ensureMakerCloseSubscription(getMaker());
+      const state: SessionState = {
+        makerSession: session,
+        preserveSessionConfig: false,
+        userId,
+        workingDir: session.workDir,
+        queue: [],
+        sendQueue: [],
+        dispatchRetryTimer: null,
+        unsubscribers: [],
+        detachDrainPromise: null,
+        resolveDetachDrain: null,
+        attached: false,
+        scheduledTranspond: null,
+      };
+      sessionStates.set(session.id, state);
+      state.unsubscribers.push(session.onEvent(handleEventFor(session.id, userId)));
+    },
     runAgentTurn,
     persistInboundUserMessageEarly,
     dispatchAgentTurn,

@@ -53,6 +53,7 @@ import {
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
   HOOK_FEATURE_TURN_REOPEN,
+  HOOK_FEATURE_SESSION_RESULT,
   type HookMessage,
   type HookTurnEndMessage,
   type InteractionButton,
@@ -96,6 +97,7 @@ import type { HookBindingStore } from './bindings.js';
 import { terminalDeliveryExpired } from './requestLedger.js';
 import { composeXPrompt } from './xPrompt.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
+import { createBackgroundResults } from './backgroundResults.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
 export interface HookSessionRunner {
@@ -347,6 +349,7 @@ export interface HookDispatcherDeps {
    * 返回退订函数, dispose 时调用。
    */
   subscribeUiContinuation?: (listener: (sessionId: string, clientId: string) => void) => () => void;
+  subscribeChannelTurn?: (listener: (sessionId: string, workingDir: string, phase: 'starting' | 'undispatched') => void) => () => void;
   /**
    * 可选: 订阅「桌面端在某会话里做了与续跑无关的事」(生产为 maker-ipc 的
    * onUiSessionIntervention)。命中即作废该会话的待续跑记账 —— 记账只按 sessionId
@@ -1418,6 +1421,20 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   function supportsReopen(connectionId: string): boolean {
     return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_TURN_REOPEN) === true;
   }
+
+  const backgroundResults = createBackgroundResults({
+    bindings, runner,
+    generation: () => accountGeneration,
+    log,
+    owned: (sessionId) => running.has(sessionId) || activeContinuations.has(sessionId) || pendingClaims.has(sessionId),
+    allowed: (connectionId, dir) => accountActive && dirStillAllowed(connectionId, dir),
+    sender: (connectionId) => accountActive && serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_SESSION_RESULT)
+      ? sendFns.get(connectionId) : undefined,
+  });
+  const unsubscribeBackgroundResults = deps.subscribeChannelTurn?.((sessionId, dir, phase) => {
+    if (phase === 'starting') backgroundResults.start(sessionId, dir);
+    else backgroundResults.cancel(sessionId);
+  });
 
   /**
    * 放弃这个 session 的续跑回流: 撤销在观察的那一轮 + 清掉记账。
@@ -2789,6 +2806,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       accountActive = true;
     },
     async deactivateAccount() {
+      backgroundResults.clear();
       // Invalidate a deferred activation on every close request, including a
       // duplicate request that arrives while the physical drain is running.
       const wasActive = accountActive;
@@ -3133,6 +3151,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       serverFeatures.delete(connectionId);
     },
     dispose() {
+      backgroundResults.clear();
+      unsubscribeBackgroundResults?.();
       clearRecoveryDeliveries();
       closeTelegramTurnOps();
       unsubscribeUiContinuation?.();
