@@ -509,6 +509,31 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.isBusy).toBe(false);
   });
 
+  it('does not retire a new ordinary login after a delayed startup read of an old add-account record', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const oldRecord = native.storage.get(pendingKey)!;
+    let finishRead!: () => void;
+    let delayed = false;
+    native.readSecure.mockImplementation(async (key: string) => {
+      if (key === pendingKey && !delayed) {
+        delayed = true;
+        return new Promise<string>(resolve => { finishRead = () => resolve(oldRecord); });
+      }
+      return native.storage.get(key) ?? null;
+    });
+    await restartProvider();
+    await mountLoginScreen('ordinary-cold-login');
+    expect(auth.loginState?.step).toBe('identifier');
+    await start('social');
+    const newRecord = native.storage.get(pendingKey);
+    expect(JSON.parse(newRecord!).additionalAccount).toBe(false);
+    await act(async () => { finishRead(); });
+    expect(native.storage.get(pendingKey)).toBe(newRecord);
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {
     await start();
     const oldCallback = callbackUrl();

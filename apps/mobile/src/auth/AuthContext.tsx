@@ -1452,9 +1452,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Authenticated cold starts can stay on Home without mounting LoginScreen.
     // Retire only the old add-account attempt; never interfere with account
     // recovery or a new login that has taken ownership during the storage read.
+    const pendingMutation = pendingOAuthMutationRef.current;
     void (async () => {
       const raw = await getSecureItem(PENDING_OAUTH_KEY);
       if (cancelled || loginFlowEpochRef.current !== epoch || additionalLoginRef.current) return;
+      if (pendingOAuthMutationRef.current !== pendingMutation) return;
       if (!raw || JSON.parse(raw)?.additionalAccount !== true) return;
       oauthCancelledRef.current = true;
       await persistPendingOAuth(null);
