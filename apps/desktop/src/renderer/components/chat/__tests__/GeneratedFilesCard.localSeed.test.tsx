@@ -182,6 +182,49 @@ describe('local generated files remount', () => {
     await waitFor(() => expect(document.querySelector('img')).not.toBeNull());
   });
 
+  it('does not let a stale cancelled stat overwrite a fresher cache verdict', async () => {
+    const pendingStat: Array<(stat: unknown) => void> = [];
+    const statPath = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingStat.push(resolve);
+        }),
+    );
+    stubStat(statPath);
+
+    const { rerender, unmount } = render(
+      cardElement({ renderItemKey: 'genfiles-a', turnStartMs: START, turnEndMs: null }),
+    );
+    await waitFor(() => expect(pendingStat).toHaveLength(1));
+
+    // The turn boundary lands mid-check: the in-flight check is cancelled and
+    // a fresh one starts for the same path.
+    rerender(
+      cardElement({ renderItemKey: 'genfiles-a', turnStartMs: START, turnEndMs: START + 10_000 }),
+    );
+    await waitFor(() => expect(pendingStat).toHaveLength(2));
+
+    // The fresh check lands first and finds the file gone.
+    pendingStat[1]({ kind: 'missing' });
+    await waitFor(() => expect(screen.queryByText('report.md')).toBeNull());
+
+    // The stale, already-cancelled check now resolves with a stat that would
+    // wrongly confirm the file. It must not win the race against the fresher
+    // 'missing' verdict already recorded above.
+    pendingStat[0]({ kind: 'file', birthtimeMs: START + 5_000, mtimeMs: START + 5_000 });
+    await Promise.resolve();
+    expect(screen.queryByText('report.md')).toBeNull();
+    unmount();
+
+    // A fresh remount under the same turn window must not be seeded from the
+    // stale cached stat; the module cache should still hold the fresher
+    // 'missing' verdict, not the cancelled check's 'file' result.
+    render(
+      cardElement({ renderItemKey: 'genfiles-b', turnStartMs: START, turnEndMs: START + 10_000 }),
+    );
+    expect(screen.queryByText('report.md')).toBeNull();
+  });
+
   it('re-checks a seeded path when another file finishes during the first check', async () => {
     const notes: GeneratedFileRef = {
       path: 'C:\\work\\notes.md',

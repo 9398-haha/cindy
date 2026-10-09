@@ -897,21 +897,25 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
           if (ok) confirmedPaths.add(toStat[index].path);
         });
       } else {
-        const checks = await Promise.all(
+        // 先收集结果、不写入共享缓存:本次检查在 statPath 返回前被 checkKey 变化取消时
+        // (见本 effect 末尾的 cleanup),若这里仍把过期的 stat 写进模块缓存,它可能比
+        // 同路径更新一轮的结果更晚返回、反覆盖那个新结果;下次重挂就会用这个已失效的
+        // 缓存重新点亮已删文件。只有本次未被取消才许写。
+        const statResults = await Promise.all(
           toStat.map(async (file) => {
             try {
               const stat = await window.electronAPI.fsBrowse.statPath(file.path);
-              rememberLocalGeneratedFileStat(file.path, stat);
-              return isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs);
+              return { path: file.path, stat, ok: isLocalGeneratedFileInTurn(file, stat, turnStartMs, turnEndMs) };
             } catch {
-              rememberLocalGeneratedFileStat(file.path, null);
-              return false;
+              return { path: file.path, stat: null, ok: false };
             }
           }),
         );
-        checks.forEach((ok, index) => {
-          if (ok) confirmedPaths.add(toStat[index].path);
-        });
+        if (cancelled) return;
+        for (const result of statResults) {
+          rememberLocalGeneratedFileStat(result.path, result.stat);
+          if (result.ok) confirmedPaths.add(result.path);
+        }
       }
       if (cancelled) return;
       const merged = mergeGeneratedFileStatResults({
