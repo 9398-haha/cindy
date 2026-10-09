@@ -1,5 +1,7 @@
 // Run from the repository root. Optional --baseline=<git-ref> captures the old hit target.
 // Uses one headless Chromium, synthetic data, and production components/styles; no Cindy process.
+// Prepare once: pnpm exec playwright-core install chromium
+// Or set DEVICE_PICKER_CHROMIUM_PATH to an existing Chrome/Chromium executable.
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -61,9 +63,13 @@ const extraCss = `body{margin:0;background:var(--surface);color:var(--text-prima
 (async () => {
   fs.mkdirSync(evidence, { recursive: true });
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-device-picker-'));
-  const browser = await chromium.launch({ headless: true });
+  let browser;
   const results = [];
   try {
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: process.env.DEVICE_PICKER_CHROMIUM_PATH || undefined,
+    });
     for (const stage of baseline ? ['before', 'after'] : ['after']) {
       const old = stage === 'before';
       const historical = Object.fromEntries(
@@ -330,7 +336,7 @@ const extraCss = `body{margin:0;background:var(--surface);color:var(--text-prima
       JSON.stringify({ passed: true, scenarios: results.length, evidence, results }, null, 2),
     );
   } finally {
-    await browser.close();
+    await browser?.close();
     fs.rmSync(temp, { recursive: true, force: true });
   }
 })().catch((error) => {
