@@ -579,6 +579,103 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.authError).toBeNull();
   });
 
+  it.each([
+    { name: 'select-account', outcome: { status: 'select_account', loginTicket: 'fixture-select', accounts: [] },
+      action: { type: 'select-account', accountId: 'fixture-account' }, request: native.selectAccount },
+    { name: 'binding', outcome: { status: 'binding_required', bindType: 'email', bindTicket: 'fixture-bind' },
+      action: { type: 'request-binding-code', contact: 'user@example.invalid' }, request: native.requestBinding },
+    { name: 'verification', outcome: verifiedOutcome,
+      action: { type: 'request-sso-verification-code' }, request: native.requestVerification },
+    { name: 'back', outcome: verifiedOutcome, action: { type: 'reset' }, request: native.providers },
+  ] as const)('executes $name immediately while initialization is still awaiting providers', async fixture => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    native.storage.set(pendingKey, JSON.stringify({ state: 'fixture-cold-state', codeVerifier: 'fixture-verifier',
+      deviceId: 'fixture-device', realm: 'cn', label: 'Fixture SSO', createdAt: Date.now() }));
+    let finishProviders!: (value: unknown) => void;
+    native.providers.mockImplementationOnce(() => new Promise(resolve => { finishProviders = resolve; }));
+    native.exchange.mockResolvedValueOnce(fixture.outcome);
+    await mountLoginScreen('initial');
+    await emitLink(callbackUrl());
+    expect(auth.isBusy).toBe(false);
+    fixture.request.mockClear();
+    let actionFinished = false;
+    await act(async () => {
+      void auth.dispatchLoginAction(fixture.action).then(result => { actionFinished = result; });
+    });
+    expect(fixture.request).toHaveBeenCalledTimes(1);
+    expect(actionFinished).toBe(true);
+    const state = auth.loginState;
+    await act(async () => { finishProviders({ social: ['wechat'], emailCode: true, smsCode: false }); });
+    expect(auth.loginState).toBe(state);
+    expect(auth.authError).toBeNull();
+  });
+
+  it.each(['success', 'failure'] as const)('ignores late initialization %s while the next user request is running', async result => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    native.storage.set(pendingKey, JSON.stringify({ state: 'fixture-cold-state', codeVerifier: 'fixture-verifier',
+      deviceId: 'fixture-device', realm: 'cn', label: 'Fixture SSO', createdAt: Date.now() }));
+    let finish!: (value: unknown) => void;
+    let fail!: (error: Error) => void;
+    native.providers.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    await mountLoginScreen('initial');
+    await emitLink(callbackUrl());
+    let finishCode!: () => void;
+    native.requestVerification.mockImplementationOnce(() => new Promise<void>(resolve => { finishCode = resolve; }));
+    let codeRequest!: Promise<boolean>;
+    await act(async () => { codeRequest = auth.dispatchLoginAction({ type: 'request-sso-verification-code' }); });
+    expect(native.requestVerification).toHaveBeenCalledTimes(1);
+    expect(auth.isBusy).toBe(true);
+    const state = auth.loginState;
+    await act(async () => {
+      if (result === 'success') finish({ social: ['wechat'], emailCode: true, smsCode: false });
+      else fail(new Error('fixture obsolete initialization failure'));
+    });
+    expect(auth.loginState).toBe(state);
+    expect(auth.isBusy).toBe(true);
+    expect(auth.authError).toBeNull();
+    await act(async () => { finishCode(); expect(await codeRequest).toBe(true); });
+    expect(auth.loginState).toMatchObject({ step: 'sso-verification', codeRequested: true });
+    expect(auth.isBusy).toBe(false);
+  });
+
+  it('deduplicates initialization independently and abandons it on explicit reset', async () => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    let finish!: (value: unknown) => void;
+    native.providers.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    let first!: Promise<boolean>;
+    await act(async () => {
+      first = auth.dispatchLoginAction({ type: 'initialize' });
+      expect(auth.dispatchLoginAction({ type: 'initialize' })).toBe(first);
+    });
+    await act(async () => { expect(await auth.dispatchLoginAction({ type: 'reset' })).toBe(true); });
+    expect(auth.loginState?.step).toBe('identifier');
+    const state = auth.loginState;
+    await act(async () => { finish({ social: [], emailCode: false, smsCode: true }); expect(await first).toBe(false); });
+    expect(auth.loginState).toBe(state);
+    expect(auth.isBusy).toBe(false);
+  });
+
+  it('does not reuse or clear a new initialization after add-account cancellation changes the epoch', async () => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    let finishOld!: (value: unknown) => void;
+    let finishNew!: (value: unknown) => void;
+    native.providers
+      .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+    let old!: Promise<boolean>;
+    let current!: Promise<boolean>;
+    await act(async () => { old = auth.dispatchLoginAction({ type: 'initialize' }); });
+    await act(async () => { await auth.cancelAddAccount(); });
+    await act(async () => { current = auth.dispatchLoginAction({ type: 'initialize' }); });
+    expect(current).not.toBe(old);
+    await act(async () => { finishOld({ social: [], emailCode: true, smsCode: false }); expect(await old).toBe(false); });
+    expect(auth.loginState).toBeNull();
+    expect(auth.isBusy).toBe(true);
+    await act(async () => { finishNew({ social: ['wechat'], emailCode: true, smsCode: false }); expect(await current).toBe(true); });
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(auth.isBusy).toBe(false);
+  });
+
   it('still exchanges only once when Linking and the browser both report success', async () => {
     native.open.mockImplementation(async () => {
       const url = callbackUrl();
