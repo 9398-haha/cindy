@@ -62,7 +62,9 @@ onChannelTurn(async (session, phase) => {
   if (!orchestrator) return;
   const status = orchestrator.adapter.im.getStatus();
   const botId = binding?.botContextId ?? (row.source === 'feishu' ? row.feishuBotAppId : row.imBotContextId);
-  if (status.kind !== 'connected' || status.appId !== botId) return;
+  if (status.kind !== 'connected') return;
+  const connectedBotId = orchestrator.adapter.getBotContextId?.() ?? status.appId;
+  if (!connectedBotId || connectedBotId !== botId) return;
   const userId = binding?.userId ?? (row.source === 'feishu' ? row.feishuOpenId : row.imUserId);
   if (userId) orchestrator.turnRunner.attachSessionOutput(session, userId, {
     attached: binding !== null,

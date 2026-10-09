@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   current: vi.fn(),
   binding: vi.fn<() => IdentityKey | null>(),
   status: vi.fn(),
+  botContextId: vi.fn(),
   attach: vi.fn(),
 }));
 vi.mock('../../../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
@@ -35,10 +36,11 @@ vi.mock('../cardActionHandler', () => ({ createCardActionHandler: () => vi.fn() 
 import { createImOrchestrator } from '../orchestrator';
 import { publishChannelTurn } from '../../../maker-ipc/channelTurnSignal';
 
-for (const channel of ['telegram', 'feishu'] as const) {
+for (const channel of ['telegram', 'feishu', 'discord', 'wechat', 'wecom', 'dingtalk'] as const) {
   createImOrchestrator({
     channel, im: { getStatus: mocks.status }, sessions: { source: channel },
     output: { kind: 'chunked-text' },
+    ...(channel === 'discord' ? { getBotContextId: mocks.botContextId } : {}),
   } as unknown as ImChannelAdapter);
 }
 const session = { id: 'desktop-task' } as Session;
@@ -55,6 +57,7 @@ beforeEach(() => {
   mocks.current.mockReturnValue(true);
   mocks.status.mockReturnValue({ kind: 'connected', appId: 'bot' });
   mocks.binding.mockReturnValue(null);
+  mocks.botContextId.mockReturnValue('bot');
   mocks.limit.mockResolvedValue([nativeRow]);
 });
 
@@ -66,10 +69,33 @@ describe('background output route recovery', () => {
     expect(mocks.attach).toHaveBeenCalledExactlyOnceWith(session, 'group-user', { attached: true, scopeKey: 'topic' });
   });
 
-  it.each(['feishu', 'telegram'])('falls back to native %s identity without a binding', async (source) => {
+  it.each(['feishu', 'telegram', 'wechat', 'wecom', 'dingtalk'])('falls back to native %s identity without a binding', async (source) => {
     mocks.limit.mockResolvedValue([{ ...nativeRow, source, imBotContextId: 'bot', imUserId: 'native-user' }]);
     await publishChannelTurn(session, 'starting');
     expect(mocks.attach).toHaveBeenCalledExactlyOnceWith(session, 'native-user', { attached: false, scopeKey: undefined });
+  });
+
+  it.each([false, true])('uses stable Discord identity for cold route (takeover: %s)', async (attached) => {
+    mocks.status.mockReturnValue({ kind: 'connected', appId: 'display#0000' });
+    mocks.limit.mockResolvedValue([{ source: 'discord', status: 'active', imBotContextId: 'bot', imUserId: 'user' }]);
+    if (attached) mocks.binding.mockReturnValue({ ...binding, channel: 'discord' });
+    await publishChannelTurn(session, 'starting');
+    expect(mocks.attach).toHaveBeenCalledExactlyOnceWith(session, attached ? 'group-user' : 'user', {
+      attached, scopeKey: attached ? 'topic' : undefined,
+    });
+    mocks.attach.mockClear();
+    mocks.botContextId.mockReturnValue('other-bot');
+    await publishChannelTurn(session, 'starting');
+    expect(mocks.attach).not.toHaveBeenCalled();
+    // An unavailable identity must not fall back to a matching display label.
+    mocks.status.mockReturnValue({ kind: 'connected', appId: 'bot' });
+    mocks.botContextId.mockReturnValue('');
+    await publishChannelTurn(session, 'starting');
+    expect(mocks.attach).not.toHaveBeenCalled();
+    mocks.botContextId.mockReturnValue('bot');
+    mocks.status.mockReturnValue({ kind: 'connecting' });
+    await publishChannelTurn(session, 'starting');
+    expect(mocks.attach).not.toHaveBeenCalled();
   });
 
   it.each(['deleted', 'archived', 'missing', 'disconnected', 'wrong-bot', 'wrong-account', 'unbound-desktop', 'unsupported-binding'])(
