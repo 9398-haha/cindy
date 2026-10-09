@@ -237,6 +237,8 @@ export interface HookRunRequest {
    * 确认为 dispatched 后 await；失败必须由调用方自行降级，不能反转已受理 turn。
    */
   onProviderAccepted?: () => void | Promise<void>;
+  /** Provider observation ended; attachment collection and channel delivery may still be pending. */
+  onTurnTerminal?: () => void;
   /**
    * 执行中渲染快照回调(turn.progress 链路)。runner 合成「过程区时间线 +
    * 部分正文」的完整 markdown 快照并节流回调; dispatcher 注入的实现把它
@@ -847,7 +849,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
-  const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
+  const runningByRequest = new Map<string, { sessionId: string; connectionId: string; observing?: boolean }>();
   /**
    * 已开始执行但 provider 尚未受理的 Telegram 群任务。账号边界必须把其
    * accepted / queued ACK 收成 cancelled；accepted=true 后消息已交给 agent，
@@ -1426,7 +1428,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     bindings, runner,
     generation: () => accountGeneration,
     log,
-    owned: (sessionId) => running.has(sessionId) || activeContinuations.has(sessionId) || pendingClaims.has(sessionId),
+    owned: (sessionId) => [...runningByRequest.values()].some((entry) => entry.sessionId === sessionId && entry.observing)
+      || activeContinuations.has(sessionId) || pendingClaims.has(sessionId),
     allowed: (connectionId, dir) => accountActive && dirStillAllowed(connectionId, dir),
     sender: (connectionId) => accountActive && serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_SESSION_RESULT)
       ? sendFns.get(connectionId) : undefined,
@@ -1768,7 +1771,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 这条消息线交给新任务了: 撤掉上一轮失败留下的续跑观察与记账。连接还在, 所以要
     // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
     dropContinuation(sessionId, { silent: false, remember: false });
-    runningByRequest.set(requestKey, { sessionId, connectionId: task.connectionId });
+    const runningEntry = { sessionId, connectionId: task.connectionId, observing: true };
+    runningByRequest.set(requestKey, runningEntry);
     const messageLifecycle = telegramLegacyLifecycle(
       task.connectionId,
       task.requestId,
@@ -1863,6 +1867,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       try {
         outcome = await runner.run({
           ...task.run,
+          onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
             onRuntimeRecovery: (text: string): Promise<boolean> => {

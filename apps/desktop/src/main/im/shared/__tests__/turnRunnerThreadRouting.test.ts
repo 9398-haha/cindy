@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
       .getSession(sessionId)
       ?.abort();
   }),
-  onSilentStopSettled: vi.fn(() => vi.fn()),
+  onSilentStopSettled: vi.fn((_sessionId: string, _cb: () => void) => vi.fn()),
   rejectAllPending: vi.fn<(reason: string, owner?: symbol) => Array<{ requestId: string; messageId: string }>>(() => []),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
@@ -558,6 +558,54 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
 });
 
 describe('turnRunner 渠道任务后台结果回传', () => {
+  it.each(['done', 'settled'] as const)('silent stop keeps queued input out of the resumed turn until %s', async (ending) => {
+    const h = await channelAndIdle();
+    h.send.mockClear();
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    let settled!: () => void;
+    mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settled = cb; return vi.fn(); });
+    h.emit({ type: 'text', data: { text: 'background' } });
+    h.emit({ type: 'done', data: { silentStop: true } });
+    await runTurn('100.1', 'queued input');
+    expect(h.send).not.toHaveBeenCalled();
+    h.emit({ type: 'text', data: { text: ' resumed' } });
+    if (ending === 'done') h.emit({ type: 'done', data: {} });
+    else settled();
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith('background resumed'));
+    h.emit({ type: 'done', data: {} });
+  });
+
+  it.each(['done', 'settled', 'error', 'dispose'] as const)('silent stop waits for %s and ignores late settlement', async (ending) => {
+    const h = await channelAndIdle();
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const unsubscribe = vi.fn();
+    let settled!: () => void;
+    mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settled = cb; return unsubscribe; });
+    h.emit({ type: 'text', data: { text: 'first' } });
+    h.emit({ type: 'done', data: { silentStop: true } });
+    h.emit({ type: 'done', data: { silentStop: true } });
+    await Promise.resolve();
+    expect(stub.finalize).not.toHaveBeenCalled();
+    expect(mocks.onSilentStopSettled).toHaveBeenCalledTimes(1);
+    h.emit({ type: 'text', data: { text: ' resumed' } });
+    if (ending === 'done') h.emit({ type: 'done', data: {} });
+    else if (ending === 'error') h.emit({ type: 'error', data: { message: 'failed', isTerminal: true } });
+    else if (ending === 'dispose') await runner.disposeAllSessions();
+    else settled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    settled();
+    if (ending === 'dispose') {
+      expect(stub.finalize).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+      expect(stub.finalize).toHaveBeenCalledWith(expect.stringContaining('first resumed'));
+    }
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+  });
+
   it('换执行实例只换绑监听，保留同话题已经排队的消息', async () => {
     const old = await channelAndIdle();
     vi.mocked(old.session.isTurnRunning).mockReturnValue(true);

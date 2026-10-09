@@ -969,6 +969,7 @@ export function createMakerHookSessionRunner(deps: {
       const extraImageAbsPaths: string[] = [];
       const useTelegramProgressParity = req.source?.im === 'telegram';
       const observer = observeHookTurn(session, {
+        onTurnTerminal: req.onTurnTerminal,
         // Telegram 对齐个人 bot：过程消息累积展示整轮正文，done 先冲刷最后一帧。
         // Slack / X 保留只展示当前消息的旧行为，避免顺带改变其它车道。
         ...(req.onProgress ? { onProgress: req.onProgress } : {}),
@@ -1493,6 +1494,7 @@ function beginContinuationWatch(
   let settled = false;
   const useTelegramProgressParity = req.source?.im === 'telegram';
   const observer = observeHookTurn(session, {
+    onTurnTerminal: req.onSettling,
     // 与 run() 同一呈现；Telegram 续跑同样累计正文并在 done 冲刷最后一帧。
     onProgress: (text) => {
       // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。

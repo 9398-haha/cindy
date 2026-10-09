@@ -729,6 +729,21 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
   });
 
+  it('provider 终态立即释放观察归属，不等待受理回调或结果收集', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const onTurnTerminal = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    let returned = false;
+    const result = runner.run(baseReq({ onTurnTerminal, onProviderAccepted: () => waiting }))
+      .then((outcome) => { returned = true; return outcome; });
+    await vi.waitFor(() => expect(onTurnTerminal).toHaveBeenCalledTimes(1));
+    expect(returned).toBe(false);
+    release();
+    expect((await result).status).toBe('ok');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it('入站图片附件:ingest 进媒体总仓挂 session-attachment 引用,喂 agent 用 blob 绝对路径,落库用 cindy-media url', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(

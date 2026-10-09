@@ -373,6 +373,7 @@ interface SessionState {
  * 复用 turnActivity 的纯函数 + streamingHandle 原语,但用自己的卡片与渲染。
  */
 interface ScheduledTranspond {
+  silentStopSettleUnsub: (() => void) | null;
   /** 仅 scheduler 轮次显示自动任务标题，其它来源直接回复正文。 */
   header: string | null;
   activity: TurnActivityState;
@@ -1117,6 +1118,7 @@ export function createTurnRunner(
     if (
       state.queue.length > 0 ||
       state.sendQueue.length > 0 ||
+      state.scheduledTranspond !== null ||
       state.makerSession.isTurnRunning()
     ) {
       if (args.queueMode === 'external') {
@@ -1698,6 +1700,7 @@ export function createTurnRunner(
   function maybeDispatchNextQueued(state: SessionState, userId: string): void {
     if (state.sendQueue.length === 0) return;
     if (state.queue.length > 0) return;
+    if (state.scheduledTranspond) return;
     if (state.makerSession.isTurnRunning()) {
       armDispatchRetry(state, userId);
       return;
@@ -2699,6 +2702,7 @@ export function createTurnRunner(
     if (!state.scheduledTranspond) {
       const origin = event.turnOrigin;
       state.scheduledTranspond = {
+        silentStopSettleUnsub: null,
         header: origin?.kind === 'scheduler'
           ? ui.agent.scheduledTaskHeader(origin.scheduleName ?? null)
           : null,
@@ -2755,6 +2759,14 @@ export function createTurnRunner(
         return;
       }
       case 'done':
+        if ((event.data as { silentStop?: boolean } | null)?.silentStop === true) {
+          waitForSilentStopSettled(state, t, () => {
+            if (state.scheduledTranspond !== t) return;
+            void finalizeTranspond(state, null);
+            maybeDispatchNextQueued(state, state.userId);
+          });
+          return;
+        }
         return void finalizeTranspond(state, null);
       case 'error':
         // 只在**终止型** error 上收口。可重试 error(willRetry / isTerminal=false)turn
@@ -2786,6 +2798,7 @@ export function createTurnRunner(
     const t = state.scheduledTranspond;
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
+    clearSilentStopSettleWait(t);
     clearTranspondTicker(t);
     // 防御性复位: composeTranspondView(final=true) 本身只取 header + 正文, 不含过程区,
     // 所以这行不是收口正确性的依赖; 留着是为了让这块转播态在收口后不残留瞬态字段
@@ -3283,20 +3296,26 @@ export function createTurnRunner(
   function handleSilentStopDone(state: SessionState, userId: string): void {
     const turn = state.queue[0];
     if (!turn) return;
+    waitForSilentStopSettled(state, turn, () => {
+      if (state.queue[0] === turn) void handleTurnDoneAsync(state, userId);
+    });
+  }
+
+  function waitForSilentStopSettled(
+    state: SessionState,
+    turn: Pick<TurnState, 'silentStopSettleUnsub'>,
+    onSettled: () => void,
+  ): void {
     if (turn.silentStopSettleUnsub) return;
     const unsub = onSilentStopSettled(state.makerSession.id, () => {
-      turn.silentStopSettleUnsub = null;
-      unsub();
-      // 防御: 收口路径都会先退订,回调能跑理应意味着 turn 仍是 queue[0];
-      // 若未来有人加了新的出队路径破坏该不变量,这里宁可不动也不错收别人的 turn。
-      if (state.queue[0] !== turn) return;
-      void handleTurnDoneAsync(state, userId);
+      clearSilentStopSettleWait(turn);
+      onSettled();
     });
     turn.silentStopSettleUnsub = unsub;
   }
 
   /** 真 done / error 收口前清掉挂着的 silent-stop settle 订阅(幂等)。 */
-  function clearSilentStopSettleWait(turn: TurnState): void {
+  function clearSilentStopSettleWait(turn: Pick<TurnState, 'silentStopSettleUnsub'>): void {
     if (turn.silentStopSettleUnsub) {
       turn.silentStopSettleUnsub();
       turn.silentStopSettleUnsub = null;
@@ -4029,6 +4048,7 @@ export function createTurnRunner(
     clearPendingSends(state);
     clearQueuedTurnTimers(state);
     if (state.scheduledTranspond) {
+      clearSilentStopSettleWait(state.scheduledTranspond);
       clearTranspondTicker(state.scheduledTranspond);
       state.scheduledTranspond.streamingHandle?.close();
       state.scheduledTranspond = null;
