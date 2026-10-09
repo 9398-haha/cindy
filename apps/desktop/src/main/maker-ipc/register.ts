@@ -873,6 +873,15 @@ import {
 import { tryInjectProjectContext } from './projectContextInject.js';
 import { registerMakerSessionCreateHandler } from './sessionCreateHandler.js';
 import {
+  createOrcaRemoteWorkerHost,
+  registerOrcaRemoteWorkerHandlers,
+} from './orcaRemoteWorkerHost.js';
+import {
+  parseOrcaRemoteLead,
+  serializeOrcaRemoteLead,
+  type OrcaRemoteLead,
+} from '../../shared/orcaRemoteWorker.js';
+import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
   performSessionAgentSwitch,
@@ -8290,6 +8299,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warnStderr: (agentKind, line) => log.warn(`[${agentKind}/stderr] ${line}`),
   });
 
+  // 本机作为运行设备：承接另一台电脑上协同 Lead 派来的 Worker 任务(见 orcaRemoteWorkerHost.ts)。
+  const writeOrcaRemoteLead = async (sessionId: string, lead: OrcaRemoteLead) => {
+    await getDbClient()
+      .drizzle.update(sessions)
+      .set({ orcaRemoteLead: serializeOrcaRemoteLead(lead) })
+      .where(eq(sessions.id, sessionId));
+    broadcastSessionPatched(sessionId, { orcaRemoteLead: lead });
+  };
+  registerOrcaRemoteWorkerHandlers(makerSessionRegistry, createOrcaRemoteWorkerHost({
+    getCaller: () => {
+      const context = getDeviceLinkInvokeContext();
+      return context
+        ? {
+            controllerDeviceId: context.controllerDeviceId,
+            controllerName: context.controllerName,
+            sharedTask: context.sharedTask,
+          }
+        : null;
+    },
+    readSession: async (sessionId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({
+          orcaRemoteLead: sessions.orcaRemoteLead,
+          workingDir: sessions.workingDir,
+          model: sessions.model,
+          agentKind: sessions.agentKind,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!row) return null;
+      return {
+        orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead),
+        workingDir: row.workingDir,
+        model: row.model,
+        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
+      };
+    },
+    openSession: async (request, lead) => {
+      const workspaceKind = request.workingDir ? 'project' : 'dialogue';
+      const { row } = await openSession({
+        id: request.sessionId,
+        body: {
+          title: request.title,
+          agentKind: request.agentKind === 'claude-code' ? 'cc' : request.agentKind,
+          model: request.model,
+          providerId: request.providerId,
+          effort: request.effort,
+          fastMode: request.fastMode,
+          permissionMode: request.permissionMode,
+          workspaceKind,
+          workingDir: request.workingDir,
+          orcaRemoteLead: lead,
+        },
+      }, async (opened, assertCurrent) => {
+        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
+          ? opened.agentKind
+          : 'claude-code';
+        await bootstrapSession(buildCreateOptsWithStderr({
+          id: opened.id,
+          agentKind,
+          workspaceKind: opened.workspaceKind,
+          // openSession 已为 dialogue 分配目录；project 由调用方给出并经 device-link 目录守卫。
+          workingDir: opened.workingDir ?? '',
+          model: opened.model,
+          providerId: opened.providerId,
+          effort: (opened.effort || undefined) as CreateOpts['effort'],
+          fastMode: opened.fastMode,
+          permissionMode: opened.permissionMode as CreateOpts['permissionMode'],
+          title: opened.title,
+        }), assertCurrent);
+        // maker.createSession 只写通用列；来源标记在广播 created 之前补上。
+        await getDbClient()
+          .drizzle.update(sessions)
+          .set({ orcaRemoteLead: serializeOrcaRemoteLead(lead) })
+          .where(eq(sessions.id, opened.id));
+      });
+      broadcastSessionCreated(row.id);
+      const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
+      return { workingDir: row.workingDir ?? '', model: row.model, agentKind };
+    },
+    writeRemoteLead: writeOrcaRemoteLead,
+    withSessionLock: withSendToSessionLock,
+    now: Date.now,
+  }));
+
   const readSourceReviewCards = async (sourceSessionId: string) =>
     getDbClient()
       .drizzle.select({
@@ -9363,6 +9458,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertReviewSettingsUnlocked(leadSessionId);
     const lead = maker.getSession(leadSessionId);
     const leadRow = await getSessionRowSnapshot(leadSessionId);
+    // Worker 不能再当 Lead：本机 Worker 的 MCP 工具已按 vendorOptions 拒绝，这里补上
+    // IPC / 远程入口；另一台电脑派来的远端 Worker 同样不能嵌套开启协同。
+    if (leadRow?.orcaRole === 'worker' || leadRow?.orcaRemoteLead) {
+      throwIpcError('PRECONDITION_FAILED', '[WORKER_CANNOT_NEST] a worker task cannot start collaboration');
+    }
     const rawWorkingDir =
       typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;
     const normalizedWorkingDir =

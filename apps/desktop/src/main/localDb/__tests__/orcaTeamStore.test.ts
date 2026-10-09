@@ -434,6 +434,7 @@ describe('orcaTeamStore', () => {
         writable_dirs TEXT NOT NULL DEFAULT '[]',
         remote_host_id TEXT,
         agent_device_id TEXT,
+        orca_remote_lead TEXT,
         provider_id TEXT,
         active_turn_started_at INTEGER,
         active_turn_pid INTEGER,
@@ -471,6 +472,10 @@ describe('orcaTeamStore', () => {
         role TEXT NOT NULL DEFAULT 'developer',
         focused INTEGER NOT NULL DEFAULT 0,
         idle_since INTEGER,
+        execution_device_id TEXT,
+        remote_session_id TEXT,
+        last_bridged_message_id TEXT,
+        remote_released_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );

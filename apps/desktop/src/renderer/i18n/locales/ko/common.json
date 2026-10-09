@@ -11330,7 +11330,11 @@
       "untitled": "제목 없는 세션",
       "moreActions": "더 보기",
       "agentDevice": "Agent가 {{device}}에서 실행 중",
-      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다"
+      "agentDeviceOffline": "Agent가 {{device}}에서 실행 중이지만 그 컴퓨터가 오프라인입니다. 다시 연결되면 계속됩니다",
+      "orcaRemoteLead": "{{device}}에서 온 협업",
+      "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
+      "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
     },
     "gitContext": {
       "detached": "Detached HEAD",

@@ -123,6 +123,14 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0124_funny_glorian.sql') {
+    ensureColumnSync(db, 'orca_workers', 'execution_device_id', 'text');
+    ensureColumnSync(db, 'orca_workers', 'remote_session_id', 'text');
+    ensureColumnSync(db, 'orca_workers', 'last_bridged_message_id', 'text');
+    ensureColumnSync(db, 'orca_workers', 'remote_released_at', 'integer');
+    ensureColumnSync(db, 'sessions', 'orca_remote_lead', 'text');
+    return;
+  }
   if (fileName === '0097_fresh_stryfe.sql') {
     ensureColumnSync(db, 'sessions', 'list_preview', 'text');
     ensureColumnSync(db, 'sessions', 'list_preview_role', 'text');
@@ -219,6 +227,14 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0124_funny_glorian.sql') {
+    await ensureColumn(target, 'orca_workers', 'execution_device_id', 'text');
+    await ensureColumn(target, 'orca_workers', 'remote_session_id', 'text');
+    await ensureColumn(target, 'orca_workers', 'last_bridged_message_id', 'text');
+    await ensureColumn(target, 'orca_workers', 'remote_released_at', 'integer');
+    await ensureColumn(target, 'sessions', 'orca_remote_lead', 'text');
+    return;
+  }
   if (fileName === '0097_fresh_stryfe.sql') {
     await ensureColumn(target, 'sessions', 'list_preview', 'text');
     await ensureColumn(target, 'sessions', 'list_preview_role', 'text');

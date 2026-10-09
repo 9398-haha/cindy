@@ -11358,7 +11358,11 @@
       "untitled": "Untitled session",
       "moreActions": "More actions",
       "agentDevice": "Agent runs on {{device}}",
-      "agentDeviceOffline": "Agent runs on {{device}}, which is offline — it continues once that computer is back"
+      "agentDeviceOffline": "Agent runs on {{device}}, which is offline — it continues once that computer is back",
+      "orcaRemoteLead": "Collaboration from {{device}}",
+      "orcaRemoteLeadReleased": "Collaboration ended · from {{device}}",
+      "orcaRemoteLeadUnknownDevice": "another computer",
+      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead."
     },
     "gitContext": {
       "detached": "Detached HEAD",

@@ -2955,6 +2955,7 @@ export function CCAgentSessionView({
     workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
+    orcaRemoteWorker: !!session?.orcaRemoteLead,
     remoteHostId: session?.remoteHostId,
     // 粘滞归属:relay 瞬时重连清空注册表的窗口内不把远程会话误判成本机 —— 误判会让
     // 协同策略退回查控制端本机,读到的是另一台机器的开关。

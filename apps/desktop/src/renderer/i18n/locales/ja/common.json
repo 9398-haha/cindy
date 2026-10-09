@@ -11330,7 +11330,11 @@
       "untitled": "無題のセッション",
       "moreActions": "その他の操作",
       "agentDevice": "Agent は {{device}} で実行中",
-      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します"
+      "agentDeviceOffline": "Agent は {{device}} で実行中ですが、そのパソコンはオフラインです。接続されると続行します",
+      "orcaRemoteLead": "{{device}} からの協同",
+      "orcaRemoteLeadReleased": "協同は終了しました · {{device}} から",
+      "orcaRemoteLeadUnknownDevice": "別のパソコン",
+      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
     },
     "gitContext": {
       "detached": "Detached HEAD",
