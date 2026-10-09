@@ -94,4 +94,25 @@ export async function writeProviderGroupBinding(
   });
 }
 
+/**
+ * 组内电脑被移出或整个组被删除后，解除指向它们的任务绑定：这些任务成为普通任务，之后即使同一台电脑
+ * 重新加入、或重建同一个组，也不会恢复自动换电脑。`keepMemberKeys` 为 null 表示整个组已删除。
+ */
+export async function pruneProviderGroupBindings(
+  providerId: string,
+  keepMemberKeys: ReadonlySet<string> | null,
+): Promise<void> {
+  await store.updateAtomic(({ value }) => {
+    const sessions = { ...value.sessions };
+    let changed = false;
+    for (const [sessionId, binding] of Object.entries(sessions)) {
+      if (binding.providerId !== providerId) continue;
+      if (keepMemberKeys?.has(binding.memberKey)) continue;
+      delete sessions[sessionId];
+      changed = true;
+    }
+    return changed ? { sessions } : {};
+  });
+}
+
 export const __testing = { normalize, prune };

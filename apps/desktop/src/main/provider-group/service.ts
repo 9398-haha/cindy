@@ -363,10 +363,24 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (!row || row.remoteHostId) return null;
       const binding = deps.readBinding(sessionId);
       if (binding) {
-        await verifyBinding(sessionId, binding, deps.readGroup(binding.providerId), row).catch((error) => {
+        const config = deps.readGroup(binding.providerId);
+        const current = await verifyBinding(sessionId, binding, config, row).catch((error) => {
           deps.log.warn('provider group: binding reconciliation failed', { sessionId, error: errorText(error) });
+          return null;
         });
-        return null;
+        // 从没运行过的任务(上次全部没能启动、重启应用后再打开等)：带上启动上下文，这次启动失败时仍能
+        // 换组里下一台。已经运行过的任务在原来那台上有原生会话，换电脑要走交接，不在这里换。
+        if (!current || row.sdkSessionId || (await deps.hasAssistantHistory(sessionId))) return null;
+        const localProviderId = current.kind === 'local' ? row.providerId : binding.providerId;
+        return {
+          sessionId,
+          groupProviderId: binding.providerId,
+          agentKind,
+          model,
+          member: current,
+          route: memberRoute(current, localProviderId),
+          localProviderId,
+        };
       }
       // 已指定 Agent 所在电脑的任务不动。
       if (row.agentDeviceId) return null;

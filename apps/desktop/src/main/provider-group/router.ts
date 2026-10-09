@@ -7,7 +7,7 @@
  *
  * 冷却、轮询游标与「这一轮已试过」只在本次运行内有效，不落盘；重启后按组内电脑的实时状态重新判断。
  */
-import { findCatalogModel } from '@cindy/model-providers';
+import { findCatalogModel, isModelSelectableForNewRoute } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
 
 import type { ProviderGroupConfig, ProviderGroupMember, ProviderGroupView } from '../../shared/providerGroup.js';
@@ -100,8 +100,12 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     return count;
   }
 
+  /** 那台能为新会话提供这个模型：停用、已退役、需要付费的都不算(与新建任务、切模型同一准入)。 */
   function offersModel(resolved: ResolvedProviderGroupMember, agentKind: AgentKind, model: string): boolean {
-    return resolved.state === 'ok' && !!resolved.view && findCatalogModel(resolved.view, model, agentKind) !== undefined;
+    if (resolved.state !== 'ok' || !resolved.view) return false;
+    const found = findCatalogModel(resolved.view, model, agentKind);
+    return found !== undefined
+      && isModelSelectableForNewRoute(found, { userProvider: resolved.view.source === 'user' });
   }
 
   return {

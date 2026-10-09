@@ -3,6 +3,8 @@
  */
 import { ipcMain } from 'electron';
 
+import { activeOwnerScopeKey } from '../appSessionState.js';
+
 import {
   PROVIDER_GROUP_IPC,
   isProviderGroupProviderId,
@@ -15,6 +17,7 @@ import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { pruneProviderGroupBindings } from './bindings.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupRouter } from './router.js';
 import { getProviderGroupDirectory, getProviderGroupRouter } from './runtime.js';
@@ -27,6 +30,10 @@ export interface ProviderGroupCommandDeps {
   directory: ProviderGroupDirectory;
   readGroup(providerId: string): ProviderGroupConfig | null;
   writeGroup(providerId: string, config: unknown): Promise<ProviderGroupConfig | null>;
+  /** 解除指向已不在组里的电脑的任务绑定；keep 为 null = 整个组已删除。 */
+  pruneBindings(providerId: string, keep: ReadonlySet<string> | null): Promise<void>;
+  /** 当前账号：等远端目录期间换了账号时不写入(否则会把上一个账号的组写进新账号)。 */
+  ownerKey(): string;
   changed(providerId: string): void;
 }
 
@@ -59,9 +66,11 @@ export async function executeProviderGroupCommand(deps: ProviderGroupCommandDeps
       return deps.directory.listCandidates(providerId, deps.readGroup(providerId));
     case 'delete':
       await deps.writeGroup(providerId, null);
+      await deps.pruneBindings(providerId, null);
       deps.changed(providerId);
       return deps.router.view(providerId);
     case 'save': {
+      const owner = deps.ownerKey();
       const next = normalizeProviderGroupConfig(command.config, providerId);
       if (next) {
         // 新加入的电脑必须是这台电脑已经能用的同一个供应商(§3)，不能凭渲染端点名加入。
@@ -82,7 +91,11 @@ export async function executeProviderGroupCommand(deps: ProviderGroupCommandDeps
           }
         }
       }
-      await deps.writeGroup(providerId, next);
+      if (deps.ownerKey() !== owner) {
+        throwIpcError('PRECONDITION_FAILED', 'The account changed while saving the provider group');
+      }
+      const written = await deps.writeGroup(providerId, next);
+      await deps.pruneBindings(providerId, written ? new Set(written.members.map((m) => m.key)) : null);
       deps.changed(providerId);
       return deps.router.view(providerId);
     }
@@ -95,6 +108,8 @@ export function registerProviderGroupIpc(): void {
     directory: getProviderGroupDirectory(),
     readGroup: readProviderGroup,
     writeGroup: writeProviderGroup,
+    pruneBindings: pruneProviderGroupBindings,
+    ownerKey: activeOwnerScopeKey,
     changed: (providerId) => {
       try {
         broadcast(PROVIDER_GROUP_IPC.CHANGED, { providerId });

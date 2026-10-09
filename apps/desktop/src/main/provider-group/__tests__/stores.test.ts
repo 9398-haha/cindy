@@ -79,4 +79,17 @@ describe('provider group bindings', () => {
     await bindings.writeProviderGroupBinding('s1', null);
     expect(bindings.readProviderGroupBinding('s1')).toBeNull();
   });
+
+  it('releases bindings of removed computers and of deleted groups only', async () => {
+    await bindings.writeProviderGroupBinding('a', { providerId: 'anthropic', memberKey: 'local' }, 1);
+    await bindings.writeProviderGroupBinding('b', { providerId: 'anthropic', memberKey: 'device:mini:x' }, 2);
+    await bindings.writeProviderGroupBinding('c', { providerId: 'openai', memberKey: 'device:mini:y' }, 3);
+    await bindings.pruneProviderGroupBindings('anthropic', new Set(['local']));
+    expect(bindings.readProviderGroupBinding('a')).not.toBeNull();
+    expect(bindings.readProviderGroupBinding('b')).toBeNull();
+    expect(bindings.readProviderGroupBinding('c')).not.toBeNull();
+    await bindings.pruneProviderGroupBindings('anthropic', null);
+    expect(bindings.readProviderGroupBinding('a')).toBeNull();
+    expect(bindings.readProviderGroupBinding('c')).not.toBeNull();
+  });
 });

@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../runtime.js', () => ({ getProviderGroupDirectory: vi.fn(), getProviderGroupRouter: vi.fn() }));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn() }));
+vi.mock('../bindings.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner-a' }));
 vi.mock('../../device-link/index.js', () => ({ broadcast: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
 
@@ -26,7 +28,11 @@ const MINI = {
 
 function deps(candidates: ProviderGroupCandidate[], existing: ProviderGroupConfig | null = null) {
   let stored = existing;
+  let owner = 'owner-a';
   return {
+    switchOwner: (next: string) => { owner = next; },
+    ownerKey: vi.fn(() => owner),
+    pruneBindings: vi.fn(async () => {}),
     router: { view: vi.fn(async (providerId: string) => ({ providerId, config: stored, members: [] })) },
     directory: { listCandidates: vi.fn(async () => candidates), resolveMembers: vi.fn(), invalidate: vi.fn() },
     readGroup: vi.fn(() => stored),
@@ -35,7 +41,12 @@ function deps(candidates: ProviderGroupCandidate[], existing: ProviderGroupConfi
       return stored;
     }),
     changed: vi.fn(),
-  } as unknown as ProviderGroupCommandDeps & { writeGroup: ReturnType<typeof vi.fn>; changed: ReturnType<typeof vi.fn> };
+  } as unknown as ProviderGroupCommandDeps & {
+    writeGroup: ReturnType<typeof vi.fn>;
+    changed: ReturnType<typeof vi.fn>;
+    pruneBindings: ReturnType<typeof vi.fn>;
+    switchOwner(next: string): void;
+  };
 }
 
 describe('parseProviderGroupCommand', () => {
@@ -92,5 +103,35 @@ describe('executeProviderGroupCommand save', () => {
       config: { strategy: 'least', autoSwitch: true, members: [] },
     });
     expect(d.writeGroup).toHaveBeenCalledWith('anthropic', null);
+    expect(d.pruneBindings).toHaveBeenCalledWith('anthropic', null);
+  });
+
+  it('releases tasks bound to computers that were removed from the group', async () => {
+    const d = deps([], { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] });
+    await executeProviderGroupCommand(d, {
+      action: 'save',
+      providerId: 'anthropic',
+      config: { strategy: 'least', autoSwitch: true, members: [LOCAL] },
+    });
+    expect(d.pruneBindings).toHaveBeenCalledWith('anthropic', new Set(['local']));
+
+    const removed = deps([], { strategy: 'least', autoSwitch: true, members: [LOCAL] });
+    await executeProviderGroupCommand(removed, { action: 'delete', providerId: 'anthropic' });
+    expect(removed.pruneBindings).toHaveBeenCalledWith('anthropic', null);
+  });
+
+  it('does not write when the account changed while reading the candidates', async () => {
+    const d = deps([{ key: MINI.key, kind: 'device', agentDeviceId: 'mini', providerId: MINI.providerId, label: 'Mac mini', providerName: 'Claude' }]);
+    (d.directory.listCandidates as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      d.switchOwner('owner-b');
+      return [{ key: MINI.key, kind: 'device', agentDeviceId: 'mini', providerId: MINI.providerId, label: 'Mac mini', providerName: 'Claude' }];
+    });
+    await expect(executeProviderGroupCommand(d, {
+      action: 'save',
+      providerId: 'anthropic',
+      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] },
+    })).rejects.toThrow(/PRECONDITION_FAILED/);
+    expect(d.writeGroup).not.toHaveBeenCalled();
+    expect(d.pruneBindings).not.toHaveBeenCalled();
   });
 });

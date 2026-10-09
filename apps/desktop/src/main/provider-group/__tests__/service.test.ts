@@ -21,13 +21,13 @@ import {
 
 const MODEL = 'claude-opus-5-5';
 
-function view(id: string): ProviderView {
+function view(id: string, model: Record<string, unknown> = {}): ProviderView {
   return {
     id,
     name: id,
     agents: ['claude-code'],
     connected: true,
-    models: { 'claude-code': [{ id: MODEL, name: MODEL, efforts: [], defaultEffort: null }] },
+    models: { 'claude-code': [{ id: MODEL, name: MODEL, efforts: [], defaultEffort: null, ...model }] },
     routing: { 'claude-code': {} },
   } as unknown as ProviderView;
 }
@@ -47,6 +47,8 @@ function harness(options: {
   row?: Partial<ProviderGroupSessionRow>;
   offline?: string[];
   autoSwitch?: boolean;
+  /** 这些组内电脑上的同名模型不能用于新会话(停用、退役、需要付费)。 */
+  unusableModel?: Record<string, Record<string, unknown>>;
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
@@ -60,7 +62,7 @@ function harness(options: {
     async resolveMembers(_providerId, current) {
       return current.members.map((m): ResolvedProviderGroupMember => offline.has(m.key)
         ? { member: m, label: m.key, state: 'offline' }
-        : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId) });
+        : { member: m, label: `${m.key}-name`, state: 'ok', view: view(m.providerId, options.unusableModel?.[m.key]) });
     },
     async listCandidates() {
       return [];
@@ -171,6 +173,29 @@ describe('assignBeforeStart', () => {
     const h = harness({ offline: ['local', MINI.key, STUDIO.key] });
     await expect(h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL }))
       .rejects.toThrow(PROVIDER_GROUP_UNAVAILABLE_ERROR);
+  });
+
+  it('skips computers whose model cannot be used for a new task', async () => {
+    for (const unusable of [{ disabled: true }, { status: 'retired' }, { availability: 'requires_payment' }]) {
+      const h = harness({ unusableModel: { local: unusable } });
+      const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+      expect(context?.member.key).toBe(MINI.key);
+    }
+  });
+
+  it('keeps a start context for a bound task that never ran, so a failed start can move on', async () => {
+    const h = harness({ row: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    const context = await h.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL });
+    expect(context).toMatchObject({ member: { key: MINI.key }, route: { agentDeviceId: 'mini', providerId: MINI.providerId } });
+    expect(h.deps.persistRoute).not.toHaveBeenCalled();
+    const next = await h.service.nextAfterStartFailure(context!, new Error('[REMOTE_AGENT_DEVICE_UNREACHABLE] x'));
+    expect(next?.member.key).not.toBe(MINI.key);
+
+    // 已经运行过的任务换电脑要走交接，这里不带启动上下文。
+    const ran = harness({ row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native-1' } });
+    ran.bindings.set('s1', { providerId: 'anthropic', memberKey: MINI.key, at: 1 });
+    expect(await ran.service.assignBeforeStart({ sessionId: 's1', agentKind: 'claude-code', model: MODEL })).toBeNull();
   });
 
   it('drops the binding when the user moved the task out of the group', async () => {
