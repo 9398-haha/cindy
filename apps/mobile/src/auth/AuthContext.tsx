@@ -1718,11 +1718,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!matchesOAuthCallbackUrl(callbackUrl, MOBILE_REDIRECT_URL)) {
         throw authCodeError('INVALID_AUTH_CODE');
       }
-      const callback = parseOAuthCallbackUrl(callbackUrl);
+      // Establish ownership even for denial/malformed-code redirects before
+      // parsing their terminal result. Unowned error links cannot cancel a flow.
+      const callbackState = new URL(callbackUrl).searchParams.get('state');
+      if (!callbackState) throw authCodeError('STATE_MISMATCH');
       const currentCompletion = () =>
         !oauthCancelledRef.current && loginFlowEpochRef.current === expectedLoginFlowEpoch &&
         browserCompletionEpochRef.current === expectedLoginFlowEpoch &&
-        browserCompletionStateRef.current === callback.state
+        browserCompletionStateRef.current === callbackState
           ? browserCompletionRef.current : null;
       const existing = currentCompletion();
       if (existing) return existing;
@@ -1731,7 +1734,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         // Validate ownership before taking the single-flight slot. A stale
         // state must never swallow the current attempt's callback.
-        pending = await readPendingOAuth(callback.state);
+        pending = await readPendingOAuth(callbackState);
       } catch (error) {
         const concurrent = currentCompletion();
         if (concurrent) return concurrent;
@@ -1755,7 +1758,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       suspendSessionRecoveryForLogin();
       const run = (async () => {
         setIsBusy(true);
+        let parsedCallback = false;
         try {
+          const callback = parseOAuthCallbackUrl(callbackUrl);
+          parsedCallback = true;
           try {
             await loadMobileEndpointsForRealm(pending.realm);
           } catch {
@@ -1784,6 +1790,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) throw error;
           const code = authErrorCode(error);
+          if (!parsedCallback) {
+            oauthCancelledRef.current = true;
+            let reportedCode = code;
+            try {
+              await persistPendingOAuth(null);
+            } catch (storageError) {
+              reportedCode = authErrorCode(storageError);
+            }
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            updateLoginState({ step: 'error', code: reportedCode, recoverTo: 'identifier' });
+            setAuthError(reportedCode);
+            throw error;
+          }
           if (code === 'INVALID_AUTH_CODE') {
             await persistPendingOAuth(null).catch(() => undefined);
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
@@ -1801,7 +1820,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })();
       browserCompletionRef.current = run;
       browserCompletionEpochRef.current = expectedLoginFlowEpoch;
-      browserCompletionStateRef.current = callback.state;
+      browserCompletionStateRef.current = callbackState;
       // Keep successful completion for duplicate native/Linking notifications;
       // a different state or epoch cannot reuse it. Failed attempts may retry.
       void run.catch(() => {
@@ -1992,7 +2011,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             oauthCancelledRef.current = true;
             setIsBusy(false);
             const cancelledEpoch = ++loginFlowEpochRef.current;
-            await persistPendingOAuth(null).catch(() => undefined);
+            try {
+              await persistPendingOAuth(null);
+            } catch (error) {
+              assertLoginFlowCurrent(cancelledEpoch);
+              const code = authErrorCode(error);
+              updateLoginState({ step: 'error', code, recoverTo: 'identifier' });
+              setAuthError(code);
+              throw error;
+            }
             assertLoginFlowCurrent(cancelledEpoch);
             pendingAuthRealmRef.current = null;
             updateLoginState(null);
@@ -2760,6 +2787,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loginFlowEpochRef.current += 1;
     const cancelledEpoch = loginFlowEpochRef.current;
     setIsBusy(false);
+    try {
+      await persistPendingOAuth(null);
+    } catch (error) {
+      if (loginFlowEpochRef.current !== cancelledEpoch) return;
+      const code = authErrorCode(error);
+      updateLoginState({ step: 'error', code, recoverTo: 'identifier' });
+      setAuthError(code);
+      throw error;
+    }
+    if (loginFlowEpochRef.current !== cancelledEpoch) return;
     pendingAccountTokenRef.current = null;
     pendingAccountRefreshTokenRef.current = null;
     pendingAccountMembershipsRef.current = [];
@@ -2772,8 +2809,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingAccountDeletionRestoredRef.current = false;
     additionalLoginRef.current = false;
     sessionRecoverySuspendedRef.current = false;
-    await persistPendingOAuth(null).catch(() => undefined);
-    if (loginFlowEpochRef.current !== cancelledEpoch) return;
     activateMobileSessionRealm(activeAuthRealmRef.current);
     setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
     updateLoginState(null);

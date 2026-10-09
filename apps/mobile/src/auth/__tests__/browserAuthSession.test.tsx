@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const native = vi.hoisted(() => ({
   platform: 'android',
+  replaceRoute: vi.fn(),
+  closeAccount: undefined as (() => void) | undefined,
   storage: new Map<string, string>(),
   readSecure: vi.fn(),
   deleteSecure: vi.fn(),
@@ -25,6 +27,10 @@ const native = vi.hoisted(() => ({
   state: 0,
 }));
 
+vi.mock('expo-router', () => ({ useRouter: () => ({ replace: native.replaceRoute }) }));
+vi.mock('../../../app/(auth)/login', () => ({
+  LoginScreen: ({ onClose }: { onClose?: () => void }) => { native.closeAccount = onClose; return null; },
+}));
 vi.mock('react-native', () => ({
   Platform: { get OS() { return native.platform; } },
   AppState: { addEventListener: () => ({ remove() {} }) },
@@ -108,6 +114,7 @@ vi.mock('@/update/betaChannelStore', () => ({ prepareBetaChannelForDevice: async
 vi.mock('@/update/fetchLatestRelease', () => ({}));
 
 import { AuthProvider, useAuth } from '../AuthContext';
+import AddAccountScreen from '../../../app/add-account';
 
 const pendingKey = 'cindy.mobile.auth.pendingOAuth';
 const verifiedOutcome = {
@@ -167,6 +174,8 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
   beforeEach(async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     native.platform = 'android';
+    native.replaceRoute.mockReset();
+    native.closeAccount = undefined;
     native.crossRealm = false;
     native.discoverOrganization.mockReset().mockResolvedValue({
       region: 'cn', orgName: 'Fixture Organization',
@@ -211,6 +220,106 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.exchange).toHaveBeenCalledExactlyOnceWith('fixture-code', 'fixture-verifier');
     expect(auth.loginState?.step).toBe('sso-verification');
     expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it.each(['access_denied', 'missing-code'])('surfaces a current terminal callback after dismiss (%s)', async error => {
+    await start();
+    const state = JSON.parse(native.storage.get(pendingKey)!).state;
+    await emitLink(`cindycn://auth?state=${state}${error === 'access_denied' ? '&error=access_denied' : ''}`);
+    expect(native.exchange).not.toHaveBeenCalled();
+    expect(auth.loginState?.step).toBe('error');
+    expect(auth.authError).toBe(error === 'access_denied' ? error : 'INVALID_AUTH_CODE');
+    expect(native.storage.has(pendingKey)).toBe(false);
+    await emitLink(callbackUrl(state));
+    expect(native.exchange).not.toHaveBeenCalled();
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    await start();
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it.each(['wrong-state', 'missing-state'])('ignores an unowned error callback (%s)', async state => {
+    await start();
+    const pending = native.storage.get(pendingKey);
+    await emitLink(`cindycn://auth?error=access_denied${state === 'wrong-state' ? '&state=old-state' : ''}`);
+    expect(auth.loginState?.step).toBe('browser-redirect');
+    expect(auth.authError).toBeNull();
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it.each(['native-cancel', 'close-account', 'error-link'])('reports complete storage failure and permits cancellation retry (%s)', async entry => {
+    if (entry === 'close-account') await act(async () => { await auth.beginAddAccount(); });
+    let finish!: (v: {type: 'cancel'}) => void;
+    let opening!: Promise<unknown>;
+    if (entry === 'native-cancel') {
+      native.open.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await act(async () => { opening = auth.dispatchLoginAction({ type: 'start-social-browser', provider: 'wechat', label: 'WeChat' }).catch(e => e); });
+    } else await start();
+    const pending = native.storage.get(pendingKey);
+    const url = callbackUrl();
+    native.writeSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    await act(async () => {
+      if (entry === 'native-cancel') { finish({type: 'cancel'}); await opening; }
+      else if (entry === 'close-account') await auth.cancelAddAccount().catch(() => undefined);
+      else for (const listener of native.links) listener({url: url.replace('code=fixture-code', 'error=access_denied')});
+    });
+    expect(auth.loginState?.step).toBe('error');
+    expect(auth.authError).toBeTruthy();
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await act(async () => {
+      if (entry === 'close-account') await auth.cancelAddAccount();
+      else expect(await auth.dispatchLoginAction({type: 'reset'})).toBe(true);
+    });
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it('keeps the add-account route open when cancellation fails and closes on retry', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await act(async () => { root.render(<AuthProvider><Probe /><AddAccountScreen /></AuthProvider>); });
+    native.writeSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    await act(async () => { native.closeAccount!(); });
+    expect(auth.loginState?.step).toBe('error');
+    expect(native.replaceRoute).not.toHaveBeenCalled();
+    await act(async () => { native.closeAccount!(); });
+    expect(native.replaceRoute).toHaveBeenCalledExactlyOnceWith('/devices');
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it('surfaces a failed unmount cancellation without an unhandled rejection', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const url = callbackUrl();
+    await act(async () => { root.render(<AuthProvider><Probe /><AddAccountScreen /></AuthProvider>); });
+    native.writeSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
+    await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
+    expect(auth.loginState?.step).toBe('error');
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await act(async () => { await auth.beginAddAccount(); });
+    expect(native.storage.has(pendingKey)).toBe(false);
+    expect(auth.loginState?.step).toBe('identifier');
+  });
+
+  it('handles a terminal native success redirect on iOS through the same error path', async () => {
+    native.platform = 'ios';
+    native.open.mockImplementationOnce(async (url: string) => ({
+      type: 'success', url: `cindycn://auth?state=${new URL(url).searchParams.get('state')}&error=access_denied`,
+    }));
+    await act(async () => {
+      await auth.dispatchLoginAction({type: 'start-social-browser', provider: 'wechat', label: 'WeChat'}).catch(() => undefined);
+    });
+    expect(auth.loginState?.step).toBe('error');
+    expect(auth.authError).toBe('access_denied');
+    expect(native.storage.has(pendingKey)).toBe(false);
+    expect(native.exchange).not.toHaveBeenCalled();
   });
 
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {

@@ -21,7 +21,7 @@ export default function AddAccountScreen() {
       // Android 系统返回键可以直接移除路由。取消动作必须从卸载路径兜底，
       // 让验证码校验、账号选择等迟到结果在提交前失效。
       if (flowFinishedRef.current || closeStartedRef.current) return;
-      void auth.cancelAddAccount();
+      void auth.cancelAddAccount().catch(() => undefined);
     },
     [auth.cancelAddAccount],
   );
@@ -31,7 +31,10 @@ export default function AddAccountScreen() {
       additionalAccount
       onClose={() => {
         closeStartedRef.current = true;
-        void auth.cancelAddAccount().finally(() => router.replace('/devices'));
+        void auth.cancelAddAccount().then(
+          () => router.replace('/devices'),
+          () => { closeStartedRef.current = false; },
+        );
       }}
     />
   );
