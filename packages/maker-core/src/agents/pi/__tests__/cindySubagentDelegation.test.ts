@@ -12,14 +12,20 @@ import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 const compiled = ts.transpileModule(CINDY_SUBAGENT_EXTENSION_SOURCE + '\nexport { parentContextSnapshot, createResultDelivery };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const extension: any = {};
-new Function('require', 'exports', compiled)(createRequire(import.meta.url), extension);
+const nativeRequire = createRequire(import.meta.url);
+function loadExtension(fsOverrides: Record<string, unknown> = {}) {
+  const loaded: any = {};
+  new Function('require', 'exports', compiled)((name: string) => name === 'node:fs'
+    ? { ...nativeRequire(name), ...fsOverrides } : nativeRequire(name), loaded);
+  return loaded;
+}
+const extension = loadExtension();
 const roots: string[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
-async function fixture() {
+async function fixture(fsOverrides: Record<string, unknown> = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'pi-delegation-'));
   roots.push(root);
   vi.stubEnv('CINDY_PI_SUBAGENT_RUN_ROOT', root);
@@ -38,13 +44,19 @@ async function fixture() {
   let tool: any;
   const pi = { on: (event: string, handler: any) => { hooks[event] = handler; }, appendEntry: vi.fn(),
     registerTool: (value: any) => { tool = value; } };
-  await extension.default(pi);
+  await loadExtension(fsOverrides).default(pi);
   const ctx = { ui: { input: vi.fn(async (_title: string, _payload: string) => JSON.stringify({ ok: true })) },
     sessionManager: { getBranch: () => [] }, hasPendingMessages: () => false };
   const execute = (params: any, signal = new AbortController().signal) => tool.execute('control-id', params, signal, undefined, ctx);
   return { root, runId, dir, status, publish, hooks, pi, ctx, execute };
 }
 const boundary = { outcome: 'completed', context: { pendingMessages: [] } };
+function restorePending(f: Awaited<ReturnType<typeof fixture>>) {
+  f.hooks.session_start!({}, { sessionManager: { getBranch: () => [{
+    type: 'custom', customType: 'cindy-subagent-delivery',
+    data: { runId: f.runId, state: 'pending', deadlineAt: Date.now() + 86400000 },
+  }] } });
+}
 
 describe('Pi delegation behavior', () => {
   it('forks the native projected context, prioritizing the latest correction and compaction summary', () => {
@@ -184,6 +196,90 @@ describe('Pi delegation behavior', () => {
       ? { ok: false, exited: true, error: 'Runner crashed' } : { ok: true }));
     const result = await f.hooks.agent_before_settle!(boundary, f.ctx);
     expect(result.entries[0].content).toContain('Runner crashed');
+  });
+
+  it('polls only pending runs without listing or reading historical statuses', async () => {
+    const fs = nativeRequire('node:fs');
+    const readStatus = vi.fn(fs.readFileSync);
+    const scanHistory = vi.fn(fs.readdirSync);
+    const f = await fixture({ readFileSync: readStatus, readdirSync: scanHistory });
+    const historicalId = randomUUID();
+    await mkdir(path.join(f.root, historicalId));
+    await writeFile(path.join(f.root, historicalId, 'status.json'), JSON.stringify({
+      ...f.status, runId: historicalId, state: 'completed',
+    }));
+    restorePending(f);
+    // Keep the run active for several poll ticks, then simulate user input.
+    let polls = 0;
+    f.ctx.hasPendingMessages = () => ++polls > 3;
+    expect(await f.hooks.agent_before_settle!(boundary, f.ctx)).toBeUndefined();
+    expect(scanHistory).not.toHaveBeenCalled();
+    const files = readStatus.mock.calls.map(args => String(args[0]));
+    expect(files.filter(file => file === path.join(f.dir, 'status.json'))).toHaveLength(3);
+    expect(files.some(file => file.includes(historicalId))).toBe(false);
+  });
+
+  it.each(['running', 'completed'])('settles a restored %s run owned by the previous runtime without exposing its output', async state => {
+    const f = await fixture();
+    f.status.state = state;
+    f.status.runtimeOwnerId = 'previous-runtime';
+    f.status.tasks.forEach(task => { task.status = state; task.output = 'FOREIGN_OUTPUT'; });
+    await f.publish();
+    restorePending(f);
+    const result = await f.hooks.agent_before_settle!(boundary, f.ctx);
+    expect(result.continue).toBe(true);
+    expect(result.entries[0].content).toContain('another runtime owner');
+    expect(result.entries[0].content).not.toContain('FOREIGN_OUTPUT');
+    expect(result.entries[0].details.runIds).toEqual([f.runId]);
+    expect(f.ctx.ui.input.mock.calls.every(([, payload]) => JSON.parse(payload).action === 'delivery')).toBe(true);
+    expect(await f.hooks.agent_before_settle!(boundary, f.ctx)).toBeUndefined();
+    f.hooks.session_start!({}, { sessionManager: { getBranch: () => [{
+      type: 'custom', customType: 'cindy-subagent-delivery',
+      data: { runId: f.runId, state: 'pending', deadlineAt: Date.now() + 86400000 },
+    }, ...result.entries] } });
+    expect(await f.hooks.agent_before_settle!(boundary, f.ctx)).toBeUndefined();
+    expect(await readdir(f.dir)).toEqual(['status.json']);
+  });
+
+  it('settles a restored missing run when the host rejects status access', async () => {
+    const f = await fixture();
+    await rm(path.join(f.dir, 'status.json'));
+    restorePending(f);
+    f.ctx.ui.input.mockImplementation(async (_title, payload) => JSON.stringify(JSON.parse(payload).action === 'status'
+      ? { ok: false, error: 'PI Subagent runner control failed' } : { ok: true }));
+    const result = await f.hooks.agent_before_settle!(boundary, f.ctx);
+    expect(result.entries[0].content).toContain('host rejected status access');
+    expect(result.entries[0].content).toContain('does not confirm the child stopped');
+    expect(await f.hooks.agent_before_settle!(boundary, f.ctx)).toBeUndefined();
+  });
+
+  it('does not deliver legacy output when both the runtime and status lack an owner', async () => {
+    const f = await fixture();
+    vi.stubEnv('CINDY_PI_SUBAGENT_OWNER_ID', undefined);
+    f.status.state = 'completed';
+    f.status.tasks.forEach(task => { task.status = 'completed'; task.output = 'LEGACY_OUTPUT'; });
+    await writeFile(path.join(f.dir, 'status.json'), JSON.stringify({ ...f.status, runtimeOwnerId: undefined }));
+    restorePending(f);
+    const result = await f.hooks.agent_before_settle!(boundary, f.ctx);
+    expect(result.entries[0].content).toContain('another runtime owner');
+    expect(result.entries[0].content).not.toContain('LEGACY_OUTPUT');
+  });
+
+  it('keeps a transiently unreadable status pending when the host still confirms the run', async () => {
+    const f = await fixture();
+    await rm(path.join(f.dir, 'status.json'));
+    restorePending(f);
+    f.ctx.ui.input.mockImplementation(async (_title, payload) => {
+      if (JSON.parse(payload).action === 'status') {
+        f.status.state = 'completed';
+        f.status.tasks.forEach(task => { task.status = 'completed'; task.output = 'RECOVERED_RESULT'; });
+        await f.publish();
+      }
+      return JSON.stringify({ ok: true });
+    });
+    const result = await f.hooks.agent_before_settle!(boundary, f.ctx);
+    expect(result.entries[0].content).toContain('RECOVERED_RESULT');
+    expect(result.entries[0].content).not.toContain('rejected');
   });
 
   it('retains the failure reason alongside intermediate output', async () => {

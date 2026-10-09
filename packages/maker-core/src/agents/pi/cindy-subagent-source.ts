@@ -512,6 +512,18 @@ function writePrivateJson(file, value) {
   try { chmodSync(file, 0o600); } catch (err) { /* best effort on Windows */ }
 }
 
+function readDurableStatus(runId) {
+  const root = process.env[RUN_ROOT_ENV];
+  if (!root || typeof runId !== 'string' || !/^[0-9a-f-]{36}$/i.test(runId)) return null;
+  try {
+    const file = join(root, runId, 'status.json');
+    const stat = statSync(file);
+    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return null;
+    const status = JSON.parse(readFileSync(file, 'utf8'));
+    return status && status.version === 1 && status.runId === runId ? status : null;
+  } catch (err) { return null; /* transiently unreadable status */ }
+}
+
 function durableStatuses() {
   const root = process.env[RUN_ROOT_ENV];
   const runtimeOwnerId = process.env[OWNER_ID_ENV];
@@ -521,21 +533,10 @@ function durableStatuses() {
   const statuses = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[0-9a-f-]{36}$/i.test(entry.name)) continue;
-    const file = join(root, entry.name, 'status.json');
-    try {
-      const stat = statSync(file);
-      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue;
-      const status = JSON.parse(readFileSync(file, 'utf8'));
-      // Shared userData can contain runs for the same task opened by another
-      // Desktop instance. The in-model management actions are a control plane,
-      // so legacy or foreign ownership must fail closed just like host controls.
-      if (
-        status
-        && status.version === 1
-        && status.runId === entry.name
-        && status.runtimeOwnerId === runtimeOwnerId
-      ) statuses.push(status);
-    } catch (err) { /* unreadable runs fail closed */ }
+    const status = readDurableStatus(entry.name);
+    // Only explicit list/management discovery scans history. Never expose
+    // legacy or foreign-owner results through the model's control plane.
+    if (status && status.runtimeOwnerId === runtimeOwnerId) statuses.push(status);
   }
   return statuses.sort(function (left, right) { return Number(right.startedAt || 0) - Number(left.startedAt || 0); });
 }
@@ -901,7 +902,10 @@ async function requestRunnerControl(ctx, action, runId, options = {}) {
     );
   }
   if (!response || response.ok !== true) {
-    throw new Error('subagent: Cindy could not ' + action + ' the durable runner.');
+    throw Object.assign(
+      new Error('subagent: Cindy could not ' + action + ' the durable runner.'),
+      { runnerRejected: !!response && response.ok === false && typeof response.error === 'string' },
+    );
   }
   return response;
 }
@@ -1339,20 +1343,25 @@ function createResultDelivery(pi) {
           return;
         }
         if (typeof ctx.hasPendingMessages === 'function' && ctx.hasPendingMessages()) return;
-        const statuses = durableStatuses();
         const ready = [];
         const runIds = [];
         const pollHost = Date.now() >= nextHostPoll;
         if (pollHost) nextHostPoll = Date.now() + 1000;
         for (const [runId, deadlineAt] of pending) {
-          const status = statuses.find(function (entry) { return entry.runId === runId; });
-          if (status && isTerminalStatus(status.state)) {
+          // Poll only the pending set: completed history can be arbitrarily
+          // large and must not occupy Pi's event loop on every 250 ms tick.
+          const status = readDurableStatus(runId);
+          if (status && (!process.env[OWNER_ID_ENV] || status.runtimeOwnerId !== process.env[OWNER_ID_ENV])) {
+            ready.push('runId=' + runId + ': automatic result collection is unavailable because the run belongs to another runtime owner. Its output was not read into this conversation; this does not confirm the child stopped.');
+            runIds.push(runId);
+          } else if (status && isTerminalStatus(status.state)) {
             ready.push(describeRun(status));
             runIds.push(runId);
           } else if (pollHost) {
             try { await requestRunnerControl(ctx, 'status', runId); } catch (error) {
-              if (error && error.runnerExited) {
-                ready.push('runId=' + runId + ': ' + error.message);
+              if (error && (error.runnerExited || error.runnerRejected)) {
+                ready.push('runId=' + runId + ': ' + error.message
+                  + (error.runnerRejected ? ' Automatic collection ended after the host rejected status access; this does not confirm the child stopped.' : ''));
                 runIds.push(runId);
                 continue;
               }

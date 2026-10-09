@@ -83,6 +83,9 @@ sequenceDiagram
 
 - 待投递意图记在原生 custom entry；结果通过 custom message 持久化。
   从当前分支恢复时，已投递/已消费的 run 不再通知。
+- 收集循环只读取 pending run 的状态，不反复扫描历史目录。恢复记录若已属于旧 runtime
+  owner，或宿主明确拒绝状态访问，则回传诊断并结束该记录的自动等待；不暴露旧 owner
+  的输出、不接管或停止其 child。状态文件暂时不可读但宿主仍确认有效时继续等待。
 - 父轮已经 abort/error 时不追加自动继续；结束前等待中定期查询 host gate，
   用户停止、关闭或账号边界会撤销本轮通知。原生 Pi 再检查一次等待期间的 abort。
 - 新输入优先于收集等待。`agent_settled` 清除未投递意图，防止下一次不相关输入复活旧通知。
