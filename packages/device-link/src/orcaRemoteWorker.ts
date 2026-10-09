@@ -68,6 +68,8 @@ export interface OrcaRemoteWorkerOpenResult {
   workingDir: string;
   model: string;
   agentKind: OrcaRemoteWorkerAgentKind;
+  /** 运行设备实际保存的档位；空字符串 = 不使用档位，缺省 = 旧设备未返回。 */
+  effort?: string;
 }
 
 export interface OrcaRemoteWorkerReleaseRequest {

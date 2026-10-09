@@ -427,10 +427,11 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (
           !uncertainOpen &&
           owner === ownerToken() &&
-          code &&
-          !['INVOKE_TIMEOUT', 'DEVICE_OFFLINE', 'LINK_NOT_OPEN'].includes(code) &&
+          (code === 'CHANNEL_NOT_ALLOWED' || code === 'ALREADY_EXISTS') &&
           (err as { inFlight?: boolean }).inFlight !== true
         ) {
+          // 仅未进入 open 的通道拒绝或已存在的其他任务可直接清理。
+          // 普通启动错误可能发生在 INSERT 之后，保留收据供恢复核对并解除标记。
           await removeRemoteWorkerOpen(remoteSessionId);
         }
         if (code === 'CHANNEL_NOT_ALLOWED' && input.workingDir) {
@@ -485,7 +486,9 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         title: input.title,
         agentKind: agent === 'claude-code' ? 'cc' : agent,
         model: opened.model || input.model || '',
-        effort: input.effort && EFFORTS.has(input.effort) ? input.effort : null,
+        effort: opened.effort !== undefined
+          ? opened.effort
+          : input.effort && EFFORTS.has(input.effort) ? input.effort : null,
         permissionMode: input.permissionMode,
         fastMode: input.fast === true,
       };

@@ -4,6 +4,7 @@ import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { OrcaTeamService, OrcaTeamServiceDeps, WorkerTerminalTurnCapture } from '../orcaTeamService.js';
 import { withSendToSessionLock } from '../sendToSessionLock.js';
+import { createOrcaRemoteWorkerHost, type OrcaRemoteWorkerExistingSession } from '../orcaRemoteWorkerHost.js';
 
 const store = vi.hoisted(() => ({
   archiveSingleWorkerSession: vi.fn(async () => undefined),
@@ -198,6 +199,24 @@ describe('execution devices', () => {
 });
 
 describe('openRemoteWorker', () => {
+  it.each([
+    ['medium', undefined, 'medium'],
+    ['low', 'high', 'low'],
+    ['', 'high', ''],
+    [undefined, 'xhigh', 'xhigh'],
+    [undefined, undefined, null],
+  ] as const)('uses admitted remote effort %s with requested effort %s (old hosts omit it)', async (effort, requested, expected) => {
+    const { workers } = setup({ handle: (_device, channel, args) =>
+      channel === 'maker:orca:remote-worker:open' ? ok({
+        sessionId: (args[0] as { sessionId: string }).sessionId,
+        agentKind: 'claude-code', model: 'device-model', workingDir: '/remote',
+        ...(effort !== undefined ? { effort } : {}),
+      }) : undefined });
+    const result = await workers.openRemoteWorker({ ...openInput, effort: requested });
+    expect(result).toMatchObject({ ok: true, proxySession: { effort: expected } });
+    workers.stop();
+  });
+
   it('opens the device task and defers the local proxy until Worker association', async () => {
     const { workers, remoteInvoke } = setup();
     const result = await workers.openRemoteWorker({ ...openInput, workingDir: '/Users/demo/Interviews' });
@@ -742,6 +761,112 @@ describe('wrapTeamDeps', () => {
 });
 
 describe('remote open recovery', () => {
+  it.each(['startup failed', '[INTERNAL] startup failed'])(
+    'reconciles a persisted task after a non-timeout startup error (%s)', async message => {
+      let session: OrcaRemoteWorkerExistingSession | null = null;
+      const host = createOrcaRemoteWorkerHost({
+        getCaller: () => ({ controllerDeviceId: 'lead-device' }),
+        readSession: async () => session,
+        openSession: async (_request, lead) => {
+          session = { orcaRemoteLead: lead, workingDir: '/remote', model: 'device-model',
+            agentKind: 'claude-code', effort: 'medium' };
+          throw new Error(message);
+        },
+        writeRemoteLead: async (_id, lead) => { session = { ...session!, orcaRemoteLead: lead }; },
+        withSessionLock: async <T,>(_id: string, task: () => Promise<T>) => task(),
+        now: () => 123,
+      });
+      const handle = async (_device: string, channel: string, args: unknown[]) => {
+        if (channel === 'maker:orca:remote-worker:open') {
+          try { return ok(await host.open(args[0])); }
+          catch (err) { return fail('IPC_ERROR', (err as Error).message); }
+        }
+        if (channel === 'local-db:sessions:get') return ok(session);
+        if (channel === 'maker:orca:remote-worker:release') return ok(await host.release(args[0]));
+        return undefined;
+      };
+      const first = setup({ handle });
+      await expect(first.workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
+      expect(store.saveRemoteWorkerOpen).toHaveBeenCalledOnce();
+      expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
+      const [, remoteSessionId] = store.saveRemoteWorkerOpen.mock.calls[0] as unknown as [string, string];
+      first.workers.stop();
+      const receipt = { deviceId: 'mac-mini', remoteSessionId, createdAt: Date.now() };
+      store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+      store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+      const second = setup({ handle });
+      try {
+        await second.workers.releaseEnded([]);
+        expect(second.remoteInvoke.mock.calls.map(([, channel]) => channel))
+          .toEqual(['local-db:sessions:get', 'maker:orca:remote-worker:release']);
+        expect(session!.orcaRemoteLead!.releasedAt).toBe(123);
+        expect(store.removeRemoteWorkerOpen).toHaveBeenCalledWith(remoteSessionId);
+        expect(store.addRemoteWorker).not.toHaveBeenCalled();
+      } finally { second.workers.stop(); }
+    },
+  );
+
+  it.each(['CHANNEL_NOT_ALLOWED', 'ALREADY_EXISTS'])(
+    'discards a definitive rejection without touching another task (%s)', async code => {
+      const { workers, remoteInvoke } = setup({ handle: (_device, channel) =>
+        channel === 'maker:orca:remote-worker:open' ? fail(code, 'not created') : undefined });
+      await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
+      expect(store.removeRemoteWorkerOpen).toHaveBeenCalledOnce();
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(false);
+      workers.stop();
+    },
+  );
+
+  it('keeps another controller on the same host unaffected by a lost cleanup ACK', async () => {
+    const sessions = new Map<string, OrcaRemoteWorkerExistingSession>();
+    const hostFor = (controllerDeviceId: string) => createOrcaRemoteWorkerHost({
+      getCaller: () => ({ controllerDeviceId }),
+      readSession: async id => sessions.get(id) ?? null,
+      openSession: async (request, lead) => {
+        const opened = { workingDir: '/remote', model: 'device-model', agentKind: request.agentKind, effort: 'medium' };
+        sessions.set(request.sessionId, { ...opened, orcaRemoteLead: lead });
+        if (controllerDeviceId === 'first-controller') throw new Error('startup failed');
+        return opened;
+      },
+      writeRemoteLead: async (id, lead) => { sessions.set(id, { ...sessions.get(id)!, orcaRemoteLead: lead }); },
+      withSessionLock: async <T,>(_id: string, task: () => Promise<T>) => task(),
+      now: () => 123,
+    });
+    const firstHost = hostFor('first-controller');
+    const otherHost = hostFor('other-controller');
+    const otherRequest = { sessionId: 'other-task', agentKind: 'claude-code', permissionMode: 'auto', title: 'Other',
+      lead: { leadSessionId: 'other-lead', leadTitle: 'Other lead', workerLabel: 'other' } };
+    const before = await otherHost.open(otherRequest);
+    let loseReply = true;
+    const { workers } = setup({ handle: async (_device, channel, args) => {
+      if (channel === 'maker:orca:remote-worker:open') {
+        try { return ok(await firstHost.open(args[0])); }
+        catch (err) { return fail('IPC_ERROR', (err as Error).message); }
+      }
+      if (channel === 'local-db:sessions:get') return ok(sessions.get(args[0] as string));
+      if (channel === 'maker:orca:remote-worker:release') {
+        const result = await firstHost.release(args[0]);
+        if (loseReply) { loseReply = false; return fail('INVOKE_TIMEOUT', 'ACK lost'); }
+        return ok(result);
+      }
+      return undefined;
+    } });
+    try {
+      await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
+      const [, remoteSessionId] = store.saveRemoteWorkerOpen.mock.calls[0] as unknown as [string, string];
+      const receipt = { deviceId: 'mac-mini', remoteSessionId, createdAt: Date.now() };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+        store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+        await workers.releaseEnded([]);
+        await expect(otherHost.open(otherRequest)).resolves.toEqual(before);
+        expect(sessions.get('other-task')!.orcaRemoteLead!.releasedAt).toBeUndefined();
+        if (attempt === 0) expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
+      }
+      expect(store.removeRemoteWorkerOpen).toHaveBeenCalledWith(remoteSessionId);
+    } finally { workers.stop(); }
+  });
+
   it.each([false, true])('does not touch a colliding existing task after association fails (remote=%s)', async remote => {
     const existing = { workerId: 'other-worker', teamId: 'other-team', leadSessionId: 'other-lead',
       proxySessionId: 'proxy-1', deviceId: 'other-device', remoteSessionId: 'other-remote', lastBridgedMessageId: null };
@@ -859,6 +984,16 @@ describe('remote open recovery', () => {
       channel === 'maker:orca:remote-worker:open' ? fail('INVOKE_TIMEOUT', 'reply lost') : undefined });
     await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
     expect(store.saveRemoteWorkerOpen).toHaveBeenCalledOnce();
+    expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
+    workers.stop();
+  });
+
+  it('retains a timed out open even if the reconciliation receives a definitive error', async () => {
+    let opens = 0;
+    const { workers } = setup({ handle: (_device, channel) =>
+      channel === 'maker:orca:remote-worker:open'
+        ? fail(++opens === 1 ? 'INVOKE_TIMEOUT' : 'ALREADY_EXISTS', 'reply lost or released') : undefined });
+    await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
     expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
     workers.stop();
   });

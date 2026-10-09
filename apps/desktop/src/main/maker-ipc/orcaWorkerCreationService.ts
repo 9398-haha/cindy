@@ -883,7 +883,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         resolved: {
           agent: opened.agent,
           model: opened.model,
-          effort: params.effort ?? null,
+          effort: opened.proxySession.effort || null,
           fastMode: params.fast === true,
           providerId: explicitSourceId ?? null,
           role,

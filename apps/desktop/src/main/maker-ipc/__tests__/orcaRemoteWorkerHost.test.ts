@@ -43,11 +43,13 @@ function setup(
         workingDir: req.workingDir ?? '/Users/demo/Cindy/dialogues/w_remote_1',
         model: 'claude-opus-5-5',
         agentKind: req.agentKind,
+        effort: req.effort ?? 'medium',
       });
       return {
         workingDir: req.workingDir ?? '/Users/demo/Cindy/dialogues/w_remote_1',
         model: 'claude-opus-5-5',
         agentKind: req.agentKind,
+        effort: req.effort ?? 'medium',
       };
     }),
     writeRemoteLead: vi.fn(async (id: string, lead: OrcaRemoteLead) => {
@@ -89,6 +91,7 @@ describe('orca remote worker host', () => {
       workingDir: '/Users/demo/Cindy/dialogues/w_remote_1',
       model: 'claude-opus-5-5',
       agentKind: 'claude-code',
+      effort: 'medium',
     });
     expect(deps.openSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'w_remote_1', permissionMode: 'auto' }),
@@ -109,6 +112,13 @@ describe('orca remote worker host', () => {
     const second = await host.open(request);
     expect(second).toEqual(first);
     expect(deps.openSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays the stored effort instead of a changed request or device default', async () => {
+    const { host, deps } = setup();
+    await host.open({ ...request, effort: 'low' });
+    await expect(host.open({ ...request, effort: 'high' })).resolves.toMatchObject({ effort: 'low' });
+    expect(deps.openSession).toHaveBeenCalledOnce();
   });
 
   it('refuses an id already used by another task or device', async () => {

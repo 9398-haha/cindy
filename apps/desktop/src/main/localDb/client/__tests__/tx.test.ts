@@ -3379,6 +3379,25 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  it.each([
+    [false, 'medium'], [true, 'medium'],
+    [false, 'low'], [true, 'low'],
+    [false, ''], [true, ''],
+  ] as const)('persists remote admitted effort unchanged (inline=%s, effort=%s)', async (useInlineWorker, effort) => {
+    await withClient(async client => {
+      await seedSession(client, 'lead');
+      await client.exec("INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES ('t', 'lead', 'active', 1, 1)");
+      await client.exec("INSERT INTO orca_remote_opens VALUES ('remote', 'device', 1)");
+      await client.tx('orca.upsertWorker', { id: 'w', teamId: 't', sessionId: 'proxy', label: 'dev', now: 2,
+        remoteExecution: { deviceId: 'device', remoteSessionId: 'remote',
+          proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort,
+            permissionMode: 'auto', fastMode: false } },
+      });
+      await expect(client.queryOne('SELECT effort FROM sessions WHERE id = ?', ['proxy']))
+        .resolves.toEqual({ effort });
+    }, { useInlineWorker });
+  });
+
   it.each([false, true])('rejects a proxy id collision without changing the existing task (inline=%s)', async useInlineWorker => {
     await withClient(async client => {
       await seedSession(client, 'lead');

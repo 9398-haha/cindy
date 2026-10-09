@@ -313,6 +313,24 @@ describe('Worker running on another device (execution device)', () => {
     expect(windows.ok).toBe(true);
   });
 
+  it.each(['medium', 'low', ''])('reports the admitted remote effort %s after recording the Worker', async effort => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort,
+          permissionMode: 'auto', fastMode: false },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini' })).resolves.toMatchObject({
+      ok: true, resolved: { effort: effort || null },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ effort }),
+    }));
+  });
+
   it.each([
     ['relative directory', { workingDir: 'relative/dir' }],
     ['malformed device id', { executionDeviceId: 'bad id/../' }],

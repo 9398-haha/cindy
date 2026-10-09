@@ -108,7 +108,26 @@ it.each([undefined, '/execution/project'])('inserts the remote Worker identity a
   expect(h.run.mock.invocationCallOrder[0]).toBeLessThan(bootstrapSession.mock.invocationCallOrder[0]!);
   expect(bootstrapSession.mock.invocationCallOrder[0]).toBeLessThan(broadcastSessionCreated.mock.invocationCallOrder[0]!);
   expect(h.values).toHaveBeenCalledOnce();
-  expect(result).toEqual({ agentKind: 'codex', model: 'model', workingDir: persisted.workingDir });
+  expect(result).toEqual({ agentKind: 'codex', model: 'model', workingDir: persisted.workingDir, effort: '' });
+});
+
+it.each(['medium', 'low', ''] as const)('returns the execution provider admitted effort %s', async effort => {
+  setSessionOpeningModelAdmission(async request => {
+    const route = resolveSessionExecutionSelection({ selection: request,
+      availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: ['high'], defaultEffort: 'high' }],
+      hasCindyAiApiKey: false,
+      providerRouting: {
+        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
+          effortMetaByModel: { model: { efforts: effort ? [effort] : [], defaultEffort: effort || null } } }] },
+        resolveDefaultProviderIdForModel: () => 'connected',
+      },
+    });
+    return { ...request, effort: route.effort ?? '' };
+  });
+  const { open, bootstrapSession } = remoteOpener();
+  await expect(open(remoteRequest, remoteLead)).resolves.toMatchObject({ effort });
+  expect(h.values.mock.calls[0]![0]).toMatchObject({ effort });
+  expect(bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ effort }), expect.any(Function));
 });
 
 it('does not start or broadcast a remote Worker when its identity INSERT fails', async () => {
@@ -128,7 +147,7 @@ it('keeps a persisted remote Worker recognizable after startup fails or the host
     readSession: async () => {
       const row = h.values.mock.calls[0]?.[0] as OpenedSessionRow | undefined;
       return row ? { orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead),
-        workingDir: row.workingDir ?? null, model: row.model, agentKind: 'codex' as const } : null;
+        workingDir: row.workingDir ?? null, model: row.model, agentKind: 'codex' as const, effort: row.effort } : null;
     },
     openSession: start,
     writeRemoteLead: vi.fn(),
@@ -138,7 +157,7 @@ it('keeps a persisted remote Worker recognizable after startup fails or the host
   await expect(createOrcaRemoteWorkerHost(deps).open(remoteRequest)).rejects.toThrow('startup interrupted');
   expect(broadcastSessionCreated).not.toHaveBeenCalled();
   // 重建 Host，仅使用已 INSERT 的任务身份；同 ID 重试可对账，无 ALREADY_EXISTS。
-  await expect(createOrcaRemoteWorkerHost(deps).open(remoteRequest)).resolves.toMatchObject({ sessionId: 'remote-worker', model: 'model' });
+  await expect(createOrcaRemoteWorkerHost(deps).open(remoteRequest)).resolves.toMatchObject({ sessionId: 'remote-worker', model: 'model', effort: '' });
   expect(h.run).toHaveBeenCalledOnce();
   expect(start).toHaveBeenCalledOnce();
   const foreign = createOrcaRemoteWorkerHost({ ...deps, getCaller: () => ({ controllerDeviceId: 'other-device' }) });
