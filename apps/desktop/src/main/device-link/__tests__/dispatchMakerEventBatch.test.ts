@@ -137,6 +137,23 @@ afterEach(() => {
 });
 
 describe('[1] 能力协商', () => {
+  it('projects done to lifecycle fields for list subscribers while retaining full detail events', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1];
+    subscriptions.subscribe('list', ['sessions'], 'list', capabilities);
+    subscriptions.subscribe('detail', ['sessions', 'session:s1'], 'detail', capabilities);
+    const payload = { sessionId: 's1', resolvedContent: 'tool-body', event: { type: 'done', source: 'codex',
+      turnContinuationId: 2, turnScope: 'background', data: { raw: { items: ['tool-body'] }, result: 'tool-body',
+        plan: ['tool-body'], cancelled: true, silentStop: true } } };
+    __testing.forwardPush('maker:event', payload);
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    const list = h.sent.find(push => push.dst === 'list')!.payload as MakerEventBatchPayload;
+    expect(list.events).toEqual([{ sessionId: 's1', listMessage: true, event: { type: 'done', source: 'codex',
+      turnContinuationId: 2, turnScope: 'background', data: { cancelled: true, silentStop: true } } }]);
+    expect((h.sent.find(push => push.dst === 'detail')!.payload as MakerEventBatchPayload).events).toEqual([payload]);
+  });
+
   it('prefetches full prose for new list subscribers only, without duplicate delivery or tools', async () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -582,6 +599,21 @@ describe('[10] 收敛检查点:主动发送闸门的全部入口与边界(review
 });
 
 describe('[11] 重连恢复的顺序(review 第三轮)', () => {
+  it('replays a reply completed while the relay was offline to sessions-only subscribers', () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const capabilities = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1];
+    subscriptions.subscribe('phone', ['sessions'], 'phone', capabilities);
+    h.client.getStatus.mockReturnValue('connecting');
+    const message = { id: 'final', clientId: 'final', role: 'assistant', content: 'completed offline' };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message });
+    expect(h.sent).toEqual([]);
+    h.client.getStatus.mockReturnValue('online');
+    __testing.handleSubscriptionFrame('phone', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'], capabilities }] });
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ channel: 'local-db:messages:created', payload: { listMessage: true, message } });
+  });
+
   it('订阅重放 drain 离线积压之前先排空断线前的事件批', () => {
     // 断线期间同会话的新事件/终态进 offlinePushQueue,旧批留在内存等重试;
     // 不先收口就会让新帧先于断线前的文本送达,重现「终态后冒出文本」。
@@ -725,6 +757,20 @@ describe('running session recovery on slow links', () => {
   const snapshot = { ...delta('whole prefix'), event: {
     type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
   } };
+
+  it('keeps oversized recovery text on demand for list-only subscribers', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const oversized = { ...snapshot, event: { ...snapshot.event, data: { ...snapshot.event.data, text: 'x'.repeat(200_001) } } };
+    setSessionTextSnapshotReader(() => oversized);
+    subscriptions.subscribe('list', ['sessions', 'session:s1'], 'list', [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    __testing.handleSubscriptionFrame('list', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent[0]).toMatchObject({ channel: SESSION_SYNC_CHANNEL, payload: { sessionId: 's1', listMessage: true, resyncRequired: true } });
+    expect(JSON.stringify(h.sent[0])).not.toContain('xxx');
+    __testing.handleSubscriptionFrame('detail', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'], capabilities }] });
+    expect(h.sent.at(-1)).toMatchObject({ channel: SESSION_SYNC_CHANNEL, payload: oversized });
+  });
 
   it('repairs the prefix when leaving chat and continues list text until the list is unsubscribed', async () => {
     const h = mkClient();

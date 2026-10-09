@@ -168,6 +168,8 @@ const putMessages = vi.fn<
     expectedInvalidation?: number,
     expectedOwnerToken?: string,
     expectedAccountCounter?: number,
+    historyView?: string,
+    mergeListMessage?: boolean,
   ) => Promise<{ ok: true }>
 >(async () => ({ ok: true as const }));
 
@@ -295,8 +297,33 @@ describe('冷缓存 hydrate', () => {
     const latest = dbMessage(s, 'new', '完整正文'.repeat(2000), '2026-10-10T00:01:00.000Z');
     cachedMessages.set(`${DEVICE_ID}::${s}`, [earlier as unknown as Record<string, unknown>]);
     persistListMessage(DEVICE_ID, s, latest);
-    await vi.waitFor(() => expectPut(DEVICE_ID, s, [earlier, latest]));
+    await vi.waitFor(() => expectPut(DEVICE_ID, s, [latest]));
     expect(putMessages.mock.calls[0].slice(3, 6)).toEqual([7, cachedOwnerToken, 0]);
+    expect(putMessages.mock.calls[0].slice(6)).toEqual([undefined, true]);
+  });
+
+  it('reclaims never-opened list messages through the existing idle budget', async () => {
+    vi.useFakeTimers();
+    const s = sid();
+    try {
+      setDataOwnerGeneration('owner-a', 1);
+      registerRemote(s);
+      let push!: Parameters<typeof window.electronAPI.deviceLink.onRemotePush>[0];
+      window.electronAPI.deviceLink.onRemotePush = vi.fn(callback => { push = callback; return () => {}; });
+      makerChatStore.initGlobalListeners();
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      const row = dbMessage(s, 'prefetched', 'full body', '2026-10-10T00:00:00.000Z');
+      push({ deviceId: DEVICE_ID, channel: 'local-db:messages:created', payload: { sessionId: s, listMessage: true, message: row } });
+      expect(makerChatStore.__activeViewTest.getLastViewedAt(s)).toBeDefined();
+      expect(makerChatStore.getSnapshot(s).messages).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+      makerChatStore.purgeSession(s);
+      makerChatStore.__teardownGlobalListeners();
+      vi.useRealTimers();
+    }
   });
 
   it('restores the structured view through the actual offline session entry', async () => {

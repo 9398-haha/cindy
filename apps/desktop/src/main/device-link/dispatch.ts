@@ -13,6 +13,7 @@ import {
   mapMessageBodies,
   messageRecord,
   MESSAGE_BODY_FORMAT,
+  MAX_LIST_MESSAGE_CHARS,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -1936,8 +1937,23 @@ function receivesSessionText(dst: string, sessionId: string): boolean {
 }
 
 function listMessagePayload(dst: string, sessionId: string, payload: unknown): unknown {
-  return receivesListMessages(dst) && !subscriptions.controllerHasTopic(dst, `session:${sessionId}`)
-    ? { ...(payload as object), listMessage: true } : payload;
+  if (!receivesListMessages(dst) || subscriptions.controllerHasTopic(dst, `session:${sessionId}`)) return payload;
+  const value = payload as Record<string, unknown>;
+  const event = messageRecord(value.event) ? value.event : undefined;
+  const data = messageRecord(event?.data) ? event.data : undefined;
+  // Snapshot repair must use the same bound as ordinary list text pushes.
+  if (event?.type === 'text' && typeof data?.text === 'string' && data.text.length > MAX_LIST_MESSAGE_CHARS) {
+    return { sessionId, listMessage: true, resyncRequired: true };
+  }
+  // SDK done payloads can contain the entire turn, including tools and thinking.
+  // List subscribers need only the lifecycle boundary, including continuation claims.
+  if (event?.type === 'done') return {
+    sessionId, listMessage: true,
+    event: { type: 'done', source: event.source, turnScope: event.turnScope,
+      turnContinuationId: event.turnContinuationId,
+      data: { silentStop: data?.silentStop === true, cancelled: data?.cancelled === true } },
+  };
+  return { ...value, listMessage: true };
 }
 
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
@@ -2045,7 +2061,8 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
       offlinePushQueue.enqueue(dst, {
         channel,
         payload: payloadFor(dst),
-        topic: sharedMetadata ? sharedTaskTopic : topic,
+        topic: sharedMetadata ? sharedTaskTopic : listMessage && receivesListMessages(dst)
+          && !subscriptions.controllerHasTopic(dst, `session:${historySessionId}`) ? 'sessions' : topic,
         ...(ownerStamp ? { ownerStamp } : {}),
       });
     }

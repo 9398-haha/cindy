@@ -145,24 +145,18 @@ export async function readCachedMessages(deviceId: string, sessionId: string, on
   return read;
 }
 
-const listMessageWrites = new Map<string, Promise<void>>();
-
 /** List pushes merge into the same protected disk window used when opening a task. */
 export function persistListMessage(deviceId: string, sessionId: string, message: Message): void {
-  const owner = getDataOwnerGeneration();
-  const token = sessionCacheInvalidationToken(sessionId);
-  const key = JSON.stringify([deviceId, sessionId]);
-  const current = () => isDataOwnerGenerationCurrent(owner) && token === sessionCacheInvalidationToken(sessionId);
-  const pending = (listMessageWrites.get(key) ?? Promise.resolve()).then(async () => {
-    if (!current()) return;
-    const rows = await readCachedMessages(deviceId, sessionId);
-    if (!current()) return;
-    await persistCachedMessages(deviceId, sessionId,
-      [...rows.filter(row => row.id !== message.id && (!message.clientId || row.clientId !== message.clientId)), message],
-      invalidationAtRequestStart(deviceId, sessionId), ownerTokenAtRequestStart(sessionId), accountCounterAtRequestStart(sessionId));
-  }).catch(error => log.debug('persist list message failed', error));
-  listMessageWrites.set(key, pending);
-  void pending.finally(() => { if (listMessageWrites.get(key) === pending) listMessageWrites.delete(key); });
+  // Never-opened sessions have no protected read to establish their owner token yet.
+  // Start the existing read path; the token helpers below wait for it with their usual timeout.
+  const pending = pendingProtectedRead.get(sessionId);
+  if (!knownOwnerToken.has(sessionId) && (!pending || !isDataOwnerGenerationCurrent(pending.owner))) {
+    void readCachedMessages(deviceId, sessionId);
+  }
+  // Merge inside Main's existing lock, alongside page writes and clears.
+  void persistCachedMessages(deviceId, sessionId, [message],
+    invalidationAtRequestStart(deviceId, sessionId), ownerTokenAtRequestStart(sessionId),
+    accountCounterAtRequestStart(sessionId), undefined, true);
 }
 
 /** 写某 (设备, 会话) 的最近一页 server rows(空数组 = 清掉该条缓存)。失败静默。 */
@@ -254,9 +248,12 @@ export function persistCachedMessages(
   expectedOwnerToken?: string | Promise<string | undefined>,
   expectedAccountCounter?: number | Promise<number | undefined>,
   historyView?: string,
+  mergeListMessage?: boolean,
 ): Promise<number | undefined> {
   const api = bridge();
   if (!api || !deviceId || !sessionId) return Promise.resolve(undefined);
+  const historyArgs: [historyView?: string, mergeListMessage?: boolean] = mergeListMessage
+    ? [historyView, true] : historyView !== undefined ? [historyView] : [];
   const owner = getDataOwnerGeneration();
   const localToken = sessionCacheInvalidationToken(sessionId);
   const dispatch = (
@@ -273,7 +270,7 @@ export function persistCachedMessages(
         expected,
         ownerToken,
         accountCounter,
-        ...(historyView !== undefined ? [historyView] : []),
+        ...historyArgs,
       )
       .then((result) => {
         if (!isDataOwnerGenerationCurrent(owner) || localToken !== sessionCacheInvalidationToken(sessionId)) return undefined;
