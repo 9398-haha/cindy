@@ -89,9 +89,9 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(dir ? { workingDir: dir } : {}),
     workspaceKind: dir ? 'project' : 'dialogue',
     model: p.model,
-    ...(p.agentKind === 'cursor' ? {} : { effort: p.effort }),
+    ...(p.effort ? { effort: p.effort } : {}),
     permissionMode: p.agentKind === 'cursor' ? 'ask' : p.permissionMode,
-    fastMode: p.agentKind === 'cursor' ? false : p.fastMode,
+    fastMode: p.fastMode,
     ...(p.planModeEnabled ? { planMode: true } : {}),
     // 空 / 缺省不放进 args:payload 干净,且被控端 bootstrapSession 也只在非空时才校验。
     ...(p.extraDirs && p.extraDirs.length > 0 ? { extraDirs: p.extraDirs } : {}),

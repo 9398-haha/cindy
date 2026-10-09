@@ -451,9 +451,6 @@ export async function performSessionAgentSwitch(
   if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi' && targetAgentKind !== 'cursor') {
     throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi');
   }
-  if (targetAgentKind === 'cursor' && (params.effort || params.fastMode === true)) {
-    throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not expose effort or Fast controls');
-  }
   if (typeof model !== 'string' || model.length === 0) {
     throwIpcError('INVALID_PARAMS', 'model required');
   }

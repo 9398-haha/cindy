@@ -124,9 +124,6 @@ export function readCreateSessionOpts(
   if (agentKind === 'cursor' && (body.remoteHostId || body.agentDeviceId)) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor requires a workspace on the executing desktop');
   }
-  if (agentKind === 'cursor' && (body.effort || body.fastMode === true)) {
-    throwIpcError('UNSUPPORTED_CAPABILITY', 'Cursor does not expose effort or Fast controls');
-  }
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);
   const explicitWorkingDir = readExplicitWorkingDir(body.workingDir);

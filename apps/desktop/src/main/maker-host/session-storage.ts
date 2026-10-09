@@ -26,6 +26,7 @@ import { sessions } from '../localDb/schema.js';
 import { normalizeRemoteHostId } from '../localDb/mapper.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { getCursorDiscoveredModel } from './cursor-model-catalog.js';
 
 type DbAgentKind = 'cc' | 'codex' | 'pi' | 'cursor';
 
@@ -45,6 +46,8 @@ function normalizeWorkspaceKind(value: unknown): WorkspaceKind {
 type SessionRow = typeof sessions.$inferSelect;
 
 function rowToMeta(row: SessionRow): SessionMeta {
+  const cursorModel = row.agentKind === 'cursor' ? getCursorDiscoveredModel(row.model) : undefined;
+  const cursorDefault = row.agentKind === 'cursor' && row.model === 'cursor-default';
   // 注意: row.status (DB 的 'active'|'archived'|'deleted') 是产品语义, 由 sidebar IPC 自管,
   // 不映射到 SessionMeta —— maker-core 接口已不再持有 status 字段。
   return {
@@ -54,10 +57,11 @@ function rowToMeta(row: SessionRow): SessionMeta {
     title: row.title,
     model: row.model,
     workspaceKind: row.workspaceKind,
-    // The legacy DB effort column is NOT NULL; its placeholder is not a Cursor capability.
-    effort: row.agentKind === 'cursor' ? undefined : row.effort,
+    // Ignore legacy NOT NULL placeholders for fixed-effort native models, while
+    // retaining persisted tuning (including while discovery is still pending).
+    effort: cursorDefault || cursorModel?.efforts.length === 0 ? undefined : row.effort,
     permissionMode: row.permissionMode,
-    fastMode: row.agentKind === 'cursor' ? false : row.fastMode,
+    fastMode: cursorDefault || cursorModel?.supportsFastMode === false ? false : row.fastMode,
     planMode: row.planModeEnabled,
     ...(row.source === 'review' ? { reviewMode: true as const } : {}),
     sdkSessionId: row.sdkSessionId ?? undefined,

@@ -3,7 +3,7 @@ import type { ModelDescriptor } from '@cindy/maker-core';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 const state = vi.hoisted(() => ({ owner: 'owner-a' }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner }));
-import { clearCursorDiscoveredModels, hasCursorDiscoveredModels, setCursorDiscoveredModels, withCursorDiscoveredModels } from '../cursor-model-catalog.js';
+import { clearCursorDiscoveredModels, getCursorDiscoveredModel, hasCursorDiscoveredModels, setCursorDiscoveredModels, withCursorDiscoveredModels } from '../cursor-model-catalog.js';
 
 describe('Cursor ACP catalog projection', () => {
   beforeEach(() => { state.owner = 'owner-a'; clearCursorDiscoveredModels(); });
@@ -24,9 +24,18 @@ describe('Cursor ACP catalog projection', () => {
   });
   it('drops late discoveries and never reuses a different owner snapshot', () => {
     setCursorDiscoveredModels([discovered], state.owner);
+    expect(getCursorDiscoveredModel(discovered.id)).toEqual(discovered);
+    expect(getCursorDiscoveredModel('missing')).toBeUndefined();
     state.owner = 'owner-b';
     expect(hasCursorDiscoveredModels()).toBe(false);
+    expect(getCursorDiscoveredModel(discovered.id)).toBeUndefined();
     setCursorDiscoveredModels([discovered], 'owner-a');
+    expect(getCursorDiscoveredModel(discovered.id)).toBeUndefined();
     expect(withCursorDiscoveredModels(BUNDLED_CATALOG).providers.find(p => p.id === 'cursor')?.models.cursor).toEqual([]);
+  });
+  it('projects native per-model effort and Fast capabilities for desktop and mobile pickers', () => {
+    setCursorDiscoveredModels([{ ...discovered, efforts: ['low', 'high', 'max'], defaultEffort: 'high', supportsFastMode: true }], state.owner);
+    expect(withCursorDiscoveredModels(BUNDLED_CATALOG).providers.find(p => p.id === 'cursor')?.models.cursor?.[0])
+      .toMatchObject({ efforts: ['low', 'high', 'max'], defaultEffort: 'high', supportsFastMode: true });
   });
 });

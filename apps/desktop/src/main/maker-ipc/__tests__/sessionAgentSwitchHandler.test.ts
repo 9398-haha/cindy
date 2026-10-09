@@ -1355,10 +1355,9 @@ describe('Cursor switch capability normalization', () => {
       agentKind: 'cursor', model: 'native', permissionMode: 'ask', fastMode: false,
     }));
   });
-  it('rejects unsupported explicit tuning before closing the previous session', async () => {
+  it('retains explicit native tuning when switching to Cursor', async () => {
     const { deps } = makeDeps();
-    await expect(performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', effort: 'high', applyNow: true })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
-    expect(deps.closeSession).not.toHaveBeenCalled();
-    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    await performSessionAgentSwitch(deps, { sessionId: 's1', targetAgentKind: 'cursor', model: 'native', effort: 'high', fastMode: true, applyNow: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'cursor', effort: 'high', fastMode: true, permissionMode: 'ask' }));
   });
 });

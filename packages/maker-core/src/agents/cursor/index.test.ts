@@ -65,6 +65,166 @@ function create(fake = new FakeTransport(), extra: Partial<CursorAgentDeps> = {}
 }
 async function tick() { await new Promise(resolve => setTimeout(resolve, 0)); }
 
+function parameterizedFixture() {
+  const fake = new FakeTransport();
+  const select = (id: string, category: string, currentValue: string, values: string[]) => ({
+    id, category, type: 'select', currentValue, options: values.map(value => ({ value, name: value })),
+  });
+  const models = [
+    { value: 'auto-native', name: 'Auto', configOptions: [] },
+    { value: 'model-b', name: 'Grok', configOptions: [
+      select('native-reasoning-id', 'thought_level', 'high', ['low', 'medium', 'high', 'xhigh']),
+      select('fast', 'model_config', 'true', ['false', 'true']),
+    ] },
+    { value: 'kimi', name: 'Kimi', configOptions: [select('reasoning', 'thought_level', 'max', ['low', 'high', 'max'])] },
+  ];
+  let currentModel = 'auto-native';
+  let configs: Record<string, unknown>[] = [];
+  const refresh = () => { configs = [select('native-model-picker', 'model', currentModel, models.map(model => model.value)),
+    ...structuredClone(models.find(model => model.value === currentModel)!.configOptions)]; };
+  refresh();
+  fake.onWrite = message => {
+    let result: unknown;
+    if (message.method === 'cursor/list_available_models') result = { models };
+    if (message.method === 'session/new' || message.method === 'session/load') result = { ...fake.session, configOptions: configs };
+    if (message.method === 'session/set_config_option') {
+      if (message.params.configId === 'native-model-picker') { currentModel = String(message.params.value); refresh(); }
+      else configs = configs.map(option => option.id === message.params.configId ? { ...option, currentValue: message.params.value } : option);
+      result = { configOptions: configs };
+    }
+    if (result !== undefined) fake.emit({ jsonrpc: '2.0', id: message.id, result });
+  };
+  return { ...create(fake), models, getConfigs: () => structuredClone(configs) };
+}
+
+describe('Cursor native model parameters', () => {
+  it('negotiates the native parameterized picker and advertises each model’s actual controls', async () => {
+    const { fake, agent, start } = parameterizedFixture();
+    const handle = await start();
+    expect(fake.written.find(message => message.method === 'initialize')!.params.clientCapabilities)
+      .toMatchObject({ _meta: { parameterizedModelPicker: true }, session: { configOptions: { boolean: {} } } });
+    expect(agent.capabilities.hasFastMode).toBe(true);
+    expect(agent.capabilities.effort.supported).toBe(true);
+    expect(agent.capabilities.availableModels.find(model => model.id === 'model-b'))
+      .toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true });
+    expect(agent.capabilities.availableModels.find(model => model.id === 'kimi'))
+      .toMatchObject({ efforts: ['low', 'high', 'max'], defaultEffort: 'max', supportsFastMode: false });
+    expect(agent.capabilities.availableModels.find(model => model.id === 'auto-native'))
+      .toMatchObject({ efforts: [], defaultEffort: null, supportsFastMode: false });
+    expect(fake.written.some(message => message.method === 'session/prompt')).toBe(false);
+    await handle.close();
+  });
+  it('applies startup effort and explicit Fast off before the first prompt, using native IDs', async () => {
+    const { fake, start, getConfigs } = parameterizedFixture();
+    const handle = await start({ model: 'model-b', effort: 'low', fastMode: false });
+    expect(fake.written.filter(message => message.method === 'session/set_config_option').map(message => message.params))
+      .toEqual([
+        { sessionId: 'native-1', configId: 'native-model-picker', value: 'model-b' },
+        { sessionId: 'native-1', configId: 'native-reasoning-id', value: 'low' },
+        { sessionId: 'native-1', configId: 'fast', value: 'false' },
+      ]);
+    expect(getConfigs().find(option => option.id === 'fast')?.currentValue).toBe('false');
+    expect(handle.getFastMode!()).toBe(false);
+    await handle.send({ type: 'user', content: 'use my settings' });
+    expect(fake.written.at(-1)?.method).toBe('session/prompt');
+    fake.finish(); await tick(); await handle.close();
+  });
+  it('switches effort on the same model and reads back the acknowledged Fast value', async () => {
+    const { start, getConfigs } = parameterizedFixture();
+    const handle = await start({ model: 'model-b', fastMode: false });
+    await handle.setModel!('model-b', { effort: 'xhigh' });
+    await handle.setFastMode!(true);
+    expect(getConfigs().find(option => option.id === 'native-reasoning-id')?.currentValue).toBe('xhigh');
+    expect(handle.getFastMode!()).toBe(true);
+    await handle.close();
+  });
+  it('uses the new model’s native effort ID and removes unsupported Fast', async () => {
+    const { fake, start, getConfigs } = parameterizedFixture();
+    const handle = await start({ model: 'model-b' });
+    await handle.setModel!('kimi', { effort: 'high' });
+    expect(getConfigs().find(option => option.id === 'reasoning')?.currentValue).toBe('high');
+    expect(fake.written.filter(message => message.method === 'session/set_config_option').at(-1)?.params.configId).toBe('reasoning');
+    await expect(handle.setFastMode!(true)).rejects.toThrow('fastMode');
+    await expect(handle.setFastMode!(false)).resolves.toBeUndefined();
+    expect(handle.getFastMode!()).toBe(false);
+    await handle.close();
+  });
+  it('rejects an unsupported target effort before changing the model or dispatching a prompt', async () => {
+    const { fake, start } = parameterizedFixture();
+    const handle = await start();
+    await expect(handle.setModel!('model-b', { effort: 'max' })).rejects.toThrow('effort');
+    expect(fake.written.some(message => message.method === 'session/set_config_option')).toBe(false);
+    await handle.close();
+    await expect(start({ model: 'model-b', effort: 'ultra' })).rejects.toThrow('effort');
+    expect(fake.written.some(message => message.method === 'session/prompt')).toBe(false);
+  });
+  it('reapplies persisted effort and Fast when loading the same native task', async () => {
+    const { fake, start, getConfigs } = parameterizedFixture();
+    const handle = await start({ resumeSessionId: 'native-1', model: 'model-b', effort: 'medium', fastMode: false });
+    expect(handle.id).toBe('native-1');
+    expect(fake.written.some(message => message.method === 'session/new')).toBe(false);
+    expect(getConfigs().find(option => option.id === 'native-reasoning-id')?.currentValue).toBe('medium');
+    expect(handle.getFastMode!()).toBe(false);
+    await handle.close();
+  });
+  it('consumes complete config updates and refuses settings removed by the native agent', async () => {
+    const { fake, start, getConfigs } = parameterizedFixture();
+    const handle = await start({ model: 'model-b' });
+    fake.update('config_option_update', { configOptions: getConfigs().filter(option => option.id !== 'fast') });
+    await expect(handle.setFastMode!(true)).rejects.toThrow('fastMode');
+    await handle.setEffort!('low');
+    await handle.close();
+  });
+  it('does not mutate configuration while a turn is running', async () => {
+    const { fake, start } = parameterizedFixture();
+    const handle = await start({ model: 'model-b' });
+    await handle.send({ type: 'user', content: 'wait' });
+    const mutations = fake.written.filter(message => message.method === 'session/set_config_option').length;
+    await expect(handle.setEffort!('low')).rejects.toThrow('active turn');
+    await expect(handle.setFastMode!(false)).rejects.toThrow('active turn');
+    expect(fake.written.filter(message => message.method === 'session/set_config_option')).toHaveLength(mutations);
+    fake.finish(); await tick(); await handle.close();
+  });
+  it('keeps older CLIs usable when the optional native extension is absent', async () => {
+    const { fake, agent, start } = create();
+    fake.onWrite = message => {
+      if (message.method === 'cursor/list_available_models') fake.emit({ jsonrpc: '2.0', id: message.id,
+        error: { code: -32601, message: 'Method not found' } });
+    };
+    const handle = await start({ model: 'model-b', fastMode: false });
+    expect(agent.capabilities.hasFastMode).toBe(false);
+    expect(agent.capabilities.effort.supported).toBe(false);
+    await expect(handle.setEffort!('high')).rejects.toThrow('effort');
+    await expect(handle.setFastMode!(true)).rejects.toThrow('fastMode');
+    await handle.close();
+  });
+  it('uses the negotiated boolean type when Fast is a native boolean option', async () => {
+    const { fake, start, getConfigs } = parameterizedFixture();
+    const handle = await start({ model: 'model-b' });
+    fake.update('config_option_update', { configOptions: getConfigs().map(option => option.id === 'fast'
+      ? { id: 'fast', category: 'model_config', type: 'boolean', currentValue: true } : option) });
+    await handle.setFastMode!(false);
+    expect(fake.written.filter(message => message.method === 'session/set_config_option').at(-1)?.params)
+      .toEqual({ sessionId: 'native-1', configId: 'fast', type: 'boolean', value: false });
+    expect(handle.getFastMode!()).toBe(false);
+    await handle.close();
+  });
+  it('retains the actual setting when the native agent rejects a change', async () => {
+    const { fake, start } = parameterizedFixture();
+    const handle = await start({ model: 'model-b' });
+    const respond = fake.onWrite!;
+    fake.onWrite = message => {
+      if (message.method === 'session/set_config_option' && message.params.configId === 'fast') {
+        fake.emit({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: 'Fast unavailable' } });
+      } else respond(message);
+    };
+    await expect(handle.setFastMode!(false)).rejects.toThrow('Fast unavailable');
+    expect(handle.getFastMode!()).toBe(true);
+    await handle.setEffort!('low');
+    await handle.close();
+  });
+});
+
 describe('Cursor native ACP lifecycle', () => {
   it('describes native approval coverage without promising a prompt for every edit', () => {
     const { agent, fake } = create();

@@ -245,6 +245,25 @@ function rowFor(name: string): HTMLElement {
   return within(list).getByText(name).closest('[data-unified-anchor]') as HTMLElement;
 }
 
+it('renders Cursor’s native effort slider and Fast toggle and forwards live changes', async () => {
+  const onEffortChange = vi.fn();
+  const onFastModeChange = vi.fn();
+  renderPanel({ vendorKey: 'cursor', modelId: 'grok-native', currentProviderId: 'cursor', effort: 'low',
+    fastMode: false, onEffortChange, onFastModeChange, unifiedAgents: ['cursor'],
+    providersOverride: [{ id: 'cursor', name: 'Cursor', source: 'builtin', connected: true, agents: ['cursor'],
+      auth: { method: 'none' }, routing: {}, models: { cursor: [{ id: 'grok-native', name: 'Grok Native',
+        contextWindow: 0, efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: true }] } }],
+  });
+  const row = rowFor('Grok Native');
+  await act(async () => { fireEvent.click(within(row).getByRole('button', { name: '自定义' })); });
+  const flyout = await screen.findByTestId('unified-model-config-flyout');
+  const slider = within(flyout).getByRole('slider');
+  await act(async () => { fireEvent.keyDown(slider, { key: 'ArrowRight' }); });
+  expect(onEffortChange).toHaveBeenCalledWith('medium', FROM_PANEL);
+  await act(async () => { fireEvent.click(within(flyout).getByRole('button', { name: 'newChat.modelSelector.unified.fastTip' })); });
+  expect(onFastModeChange).toHaveBeenCalledWith(true);
+});
+
 async function openRowFlyout(name: string): Promise<HTMLElement> {
   await act(async () => {
     fireEvent.click(within(rowFor(name)).getByRole('button', { name: '自定义' }));

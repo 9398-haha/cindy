@@ -216,7 +216,7 @@ export function withAgentDefaults(
   draft: NewSessionDraft,
   agentKind: NewSessionAgentKind,
 ): NewSessionDraft {
-  if (draft.agentKind === agentKind) return agentKind === 'cursor' ? { ...draft, permissionMode: 'ask', fastMode: false } : draft;
+  if (draft.agentKind === agentKind) return agentKind === 'cursor' ? { ...draft, permissionMode: 'ask' } : draft;
   return {
     ...draft,
     agentKind,
@@ -1009,8 +1009,8 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
     workspaceKind: draft.workspaceKind,
     model: draft.model.trim(),
     permissionMode: draft.agentKind === 'cursor' ? 'ask' : draft.permissionMode,
-    fastMode: draft.agentKind === 'cursor' ? false : draft.fastMode,
-    ...(effort && draft.agentKind !== 'cursor' ? { effort } : {}),
+    fastMode: draft.fastMode,
+    ...(effort ? { effort } : {}),
     // 仅显式选了非空来源才带 providerId(空 = NULL = 被控端默认路由,对齐桌面 deviceLinkCreateArgs)。
     ...(providerId ? { providerId } : {}),
     // Agent 在另一台电脑运行:与桌面新建任务同一个参数,被控电脑记进任务并经那台运行 Agent。

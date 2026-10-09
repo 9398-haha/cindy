@@ -588,12 +588,9 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // providerId 是可清除的来源 override：表单选回原生默认来源时值为空，仍须保留 key，
   // 让 update patch 按「key 在 + undefined」把旧 provider_id 清成 NULL。
   base.providerId = form.providerId.trim() || undefined;
-  if (form.agentKind !== 'cursor' && form.effort && isEffortValue(form.effort)) base.effort = form.effort;
-  // fastMode 对 Codex / Pi 都生效(runner.ts:665 明确 claude-code 忽略此字段);只序列化
-  // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
-  // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
-  if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
-  if (form.agentKind === 'cursor') { base.effort = ''; base.fastMode = false; }
+  if (form.effort && isEffortValue(form.effort)) base.effort = form.effort;
+  // Fast 按引擎和模型的原生能力门控；保留显式 false，避免执行端沿用之前的值。
+  if (form.agentKind === 'codex' || form.agentKind === 'pi' || form.agentKind === 'cursor') base.fastMode = form.fastMode;
   return base;
 }
 

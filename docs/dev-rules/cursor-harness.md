@@ -44,8 +44,22 @@ legacy model state). `cursor-default` is only Cindy's route sentinel: it omits a
 explicit model override and is never sent as a model ID. It is displayed only
 after a successful native handshake. It does not claim that AUTO is available.
 Model mutations use the advertised config ID and exact value. Native AUTO is
-listed only when the CLI lists it. Unknown context windows remain unknown;
-Fast/effort controls are not advertised or silently simulated.
+listed only when the CLI lists it. Unknown context windows remain unknown.
+Cindy negotiates Cursor's native `_meta.parameterizedModelPicker` capability and
+reads `cursor/list_available_models` to discover each offered model's parameter
+options without selecting models or sending prompts. Older CLIs that do not
+implement this optional extension retain their advertised model catalog.
+
+The existing desktop/mobile effort slider and Fast toggle use those native
+per-model options. Standard effort values map only from advertised
+`thought_level` choices; Fast uses the advertised `fast` config in `model_config`
+(or its legacy `_model_config` category). Mutations retain the exact config ID
+and offered value and consume the complete returned `configOptions`. Model
+changes can replace the available controls. Unsupported values fail explicitly;
+Auto and other fixed models do not receive simulated controls. Persisted settings
+are reapplied before prompting on new/load and are not stripped by remote creation
+or task recovery. Generic thinking switches and arbitrary extra parameters are
+not synthesized. No model IDs with guessed bracket parameters are constructed.
 
 Existing user context and a frozen Maker Memory index are included once with the
 first user prompt, because ACP has no system-message API. Cursor's native system

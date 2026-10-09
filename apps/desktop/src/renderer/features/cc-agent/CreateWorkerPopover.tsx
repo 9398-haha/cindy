@@ -774,7 +774,7 @@ export function CreateWorkerPopover({
                 <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
               )}
               <ModelSelector
-                fastModeConfigurable={['codex', 'pi']}
+                fastModeConfigurable={['codex', 'pi', 'cursor']}
                 unifiedAgents={sshRemote ? (pickerAgents ?? ['claude-code', 'codex']).filter((kind) => kind !== 'pi') : pickerAgents}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;

@@ -17,12 +17,12 @@ import { AcpClient, AcpRpcError } from '../acp/client.js';
 import { spawnAcpTransport, type AcpTransport } from '../acp/transport.js';
 import type { Capabilities, ModelDescriptor } from '../../types/capabilities.js';
 import { NotSupportedError } from '../../types/capabilities.js';
-import type { PermissionMode, UserMessage } from '../../types/common.js';
+import type { Effort, PermissionMode, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest, InteractionResolver } from '../../types/events.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { CursorTranslator, cursorToolInput, cursorToolName } from './translator.js';
-import { CURSOR_DEFAULT_MODEL, cursorDefaultModel, readCursorModels, record, type AcpRecord } from './models.js';
+import { CURSOR_DEFAULT_MODEL, cursorDefaultModel, readCursorModels, readCursorModelControls, record, type AcpRecord, type CursorConfigOption } from './models.js';
 
 export { CURSOR_DEFAULT_MODEL, cursorDefaultModel } from './models.js';
 const yes = { supported: true } as const;
@@ -152,6 +152,7 @@ export class CursorAgent extends BaseAgent {
     let mode: PermissionMode = opts.permissionMode ?? 'ask';
     let planMode = false;
     let sessionState: AcpRecord = {};
+    let parameterizedModels: unknown;
     let turnOptions: SendOptions | undefined;
     let promptCapabilities: AcpRecord = {};
     let firstPrompt = !opts.resumeSessionId;
@@ -246,13 +247,17 @@ export class CursorAgent extends BaseAgent {
     };
     const updateCatalog = (raw: unknown) => {
       sessionState = { ...sessionState, ...record(raw) };
-      const catalog = readCursorModels(sessionState);
+      const catalog = readCursorModels(sessionState, parameterizedModels);
       const modes = record(sessionState.modes);
       if (typeof modes.currentModeId === 'string') planMode = modes.currentModeId === 'plan';
       this.capabilities.planMode = Array.isArray(modes.availableModes) && modes.availableModes.some(mode => record(mode).id === 'plan') ? yes : no;
       this.capabilities.switchModel = catalog.configId ? yes : no;
       this.capabilities.availableModels = catalog.models.length
         ? [cursorDefaultModel, ...catalog.models] : [cursorDefaultModel];
+      this.capabilities.hasFastMode = catalog.models.some(item => item.supportsFastMode === true);
+      const efforts = [...new Set(catalog.models.flatMap(item => item.efforts))];
+      this.capabilities.effort = efforts.length ? yes : no;
+      this.capabilities.effortLevels = efforts.map(id => ({ id, displayName: id }));
     };
     const control = async (method: string, params: unknown, signal?: AbortSignal) => {
       if (fenced || closed || configuring) throw new Error('Cursor session is closed or configuring');
@@ -263,22 +268,51 @@ export class CursorAgent extends BaseAgent {
         throw error;
       } finally { configuring = false; }
     };
-    const setModel = async (next: string) => {
+    const setConfigOption = async (option: CursorConfigOption, value: string | boolean) => {
+      if (running) throw new Error('Cannot change Cursor configuration during an active turn');
+      if (option.currentValue === value) return;
+      const response = await control('session/set_config_option', { sessionId, configId: option.id, value,
+        ...(option.type === 'boolean' ? { type: 'boolean' } : {}) });
+      updateCatalog(response);
+      // Legacy agents may acknowledge a mutation without returning configOptions.
+      if (!Array.isArray(record(response).configOptions)) {
+        const configs = Array.isArray(sessionState.configOptions) ? sessionState.configOptions : [];
+        updateCatalog({ configOptions: configs.map(item => record(item).id === option.id ? { ...record(item), currentValue: value } : item) });
+      } else {
+        const actual = (sessionState.configOptions as unknown[]).map(record).find(item => item.id === option.id);
+        if (actual?.currentValue !== value) throw new Error('Cursor did not apply the requested configuration');
+      }
+    };
+    const setEffort = async (effort: Effort) => {
+      if (fenced || closed || configuring) throw new Error('Cursor session is closed or configuring');
+      const controls = readCursorModelControls(sessionState.configOptions);
+      if (!controls.effort || !controls.efforts.includes(effort)) throw new NotSupportedError('effort', { supported: false, reason: 'sdk-missing' });
+      await setConfigOption(controls.effort, effort);
+    };
+    const setFastMode = async (enabled: boolean) => {
+      if (fenced || closed || configuring) throw new Error('Cursor session is closed or configuring');
+      const { fast } = readCursorModelControls(sessionState.configOptions);
+      if (!fast) {
+        if (!enabled) return;
+        throw new NotSupportedError('fastMode', { supported: false, reason: 'sdk-missing' });
+      }
+      await setConfigOption(fast, fast.type === 'boolean' ? enabled : String(enabled));
+    };
+    const setModel = async (next: string, options?: { effort?: Effort }) => {
       if (fenced || closed || configuring) throw new Error('Cursor session is closed or configuring');
       if (running) throw new Error('Cannot change Cursor model during an active turn');
-      if (next === model) return;
-      const catalog = readCursorModels(sessionState);
+      const catalog = readCursorModels(sessionState, parameterizedModels);
       const target = next === CURSOR_DEFAULT_MODEL ? defaultModel : next;
-      if (target && target === catalog.currentModel) { model = next; return; }
+      if (options?.effort && !catalog.models.find(item => item.id === target)?.efforts.includes(options.effort)) {
+        throw new NotSupportedError('effort', { supported: false, reason: 'sdk-missing' });
+      }
+      if (target && target === catalog.currentModel) { model = next; if (options?.effort) await setEffort(options.effort); return; }
       if (!target || !catalog.configId || !catalog.models.some(item => item.id === target)) {
         throw new NotSupportedError('setModel', { supported: false, reason: 'sdk-missing' });
       }
-      const response = await control('session/set_config_option', { sessionId, configId: catalog.configId, value: target });
-      updateCatalog(response);
-      // Some versions acknowledge with an empty object, retaining the advertised options.
-      const configs = Array.isArray(sessionState.configOptions) ? sessionState.configOptions : [];
-      sessionState.configOptions = configs.map(item => record(item).id === catalog.configId ? { ...record(item), currentValue: target } : item);
+      await setConfigOption({ id: catalog.configId, type: 'select', currentValue: catalog.currentModel, options: [] }, target);
       model = next;
+      if (options?.effort) await setEffort(options.effort);
     };
     const setPlanMode = async (enabled: boolean, preparing = false) => {
       if (fenced || closed || configuring) throw new Error('Cursor session is closed or configuring');
@@ -330,7 +364,7 @@ export class CursorAgent extends BaseAgent {
       }
       if (opts.remoteHostId || opts.deviceHosted) throw new Error('Cursor ACP currently runs only on the task host computer');
       if (!path.isAbsolute(opts.workingDir)) throw new Error('Cursor ACP requires an absolute working directory');
-      if (opts.fastMode || opts.effort || opts.thinkingEnabled !== undefined) throw new Error('Cursor ACP does not advertise these model options');
+      if (opts.thinkingEnabled !== undefined) throw new Error('Cursor ACP does not advertise a generic thinking switch');
       if (!['ask', 'default'].includes(mode)) throw new NotSupportedError('permissionMode', no);
       const auth = await this.deps.auth.getState();
       if (!auth.authenticated) throw new AgentNotAuthenticatedError('cursor', 'Cursor Agent is not authenticated. Run agent login on the task host computer.');
@@ -391,7 +425,8 @@ export class CursorAgent extends BaseAgent {
       const registration = pid ? this.deps.registerLocalAgentProcess?.({ pid, kind: 'cursor', role: 'task-host' }) : undefined;
       if (typeof registration === 'function') unregisterProcess = registration;
       const init = record(await client.request('initialize', {
-        protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false,
+          _meta: { parameterizedModelPicker: true }, session: { configOptions: { boolean: {} } } },
         clientInfo: { name: 'cindy', version: '1.0.0' },
       }, { signal: startup.signal }));
       if (init.protocolVersion !== 1) throw new Error('Cursor ACP protocol version is unsupported');
@@ -411,6 +446,11 @@ export class CursorAgent extends BaseAgent {
           mcpServers.push({ type: 'http', name: server.name, url: server.url, headers });
         }
       }
+      // Cursor's native extension supplies each offered model's parameter choices
+      // without selecting it or sending a prompt. Older CLIs keep their ACP catalog.
+      try { parameterizedModels = record(await client.request('cursor/list_available_models', {}, { signal: startup.signal })).models; }
+      catch (error) { if (!(error instanceof AcpRpcError) || error.code !== -32601) throw error; }
+      updateCatalog({});
       if (opts.resumeSessionId) {
         if (capabilities.loadSession !== true) throw new Error('This Cursor ACP version cannot resume saved tasks');
         validateSessionId(opts.resumeSessionId);
@@ -428,6 +468,8 @@ export class CursorAgent extends BaseAgent {
       const requestedModel = model;
       model = CURSOR_DEFAULT_MODEL;
       if (requestedModel !== CURSOR_DEFAULT_MODEL) await setModel(requestedModel);
+      if (opts.effort) await setEffort(opts.effort);
+      if (opts.fastMode !== undefined) await setFastMode(opts.fastMode);
       if (opts.planMode !== undefined) await setPlanMode(opts.planMode);
       emit({ type: 'session_id', data: sessionId });
       if (planMode) emit({ type: 'plan_mode_changed', data: { enabled: true } });
@@ -540,6 +582,8 @@ export class CursorAgent extends BaseAgent {
         },
         close,
         setModel,
+        setEffort, setFastMode,
+        getFastMode: () => { const value = readCursorModelControls(sessionState.configOptions).fast?.currentValue; return value === true || value === 'true'; },
         async setPermissionMode(next) {
           if (!['ask', 'default'].includes(next)) throw new NotSupportedError('permissionMode', no);
           mode = next; // No pending approval, especially plan approval, is auto-resolved.

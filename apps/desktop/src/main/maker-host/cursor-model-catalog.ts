@@ -9,6 +9,9 @@ export function setCursorDiscoveredModels(models: ModelDescriptor[], owner: stri
   snapshot = { owner, models };
 }
 export function clearCursorDiscoveredModels(): void { snapshot = null; }
+export function getCursorDiscoveredModel(modelId: string): ModelDescriptor | undefined {
+  return snapshot?.owner === activeOwnerScopeKey() ? snapshot.models.find(model => model.id === modelId) : undefined;
+}
 export function hasCursorDiscoveredModels(): boolean {
   return snapshot?.owner === activeOwnerScopeKey() && snapshot.models.length > 0;
 }
@@ -22,6 +25,7 @@ export function withCursorDiscoveredModels(catalog: Catalog): Catalog {
     models: { ...provider.models, cursor: models.map(model => ({
       id: model.id, name: model.displayName, contextWindow: model.contextWindow,
       efforts: [...model.efforts], defaultEffort: model.defaultEffort,
+      ...(model.supportsFastMode !== undefined ? { supportsFastMode: model.supportsFastMode } : {}),
       ...(model.newSessionDefault ? { newSessionDefault: model.newSessionDefault } : {}),
       ...(model.description ? { description: model.description } : {}),
       ...(model.supportsImageInput !== undefined ? { supportsImageInput: model.supportsImageInput } : {}),

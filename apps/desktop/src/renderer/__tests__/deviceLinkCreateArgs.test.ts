@@ -435,9 +435,8 @@ describe('resolveDeviceLinkSubmission', () => {
 });
 
 describe('Cursor native creation', () => {
-  it('does not forward remembered reasoning or automatic approval from another harness', () => {
+  it('forwards native model tuning while preserving the Cursor approval policy', () => {
     const args = buildDeviceLinkCreateArgs({ agentKind: 'cursor', model: 'account-model', effort: 'medium', permissionMode: 'auto', fastMode: true, planModeEnabled: true });
-    expect(args).not.toHaveProperty('effort');
-    expect(args).toMatchObject({ agentKind: 'cursor', model: 'account-model', permissionMode: 'ask', fastMode: false, planMode: true });
+    expect(args).toMatchObject({ agentKind: 'cursor', model: 'account-model', effort: 'medium', permissionMode: 'ask', fastMode: true, planMode: true });
   });
 });

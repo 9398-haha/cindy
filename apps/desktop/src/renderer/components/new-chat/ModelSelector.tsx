@@ -1716,9 +1716,11 @@ function ModelSelectorContentView({
           ? (codex.capabilities?.effortLevels ?? [])
           : currentAgentKind === 'pi'
             ? (pi.capabilities?.effortLevels ?? [])
-            : [];
+            : currentAgentKind === 'cursor'
+              ? (cursor.capabilities?.effortLevels ?? [])
+              : [];
     return new Map(levels.map((e) => [e.id, e.displayName]));
-  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities]);
   // 档名多语言:i18n 词表(effortLevels.*) → 模型级 effortDisplayNames →
   // capabilities displayName(未知档兜底) → 原 id。
   const effortLabelFor = (m: RowModel, e: Effort) => modelEffortLabel(t, m, e, effortMeta.get(e));
@@ -3002,18 +3004,22 @@ function ModelSelectorContentView({
           ? (cc.capabilities?.effortLevels ?? [])
           : agent === 'codex'
             ? (codex.capabilities?.effortLevels ?? [])
-            : (pi.capabilities?.effortLevels ?? []);
+            : agent === 'cursor'
+              ? (cursor.capabilities?.effortLevels ?? [])
+              : (pi.capabilities?.effortLevels ?? []);
       return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
     },
     [cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities, t],
   );
   const unifiedAgentFastCapable = useCallback(
     (agent: AgentKind): boolean =>
-      agent !== 'cursor' && (typeof fastModeConfigurable === 'boolean' ? fastModeConfigurable : fastModeConfigurable.includes(agent)) && !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
+      (typeof fastModeConfigurable === 'boolean' ? fastModeConfigurable : fastModeConfigurable.includes(agent)) && !!(onFastModeChange || onUnifiedSelect) && (agent === 'claude-code'
         ? !!cc.capabilities?.hasFastMode
         : agent === 'codex'
           ? !!codex.capabilities?.hasFastMode
-          : !!pi.capabilities?.hasFastMode),
+          : agent === 'cursor'
+            ? !!cursor.capabilities?.hasFastMode
+            : !!pi.capabilities?.hasFastMode),
     [cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
