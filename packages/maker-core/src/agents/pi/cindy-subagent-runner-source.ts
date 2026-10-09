@@ -958,6 +958,10 @@ function main() {
         }
         if (event.type === 'auto_retry_start') {
           terminalError = '';
+          // A failed attempt is not the generation's final answer. Pi keeps
+          // stdin open during retry backoff so corrections must stay eligible.
+          task.resultReady = false;
+          scheduleStatus();
           return;
         }
         if (event.type === 'agent_end') {
