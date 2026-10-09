@@ -562,8 +562,8 @@ export function CreateWorkerPopover({
       if (requiresFullAccessConfirmation(selectedWorkerPermissionMode, nextMode)) {
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
-          description: t('newChat.chatInput.fullAccessConfirmation.description'),
-          content: <FullAccessConfirmContent />,
+          description: t(agent === 'cursor' ? 'newChat.chatInput.fullAccessConfirmation.cursor.description' : 'newChat.chatInput.fullAccessConfirmation.description'),
+          content: <FullAccessConfirmContent cursor={agent === 'cursor'} />,
           describeContent: true,
           maxWidth: 440,
           confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
@@ -574,7 +574,7 @@ export function CreateWorkerPopover({
       }
       setSelectedWorkerPermissionMode(nextMode);
     },
-    [confirmDialog, selectedWorkerPermissionMode, t],
+    [agent, confirmDialog, selectedWorkerPermissionMode, t],
   );
 
   const handleCreate = useCallback(async () => {

@@ -9535,6 +9535,21 @@
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
       "retryPluginWriteAccess": "Confirm plugin write permission again",
       "fullAccessConfirmation": {
+        "cursor": {
+          "description": "Cindy will directly allow approval requests from Cursor without asking for each one:",
+          "items": {
+            "files": {
+              "description": "Directly allow file read and modification requests from Cursor"
+            },
+            "commands": {
+              "description": "Directly allow terminal command requests from Cursor"
+            },
+            "network": {
+              "description": "Directly allow network operation requests from Cursor"
+            }
+          },
+          "note": "Cursor’s native permission policy still applies. This choice does not change its native sandbox or persistent grants. Built-in high-risk operations still require confirmation."
+        },
         "title": "Enable Full access?",
         "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
         "items": {

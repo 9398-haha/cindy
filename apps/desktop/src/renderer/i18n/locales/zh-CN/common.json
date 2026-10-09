@@ -9520,6 +9520,21 @@
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
       "retryPluginWriteAccess": "重新确认插件写权限",
       "fullAccessConfirmation": {
+        "cursor": {
+          "description": "Cindy 将直接允许 Cursor 发来的授权请求，不再逐项询问：",
+          "items": {
+            "files": {
+              "description": "直接允许 Cursor 发来的文件读取和修改请求"
+            },
+            "commands": {
+              "description": "直接允许 Cursor 发来的终端命令请求"
+            },
+            "network": {
+              "description": "直接允许 Cursor 发来的联网操作请求"
+            }
+          },
+          "note": "Cursor 原生权限策略仍然生效。此选择不会更改原生沙箱或长期授权；内置高风险操作仍会要求确认。"
+        },
         "title": "开启 Full access？",
         "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
         "items": {

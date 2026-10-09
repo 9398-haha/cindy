@@ -9520,6 +9520,21 @@
       "permissionSwitchFailed": "権限モードの変更に失敗したため、以前の設定を維持しました",
       "retryPluginWriteAccess": "プラグインの書き込み権限を再確認",
       "fullAccessConfirmation": {
+        "cursor": {
+          "description": "Cindy は Cursor からの承認リクエストを、個別に確認せず許可します：",
+          "items": {
+            "files": {
+              "description": "Cursor からのファイルの読み取り・変更リクエストを許可"
+            },
+            "commands": {
+              "description": "Cursor からのターミナルコマンドのリクエストを許可"
+            },
+            "network": {
+              "description": "Cursor からのネットワーク操作のリクエストを許可"
+            }
+          },
+          "note": "Cursor 本来の権限ポリシーは引き続き適用されます。この選択でネイティブのサンドボックスや永続的な許可は変更されません。組み込みの高リスク操作には引き続き確認が必要です。"
+        },
         "title": "Full access を有効にしますか？",
         "description": "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy は確認なしで次の操作ができるようになります:",
         "items": {

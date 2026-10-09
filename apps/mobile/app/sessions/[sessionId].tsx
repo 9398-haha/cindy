@@ -7878,7 +7878,7 @@ export default function SessionScreen() {
   const selectSessionPermissionMode = useCallback((mode: string) => {
     void (async () => {
       if (!currentSession) return;
-      if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
+      if (!await confirmFullAccessChange(currentSession.permissionMode, mode, { agentKind: currentSession.agentKind })) return;
       await runControlAction(
         () => maker.setPermissionMode(sessionId, mode),
         { permissionMode: mode },

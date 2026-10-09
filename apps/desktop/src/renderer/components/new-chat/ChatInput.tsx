@@ -8365,9 +8365,9 @@ export function ChatInput({
       if (requiresFullAccessConfirmation(previousMode, newMode)) {
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
-          description: t('newChat.chatInput.fullAccessConfirmation.description'),
+          description: t(vendorKey === 'cursor' ? 'newChat.chatInput.fullAccessConfirmation.cursor.description' : 'newChat.chatInput.fullAccessConfirmation.description'),
           // 逐类权限清单(文件 / 终端命令 / 网络)+ 高风险操作仍确认的脚注。
-          content: <FullAccessConfirmContent />,
+          content: <FullAccessConfirmContent cursor={vendorKey === 'cursor'} />,
           // 高风险授权:开场朗读必须覆盖清单全文,SR 用户听全权限再确认。
           describeContent: true,
           // 带清单的确认框放宽到 440(§4:普通确认 400,富内容可适度放宽)。
@@ -8396,7 +8396,7 @@ export function ChatInput({
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
       }
     },
-    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked],
+    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked, vendorKey],
   );
   useEffect(() => {
     handlePermissionModeChangeRef.current = handlePermissionModeChange;

@@ -9,6 +9,10 @@ describe('Cursor native permission copy', () => {
     const desktop = JSON.parse(readFileSync(resolve('src/renderer/i18n/locales', locale, 'common.json'), 'utf8'));
     const mobile = JSON.parse(readFileSync(resolve('../mobile/src/i18n/locales', locale, 'session.json'), 'utf8'));
     const modes = desktop.newChat.permissionSelector.modes;
+    const full = desktop.newChat.chatInput.fullAccessConfirmation.cursor;
+    expect(full.description).toContain('Cursor');
+    expect(full.note).toContain('Cursor');
+    for (const item of ['files', 'commands', 'network']) expect(full.items[item].description).toContain('Cursor');
     for (const mode of ['ask', 'default', 'auto', 'bypassPermissions']) {
       expect(modes.cursor[mode].label.trim()).not.toBe('');
       expect(modes.cursor[mode].description).toContain('Cursor');

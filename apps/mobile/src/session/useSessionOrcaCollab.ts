@@ -483,9 +483,9 @@ export function useOrcaWorkerForm(params: {
 
   const changePermission = useCallback(async (mode: OrcaWorkerPermissionMode) => {
     touchedRef.current = true;
-    if (!await confirmFullAccessChange(form.permissionMode, mode)) return;
+    if (!await confirmFullAccessChange(form.permissionMode, mode, { agentKind: form.agent })) return;
     setForm((current) => ({ ...current, permissionMode: mode }));
-  }, [form.permissionMode]);
+  }, [form.agent, form.permissionMode]);
 
   const openPicker = useCallback(() => {
     setSheetOpen(false);
