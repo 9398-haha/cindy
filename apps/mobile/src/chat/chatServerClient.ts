@@ -137,6 +137,11 @@ export function createChatServerClient(request: ChatRequest) {
     async snapshot(roomId: string): Promise<ChatSnapshot> {
       return request(`/conversations/${chatId(roomId)}/snapshot`);
     },
+    async members(roomId: string): Promise<ChatMember[]> {
+      const members = await request<ChatMember[]>(`/conversations/${chatId(roomId)}/members`);
+      if (!Array.isArray(members)) throw new Error('INVALID_CHAT_MEMBERS');
+      return members;
+    },
     async load(roomId: string, oldest?: string): Promise<ChatPage> {
       const room = chatId(roomId);
       const snapshot = await request<ChatSnapshot>(`/conversations/${room}/snapshot`);

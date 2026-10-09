@@ -142,24 +142,30 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
   const active = useRef(identity); active.current = identity;
   const [state, setState] = useState<{ identity: string; value: BotGroupChatState; online: boolean; loadingOlder: boolean }>({ identity, value: { kind: 'loading' }, online: true, loadingOlder: false });
   const page = useRef<{ identity: string; page: ChatPage; self: string } | null>(null);
+  const accessGeneration = useRef(0);
   const freshRead = useRef(false);
   const olderPending = useRef(false);
   const valid = () => api.current() && active.current === identity;
+  const loseAccess = () => {
+    accessGeneration.current++; freshRead.current = false; page.current = null;
+    setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
+  };
   const request = useRemoteSyncCoordinator(async run => {
     if (!enabled || !api.enabled) return;
+    const generation = accessGeneration.current;
     freshRead.current = false;
     try {
       const previous = page.current?.identity === identity ? page.current.page : null;
       const oldest = previous?.messages.reduce<string | undefined>((oldest, message) => !oldest || BigInt(message.seq) < BigInt(oldest) ? message.seq : oldest, undefined);
       const [next, self] = await Promise.all([api.client.load(groupId, oldest), api.client.me()]);
-      if (run.isStale() || !valid()) return;
+      if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       // Replace the reauthorized window; no stale history survives changed access.
       freshRead.current = true;
       page.current = { identity, page: next, self };
       setState({ identity, value: { kind: 'ready', group: chatGroupView(next, self) }, online: true, loadingOlder: false });
     } catch (error) {
-      if (run.isStale() || !valid()) return;
-      if (chatAccessLost(error)) { page.current = null; setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false }); }
+      if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
+      if (chatAccessLost(error)) loseAccess();
       else setState(old => ({ identity, value: old.identity === identity && old.value.kind === 'ready' ? old.value : { kind: 'error', message: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_READ_FAILED' }, online: false, loadingOlder: false }));
     }
   }, identity);
@@ -186,7 +192,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
           const latest = page.current;
           if (!freshRead.current || !latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
           return { scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor };
-        }, changed: reload, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; if (api.current() && active.current === identity) setState(old => ({ ...old, online: false })); } });
+        }, changed: reload, available: () => { subscribed = true; }, unavailable: () => { subscribed = false; freshRead.current = false; } });
       }).catch(() => {}); // Read presents endpoint errors.
     };
     start();
@@ -204,7 +210,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
       page.current = { ...previous, page: next };
       setState({ identity, value: { kind: 'ready', group: chatGroupView(next, previous.self) }, online: true, loadingOlder: false });
     } catch (error) {
-      if (valid() && chatAccessLost(error)) { page.current = null; setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false }); }
+      if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
       throw error;
     } finally { olderPending.current = false; if (valid()) setState(old => ({ ...old, loadingOlder: false })); }
   };
@@ -212,13 +218,24 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     if (action !== 'send' || !input || input.division || (Array.isArray(input.attachments) && input.attachments.length)) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
-    const mentions = input.mentions as { all: boolean; botIds: string[] };
-    const recipients = mentions.all
-      ? latest.page.snapshot.members.filter(member => member.state === 'joined').map(member => member.id)
-      : mentions.botIds;
-    await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text),
-      mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });
-    reload(); return { effects: [] };
+    try {
+      const mentions = input.mentions as { all: boolean; botIds: string[] };
+      const recipients = mentions.all
+        ? (await api.client.members(groupId)).filter(member => member.state === 'joined').map(member => member.id)
+        : mentions.botIds;
+      if (!valid() || page.current?.identity !== identity) throw new Error('OWNER_CHANGED');
+      await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text),
+        mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });
+      if (valid()) reload();
+      return { effects: [] };
+    } catch (error) {
+      if (valid()) {
+        freshRead.current = false;
+        if (chatAccessLost(error)) loseAccess();
+        else setState(old => ({ ...old, online: false }));
+      }
+      throw error;
+    }
   };
   const media = async (mediaId: string): Promise<BotGroupAttachment> => {
     const attachment = await api.client.media(groupId, mediaId);

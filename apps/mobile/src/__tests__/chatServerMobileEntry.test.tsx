@@ -42,6 +42,7 @@ beforeEach(() => {
     options.assertCurrent();
     if (path.startsWith('/v1/conversations?')) return [room];
     if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
+    if (path.endsWith('/members')) return [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }];
     if (path.endsWith('/snapshot')) return { room, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
     if (path.includes('/messages?')) return [{ id: self, seq: '9007199254740993', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Fixture message' }], createdAt: '2026-10-09', deleted: false, threadRootId: null }];
     if (path.endsWith('/messages')) return { id: self };
@@ -66,6 +67,7 @@ it('never includes the current human actor in explicit or everyone server mentio
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     const value = await original(path, options);
+    if (path.endsWith('/members')) return [...value, { ...value[0], id: other, name: 'Other', ownerActorId: other }];
     return path.endsWith('/snapshot') ? { ...value, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
   });
   showChat = true; await render();
@@ -73,6 +75,80 @@ it('never includes the current human actor in explicit or everyone server mentio
     await act(async () => { await chat.act('send', { text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
     expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
   }
+});
+it('resolves everyone using authorized members at send time instead of the displayed snapshot', async () => {
+  const joined = '00000000-0000-4000-8000-000000000003';
+  const invited = '00000000-0000-4000-8000-000000000004';
+  const left = '00000000-0000-4000-8000-000000000005';
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/members')) {
+      const [member] = await original(path, options);
+      return [member, { ...member, id: joined, kind: 'bot', name: 'New teammate' },
+        { ...member, id: invited, state: 'invited' }, { ...member, id: left, state: 'left' }];
+    }
+    return original(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => { await chat.act('send', { text: 'everyone', clientId: 'fixture-new-member', mentions: { all: true, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'fixture-new-member', content: [{ type: 'text', text: 'everyone' }], mentions: [joined] } }));
+});
+
+it('keeps REST sending available after the group WebSocket disconnects', async () => {
+  vi.useFakeTimers();
+  const sockets: any[] = [];
+  vi.stubGlobal('WebSocket', class {
+    readyState = 1; onclose?: Function;
+    constructor() { sockets.push(this); }
+    close() { this.onclose?.({}); }
+  });
+  showChat = true; await render();
+  expect(chat.online).toBe(true);
+  await act(async () => { sockets[0].close(); });
+  expect(chat.online).toBe(true);
+  await act(async () => { await chat.act('send', { text: 'REST works', clientId: 'fixture-ws-offline', mentions: { all: false, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST' }));
+  h.auth.apiFetch.mockRejectedValue(new Error('REST offline'));
+  await act(async () => { chat.reload(); });
+  expect(chat.online).toBe(false);
+});
+
+it.each([403, 404])('clears revoked access immediately when a send returns %s', async (status) => {
+  showChat = true; await render();
+  expect(chat.state.kind).toBe('ready');
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/messages')) throw Object.assign(new Error('NOT_MEMBER'), { status });
+    return original(path, options);
+  });
+  await act(async () => {
+    await expect(chat.act('send', { text: 'fixture', clientId: 'fixture-revoked', mentions: { all: false, botIds: [] } })).rejects.toMatchObject({ status });
+  });
+  expect(chat.state.kind).toBe('missing');
+  expect(chat.online).toBe(false);
+  await expect(chat.act('send', { text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
+});
+it('clears access on everyone member-read rejection and ignores an older authorized history reply', async () => {
+  showChat = true; await render();
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let finish!: () => void;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/members')) throw Object.assign(new Error('NOT_MEMBER'), { status: 403 });
+    const value = await original(path, options);
+    if (path.endsWith('/snapshot')) await new Promise<void>(resolve => { finish = resolve; });
+    return value;
+  });
+  await act(async () => { chat.reload(); });
+  await act(async () => {
+    await expect(chat.act('send', { text: 'everyone', clientId: 'fixture-member-rejected', mentions: { all: true, botIds: [] } })).rejects.toMatchObject({ status: 403 });
+  });
+  expect(chat.state.kind).toBe('missing');
+  expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+  await act(async () => { finish(); });
+  expect(chat.state.kind).toBe('missing');
+  h.auth.apiFetch.mockImplementation(original);
+  await act(async () => { chat.reload(); });
+  expect(chat.state.kind).toBe('ready');
 });
 it('deduplicates server copies from multiple computers while retaining a local legacy group', async () => {
   h.legacy.items = ['mac', 'pc'].map(deviceId => ({ key: deviceId, host: { deviceId, deviceName: deviceId }, item: { ref: { collectionId: 'bot-groups', kind: 'bot-group', id }, revision: '1', display: { title: 'Discussion' }, links: [] } }));
