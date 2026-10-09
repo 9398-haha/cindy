@@ -8,6 +8,7 @@ const native = vi.hoisted(() => ({
   storage: new Map<string, string>(),
   readSecure: vi.fn(),
   deleteSecure: vi.fn(),
+  writeSecure: vi.fn(),
   logoutCleanup: vi.fn(),
   unregisterPush: vi.fn(),
   links: new Set<(event: { url: string }) => void>(),
@@ -68,7 +69,7 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
 vi.mock('@cindy/auth-client/fixtures', () => ({ resolveLoginScenarioFetch: () => undefined }));
 vi.mock('@/auth/secureStorage', () => ({
   getSecureItem: native.readSecure,
-  setSecureItem: async (key: string, value: string) => { native.storage.set(key, value); },
+  setSecureItem: native.writeSecure,
   deleteSecureItem: native.deleteSecure,
 }));
 vi.mock('@/auth/pkce', () => ({
@@ -175,6 +176,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.initialUrl.mockReset().mockResolvedValue(null);
     native.requestCode.mockReset().mockResolvedValue(undefined);
     native.storage.clear();
+    native.writeSecure.mockReset().mockImplementation(async (key: string, value: string) => { native.storage.set(key, value); });
     native.logoutCleanup.mockReset();
     native.unregisterPush.mockReset();
     native.deleteSecure.mockReset().mockImplementation(async (key: string) => { native.storage.delete(key); });
@@ -235,6 +237,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       native.exchange.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
       await emitLink(oldCallback);
     }
+    native.writeSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
     native.deleteSecure.mockRejectedValueOnce(new Error('fixture storage unavailable'));
     await act(async () => { expect(await auth.dispatchLoginAction({ type: 'reset' })).toBe(false); });
     expect(native.storage.get(pendingKey)).toBe(pending);
@@ -272,6 +275,67 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.authError).toBeNull();
   });
 
+  it.each(['reset', 'close'] as const)('persists cancellation across restart when deletion fails (%s)', async action => {
+    await start();
+    const url = callbackUrl();
+    native.deleteSecure.mockRejectedValueOnce(new Error('fixture deletion failure'));
+    await act(async () => {
+      if (action === 'reset') await auth.dispatchLoginAction({ type: 'reset' });
+      else await auth.cancelAddAccount();
+    });
+    native.initialUrl.mockResolvedValue(url);
+    await restartProvider();
+    await mountLoginScreen('after-restart');
+    expect(native.exchange).not.toHaveBeenCalled();
+    expect(auth.loginState?.step).toBe('identifier');
+  });
+
+  it.each(['old-first', 'current-first'] as const)('does not deduplicate different callback states (%s)', async order => {
+    await start();
+    const oldUrl = callbackUrl();
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    await start();
+    const currentUrl = callbackUrl();
+    const pending = native.storage.get(pendingKey)!;
+    let finishRead!: (value: string) => void;
+    native.readSecure.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    await emitLink(order === 'old-first' ? oldUrl : currentUrl);
+    await emitLink(order === 'old-first' ? currentUrl : oldUrl);
+    await act(async () => { finishRead(pending); });
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(auth.loginState?.step).toBe('sso-verification');
+    expect(auth.authError).toBeNull();
+  });
+
+  it('invalidates cold callback validation before a browser state has been restored', async () => {
+    await start();
+    const oldUrl = callbackUrl();
+    const pending = native.storage.get(pendingKey)!;
+    await restartProvider();
+    let finishRead!: (value: string) => void;
+    native.readSecure.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    await emitLink(oldUrl);
+    expect(auth.loginState).toBeNull();
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    await start();
+    await emitLink(callbackUrl());
+    await act(async () => { finishRead(pending); });
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(auth.loginState?.step).toBe('sso-verification');
+    expect(auth.authError).toBeNull();
+  });
+
+  it('ignores a duplicate success callback after its continuation is already displayed', async () => {
+    await start();
+    const url = callbackUrl();
+    await emitLink(url);
+    const state = auth.loginState;
+    await emitLink(url);
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(auth.loginState).toBe(state);
+    expect(auth.authError).toBeNull();
+  });
+
   it('an earlier attempt cannot consume the new attempt after cancel and retry', async () => {
     await start();
     const oldCallback = callbackUrl();
@@ -280,7 +344,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     const pending = native.storage.get(pendingKey);
     await emitLink(oldCallback);
     expect(native.exchange).not.toHaveBeenCalled();
-    expect(auth.authError).toBe('STATE_MISMATCH');
+    expect(auth.authError).toBeNull();
     expect(native.storage.get(pendingKey)).toBe(pending);
     await emitLink(callbackUrl());
     expect(native.exchange).toHaveBeenCalledTimes(1);
@@ -337,7 +401,7 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       result = auth.dispatchLoginAction({ type: 'start-social-browser', provider: 'wechat', label: 'WeChat' })
         .catch(error => error);
     });
-    await emitLink(callbackUrl());
+    await emitLink(callbackUrl(new URL(native.open.mock.calls[0][0]).searchParams.get('state')!));
     expect(native.exchange).not.toHaveBeenCalled();
     await act(async () => {
       if (deletion === 'delayed') finishDelete();
@@ -392,11 +456,12 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     });
     let closing!: Promise<void>;
     await act(async () => { closing = auth.cancelAddAccount(); });
-    await act(async () => { await auth.beginAddAccount(); });
+    let reopening!: Promise<void>;
+    await act(async () => { reopening = auth.beginAddAccount(); });
+    await act(async () => { finishDelete(); await closing; await reopening; });
     await start();
     const pending = native.storage.get(pendingKey);
     const state = auth.loginState;
-    await act(async () => { finishDelete(); await closing; });
     expect(auth.loginState).toBe(state);
     expect(native.storage.get(pendingKey)).toBe(pending);
     await emitLink(callbackUrl());
@@ -420,14 +485,15 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.storage.has(pendingKey)).toBe(false);
   });
 
-  it('retains in-flight deduplication for reset outside browser authorization', async () => {
+  it('lets the latest reset win without publishing an older reset result', async () => {
     let first!: Promise<boolean>;
     let second!: Promise<boolean>;
     await act(async () => {
       first = auth.dispatchLoginAction({ type: 'reset' });
       second = auth.dispatchLoginAction({ type: 'reset' });
-      expect(second).toBe(first);
-      await first;
+      expect(second).not.toBe(first);
+      expect(await first).toBe(false);
+      expect(await second).toBe(true);
     });
     expect(auth.loginState?.step).toBe('identifier');
     expect(auth.isBusy).toBe(false);

@@ -431,6 +431,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pendingAccountDeletionRestoredRef = useRef(false);
   const loginInitializationRef = useRef<{ epoch: number; promise: Promise<boolean> } | null>(null);
   const oauthCancelledRef = useRef(false);
+  const pendingOAuthMutationRef = useRef<Promise<void>>(Promise.resolve());
+  const browserCompletionStateRef = useRef<string | null>(null);
   const loginActionInFlightRef = useRef<Promise<boolean> | null>(null);
   const loginActionInFlightEpochRef = useRef<number | null>(null);
   const browserCompletionRef = useRef<Promise<void> | null>(null);
@@ -477,6 +479,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const assertLoginFlowCurrent = useCallback((expectedEpoch: number) => {
     if (loginFlowEpochRef.current === expectedEpoch) return;
     throw authCodeError('AUTH_FLOW_SUPERSEDED');
+  }, []);
+
+  const persistPendingOAuth = useCallback((pending: PendingOAuth | null): Promise<void> => {
+    const run = pendingOAuthMutationRef.current.then(async () => {
+      if (pending) {
+        await setSecureItem(PENDING_OAUTH_KEY, JSON.stringify(pending));
+        return;
+      }
+      // Retire the verifier durably before best-effort removal. A failed delete
+      // must not turn a canceled attempt back into a valid cold-start login.
+      try {
+        await setSecureItem(PENDING_OAUTH_KEY, JSON.stringify({ cancelled: true }));
+      } catch {
+        // If overwriting is unavailable, cancellation still succeeds if removal
+        // works. If neither operation succeeds, let the caller report failure.
+        await deleteSecureItem(PENDING_OAUTH_KEY);
+        return;
+      }
+      await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+    });
+    pendingOAuthMutationRef.current = run.catch(() => undefined);
+    return run;
   }, []);
 
   const prepareBetaChannelForCurrentDevice = useCallback((): Promise<string> => {
@@ -968,7 +992,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       expectedLoginFlowEpoch = loginFlowEpochRef.current,
       options: { skipOrganizationDiscovery?: boolean } = {},
     ): Promise<void> => {
-      await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+      assertLoginFlowCurrent(expectedLoginFlowEpoch);
+      await persistPendingOAuth(null).catch(() => undefined);
       assertLoginFlowCurrent(expectedLoginFlowEpoch);
 
       pendingAccountTokenRef.current =
@@ -1180,6 +1205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       applyUser,
       assertLoginFlowCurrent,
+      persistPendingOAuth,
       clearAccountScopedRuntimeForSwitch,
       commitWithClearedAccountDeletionReceipt,
       loadMe,
@@ -1684,34 +1710,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user?.id]);
 
   const completeOAuthCallback = useCallback(
-    (
+    async (
       callbackUrl: string,
       expectedLoginFlowEpoch = loginFlowEpochRef.current,
     ): Promise<void> => {
-      // A late Linking event captures the current epoch, so the epoch alone
-      // cannot fence an attempt whose credential deletion is pending or failed.
-      if (oauthCancelledRef.current) {
-        return Promise.reject(authCodeError('AUTH_FLOW_SUPERSEDED'));
+      if (oauthCancelledRef.current) throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      if (!matchesOAuthCallbackUrl(callbackUrl, MOBILE_REDIRECT_URL)) {
+        throw authCodeError('INVALID_AUTH_CODE');
       }
-      if (
-        browserCompletionRef.current &&
-        browserCompletionEpochRef.current === expectedLoginFlowEpoch
-      ) {
-        return browserCompletionRef.current;
+      const callback = parseOAuthCallbackUrl(callbackUrl);
+      const currentCompletion = () =>
+        !oauthCancelledRef.current && loginFlowEpochRef.current === expectedLoginFlowEpoch &&
+        browserCompletionEpochRef.current === expectedLoginFlowEpoch &&
+        browserCompletionStateRef.current === callback.state
+          ? browserCompletionRef.current : null;
+      const existing = currentCompletion();
+      if (existing) return existing;
+
+      let pending: PendingOAuth;
+      try {
+        // Validate ownership before taking the single-flight slot. A stale
+        // state must never swallow the current attempt's callback.
+        pending = await readPendingOAuth(callback.state);
+      } catch (error) {
+        const concurrent = currentCompletion();
+        if (concurrent) return concurrent;
+        if (loginFlowEpochRef.current === expectedLoginFlowEpoch &&
+          !oauthCancelledRef.current &&
+          authErrorCode(error) === 'INVALID_AUTH_CODE' &&
+          loginStateRef.current?.step === 'browser-redirect') {
+          await persistPendingOAuth(null).catch(() => undefined);
+          if (loginFlowEpochRef.current === expectedLoginFlowEpoch && !oauthCancelledRef.current) {
+            updateLoginState(null);
+            setAuthError('INVALID_AUTH_CODE');
+          }
+        }
+        throw error;
       }
+      assertLoginFlowCurrent(expectedLoginFlowEpoch);
+      if (oauthCancelledRef.current) throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      const concurrent = currentCompletion();
+      if (concurrent) return concurrent;
       loginInitializationRef.current = null;
       suspendSessionRecoveryForLogin();
       const run = (async () => {
         setIsBusy(true);
         try {
-          if (!matchesOAuthCallbackUrl(callbackUrl, MOBILE_REDIRECT_URL)) {
-            throw authCodeError('INVALID_AUTH_CODE');
-          }
-          const pending = await readPendingOAuth();
-          assertLoginFlowCurrent(expectedLoginFlowEpoch);
-          const callback = parseOAuthCallbackUrl(callbackUrl);
-          if (callback.state !== pending.state)
-            throw authCodeError('STATE_MISMATCH');
           try {
             await loadMobileEndpointsForRealm(pending.realm);
           } catch {
@@ -1735,12 +1779,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pending.deviceId,
             expectedLoginFlowEpoch,
           );
+          assertLoginFlowCurrent(expectedLoginFlowEpoch);
           setAuthError(null);
         } catch (error) {
           if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) throw error;
           const code = authErrorCode(error);
           if (code === 'INVALID_AUTH_CODE') {
-            await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+            await persistPendingOAuth(null).catch(() => undefined);
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
             pendingAuthRealmRef.current = null;
             if (!additionalLoginRef.current) resetMobileSessionRealm();
             updateLoginState(null);
@@ -1755,25 +1801,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })();
       browserCompletionRef.current = run;
       browserCompletionEpochRef.current = expectedLoginFlowEpoch;
-      run.then(
-        () => {
-          if (browserCompletionRef.current === run) {
-            browserCompletionRef.current = null;
-            browserCompletionEpochRef.current = null;
-          }
-        },
-        () => {
-          if (browserCompletionRef.current === run) {
-            browserCompletionRef.current = null;
-            browserCompletionEpochRef.current = null;
-          }
-        },
-      );
+      browserCompletionStateRef.current = callback.state;
+      // Keep successful completion for duplicate native/Linking notifications;
+      // a different state or epoch cannot reuse it. Failed attempts may retry.
+      void run.catch(() => {
+        if (browserCompletionRef.current === run) {
+          browserCompletionRef.current = null;
+          browserCompletionEpochRef.current = null;
+          browserCompletionStateRef.current = null;
+        }
+      });
       return run;
     },
     [
       acceptOutcome,
       assertLoginFlowCurrent,
+      persistPendingOAuth,
       suspendSessionRecoveryForLogin,
       updateLoginState,
     ],
@@ -1852,13 +1895,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return promise;
       }
       loginInitializationRef.current = null;
-      if (action.type === 'reset') oauthCancelledRef.current = true;
-      // Cancelling a browser login must invalidate its in-flight callback before
-      // any await or deduplication. Other login actions retain their lifecycle.
-      if (action.type === 'reset' && (
-        loginStateRef.current?.step === 'browser-redirect' ||
-        (browserCompletionRef.current && browserCompletionEpochRef.current === loginFlowEpochRef.current)
-      )) {
+      // Reset abandons the attempt, including work still reading credentials or
+      // preparing the browser, before any await or action deduplication.
+      if (action.type === 'reset') {
+        oauthCancelledRef.current = true;
         loginFlowEpochRef.current += 1;
       }
       const expectedLoginFlowEpoch = loginFlowEpochRef.current;
@@ -1911,17 +1951,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const { codeVerifier, codeChallenge } = await createPkcePair();
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             const state = createState();
-            await setSecureItem(
-              PENDING_OAUTH_KEY,
-              JSON.stringify({
-                codeVerifier,
-                deviceId: did,
-                state,
-                createdAt: Date.now(),
-                label: input.label,
-                realm: authorizationRealm,
-              } satisfies PendingOAuth),
-            );
+            await persistPendingOAuth({
+              codeVerifier,
+              deviceId: did,
+              state,
+              createdAt: Date.now(),
+              label: input.label,
+              realm: authorizationRealm,
+            });
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             oauthCancelledRef.current = false;
             updateLoginState(
@@ -1955,7 +1992,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             oauthCancelledRef.current = true;
             setIsBusy(false);
             const cancelledEpoch = ++loginFlowEpochRef.current;
-            await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+            await persistPendingOAuth(null).catch(() => undefined);
             assertLoginFlowCurrent(cancelledEpoch);
             pendingAuthRealmRef.current = null;
             updateLoginState(null);
@@ -1983,7 +2020,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pendingAccountDeletionRestoredRef.current = false;
             setAccountDeletionRestored(false);
             // Do not expose another login until cancellation has reached storage.
-            await deleteSecureItem(PENDING_OAUTH_KEY);
+            await persistPendingOAuth(null);
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             const providers = await authClientFor(
               did,
@@ -2397,6 +2434,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       acceptOutcome,
       assertLoginFlowCurrent,
+      persistPendingOAuth,
       completeOAuthCallback,
       lookupOrganizationRealm,
       ensureCaptchaGate,
@@ -2734,13 +2772,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingAccountDeletionRestoredRef.current = false;
     additionalLoginRef.current = false;
     sessionRecoverySuspendedRef.current = false;
-    await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
+    await persistPendingOAuth(null).catch(() => undefined);
     if (loginFlowEpochRef.current !== cancelledEpoch) return;
     activateMobileSessionRealm(activeAuthRealmRef.current);
     setMobileAuthOwner(userRef.current?.id ?? null, activeAuthRealmRef.current);
     updateLoginState(null);
     setAuthError(null);
-  }, [updateLoginState]);
+  }, [persistPendingOAuth, updateLoginState]);
 
   const clearLocalSession = useCallback(async (
     options: { persistedAuthAlreadyCleared?: boolean } = {},
@@ -2821,11 +2859,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         () => undefined,
       ),
       deleteSecureItem(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY).catch(() => undefined),
-      deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined),
+      persistPendingOAuth(null).catch(() => undefined),
       deleteSecureItem(LEGACY_PENDING_OAUTH_KEY).catch(() => undefined),
       deleteSecureItem(LEGACY_USER_PROFILE_KEY).catch(() => undefined),
     ]);
   }, [
+    persistPendingOAuth,
     applyUser,
     serializeRefreshTokenMutation,
     serializeUserProfileMutation,
@@ -3468,7 +3507,7 @@ async function writeCachedUserProfile(
   }
 }
 
-async function readPendingOAuth(): Promise<PendingOAuth> {
+async function readPendingOAuth(expectedState?: string): Promise<PendingOAuth> {
   const raw = await getSecureItem(PENDING_OAUTH_KEY);
   if (!raw) throw authCodeError('INVALID_AUTH_CODE');
   let parsed: Partial<PendingOAuth>;
@@ -3487,8 +3526,10 @@ async function readPendingOAuth(): Promise<PendingOAuth> {
     (parsed.realm !== 'cn' && parsed.realm !== 'global')
   )
     throw authCodeError('INVALID_AUTH_CODE');
+  if (expectedState !== undefined && parsed.state !== expectedState) {
+    throw authCodeError('STATE_MISMATCH');
+  }
   if (Date.now() - parsed.createdAt > PENDING_OAUTH_MAX_AGE_MS) {
-    await deleteSecureItem(PENDING_OAUTH_KEY).catch(() => undefined);
     throw authCodeError('INVALID_AUTH_CODE');
   }
   return parsed as PendingOAuth;
