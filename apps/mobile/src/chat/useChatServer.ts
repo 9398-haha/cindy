@@ -213,8 +213,11 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     const mentions = input.mentions as { all: boolean; botIds: string[] };
+    const recipients = mentions.all
+      ? latest.page.snapshot.members.filter(member => member.state === 'joined').map(member => member.id)
+      : mentions.botIds;
     await api.client.send(groupId, { clientId: String(input.clientId), text: String(input.text),
-      mentions: { all: false, botIds: mentions.all ? latest.page.snapshot.members.filter(member => member.state === 'joined' && member.id !== latest.self).map(member => member.id) : mentions.botIds } });
+      mentions: { all: false, botIds: recipients.filter(id => id !== latest.self) } });
     reload(); return { effects: [] };
   };
   const media = async (mediaId: string): Promise<BotGroupAttachment> => {

@@ -118,17 +118,19 @@ export function BotGroupComposer({
   const mediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
+  const mentionMembers = useMemo(() => members.filter(member => member.isSelf !== true), [members]);
+  const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const allLabel = t('groupChat.mention.all');
   const query = focused ? findBotGroupMentionQuery(text, caret) : null;
   const options = useMemo<MentionOption[]>(() => {
-    if (!query || activeMembers.length === 0) return [];
+    if (!query || mentionCandidates.length === 0) return [];
     const everyone: MentionOption[] = filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
       ? [{ kind: 'all', label: allLabel }]
       : [];
-    const people = filterBotGroupMentionCandidates(query.query, activeMembers)
+    const people = filterBotGroupMentionCandidates(query.query, mentionCandidates)
       .map((member): MentionOption => ({ kind: 'member', label: member.name, member }));
     return [...everyone, ...people];
-  }, [activeMembers, allLabel, query]);
+  }, [mentionCandidates, allLabel, query]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();
@@ -193,7 +195,7 @@ export function BotGroupComposer({
       const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds);
       attemptRef.current = attempt;
       const mentions = resolveBotGroupMentions(draftText, {
-        members: members.map((member) => ({ botId: member.botId, name: member.name })),
+        members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
         allLabels: [allLabel],
         tracked: draftTracked,
       });

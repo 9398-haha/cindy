@@ -471,6 +471,19 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
+    h.chat.server = true;
+    const data = group({ openPlan: null });
+    data.members.unshift({ ...data.members[0]!, botId: 'self', name: 'Me', actorKind: 'human', isSelf: true });
+    await render(data);
+    await type('@');
+    expect(byId('botGroup.mention.self')).toBeNull();
+    expect(byId('botGroup.mention.mimi')).not.toBeNull();
+    await type('@Me @阿布 hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
   it('sends a 分工 message and keeps the clientId and tag for a retry', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.divisionTag')).toBeNull();
