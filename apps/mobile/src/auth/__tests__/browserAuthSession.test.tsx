@@ -95,22 +95,22 @@ vi.mock('@/auth/nativeSocial', () => ({}));
 vi.mock('@/auth/ssoOrgHistory', () => ({ rememberSsoOrgIdentifier: async () => {} }));
 vi.mock('@/auth/canaryChannelSync', () => ({}));
 vi.mock('@/auth/xdOrgBetaDefault', () => ({}));
-vi.mock('@/analytics/mobileTapdb', () => ({ clearTapdbUser: async () => {} }));
-vi.mock('@/analytics/analyticsConsentStore', () => ({}));
+vi.mock('@/analytics/mobileTapdb', () => ({ clearTapdbUser: async () => {}, stopMobileTapdbReporting: async () => {} }));
+vi.mock('@/analytics/analyticsConsentStore', () => ({ clearAnalyticsConsent: async () => {} }));
 vi.mock('@/notifications/pushNotifications', () => ({ unregisterPushTokenBestEffort: native.unregisterPush }));
-vi.mock('@/session/agentCapabilitiesCache', () => ({}));
-vi.mock('@/session/composerPaletteCache', () => ({}));
-vi.mock('@/device-link/remoteResourceCache', () => ({}));
-vi.mock('@/session/mobileHomeListCache', () => ({}));
+vi.mock('@/session/agentCapabilitiesCache', () => ({ resetAgentCapabilitiesCache: async () => {} }));
+vi.mock('@/session/composerPaletteCache', () => ({ resetComposerPaletteCache: async () => {} }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ clearRemoteResourceCache: async () => {} }));
+vi.mock('@/session/mobileHomeListCache', () => ({ clearCachedHomeListSnapshot: async () => {} }));
 vi.mock('@/device-link/clipboardInvitationHistory', () => ({ clearClipboardInvitationHistory: async () => {} }));
-vi.mock('@/remote-desktop/credentialIdentity', () => ({}));
-vi.mock('@/session/mobileSessionMessageCache', () => ({}));
-vi.mock('@/session/remoteHistoryDiskCache', () => ({}));
+vi.mock('@/remote-desktop/credentialIdentity', () => ({ updateCredentialAccessToken() {} }));
+vi.mock('@/session/mobileSessionMessageCache', () => ({ clearCachedSessionMessages: async () => {} }));
+vi.mock('@/session/remoteHistoryDiskCache', () => ({ clearHistoryDisk: async () => {} }));
 vi.mock('@/session/mobileVoiceCredentialStore', () => ({ clearAllMobileVoiceCredentials: async () => {} }));
-vi.mock('@/session/mobileVoiceDictionaryCache', () => ({ setMobileVoiceDictionaryAccountScope() {} }));
-vi.mock('@/session/mobileVoiceHistoryStore', () => ({}));
+vi.mock('@/session/mobileVoiceDictionaryCache', () => ({ setMobileVoiceDictionaryAccountScope() {}, clearAllMobileVoiceDictionaryCaches: async () => {} }));
+vi.mock('@/session/mobileVoiceHistoryStore', () => ({ clearAllMobileVoiceInputHistories: async () => {} }));
 vi.mock('@/debug/visualMock', () => ({}));
-vi.mock('@/update/canaryChannelStore', () => ({}));
+vi.mock('@/update/canaryChannelStore', () => ({ clearCanaryChannel: async () => {} }));
 vi.mock('@/update/betaChannelStore', () => ({ prepareBetaChannelForDevice: async () => {} }));
 vi.mock('@/update/fetchLatestRelease', () => ({}));
 
@@ -769,6 +769,63 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState).toBeNull();
     expect(auth.authError).toBeNull();
     expect(auth.isBusy).toBe(false);
+  });
+
+  it.each(['missing', 'valid'] as const)('ignores an old %s callback snapshot after a new OAuth write', async snapshot => {
+    await restartProvider();
+    await act(async () => { await auth.dispatchLoginAction({ type: 'initialize' }); });
+    const old = JSON.stringify({ codeVerifier: 'old-verifier', deviceId: 'fixture-device', state: 'old-state', createdAt: Date.now(), label: 'Old', realm: 'cn' });
+    let finishRead!: (value: string | null) => void;
+    native.readSecure.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    await emitLink(callbackUrl('old-state'));
+    await start('social');
+    const pending = native.storage.get(pendingKey);
+    const state = auth.loginState;
+    await act(async () => { finishRead(snapshot === 'missing' ? null : old); });
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    expect(auth.loginState).toBe(state);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it.each([
+    { outcome: verifiedOutcome, action: {type: 'request-sso-verification-code'}, request: native.requestVerification },
+    { outcome: {status: 'select_account', loginTicket: 'fixture-ticket', accounts: []}, action: {type: 'select-account', accountId: 'fixture-account'}, request: native.selectAccount },
+    { outcome: {status: 'binding_required', bindType: 'email', bindTicket: 'fixture-ticket'}, action: {type: 'request-binding-code', contact: 'user@example.invalid'}, request: native.requestBinding },
+  ] as const)('blocks $action.type while session termination awaits cleanup', async fixture => {
+    native.exchange.mockResolvedValueOnce(fixture.outcome);
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await emitLink(callbackUrl());
+    let failCleanup!: (error: Error) => void;
+    native.unregisterPush.mockImplementationOnce(() => new Promise((_, reject) => { failCleanup = reject; }));
+    let closing!: Promise<unknown>;
+    await act(async () => { closing = auth.terminateSession('ACCOUNT_UNAVAILABLE').catch(error => error); });
+    expect(auth.isBusy).toBe(true);
+    await act(async () => { expect(await auth.dispatchLoginAction(fixture.action)).toBe(false); });
+    expect(fixture.request).not.toHaveBeenCalled();
+    await act(async () => { failCleanup(new Error('fixture cleanup failure')); await closing; });
+    expect(auth.isBusy).toBe(false);
+  });
+
+  it('initializes a login page mounted during termination only after full cleanup', async () => {
+    await start();
+    let finishCleanup!: () => void;
+    native.unregisterPush.mockImplementationOnce(() => new Promise<void>(resolve => { finishCleanup = resolve; }));
+    let closing!: Promise<void>;
+    let initializing!: Promise<boolean>;
+    await act(async () => { closing = auth.terminateSession(); });
+    native.providers.mockClear();
+    await act(async () => { initializing = auth.dispatchLoginAction({ type: 'initialize' }); });
+    expect(native.providers).not.toHaveBeenCalled();
+    expect(auth.isBusy).toBe(true);
+    await act(async () => { finishCleanup(); await closing; expect(await initializing).toBe(true); });
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(auth.isBusy).toBe(false);
+    await start();
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
   });
 
   it.each(['logout', 'terminateSession'] as const)('fences OAuth before %s awaits cleanup', async action => {

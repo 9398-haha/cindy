@@ -1750,6 +1750,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const existing = currentCompletion();
       if (existing) return existing;
 
+      const pendingMutation = pendingOAuthMutationRef.current;
       let pending: PendingOAuth;
       try {
         // Validate ownership before taking the single-flight slot. A stale
@@ -1758,7 +1759,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         const concurrent = currentCompletion();
         if (concurrent) return concurrent;
-        if (loginFlowEpochRef.current === expectedLoginFlowEpoch &&
+        if (pendingOAuthMutationRef.current === pendingMutation &&
+          loginFlowEpochRef.current === expectedLoginFlowEpoch &&
           !oauthCancelledRef.current &&
           authErrorCode(error) === 'INVALID_AUTH_CODE' &&
           loginStateRef.current?.step === 'browser-redirect') {
@@ -1770,8 +1772,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         throw error;
       }
+      const concurrent = currentCompletion();
+      if (concurrent) return concurrent;
       assertLoginFlowCurrent(expectedLoginFlowEpoch);
-      if (oauthCancelledRef.current) throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      if (oauthCancelledRef.current || pendingOAuthMutationRef.current !== pendingMutation) {
+        throw authCodeError('AUTH_FLOW_SUPERSEDED');
+      }
       // Adding an account needs its live route and account context. After a
       // restart, keep the existing account rather than create a hidden flow.
       if (pending.additionalAccount && !additionalLoginRef.current) {
@@ -1779,8 +1785,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await persistPendingOAuth(null);
         throw authCodeError('AUTH_FLOW_SUPERSEDED');
       }
-      const concurrent = currentCompletion();
-      if (concurrent) return concurrent;
       loginInitializationRef.current = null;
       const browserAction = loginActionInFlightRef.current;
       suspendSessionRecoveryForLogin();
@@ -1899,6 +1903,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const dispatchLoginAction = useCallback(
     (action: MobileLoginAction): Promise<boolean> => {
+      const terminating = terminalLogoutInFlightRef.current;
+      if (terminating) {
+        // The login page can mount during cleanup; replay only its initialization.
+        return action.type === 'initialize'
+          ? terminating.then(() => dispatchLoginAction(action), () => false)
+          : Promise.resolve(false);
+      }
       if (addAccountCancellationEpochRef.current === loginFlowEpochRef.current) {
         return Promise.resolve(false);
       }
@@ -2831,6 +2842,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const beginAddAccount = useCallback(async (): Promise<void> => {
+    if (terminalLogoutInFlightRef.current) return terminalLogoutInFlightRef.current;
     loginFlowEpochRef.current += 1;
     additionalLoginRef.current = true;
     sessionRecoverySuspendedRef.current = false;
@@ -2840,6 +2852,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [dispatchLoginAction, updateLoginState]);
 
   const cancelAddAccount = useCallback(async (): Promise<void> => {
+    if (terminalLogoutInFlightRef.current) return terminalLogoutInFlightRef.current;
     oauthCancelledRef.current = true;
     loginFlowEpochRef.current += 1;
     const cancelledEpoch = loginFlowEpochRef.current;
@@ -2980,10 +2993,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const clearIfCurrent = () => {
         if (terminalLogoutInFlightRef.current === run) {
           terminalLogoutInFlightRef.current = null;
+          setIsBusy(false);
         }
       };
       run = clearLocalSession();
       terminalLogoutInFlightRef.current = run;
+      setIsBusy(true);
       run.then(clearIfCurrent, clearIfCurrent);
       return run;
     },
