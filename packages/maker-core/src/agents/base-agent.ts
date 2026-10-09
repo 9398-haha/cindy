@@ -7,7 +7,7 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
-import type { AutoReviewUserIntent } from './shared/auto-review-decision.js';
+import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
 
@@ -2011,6 +2011,12 @@ export interface MainOwnedSendContext {
   readonly origin: TurnPermissionOrigin;
   /** Main-authenticated user text before channel/persona/context decoration. */
   readonly rawChannelText?: string;
+  /**
+   * Host-stamped content this channel message points at (reply/quote and attachment
+   * counts). Auto-review shows it as third-party evidence beside, never inside, the
+   * user's words; it cannot grant authority.
+   */
+  readonly autoReviewReferences?: AutoReviewUserReferences;
 }
 
 /**

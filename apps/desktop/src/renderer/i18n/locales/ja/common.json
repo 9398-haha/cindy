@@ -349,9 +349,7 @@
     },
     "received": {
       "title": "共有されたプロバイダー",
-      "description": "他の人から共有されたプロバイダーは、モデル一覧のリモートプロバイダーに表示されます。",
-      "empty": "まだ共有されたプロバイダーはありません。共有リンクを受け取ったら、開くかここに貼り付けてください。",
-      "paste": "共有リンクを貼り付け",
+      "enterLink": "共有リンクを入力…",
       "fromOwner": "{{name}} からの共有",
       "providerOnDevice": "{{provider}} · {{device}}",
       "statusActive": "利用可能",
@@ -367,18 +365,29 @@
       },
       "left": "{{name}} から共有された {{provider}} から退出しました",
       "pasteDialog": {
-        "title": "共有リンクを貼り付け",
+        "title": "共有リンクを入力",
         "description": "受け取ったプロバイダーの共有リンクを貼り付けてください。内容を確認してから申請するかどうか決められます。",
         "label": "共有リンク",
         "placeholder": "ここにリンクを貼り付け",
         "empty": "先に共有リンクを貼り付けてください",
         "open": "リンクを開く",
         "cancel": "キャンセル"
-      }
+      },
+      "detailNote": "Agent は {{name}} のパソコンで動き、相手のログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。",
+      "modelsTitle": "利用できるモデル",
+      "modelsLoading": "相手が公開しているモデルを読み込んでいます…",
+      "modelsRefused": "相手のパソコンが今この共有の読み込みを許可していません。リモート操作を許可していないか、このプロバイダーの「リモート利用を許可」がオフになっているか、相手の Cindy が起動したばかりでまだ準備できていない可能性があります。しばらくしてから再試行するか、相手にこの 2 つの設定を確認してもらってください。",
+      "modelsFailedWithCode": "相手が公開しているモデルを読み込めませんでした。しばらくしてから再試行してください。（エラーコード：{{code}}）",
+      "retryModels": "モデルを再読み込み",
+      "modelsEmpty": "相手はまだ利用できるモデルを公開していません。",
+      "pausedNote": "相手がこの共有を一時停止しています。再開されると使えるようになります。",
+      "offlineNote": "相手のパソコンがオフラインです。オンラインに戻ると使えるようになります。",
+      "needsUpdateNote": "相手の Cindy が更新されると、この共有を使えるようになります。"
     },
     "picker": {
       "deviceName": "{{device}} · {{owner}} からの共有",
-      "unavailable": "利用できなくなった共有"
+      "unavailable": "利用できなくなった共有",
+      "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。"
     },
     "notification": {
       "requestTitle": "新しい共有の申請",
@@ -2703,6 +2712,13 @@
           "reset": "既定の選択に戻す",
           "connectionRequired": "接続すると利用できます。モデルの選択は保持されます。"
         }
+      },
+      "remote": {
+        "rowLabel": "{{provider}} · {{device}}",
+        "statusReady": "利用可能",
+        "detailNote": "Agent は {{device}} で動き、そのパソコンのログインとクォータを使います。タスクを新規作成するときにモデル一覧で選ぶと使えます。このプロバイダーを変更するには、そのパソコンの「設定 → モデルプロバイダー」を開いてください。",
+        "modelsTitle": "利用できるモデル",
+        "modelsEmpty": "このプロバイダーには、そのパソコンで利用できるモデルがまだありません。"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
@@ -8454,6 +8470,7 @@
         "planDoneGeneric": "役割分担が完了しました"
       },
       "notice": {
+        "memberJoined": "{{name}}さんがグループに参加しました",
         "memberFailed": "{{name}} は今回返信できませんでした",
         "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
         "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -8558,6 +8575,7 @@
         "copied": "招待リンクをコピーしました",
         "createLink": "招待リンクを作成",
         "accept": "承諾して参加",
+        "openGroup": "グループを開く",
         "previewInvite": "招待を確認",
         "invalidInvite": "招待が無効、使用済み、または期限切れです。新しいリンクを取得してください。",
         "notAllowed": "このアカウントに権限がありません。アカウントを確認するか、グループ管理者に連絡してください。",
@@ -10497,7 +10515,8 @@
         "automation": "自動化 ID：{{id}}",
         "plugin": "プラグイン ID：{{id}}",
         "device": "デバイス ID：{{id}}",
-        "member": "メンバー ID：{{id}}"
+        "member": "メンバー ID：{{id}}",
+        "group": "グループ ID: {{id}}"
       },
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",
@@ -10523,7 +10542,9 @@
         "sourceNeverRan": "元のセッションがまだ実行されていないため、新しいセッションを始められません",
         "codexStateUnavailable": "Codex セッションの状態を利用できないため、新しいセッションを始められません。{{detail}}",
         "generic": "新しいセッションを始められませんでした。再試行してください"
-      }
+      },
+      "groupSentNamed": "グループ「{{name}}」から送信",
+      "groupSent": "グループから送信"
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}} から",
@@ -10910,7 +10931,8 @@
       "sessionInactive": "セッションはすでにアクティブではありません",
       "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",
       "remoteDialogueBanner": "{{device}} で新しい対話（プロジェクトなし）",
-      "agentDeviceBanner": "セッションとファイルはこのパソコンに残り、Agent は {{device}} で実行されます"
+      "agentDeviceBanner": "セッションとファイルはこのパソコンに残り、Agent は {{device}} で実行されます",
+      "agentDeviceElsewhereBanner": "Agent は {{device}} で実行されます"
     },
     "jumpSession": {
       "emptyId": "移動先の sessionId を入力してください",
@@ -13415,6 +13437,7 @@
     "addUnavailable": "このセッションは現在の分割で開けません。メイン領域でセッションを開いてから、もう一度お試しください。"
   },
   "extraDirs": {
+    "retryRemotePlugins": "リモートプラグインを読み込めませんでした。再試行",
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",
     "tooltipCount": "追加ディレクトリ {{count}} 件",
@@ -13901,6 +13924,7 @@
       "failedTitle": "プラン変更に失敗しました",
       "failedBody": "プラン変更は完了しませんでした。現在のプランは変わりません。",
       "requestFailed": "プラン変更リクエストを完了できませんでした。サブスクリプションの状態を更新して、もう一度お試しください。",
+      "renewalPrepaid": "次の請求期間の料金はすでに支払い済みです。現在の期間が終了してからアップグレードしてください。",
       "quoteRejected": "現在のサブスクリプションではこのプランに変更できません。別のプランを選択してください。",
       "chooseAnotherPlan": "別のプランを選択",
       "resyncHint": "結果をまだ確認できません。最新の状態をもう一度確認しています…",
@@ -14761,5 +14785,15 @@
     "autoTitle": "Auto 自動承認を有効化",
     "autoMessage": "「{{name}}」で Auto 自動承認を使用しますか？",
     "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。"
+  },
+  "groupTools": {
+    "authorizationRequired": "グループの許可が失効したか、この操作は許可されていません。パートナーの所有者からこのグループで再度依頼してください。",
+    "localPeersOnly": "グループからのメッセージは、この端末の同じアカウントのパートナーにのみ送信できます。",
+    "ownerChanged": "アカウントが切り替わりました。もう一度お試しください。",
+    "invalidMessage": "メッセージまたは再試行識別子が無効です。",
+    "privateUnavailable": "このパートナーの個別チャットを利用できません。後でもう一度お試しください。",
+    "idempotencyConflict": "この再試行識別子は別のメッセージに使用されています。",
+    "privateUnconfirmed": "個別メッセージの配信は未確認です。同じ識別子で再試行してください。",
+    "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。"
   }
 }

@@ -93,11 +93,14 @@ import type {
 } from '@cindy/maker-core';
 import type {
   IMAttachment,
+  IMMessageEvent,
   InteractiveCardSpec,
   StreamingTextHandle,
 } from '@cindy/im';
+import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
 import { persistUserMessage } from '../messagePersistence';
+import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
 import { buildImChannelNote, type ImChannelNoteSource } from './channelNote';
@@ -299,6 +302,8 @@ interface TurnState {
  */
 interface QueuedSend {
   contextSnapshot?: ImContextSnapshot;
+  /** Auto 审阅的引用证据, 入队时按本条消息算好, 排队重派与直发同一份。 */
+  autoReviewReferences?: AutoReviewUserReferences;
   turn: TurnState;
   userMessage: UserMessage;
   rowId: string;
@@ -420,6 +425,11 @@ export interface ImRunAgentTurnArgs {
   userMessageId: string;
   text: string;
   attachments: IMAttachment[];
+  /**
+   * 渠道 adapter 给出的被回复消息(IMMessageEvent.replyContext)。只用于 Auto 审阅的
+   * 引用证据(见 imAutoReviewReferences), 不改模型正文与落库。
+   */
+  replyContext?: IMMessageEvent['replyContext'];
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
   /**
@@ -1067,8 +1077,13 @@ export function createTurnRunner(
       );
     }
 
+    const autoReviewReferences = imAutoReviewReferences({
+      attachments,
+      replyContext: args.replyContext,
+    });
     const item: QueuedSend = {
       contextSnapshot: args.contextSnapshot,
+      ...(autoReviewReferences ? { autoReviewReferences } : {}),
       turn,
       // contextAttachments 只进模型消息(跟在用户自己附件后面), 不进
       // item.attachments —— persistUserMessage 落库的只有触发用户发的附件。
@@ -1341,6 +1356,7 @@ export function createTurnRunner(
         [MAIN_OWNED_SEND_CONTEXT]: {
           origin: { kind: 'im', channel, taskId: item.turn.userMessageId ?? undefined },
           rawChannelText: item.text,
+          ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
         },
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         beforeProviderStart: async () => {

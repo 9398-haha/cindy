@@ -24,6 +24,7 @@ import {
   type UserContentBlock,
   type UserMessage,
 } from '@cindy/maker-core';
+import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
 import {
   channelForceConfirmMutatingToolCall,
@@ -454,7 +455,8 @@ export interface RemoteAgentWireSendOptions {
   transcriptCallback?: boolean;
   turnPolicy?: WireTurnPolicy;
   cindy?: {
-    mainOwned?: { origin: TurnPermissionOrigin; rawChannelText?: string };
+    /** autoReviewReferences is optional and additive; older peers drop it and review without it. */
+    mainOwned?: { origin: TurnPermissionOrigin; rawChannelText?: string; autoReviewReferences?: unknown };
     autoReviewSourceContent?: RemoteAgentWireMessage;
     autoReviewUserIntent?: unknown;
     delegatedContinuation?: true;
@@ -584,7 +586,12 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
     if (isRecord(cindy.mainOwned)) {
       const origin = decodeOrigin(cindy.mainOwned.origin);
       if (origin) {
-        opts[MAIN_OWNED_SEND_CONTEXT] = prune({ origin, rawChannelText: optString(cindy.mainOwned.rawChannelText) });
+        opts[MAIN_OWNED_SEND_CONTEXT] = prune({
+          origin,
+          rawChannelText: optString(cindy.mainOwned.rawChannelText),
+          // Re-projected here: shape and bounds are never taken from the wire as-is.
+          autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
+        });
       }
     }
     if (isRecord(cindy.autoReviewSourceContent)) {

@@ -969,6 +969,47 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     });
   });
 
+  it('官方 Telegram 回复带图消息时把被引消息与实际送达附件作为审阅引用证据', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      prompt: '(本条消息回复的是 群友 的消息 #9: "看这个新闻") (被引消息的 1 个附件已随任务一并提供)\n\n这啥情况',
+      source: {
+        im: 'telegram',
+        userText: '这啥情况',
+        threadContext: [{ author: '群友', text: '看这个新闻' }],
+      },
+      autoReviewReplyTarget: { author: '群友', text: '看这个新闻' },
+      attachments: [{ name: 'news.png', mimeType: 'image/png', dataBase64: Buffer.from('png').toString('base64') }],
+    } as Partial<Parameters<ReturnType<typeof createMakerHookSessionRunner>['run']>[0]>));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'telegram' },
+      rawChannelText: '这啥情况',
+      autoReviewReferences: {
+        attachments: { images: 1, files: 0 },
+        quotedMessages: [{ author: '群友', text: '看这个新闻' }],
+      },
+    });
+  });
+
+  it('审阅引用只用 dispatcher 给的回复目标，不从展示用的话题历史推断', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      source: {
+        im: 'slack',
+        userText: 'hello',
+        threadContext: [
+          { author: 'bob', text: 'unrelated background' },
+          { author: 'alice', text: 'please check this link' },
+        ],
+      },
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).not.toHaveProperty('autoReviewReferences');
+  });
+
   it('旧服务端缺少 source.userText 时才回退 prompt', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({ source: { im: 'x' } }));
