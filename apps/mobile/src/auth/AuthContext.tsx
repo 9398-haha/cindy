@@ -1815,6 +1815,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           try {
             const did = await (deviceIdRef.current ?? prepareBetaChannelForCurrentDevice());
             if (!isCurrent()) return false;
+            const pending = await readPendingOAuth().catch((error: unknown) => {
+              if (authErrorCode(error) === 'INVALID_AUTH_CODE') return null;
+              throw error;
+            });
+            if (!isCurrent()) return false;
+            if (pending) {
+              // Retained credentials belong to the browser attempt. Restore its
+              // cancelable wait screen instead of offering an unrelated login.
+              updateLoginState({ step: 'browser-redirect', label: pending.label });
+              return true;
+            }
             const providers = await authClientFor(did, BUILD_AUTH_REGION).getProviders();
             if (!isCurrent()) return false;
             deviceIdRef.current = did;
