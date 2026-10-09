@@ -93,6 +93,7 @@ vi.mock('@/update/betaChannelStore', () => ({ prepareBetaChannelForDevice: async
 vi.mock('@/update/fetchLatestRelease', () => ({}));
 
 import { AuthProvider, useAuth } from '../AuthContext';
+import { useLoginScreenInitialization } from '../useLoginScreenInitialization';
 
 const pendingKey = 'cindy.mobile.auth.pendingOAuth';
 const verifiedOutcome = {
@@ -105,6 +106,18 @@ let root: Root;
 function Probe() {
   auth = useAuth();
   return null;
+}
+
+function LoginScreenLifecycle() {
+  const value = useAuth();
+  useLoginScreenInitialization(value, false);
+  return null;
+}
+
+async function mountLoginScreen(key: string) {
+  await act(async () => {
+    root.render(<AuthProvider><Probe /><LoginScreenLifecycle key={key} /></AuthProvider>);
+  });
 }
 
 function callbackUrl(state = JSON.parse(native.storage.get(pendingKey)!).state as string) {
@@ -323,6 +336,44 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState?.step).toBe('sso-verification');
     expect(auth.isBusy).toBe(false);
     expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it.each(['before-callback', 'during-exchange'] as const)(
+    'preserves browser login when the login screen remounts %s', async timing => {
+      await mountLoginScreen('initial');
+      await start();
+      const url = callbackUrl();
+      const pending = native.storage.get(pendingKey);
+      let complete!: (value: typeof verifiedOutcome) => void;
+      native.exchange.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+      if (timing === 'during-exchange') await emitLink(url);
+      await mountLoginScreen('remounted-after-deep-link');
+      expect(auth.loginState?.step).toBe('browser-redirect');
+      expect(native.storage.get(pendingKey)).toBe(pending);
+      if (timing === 'before-callback') await emitLink(url);
+      expect(native.exchange).toHaveBeenCalledExactlyOnceWith('fixture-code', 'fixture-verifier');
+      await act(async () => { complete(verifiedOutcome); });
+      expect(auth.loginState?.step).toBe('sso-verification');
+      expect(auth.authError).toBeNull();
+      expect(native.storage.has(pendingKey)).toBe(false);
+    },
+  );
+
+  it('still cancels and retries explicitly after the login screen has remounted', async () => {
+    await mountLoginScreen('initial');
+    await start();
+    const oldUrl = callbackUrl();
+    await mountLoginScreen('remounted-after-deep-link');
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(native.storage.has(pendingKey)).toBe(false);
+    await start();
+    await emitLink(oldUrl);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await emitLink(callbackUrl());
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(auth.loginState?.step).toBe('sso-verification');
+    expect(auth.authError).toBeNull();
   });
 
   it('still exchanges only once when Linking and the browser both report success', async () => {
