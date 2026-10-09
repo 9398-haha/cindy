@@ -669,6 +669,48 @@ describe('wrapTeamDeps', () => {
     workers.stop();
   });
 
+  it.each([false, true])('waits for the one reserved stop request before enqueue (stop fails=%s)', async fails => {
+    let settleStop!: (result: InvokeResultPayload) => void;
+    let enteredStop!: () => void;
+    const stopping = new Promise<InvokeResultPayload>(resolve => { settleStop = resolve; });
+    const entered = new Promise<void>(resolve => { enteredStop = resolve; });
+    const { workers, remoteInvoke } = await trackedWorker({ handle: async (_device, channel) => {
+      if (channel === 'maker:abort-session') { enteredStop(); return stopping; }
+      return undefined;
+    } });
+    const wrapped = workers.wrapTeamDeps(baseDeps());
+    let outcome: Awaited<ReturnType<typeof wrapped.requestWorkerInterrupt>> | undefined;
+    const reservation = wrapped.reserveWorkerMessage({
+      targetSessionId: 'proxy-1', workerId: 'w-1', message: 'replacement',
+      dispatchMeta: { source: 'mcp', context: 'interrupt_worker' },
+      onReserved: () => wrapped.requestWorkerInterrupt('proxy-1').then(result => { outcome = result; }),
+    });
+    try {
+      await entered;
+      expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:abort-session')).toHaveLength(1);
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+      settleStop(fails ? fail('INVOKE_TIMEOUT', 'stop unconfirmed') : ok(undefined));
+      await expect(reservation).resolves.toMatchObject({ ok: true });
+      expect(outcome).toEqual({ stopOutcome: fails ? 'unconfirmed' : 'requested', queuePaused: false });
+      const channels = remoteInvoke.mock.calls.map(([, channel]) => channel);
+      expect(channels.filter(channel => channel === 'maker:abort-session')).toHaveLength(1);
+      expect(channels.indexOf('maker:abort-session')).toBeLessThan(channels.indexOf('maker:input:enqueue'));
+    } finally {
+      settleStop(ok(undefined)); await reservation; workers.stop();
+    }
+  });
+
+  it('stops once when reserving a remote replacement without a boundary callback', async () => {
+    const { workers, remoteInvoke } = await trackedWorker();
+    try {
+      await expect(workers.wrapTeamDeps(baseDeps()).reserveWorkerMessage({
+        targetSessionId: 'proxy-1', workerId: 'w-1', message: 'replacement',
+        dispatchMeta: { source: 'mcp', context: 'interrupt_worker' },
+      })).resolves.toMatchObject({ ok: true });
+      expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:abort-session')).toHaveLength(1);
+    } finally { workers.stop(); }
+  });
+
   it('archives a remote worker by releasing it on the device and keeping the task there', async () => {
     const { workers, remoteInvoke } = await trackedWorker();
     store.getRemoteWorkerByProxySession.mockResolvedValueOnce({

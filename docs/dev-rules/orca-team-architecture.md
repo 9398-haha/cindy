@@ -334,6 +334,7 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 
 7. **中断是“预留下条输入 + 优雅停旧 turn”的单次原子操作（状态：不变量）**<br>
    `send_to_worker` 公开 schema 保持普通直发／排队语义，不带 interrupt 字段；`interrupt_worker` 是唯一公开中断入口。两者进入 `OrcaTeamService` 同一个私有 dispatch 路径，以内部 normal／interrupt mode 分流，不能把 `interrupt_worker` 实现成 stop + send 两次工具调用。interrupt 必须复用 `buildQueuedOrcaInterAgentMessage`、accepted 回调、host acceptance stamp、clientId 去重与持久化链路；队列恢复完成后，在无 await 的 coordinator 临界区把新消息插到现有 pending 队首，并在 emit／drain 之前同步发起旧 turn 的 graceful stop。消息在 `unsupported`／`unconfirmed` 时仍保留队首，不硬 abort；用户暂停态不得被解除；stop adapter 抛错／拒绝或结果为 `unconfirmed` 时，`queue_paused` 必须读取 coordinator 当前投影，不得默认成 `false`。`lead_interrupt` 必须在旧 terminal 唤醒 drain 前同步捕获，旧 turn 不 auto-bridge，也不得覆盖已 accepted 的新 turn 状态；下一次 accepted dispatch 清理标记。整个流程从预留前到 stop 结果确认都计入 `activeWorkerDispatches`，与 done 确认互斥。
+   `onReserved` 可返回同一次停止请求的等待票据：本机 coordinator 仍同步调用，远端适配器等待票据后再投递替换消息，不能额外调用第二次 abort。票据吸收错误仅为等待结算，真实停止结果仍由 TeamService 原 stopPromise 返回。
 
 8. **多条合并必须一次校验、一次交换、一次持久化（状态：不变量）**<br>
    `merge_queued_messages` 只接受至少两个不重复、按活队列顺序连续、pending、非 consuming／steering、由当前 Lead 发出的消息。durable restore 必须先成功；之后同步重读到一次性数组交换之间不得 await。任一消息缺失、次序变化、非连续、非 Lead 或已 consuming 时，整次零修改并返回 `QUEUE_CHANGED` 与最新完整队列，不能部分合并。survivor 保留最前目标的 clientId、队列位置与 `hostAcceptedAtMs`；移除项必须逐条走 discard settlement 结清 accepted 回调；最终只 emit／持久化一次，不暴露中间快照。`update_queued_message`、`cancel_queued_message` 继续保持单条语义，不得多步模拟合并。

@@ -718,8 +718,9 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (!(await isRemoteWorker(params.targetSessionId))) return base.reserveWorkerMessage(params);
         // 打断改派：先停远端当前一轮，再把新指令作为下一条派过去。
         await params.beforeReserve?.();
-        params.onReserved?.();
-        await runtime.abort(params.targetSessionId);
+        // TeamService 的 onReserved 已发起停止；等待同一次请求，不能再发第二次 abort。
+        if (params.onReserved) await params.onReserved();
+        else await runtime.abort(params.targetSessionId);
         return wrapped.dispatchWorkerMessage({
           targetSessionId: params.targetSessionId,
           message: params.message,

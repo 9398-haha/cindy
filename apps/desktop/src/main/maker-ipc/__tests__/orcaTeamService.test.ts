@@ -848,6 +848,40 @@ describe('OrcaTeamService', () => {
     expect(deps.requestWorkerInterrupt).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])('provides a reserved stop settlement ticket and preserves the stop result (fails=%s)', async fails => {
+    let settleStop!: () => void;
+    let rejectStop!: (err: Error) => void;
+    let reserved!: () => void;
+    const stop = new Promise<{ stopOutcome: 'requested'; queuePaused: false }>((resolve, reject) => {
+      settleStop = () => resolve({ stopOutcome: 'requested', queuePaused: false }); rejectStop = reject;
+    });
+    const entered = new Promise<void>(resolve => { reserved = resolve; });
+    const requestWorkerInterrupt = vi.fn(() => stop);
+    const reserveWorkerMessage: OrcaTeamServiceDeps['reserveWorkerMessage'] = async params => {
+      const ticket = params.onReserved?.();
+      expect(ticket).toBeInstanceOf(Promise);
+      reserved();
+      await ticket;
+      await params.onAccepted?.();
+      await params.onAcceptedCommit?.();
+      return { ok: true, mode: 'queued', clientId: 'replacement-1',
+        dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source,
+          dispatched: true, wakeKind: 'queued' }, targetTitle: null, targetLastUserSendAt: null };
+    };
+    const { deps, service } = createDeps({ requestWorkerInterrupt, reserveWorkerMessage });
+    const interrupt = service.interruptWorker({ callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1', message: 'replacement' });
+    try {
+      await entered;
+      expect(requestWorkerInterrupt).toHaveBeenCalledOnce();
+      expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+      if (fails) rejectStop(new Error('stop failed')); else settleStop();
+      await expect(interrupt).resolves.toMatchObject({ ok: true,
+        stopOutcome: fails ? 'unconfirmed' : 'requested', queuePaused: false });
+      expect(requestWorkerInterrupt).toHaveBeenCalledOnce();
+    } finally { settleStop(); await interrupt; }
+  });
+
   it('keeps done acknowledgement mutually exclusive with an in-flight interrupt dispatch', async () => {
     let settleStop!: (value: { stopOutcome: 'requested'; queuePaused: false }) => void;
     const stopPending = new Promise<{ stopOutcome: 'requested'; queuePaused: false }>((resolve) => {
