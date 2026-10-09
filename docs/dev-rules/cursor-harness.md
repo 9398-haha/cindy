@@ -45,6 +45,10 @@ explicit model override and is never sent as a model ID. It remains accepted for
 old saved tasks, but is absent from public catalogs and model pickers. After a
 successful handshake, the handle exposes the actual native current model ID;
 the admission-only alias still requires a connected, discovered Cursor source.
+Shared source lookup resolves an old saved alias only for the built-in Cursor
+provider with an advertised native default. It retains the saved route and
+uses that default's label without inserting a picker row or guessing the saved
+native session's effort/Fast state before the native handle is opened.
 Model mutations use the advertised config ID and exact value. Native AUTO is
 listed only when the CLI lists it. Unknown context windows remain unknown.
 Cindy negotiates Cursor's native `_meta.parameterizedModelPicker` capability and

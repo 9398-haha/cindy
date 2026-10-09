@@ -289,6 +289,24 @@ it('keeps Cursor pools visible in an existing task and selects third-party model
   expect(onCrossEngineSelect).not.toHaveBeenCalled();
 });
 
+it('keeps a saved Cursor default task connected while offering Auto only once', async () => {
+  render(React.createElement(ModelSelector, {
+    vendorKey: 'cursor', modelId: 'cursor-default', currentProviderId: 'cursor', actualRoute: true,
+    effort: 'medium', onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn(),
+    unifiedAgents: ['cursor'], providersOverride: [{ id: 'cursor', name: 'Cursor', source: 'builtin',
+      connected: true, agents: ['cursor'], auth: { method: 'none' }, routing: {}, models: { cursor: [
+        { id: 'default', name: 'Auto', contextWindow: 0, efforts: [], defaultEffort: null,
+          group: 'cursor:auto', newSessionDefault: ['cursor'] },
+      ] } }],
+  }));
+  const trigger = screen.getByText('Auto').closest('button')!;
+  expect(trigger.getAttribute('aria-label')).not.toContain('source.unavailable');
+  await act(async () => fireEvent.click(trigger));
+  const list = await screen.findByRole('listbox');
+  expect(within(list).getAllByText('Auto')).toHaveLength(1);
+  expect(within(list).queryByText('Cursor Default')).toBeNull();
+});
+
 async function openRowFlyout(name: string): Promise<HTMLElement> {
   await act(async () => {
     fireEvent.click(within(rowFor(name)).getByRole('button', { name: '自定义' }));

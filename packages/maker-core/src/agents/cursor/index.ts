@@ -461,6 +461,10 @@ export class CursorAgent extends BaseAgent {
         sessionId = validateSessionId(result.sessionId);
         updateCatalog(result);
       }
+      if (discoveryOnly) this.deps.logger.debug('Cursor native catalog discovered', {
+        sessionModelCount: this.capabilities.availableModels.length,
+        parameterizedModelCount: Array.isArray(parameterizedModels) ? parameterizedModels.length : 0,
+      });
       // session/load replays native history while loading=true. Cindy already
       // owns the transcript, so replay is never emitted as a new user turn.
       loading = false;
