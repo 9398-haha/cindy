@@ -2486,6 +2486,11 @@
     },
     {
       "providerId": "xd",
+      "modelIdPrefix": "openai-codex/gpt-",
+      "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "xd",
       "modelIdPrefix": "openai/gpt-",
       "nativeApi": "openai-responses"
     },

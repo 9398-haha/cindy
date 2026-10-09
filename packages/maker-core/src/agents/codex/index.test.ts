@@ -5601,6 +5601,20 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(implicitGatewayParams.modelProvider).toBe('cindy_codex');
     await implicitGatewayHandle.close();
 
+    // openai-codex/* 与 codex/* 一样走 Cindy 远程压缩。
+    host.request.mock.calls.length = 0;
+    const openAiCodexHandle = await agent.startSession({
+      sessionId: 'session-openai-codex',
+      model: 'openai-codex/gpt-6.1-sol',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const openAiCodexParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { modelProvider?: string };
+    expect(openAiCodexParams.modelProvider).toBe('cindy_codex');
+    await openAiCodexHandle.close();
+
     // Cindy Provider 的非 codex/* 模型不误开远程压缩。
     host.request.mock.calls.length = 0;
     const plainGatewayHandle = await agent.startSession({

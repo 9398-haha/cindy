@@ -6641,7 +6641,7 @@ assertRouteCurrent();
     const hostUsesCodexProxy = host.isCodexProxyActive();
 
     // Codex 只按 model provider 的 name="OpenAI" 判断远程压缩能力。Cindy 先按
-    // 产品来源 + codex/* 模型做语义路由，再选择同一 app-server 内固定 HTTP 的 identity。
+    // 产品来源 + openai-codex/* / codex/* 模型做语义路由，再选择同一 app-server 内固定 HTTP 的 identity。
     const cindyProviderRemoteCompactionRequested = isCindyProviderCodexRemoteCompactionRoute({
       providerId: mutableProviderId,
       model: mutableModel,
