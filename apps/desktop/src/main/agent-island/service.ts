@@ -683,6 +683,10 @@ export class AgentIslandService {
     }
   }
 
+  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
+    return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
+  }
+
   resetRuntimeState(): void {
     this.clearPublishTimer();
     this.clearStreamingPreviewPublishTimer();
@@ -841,6 +845,9 @@ export class AgentIslandService {
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
+    if (isCompletionDoneEvent(event) && event.type === 'status') {
+      this.sessionActivityRelay.awaitCompletionTerminal(hydrated.sessionId);
+    }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
@@ -856,6 +863,9 @@ export class AgentIslandService {
     });
     if (suppressCompletionAttention) {
       this.mutedCompletionSoundSessionIds.add(hydrated.sessionId);
+    }
+    if (isCompletionDoneEvent(event) && event.type === 'done') {
+      this.sessionActivityRelay.completeTerminal(hydrated.sessionId);
     }
     if (!changed) return;
     this.ensureMetadata(hydrated.sessionId);

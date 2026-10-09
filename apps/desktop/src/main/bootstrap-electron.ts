@@ -4315,15 +4315,15 @@ const registerIpcHandlers = () => {
   const isCompletionHandledByTeammate = (sessionId: string): Promise<boolean> =>
     tryGetBotDelegationService()?.isCompletionHandledByTeammate(sessionId) ?? Promise.resolve(false);
   initNotificationService({
-    isCompletionHandledByTeammate,
+    isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
+      ?? isCompletionHandledByTeammate(sessionId),
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
   initWecomGroupNotificationIpc();
   initAgentIslandService({
-    // Activity is published before the synchronous terminal adapter registers
-    // settlement. Defer the lookup until that adapter has run, without polling.
-    isCompletionHandledByTeammate: (sessionId) => Promise.resolve().then(() => isCompletionHandledByTeammate(sessionId)),
+    // The relay waits for native done before checking the durable result handoff.
+    isCompletionHandledByTeammate,
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {

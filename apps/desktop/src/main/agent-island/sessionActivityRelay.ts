@@ -21,6 +21,14 @@ interface SessionActivityRelayEntry {
   timer: Timer | null;
 }
 
+interface CompletionCheck {
+  startedAtMs: number | null;
+  payload: SessionActivityPayload;
+  checking: boolean;
+  decision: Promise<boolean>;
+  resolve: (handled: boolean) => void;
+}
+
 /**
  * Per-session throttle for list-level Agent Island activity pushes.
  * It keeps the `sessions` topic low-frequency while still sending terminal
@@ -33,9 +41,8 @@ export class SessionActivityRelay {
   private readonly clearTimer: (timer: Timer) => void;
   private readonly entries = new Map<string, SessionActivityRelayEntry>();
   private readonly terminalReplayPayloads = new Map<string, SessionActivityPayload>();
-  private readonly completionChecks = new Map<string, {
-    startedAtMs: number | null; payload: SessionActivityPayload;
-  }>();
+  private readonly completionChecks = new Map<string, CompletionCheck>();
+  private readonly awaitingTerminal = new Set<string>();
   private readonly checkCompletion?: (sessionId: string) => Promise<boolean>;
 
   constructor(
@@ -58,7 +65,8 @@ export class SessionActivityRelay {
       if (this.checkCompletion && payload.phase === 'completed' && payload.attention) {
         this.publishCompletion(activity, payload);
       } else {
-        this.completionChecks.delete(activity.sessionId);
+        this.awaitingTerminal.delete(activity.sessionId);
+        this.cancelCompletionCheck(activity.sessionId);
         this.publishOne(payload);
       }
     }
@@ -73,7 +81,8 @@ export class SessionActivityRelay {
     for (const entry of this.entries.values()) {
       if (entry.timer) this.clearTimer(entry.timer);
     }
-    this.completionChecks.clear();
+    for (const sessionId of this.completionChecks.keys()) this.cancelCompletionCheck(sessionId);
+    this.awaitingTerminal.clear();
     this.entries.clear();
     this.terminalReplayPayloads.clear();
   }
@@ -83,10 +92,33 @@ export class SessionActivityRelay {
    * Runtime reset should not leave remote lists showing stale running rows.
    */
   reset(): void {
-    this.completionChecks.clear();
+    for (const sessionId of this.completionChecks.keys()) this.cancelCompletionCheck(sessionId);
+    this.awaitingTerminal.clear();
     for (const sessionId of [...this.entries.keys()]) {
       this.clear(sessionId);
     }
+  }
+
+  /** A status completion precedes the native done/result handoff boundary. */
+  awaitCompletionTerminal(sessionId: string): void {
+    if (this.checkCompletion && !this.completionChecks.has(sessionId)) this.awaitingTerminal.add(sessionId);
+  }
+
+  completeTerminal(sessionId: string): void {
+    this.awaitingTerminal.delete(sessionId);
+    const check = this.completionChecks.get(sessionId);
+    if (check) this.checkCompletionOwnership(sessionId, check);
+  }
+
+  /** Local notification channels share the source relay's same terminal decision. */
+  waitForCompletionNotification(sessionId: string): Promise<boolean> | undefined {
+    return this.completionChecks.get(sessionId)?.decision;
+  }
+
+  private cancelCompletionCheck(sessionId: string): void {
+    // A new turn/read/reset supersedes this event; never release its stale notice.
+    this.completionChecks.get(sessionId)?.resolve(true);
+    this.completionChecks.delete(sessionId);
   }
 
   /**
@@ -143,13 +175,31 @@ export class SessionActivityRelay {
       this.publishOne(previous.payload);
       return;
     }
-    const check = { startedAtMs: activity.startedAtMs, payload: { ...payload, completionNotification: 'pending' as const } as SessionActivityPayload };
+    this.cancelCompletionCheck(activity.sessionId);
+    let resolve!: (handled: boolean) => void;
+    const check: CompletionCheck = {
+      startedAtMs: activity.startedAtMs,
+      payload: { ...payload, completionNotification: 'pending' },
+      checking: false,
+      decision: new Promise<boolean>(r => { resolve = r; }),
+      resolve: handled => resolve(handled),
+    };
     this.completionChecks.set(activity.sessionId, check);
     this.publishOne(check.payload);
-    void this.checkCompletion!(activity.sessionId).catch(() => false).then((handled) => {
+    if (!this.awaitingTerminal.has(activity.sessionId)) this.checkCompletionOwnership(activity.sessionId, check);
+  }
+
+  private checkCompletionOwnership(sessionId: string, check: CompletionCheck): void {
+    if (check.checking) return;
+    check.checking = true;
+    // The event adapter registers settlement later in the same synchronous done
+    // delivery. No status event or timer can decide ownership before that point.
+    void Promise.resolve().then(() => this.completionChecks.get(sessionId) === check
+      ? this.checkCompletion!(sessionId) : true).catch(() => false).then((handled) => {
       // A new turn, read acknowledgement, reset or disposal invalidates the old check.
-      if (this.completionChecks.get(activity.sessionId) !== check) return;
+      if (this.completionChecks.get(sessionId) !== check) return;
       check.payload = { ...check.payload, completionNotification: handled ? 'teammate' : undefined };
+      check.resolve(handled);
       this.publishOne(check.payload);
     });
   }
@@ -200,7 +250,8 @@ export class SessionActivityRelay {
   }
 
   private clear(sessionId: string): void {
-    this.completionChecks.delete(sessionId);
+    this.awaitingTerminal.delete(sessionId);
+    this.cancelCompletionCheck(sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     if (entry.timer) this.clearTimer(entry.timer);

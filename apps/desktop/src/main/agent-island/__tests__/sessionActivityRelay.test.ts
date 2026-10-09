@@ -43,12 +43,14 @@ describe('SessionActivityRelay', () => {
     relay.publish([done]);
     expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'completed', attention: true, compactDetail: 'Final result', completionNotification: 'pending' }));
     relay.publish([done]);
+    await Promise.resolve();
     expect(check).toHaveBeenCalledOnce();
     const replay = vi.fn();
     relay.replay([done], replay);
     expect(replay).toHaveBeenLastCalledWith(emit.mock.calls[0][0]);
     resolve(handled);
-    await Promise.resolve(); await Promise.resolve();
+    await check.mock.results[0].value;
+    await vi.advanceTimersByTimeAsync(0);
     expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'completed', attention: true, completionNotification: handled ? 'teammate' : undefined }));
     relay.publish([done]);
     expect(emit).toHaveBeenCalledTimes(2);
@@ -61,13 +63,16 @@ describe('SessionActivityRelay', () => {
     const emit = vi.fn();
     const relay = new SessionActivityRelay(emit, { isCompletionHandledByTeammate: () => new Promise<boolean>(r => { resolve = r; }) });
     relay.publish([activity('s1', 'Done', { phase: 'completed', attention: true })]);
+    await Promise.resolve();
+    const decision = relay.waitForCompletionNotification('s1');
     if (boundary === 'running') relay.publish([activity('s1', 'New turn', { startedAtMs: 2 })]);
     if (boundary === 'read') relay.publish([]);
     if (boundary === 'reset') relay.reset();
     if (boundary === 'dispose') relay.dispose();
+    await expect(decision).resolves.toBe(true);
     const count = emit.mock.calls.length;
     resolve(true);
-    await Promise.resolve(); await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(emit).toHaveBeenCalledTimes(count);
   });
 

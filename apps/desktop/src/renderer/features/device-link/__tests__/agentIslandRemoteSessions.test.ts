@@ -71,10 +71,11 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
     const activity = { sessionId: 'a-1', phase: 'running' as const, recordStatus: 'active', compactDetail: 'Working', startedAtMs: 1, lastActivityAtMs: 1, currentActionSummary: 'Working', attention: false, workflow: null, turnGeneration: null, gracefulStopState: 'none', source: 'live' } as const;
     relay.publish([activity]);
     relay.publish([{ ...activity, phase: 'completed', attention: true, compactDetail: 'Final result' }]);
+    await Promise.resolve();
     expect(events).toEqual([]);
     expect(getRemoteSessionActivity('a-1', 'device-a')).toMatchObject({ phase: 'completed', attention: true, compactDetail: 'Final result' });
     resolve(handled);
-    await Promise.resolve(); await Promise.resolve();
+    await relay.waitForCompletionNotification('a-1');
     expect(events).toEqual(handled ? [] : ['done']);
     relay.replay([{ ...activity, phase: 'completed', attention: true }]);
     expect(events).toEqual(handled ? [] : ['done']);
