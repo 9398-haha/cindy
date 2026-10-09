@@ -87,10 +87,44 @@ describe('outbox to offline history handoff', () => {
     await opened([row('newer', 3)]);
     expect(await save()).toBe(true);
   });
-  it.each([2, undefined])('does not infer handoff from skewed timestamps (rowid=%s)', async (rowid) => {
-    state.rows = [{ ...row('sent', 0), rowid }];
+  it('keeps a new send when older history was imported with larger rowids', async () => {
+    await opened([{ ...row('imported', 1), rowid: 100 }]);
+    expect(await save()).toBe(false);
+  });
+  it('uses persisted host chronology even when insertion order differs', async () => {
+    state.rows = [{ ...row('sent', 0), rowid: 100 }];
+    await opened([row('newer', 1)]);
+    expect(await save()).toBe(true);
+  });
+  it.each([1, 2, 3])('uses rowid only to break equal host timestamps (rowid=%s)', async (rowid) => {
+    await opened([{ ...row('boundary', 2), rowid }]);
+    expect(await save()).toBe(rowid > 2);
+  });
+  it.each(['sent', 'boundary'])('retains ownership when %s lacks a persisted rowid', async (missing) => {
+    state.rows = [{ ...row('sent', 0), rowid: missing === 'sent' ? undefined : 2 }];
+    await opened([{ ...row('previous', 1), rowid: missing === 'boundary' ? undefined : 1 }]);
+    expect(await save()).toBe(false);
+  });
+  it('does not infer handoff from invalid host timestamps', async () => {
+    state.rows = [{ ...row('sent', 0), createdAt: 'invalid' }];
     await opened([row('previous', 1)]);
     expect(await save()).toBe(false);
+  });
+  it('finds the message boundary after leading folded work and restores that window offline', async () => {
+    const { entry } = await opened([
+      { ...row('work', 3), role: 'thinking', content: 'working' },
+      { ...row('answer', 4), role: 'assistant', agentMeta: { turnCompleted: true } },
+    ]);
+    expect(entry.view.getSnapshot().items[0].type).toBe('work');
+    expect(await save()).toBe(true);
+    const cached = await readHistoryDisk(historyDiskAuthority('d', 's'));
+    expect(cached?.items[0].type).toBe('work');
+    const network = vi.fn(async () => { throw new Error('offline'); });
+    const cold = new HistoryViewController<RemoteMessage>({ page: network, details: network, expanded: async () => {} });
+    cold.setNetworkAvailable(false);
+    await cold.restoreCachedView(async () => cached);
+    expect(cold.getSnapshot().items).toEqual(cached?.items);
+    expect(network).not.toHaveBeenCalled();
   });
   it.each(['UNSUPPORTED_CAPABILITY', 'CHANNEL_NOT_ALLOWED'])('persists the raw fallback for %s hosts', async (error) => {
     await opened([], error);

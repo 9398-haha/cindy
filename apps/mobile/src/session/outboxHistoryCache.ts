@@ -11,11 +11,14 @@ function coversMessage(snapshot: HistoryViewSnapshot<RemoteMessage>, message: Re
   const leaves = historyViewLeaves(snapshot.items);
   if (leaves.some(item => item.type === 'messages'
     && item.messages.some(row => row.role === 'user' && row.clientId === message.clientId))) return true;
-  // Only host insertion order can prove the row aged out; timestamps may skew.
-  const first = leaves[0];
-  const oldest = first?.type === 'messages' ? first.messages[0]?.rowid : undefined;
-  return typeof message.rowid === 'number' && typeof oldest === 'number'
-    && Number.isFinite(message.rowid) && Number.isFinite(oldest) && message.rowid < oldest;
+  // User rows never fold into work. Skip leading work to find a stored boundary,
+  // and use the host's (createdAt, rowid) order, not import/insertion order alone.
+  const first = leaves.find(item => item.type === 'messages' && item.messages.length > 0);
+  const oldest = first?.type === 'messages' ? first.messages[0] : undefined;
+  if (!oldest || !Number.isFinite(message.rowid) || !Number.isFinite(oldest.rowid)) return false;
+  const sentAt = Date.parse(message.createdAt), oldestAt = Date.parse(oldest.createdAt);
+  return Number.isFinite(sentAt) && Number.isFinite(oldestAt)
+    && (sentAt < oldestAt || (sentAt === oldestAt && message.rowid! < oldest.rowid!));
 }
 
 /** Keep the existing durable outbox until the representation used on reentry is on disk. */
