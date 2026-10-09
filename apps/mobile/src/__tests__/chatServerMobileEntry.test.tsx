@@ -128,6 +128,23 @@ it.each([403, 404])('clears revoked access immediately when a send returns %s', 
   expect(chat.online).toBe(false);
   await expect(chat.act('send', { text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
 });
+it.each([403, 404])('clears revoked access when attachment authorization returns %s', async (status) => {
+  showChat = true; await render();
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.includes('/media/')) throw Object.assign(new Error('NOT_MEMBER'), { status });
+    return original(path, options);
+  });
+  await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ status }); });
+  expect(chat.state.kind).toBe('missing');
+  expect(chat.online).toBe(false);
+});
+it('keeps authorized history when only the attachment is missing', async () => {
+  showChat = true; await render();
+  h.auth.apiFetch.mockRejectedValue(Object.assign(new Error('MEDIA_NOT_FOUND'), { status: 404, code: 'MEDIA_NOT_FOUND' }));
+  await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' }); });
+  expect(chat.state.kind).toBe('ready'); expect(chat.online).toBe(true);
+});
 it('clears access on everyone member-read rejection and ignores an older authorized history reply', async () => {
   showChat = true; await render();
   const original = h.auth.apiFetch.getMockImplementation()!;

@@ -73,6 +73,16 @@ export function chatReadAt(snapshot: ChatSnapshot, selfId: string): number {
   return chatLastReplyAt(snapshot.messages.filter(message => BigInt(chatCursor(message.seq)) <= BigInt(chatCursor(sequence))), selfId);
 }
 
+/** Public profile images never enter the computer's local media resolver. */
+function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView, 'avatar' | 'avatarUrl'> {
+  const raw = value ?? '';
+  try { return { avatar: '', avatarUrl: chatHttpsUrl(raw) }; } catch { /* Not a public HTTPS image. */ }
+  // The server also accepts the existing bundled presets and short emoji identities.
+  const avatar = /^cindy:\/\/avatar\/preset\/(cindy|dash|lizi)$/.test(raw)
+    || (raw.length <= 16 && !/[a-zA-Z0-9/:\x00-\x1f]/.test(raw)) ? raw : '';
+  return { avatar, avatarUrl: null };
+}
+
 /** Sequence strings stay on the wire; numeric positions below are presentation order only. */
 export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
@@ -80,7 +90,7 @@ export function chatGroupView(page: ChatPage, selfId: string): BotGroupRemoteCha
   const memberViews: BotGroupMemberView[] = active.map(member => ({
     botId: member.id, actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role,
-    name: memberName(member), avatar: member.avatar?.startsWith('https://') ? member.avatar : '', avatarColor: '', status: 'active',
+    name: memberName(member), ...chatMemberAvatar(member.avatar), avatarColor: '', status: 'active',
   }));
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);

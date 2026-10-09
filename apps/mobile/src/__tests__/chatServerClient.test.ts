@@ -48,6 +48,17 @@ describe('direct Chat Server client', () => {
     expect(view.messages[0]).toMatchObject({ content: '100', authorKind: 'user', isSelf: false });
     expect(view.members[0].actorKind).toBe('human');
   });
+  it('preserves public, preset and emoji avatars while rejecting private or credentialed addresses', () => {
+    const data = snapshot();
+    const avatars = ['https://avatars.example.invalid/a.png', 'cindy://avatar/preset/cindy', '🐱',
+      'http://avatars.example.invalid/a.png', 'https://user:secret@avatars.example.invalid/a.png', 'cindy-media://avatar/a.png'];
+    data.members = avatars.map((avatar, index) => ({ ...data.members[0], id: id(index + 10), avatar }));
+    const members = chatGroupView({ snapshot: data, messages: [], before: null }, id(1)).members;
+    expect(members.map(member => ({ avatar: member.avatar, avatarUrl: member.avatarUrl }))).toEqual([
+      { avatar: '', avatarUrl: avatars[0] }, { avatar: avatars[1], avatarUrl: null }, { avatar: '🐱', avatarUrl: null },
+      ...Array.from({ length: 3 }, () => ({ avatar: '', avatarUrl: null })),
+    ]);
+  });
   it('rechecks media authorization on every open and accepts only HTTPS signed downloads', async () => {
     const request = vi.fn().mockResolvedValueOnce({ name: 'report.pdf', type: 'application/pdf', size: '42', url: 'https://media.example.invalid/report?signature=test' })
       .mockRejectedValueOnce(Object.assign(new Error('NOT_MEMBER'), { status: 403 }))

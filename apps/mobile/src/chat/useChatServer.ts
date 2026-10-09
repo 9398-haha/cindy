@@ -238,9 +238,17 @@ export function useChatServerGroup(groupId: string, enabled: boolean) {
     }
   };
   const media = async (mediaId: string): Promise<BotGroupAttachment> => {
-    const attachment = await api.client.media(groupId, mediaId);
-    if (!valid()) throw new Error('OWNER_CHANGED');
-    return attachment;
+    const generation = accessGeneration.current;
+    try {
+      const attachment = await api.client.media(groupId, mediaId);
+      if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
+      return attachment;
+    } catch (error) {
+      // A missing/deleted attachment is distinct from losing the room's membership.
+      if (valid() && generation === accessGeneration.current && chatAccessLost(error)
+        && (error as { code?: string }).code !== 'MEDIA_NOT_FOUND') loseAccess();
+      throw error;
+    }
   };
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     online: state.identity === identity && state.online, reload, act, loadOlder, loadingOlder: state.loadingOlder, media };
