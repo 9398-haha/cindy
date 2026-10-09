@@ -74,6 +74,8 @@ function createTables(db: Database.Database): void {
       remote_session_id TEXT,
       last_bridged_message_id TEXT,
       remote_released_at INTEGER,
+      pending_remote_report TEXT,
+      remote_stop_confirmed_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );

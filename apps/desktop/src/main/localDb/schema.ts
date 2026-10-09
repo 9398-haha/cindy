@@ -726,6 +726,13 @@ export const orcaTeams = sqliteTable(
   }),
 );
 
+/** 远端创建回执丢失或本机崩溃后的清理身份，成功关联 Worker 后删除。 */
+export const orcaRemoteOpens = sqliteTable('orca_remote_opens', {
+  remoteSessionId: text('remote_session_id').primaryKey(),
+  deviceId: text('device_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
 export const orcaWorkers = sqliteTable(
   'orca_workers',
   {
@@ -757,6 +764,10 @@ export const orcaWorkers = sqliteTable(
     lastBridgedMessageId: text('last_bridged_message_id'),
     /** 已通知运行设备结束协同的时刻；NULL 且已归档 = 待重连后补发。 */
     remoteReleasedAt: integer('remote_released_at'),
+    /** 派活前落盘，重启后按投递回执及历史恢复待回报。 */
+    pendingRemoteReport: text('pending_remote_report'),
+    /** 停止已确认后只补发 release，不能误停用户后续的普通任务。 */
+    remoteStopConfirmedAt: integer('remote_stop_confirmed_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

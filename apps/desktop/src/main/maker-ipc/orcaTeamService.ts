@@ -418,6 +418,7 @@ export interface OrcaTeamService {
   clearAutoBridgeState(sessionId: string): void;
   /** True while an accepted worker task still owes this Lead its report. */
   hasPendingWorkerReports(leadSessionId: string): boolean;
+  restoreWorkerPendingReport(sessionId: string, input: { workerId: string; leadSessionId: string }): void;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
   captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
@@ -1747,6 +1748,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       clearRuntimeState(sessionId);
     },
     hasPendingWorkerReports,
+    restoreWorkerPendingReport(sessionId, input) {
+      if (autoBridge.has(sessionId)) return;
+      const state = setPending(sessionId, input);
+      state.ready = true;
+      // 重启前可能已经写入 done/error，但回报仍未被 Lead 接收。
+      state.retryAfterRejectedDelivery = true;
+    },
     captureWorkerTerminalTurn(sessionId) {
       return {
         sessionId,

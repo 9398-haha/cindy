@@ -28,13 +28,19 @@ import {
   listActiveRemoteWorkers,
   listUnreleasedEndedRemoteWorkers,
   markWorkerRemoteReleased,
-  setWorkerLastBridgedMessageId,
+  markWorkerRemoteStopConfirmed,
+  getWorkerRemoteReleaseState,
+  saveWorkerRemoteReport,
+  saveRemoteWorkerOpen,
+  removeRemoteWorkerOpen,
+  listOrphanRemoteWorkerOpens,
   setWorkerRemoteExecution,
 } from '../localDb/orcaTeamStore.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import type {
   OrcaRemoteWorkerOpenResult,
   OrcaWorkerCreationDeps,
+  OrcaWorkerCreationErrorCode,
 } from './orcaWorkerCreationService.js';
 import {
   createOrcaRemoteWorkerRuntime,
@@ -46,8 +52,15 @@ import type { OrcaTeamService, OrcaTeamServiceDeps } from './orcaTeamService.js'
 const CAPS_PROBE_TIMEOUT_MS = 5_000;
 const RELEASE_RETRY_MS = 5 * 60_000;
 const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const REMOTE_DIR_ERRORS = new Set([
+  'REMOTE_WORKDIR_NOT_FOUND',
+  'REMOTE_WORKDIR_NOT_DIRECTORY',
+  'REMOTE_WORKDIR_INVALID',
+  'REMOTE_WORKDIR_UNAVAILABLE',
+]);
 
 export interface OrcaRemoteWorkersDeps {
+  getOwnerToken?(): unknown;
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   listDevices(): Promise<{ devices: DeviceLinkDeviceView[] }>;
   /** 事件回调需要的团队服务；创建顺序上晚于本模块，按需取。 */
@@ -103,23 +116,53 @@ export function isExecutionDeviceCandidate(device: DeviceLinkDeviceView): boolea
 
 export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
   const deviceNames = new Map<string, string>();
+  const opening = new Set<string>();
+  const releases = new Map<string, Promise<void>>();
+  const creationOwners = new Map<string, unknown>();
+  const openLocks = new Map<string, Promise<unknown>>();
   let releaseRetryTimer: ReturnType<typeof setInterval> | null = null;
-  const invoke = (deviceId: string, channel: string, args: unknown[]) =>
-    invokeDeviceValue(deps.remoteInvoke, deviceId, channel, args);
+  let startInFlight: { owner: unknown; promise: Promise<void> } | null = null;
+  const ownerToken = () => (deps.getOwnerToken ? deps.getOwnerToken() : deps);
+  let activeOwner: unknown = ownerToken();
+  const ownerCurrent = () => activeOwner === ownerToken();
+  const assertOwner = (owner: unknown) => {
+    if (owner !== ownerToken() || owner !== activeOwner)
+      throw new Error('remote worker owner changed');
+  };
+  const invoke = async (deviceId: string, channel: string, args: unknown[]) => {
+    const owner = ownerToken();
+    if (!ownerCurrent()) throw new Error('remote worker owner changed');
+    const value = await invokeDeviceValue(deps.remoteInvoke, deviceId, channel, args);
+    if (owner !== ownerToken()) throw new Error('remote worker owner changed');
+    return value;
+  };
   const nameOf = (deviceId: string) => deviceNames.get(deviceId) || '另一台电脑';
+
+  async function withOpenLock<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    const previous = openLocks.get(sessionId) ?? Promise.resolve();
+    const operation = previous.catch(() => undefined).then(task);
+    openLocks.set(sessionId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (openLocks.get(sessionId) === operation) openLocks.delete(sessionId);
+    }
+  }
 
   const runtime: OrcaRemoteWorkerRuntime = createOrcaRemoteWorkerRuntime({
     invoke,
     deviceName: nameOf,
-    saveLastBridgedMessageId: setWorkerLastBridgedMessageId,
+    saveReport: saveWorkerRemoteReport,
+    isOwnerCurrent: ownerCurrent,
     onTurnStarted: async (proxySessionId) => {
       await deps.getTeamService()?.handleWorkerTurnStarted(proxySessionId);
     },
     captureTurnEnded: (proxySessionId) => {
       const service = deps.getTeamService();
       const capture = service?.captureWorkerTerminalTurn(proxySessionId);
+      const owner = ownerToken();
       return async (turn: RemoteWorkerTurnEnd) => {
-        if (!service || !capture) return;
+        if (!service || !capture || owner !== ownerToken()) return false;
         await service.handleWorkerTerminalTurn({
           sessionId: proxySessionId,
           status: turn.status,
@@ -127,6 +170,11 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           capture,
           ...(turn.diagnostic ? { diagnostic: turn.diagnostic } : {}),
         });
+        return (
+          owner === ownerToken() &&
+          service.captureWorkerTerminalTurn(proxySessionId).autoBridgeIdentity !==
+            capture.autoBridgeIdentity
+        );
       };
     },
     onWorkerStateChanged: deps.broadcastOrcaWorkerChanged,
@@ -163,40 +211,124 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     }
   }
 
-  async function releaseAndMark(row: {
+  function releaseAndMark(row: {
     workerId: string;
     deviceId: string;
     remoteSessionId: string;
-  }) {
-    if (await runtime.release(row))
-      await markWorkerRemoteReleased(row.workerId).catch(() => undefined);
+    remoteStopConfirmedAt?: number | null;
+  }): Promise<void> {
+    const existing = releases.get(row.workerId);
+    if (existing) return existing;
+    const owner = ownerToken();
+    const operation = (async () => {
+      if (!ownerCurrent()) return;
+      // 归档与重连补发共用单飞入口；在入口内读最新阶段，不能沿用排队前的行快照。
+      const phase = await getWorkerRemoteReleaseState(row.workerId);
+      if (!phase || phase.remoteReleasedAt || owner !== ownerToken()) return;
+      if (!phase.remoteStopConfirmedAt) {
+        if (!(await runtime.abortRemote(row)) || owner !== ownerToken()) return;
+        await markWorkerRemoteStopConfirmed(row.workerId);
+      }
+      if (owner !== ownerToken()) return;
+      if (await runtime.release(row)) {
+        if (owner === ownerToken()) await markWorkerRemoteReleased(row.workerId);
+      }
+    })();
+    releases.set(row.workerId, operation);
+    return operation.finally(() => {
+      if (releases.get(row.workerId) === operation) releases.delete(row.workerId);
+    });
   }
 
   async function retryPendingReleases(): Promise<void> {
+    const owner = ownerToken();
     const rows = await listUnreleasedEndedRemoteWorkers().catch(() => []);
-    await Promise.all(rows.map(releaseAndMark));
+    if (owner !== ownerToken()) return;
+    await Promise.all(
+      rows.map((row) =>
+        releaseAndMark(row).catch((err) =>
+          deps.log.warn('orca remote worker: release retry failed', {
+            workerId: row.workerId,
+            err: String(err),
+          }),
+        ),
+      ),
+    );
+    const orphans = await listOrphanRemoteWorkerOpens().catch(() => []);
+    if (owner !== ownerToken()) return;
+    for (const row of orphans) {
+      if (opening.has(row.remoteSessionId) || owner !== ownerToken()) continue;
+      try {
+        await withOpenLock(row.remoteSessionId, async () => {
+          assertOwner(owner);
+          if (opening.has(row.remoteSessionId)) return;
+          // 查询结果可能早于 record，锁内重新核对，且与关联操作共用同一把锁。
+          const [candidate] = await listOrphanRemoteWorkerOpens(row.remoteSessionId);
+          assertOwner(owner);
+          if (!candidate) return;
+          const session = await invoke(row.deviceId, 'local-db:sessions:get', [
+            row.remoteSessionId,
+          ]);
+          if (session) {
+            // 未关联的 open 从未由 Lead 派活，仅解除标记，保留用户可能已启动的普通工作。
+            if (await runtime.release(row)) {
+              if (owner === ownerToken()) await removeRemoteWorkerOpen(row.remoteSessionId);
+            }
+          } else if (Date.now() - row.createdAt > 24 * 60 * 60_000) {
+            // 未发出请求的预写身份也会残留；在线核对一天仍不存在后才删除。
+            if (owner === ownerToken()) await removeRemoteWorkerOpen(row.remoteSessionId);
+          }
+        });
+      } catch {
+        /* 设备恢复后再核对，不把超时当作未创建。 */
+      }
+    }
+  }
+
+  async function restore(owner: unknown): Promise<void> {
+    if (activeOwner !== owner) {
+      releases.clear();
+      opening.clear();
+    }
+    activeOwner = owner;
+    runtime.reset();
+    if (releaseRetryTimer) clearInterval(releaseRetryTimer);
+    releaseRetryTimer = null;
+    await refreshDeviceNames().catch(() => undefined);
+    const rows = await listActiveRemoteWorkers();
+    if (owner !== ownerToken() || owner !== activeOwner) return;
+    for (const row of rows) {
+      if (row.pendingReport)
+        deps.getTeamService()?.restoreWorkerPendingReport(row.proxySessionId, row);
+      runtime.track(row);
+    }
+    void retryPendingReleases();
+    // 结束通知在运行设备离线时发不出去；低频补发，送达即记账，不重复。
+    releaseRetryTimer = setInterval(() => void retryPendingReleases(), RELEASE_RETRY_MS);
+    releaseRetryTimer.unref?.();
   }
 
   return {
     runtime,
 
     /**
-     * 按当前账号恢复仍在协同中的远端 Worker，并补发未送达的结束通知。可重入：每次先清空
-     * 上一账号的登记，数据库就绪后(及账号切换后)由宿主再调一次。
+     * 按当前账号恢复待回报与结束通知；同一数据库 owner 重入不清除现有派活。
      */
     async start(): Promise<void> {
-      runtime.reset();
-      if (releaseRetryTimer) clearInterval(releaseRetryTimer);
-      releaseRetryTimer = null;
-      await refreshDeviceNames().catch(() => undefined);
-      for (const row of await listActiveRemoteWorkers()) runtime.track(row);
-      void retryPendingReleases();
-      // 结束通知在运行设备离线时发不出去；低频补发，送达即记账，不重复。
-      releaseRetryTimer = setInterval(() => void retryPendingReleases(), RELEASE_RETRY_MS);
-      releaseRetryTimer.unref?.();
+      const owner = ownerToken();
+      if (startInFlight && startInFlight.owner === owner) return startInFlight.promise;
+      if (releaseRetryTimer && owner === activeOwner) return;
+      const promise = restore(owner);
+      startInFlight = { owner, promise };
+      try {
+        await promise;
+      } finally {
+        if (startInFlight?.promise === promise) startInFlight = null;
+      }
     },
 
     stop(): void {
+      activeOwner = Symbol('stopped');
       runtime.stop();
       if (releaseRetryTimer) clearInterval(releaseRetryTimer);
       releaseRetryTimer = null;
@@ -207,8 +339,6 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     async listExecutionDevices(): Promise<OrcaExecutionDeviceView[]> {
       const devices = (await refreshDeviceNames()).filter(isExecutionDeviceCandidate);
       const supported = await Promise.all(devices.map((device) => probeSupported(device.deviceId)));
-      // 探测失败(超时等)视为暂时不可用，不列出；明确不支持的列为需要更新。顺序固定：
-      // 可用的在前，再按名称，避免每次打开列表顺序跳动。
       return devices
         .flatMap((device, index) =>
           supported[index] === null
@@ -222,16 +352,15 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
                 },
               ],
         )
-        .sort(
-          (a, b) =>
-            Number(b.supported) - Number(a.supported) || a.name.localeCompare(b.name),
-        );
+        .sort((a, b) => Number(b.supported) - Number(a.supported) || a.name.localeCompare(b.name));
     },
-
     async openRemoteWorker(
       input: Parameters<NonNullable<OrcaWorkerCreationDeps['openRemoteWorker']>>[0],
     ): Promise<OrcaRemoteWorkerOpenResult> {
+      const owner = ownerToken();
+      assertOwner(owner);
       const devices = await refreshDeviceNames().catch(() => null);
+      assertOwner(owner);
       const device = devices?.find((item) => item.deviceId === input.deviceId);
       if (devices && (!device || !isExecutionDeviceCandidate(device))) {
         return {
@@ -242,6 +371,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       }
       const name = nameOf(input.deviceId);
       const supported = await probeSupported(input.deviceId);
+      assertOwner(owner);
       if (supported === false) {
         return {
           ok: false,
@@ -257,9 +387,13 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         };
       }
       const remoteSessionId = createId();
-      let opened: DeviceOpenResult;
+      let opened: DeviceOpenResult | undefined;
+      let uncertainOpen = false;
+      await saveRemoteWorkerOpen(input.deviceId, remoteSessionId);
+      assertOwner(owner);
+      opening.add(remoteSessionId);
       try {
-        opened = (await invoke(input.deviceId, ORCA_REMOTE_WORKER_OPEN_CHANNEL, [
+        const openArgs = [
           {
             sessionId: remoteSessionId,
             agentKind: input.agent,
@@ -276,9 +410,36 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
               workerLabel: input.label,
             },
           },
-        ])) as DeviceOpenResult;
+        ];
+        assertOwner(owner);
+        try {
+          opened = (await invoke(
+            input.deviceId,
+            ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+            openArgs,
+          )) as DeviceOpenResult;
+        } catch (err) {
+          if (codeOf(err) !== 'INVOKE_TIMEOUT' && (err as { inFlight?: boolean }).inFlight !== true)
+            throw err;
+          uncertainOpen = true;
+          // open 以 sessionId 幂等：丢失回执时复用同一身份，不创建第二个远端任务。
+          opened = (await invoke(
+            input.deviceId,
+            ORCA_REMOTE_WORKER_OPEN_CHANNEL,
+            openArgs,
+          )) as DeviceOpenResult;
+        }
       } catch (err) {
         const code = codeOf(err);
+        if (
+          !uncertainOpen &&
+          owner === ownerToken() &&
+          code &&
+          !['INVOKE_TIMEOUT', 'DEVICE_OFFLINE', 'LINK_NOT_OPEN'].includes(code) &&
+          (err as { inFlight?: boolean }).inFlight !== true
+        ) {
+          await removeRemoteWorkerOpen(remoteSessionId);
+        }
         if (code === 'CHANNEL_NOT_ALLOWED' && input.workingDir) {
           return {
             ok: false,
@@ -289,11 +450,15 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (
           code === 'INVALID_PARAMS' ||
           code === 'WORKDIR_NOT_FOUND' ||
-          code === 'NOT_A_DIRECTORY'
+          code === 'NOT_A_DIRECTORY' ||
+          (code !== null && REMOTE_DIR_ERRORS.has(code))
         ) {
           return {
             ok: false,
-            errorCode: 'INVALID_PARAMS',
+            errorCode:
+              code !== null && REMOTE_DIR_ERRORS.has(code)
+                ? (code as Extract<OrcaWorkerCreationErrorCode, `REMOTE_WORKDIR_${string}`>)
+                : 'INVALID_PARAMS',
             message: `${name} 拒绝了创建请求：${err instanceof Error ? err.message : String(err)}`,
           };
         }
@@ -308,15 +473,21 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         return {
           ok: false,
           errorCode:
-            code === 'INVOKE_TIMEOUT' || code === 'DEVICE_OFFLINE' || code === 'LINK_NOT_OPEN'
+            !uncertainOpen &&
+            (code === 'INVOKE_TIMEOUT' || code === 'DEVICE_OFFLINE' || code === 'LINK_NOT_OPEN')
               ? 'REMOTE_AGENT_DEVICE_UNREACHABLE'
               : 'INTERNAL',
-          message: `在 ${name} 上创建 Worker 失败：${err instanceof Error ? err.message : String(err)}`,
+          message: uncertainOpen
+            ? `无法确认 ${name} 上的创建结果，尚未派活。连接恢复后会核对并解除未关联任务的协同标记。`
+            : `在 ${name} 上创建 Worker 失败：${err instanceof Error ? err.message : String(err)}`,
         };
+      } finally {
+        if (!opened) opening.delete(remoteSessionId);
       }
       const proxySessionId = createId();
       const agent: AgentKind = opened.agentKind ?? input.agent;
       try {
+        assertOwner(owner);
         await insertRemoteWorkerProxySession({
           id: proxySessionId,
           title: input.title,
@@ -326,14 +497,21 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           permissionMode: input.permissionMode,
           fastMode: input.fast === true,
         });
+        assertOwner(owner);
       } catch (err) {
-        await releaseAndMark({
-          workerId: input.workerId,
-          deviceId: input.deviceId,
-          remoteSessionId,
-        }).catch(() => undefined);
+        opening.delete(remoteSessionId);
+        if (
+          owner === ownerToken() &&
+          ownerCurrent() &&
+          (await runtime.release({
+            deviceId: input.deviceId,
+            remoteSessionId,
+          }))
+        )
+          await removeRemoteWorkerOpen(remoteSessionId);
         throw err;
       }
+      creationOwners.set(proxySessionId, owner);
       return {
         ok: true,
         proxySessionId,
@@ -347,13 +525,24 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     async recordRemoteWorker(
       input: Parameters<NonNullable<OrcaWorkerCreationDeps['recordRemoteWorker']>>[0],
     ) {
-      await setWorkerRemoteExecution(input.workerId, {
-        deviceId: input.deviceId,
-        remoteSessionId: input.remoteSessionId,
+      const owner = creationOwners.has(input.proxySessionId)
+        ? creationOwners.get(input.proxySessionId)
+        : deps.getOwnerToken
+          ? Symbol('unknown creation')
+          : ownerToken();
+      await withOpenLock(input.remoteSessionId, async () => {
+        assertOwner(owner);
+        await setWorkerRemoteExecution(input.workerId, {
+          deviceId: input.deviceId,
+          remoteSessionId: input.remoteSessionId,
+        });
+        assertOwner(owner);
+        creationOwners.delete(input.proxySessionId);
+        opening.delete(input.remoteSessionId);
+        const { workingDir, ...ref } = input;
+        runtime.track({ ...ref, lastBridgedMessageId: null }, { workingDir });
+        deps.broadcastOrcaWorkerChanged(input.leadSessionId);
       });
-      const { workingDir, ...ref } = input;
-      runtime.track({ ...ref, lastBridgedMessageId: null }, { workingDir });
-      deps.broadcastOrcaWorkerChanged(input.leadSessionId);
     },
 
     async discardRemoteWorker(input: {
@@ -361,9 +550,24 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       deviceId: string;
       remoteSessionId: string;
     }) {
-      runtime.untrack(input.proxySessionId);
-      await runtime.release(input);
-      await archiveSingleWorkerSession(input.proxySessionId).catch(() => undefined);
+      const owner = creationOwners.has(input.proxySessionId)
+        ? creationOwners.get(input.proxySessionId)
+        : deps.getOwnerToken
+          ? Symbol('unknown creation')
+          : ownerToken();
+      if (owner !== ownerToken() || !ownerCurrent()) return;
+      await withOpenLock(input.remoteSessionId, async () => {
+        assertOwner(owner);
+        opening.delete(input.remoteSessionId);
+        runtime.untrack(input.proxySessionId);
+        if (await runtime.release(input)) {
+          assertOwner(owner);
+          await removeRemoteWorkerOpen(input.remoteSessionId);
+        }
+        assertOwner(owner);
+        await archiveSingleWorkerSession(input.proxySessionId).catch(() => undefined);
+        creationOwners.delete(input.proxySessionId);
+      });
     },
 
     archive,
@@ -371,14 +575,8 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
 
     /** 团队结束后：停掉仍在跑的远端 Worker，并补发全部未送达的结束通知。 */
     async releaseEnded(proxySessionIds: readonly string[]): Promise<void> {
-      await Promise.all(
-        proxySessionIds
-          .filter((id) => runtime.isRemote(id))
-          .map(async (id) => {
-            if (runtime.isTurnRunning(id)) await runtime.abort(id);
-            runtime.untrack(id);
-          }),
-      );
+      assertOwner(ownerToken());
+      for (const id of proxySessionIds) runtime.untrack(id);
       await retryPendingReleases();
     },
   };
@@ -388,9 +586,16 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
     proxySessionId: string,
     beforeMutation?: () => Promise<void>,
   ): Promise<void> {
+    const owner = ownerToken();
+    assertOwner(owner);
     const row = await getRemoteWorkerByProxySession(proxySessionId);
+    assertOwner(owner);
+    await archiveSingleWorkerSession(proxySessionId, async () => {
+      await beforeMutation?.();
+      assertOwner(owner);
+    });
+    assertOwner(owner);
     runtime.untrack(proxySessionId);
-    await archiveSingleWorkerSession(proxySessionId, beforeMutation);
     if (row) await releaseAndMark(row);
   }
 
@@ -465,7 +670,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             await params.onAccepted?.();
             await params.onAcceptedCommit?.();
           } catch (err) {
-            runtime.rejectDispatchAcceptance(params.targetSessionId, clientId);
+            await runtime.rejectDispatchAcceptance(params.targetSessionId, clientId);
             throw err;
           }
           runtime.confirmDispatchAccepted(params.targetSessionId, clientId);

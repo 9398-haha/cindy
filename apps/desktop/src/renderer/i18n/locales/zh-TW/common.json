@@ -13413,7 +13413,8 @@
       "errors": {
         "deviceUnreachable": "{{device}} 目前無法使用：需要在線並開啟遠端控制。Worker 沒有建立。",
         "deviceOutdated": "{{device}} 的 Cindy 版本過舊，更新後才能執行 Worker。",
-        "dirRejected": "{{device}} 上找不到這個目錄或不允許使用。Worker 沒有建立。"
+        "dirRejected": "{{device}} 上找不到這個目錄或不允許使用。Worker 沒有建立。",
+        "dirUnavailable": "{{device}} 上的目錄暫時無法存取。請檢查連線或網路磁碟後重試。Worker 沒有建立。"
       }
     },
     "rolePill": {

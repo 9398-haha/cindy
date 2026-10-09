@@ -15,6 +15,7 @@ import {
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
 } from '@cindy/device-link';
 import { formatAgentMessage, formatOrcaCommunicationMessage } from '@cindy/orca-workflow';
+import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 
 import type {
   AgentInputCreateOpts,
@@ -32,6 +33,7 @@ export interface RemoteWorkerRef {
   /** 运行设备上的真实任务 id。 */
   remoteSessionId: string;
   lastBridgedMessageId: string | null;
+  pendingReport?: OrcaRemotePendingReport | null;
 }
 
 export interface RemoteWorkerTurnEnd {
@@ -52,10 +54,15 @@ export interface OrcaRemoteWorkerRuntimeDeps {
   /** 调用运行设备的 channel；失败抛出 Error(message 形如 `[CODE] ...`)。 */
   invoke(deviceId: string, channel: string, args: unknown[]): Promise<unknown>;
   deviceName(deviceId: string): string;
-  saveLastBridgedMessageId(workerId: string, messageId: string): Promise<void>;
+  saveReport(
+    workerId: string,
+    pending: OrcaRemotePendingReport | null,
+    messageId?: string,
+  ): Promise<void>;
+  isOwnerCurrent?(): boolean;
   onTurnStarted(proxySessionId: string): Promise<void>;
   /** 同步冻结已完成宿主 accepted 生命周期的回报身份，异步收尾不得重新读取新派活身份。 */
-  captureTurnEnded(proxySessionId: string): (turn: RemoteWorkerTurnEnd) => Promise<void>;
+  captureTurnEnded(proxySessionId: string): (turn: RemoteWorkerTurnEnd) => Promise<boolean>;
   /** 可达性或运行状态变化，供协同面板刷新。 */
   onWorkerStateChanged(leadSessionId: string): void;
   now(): number;
@@ -97,7 +104,7 @@ interface AwaitingReport {
   baselineMessageId: string | null;
   startedNotified: boolean;
   missingReplyPolls: number;
-  terminalHandler: ((turn: RemoteWorkerTurnEnd) => Promise<void>) | null;
+  terminalHandler: ((turn: RemoteWorkerTurnEnd) => Promise<boolean>) | null;
   /** 宿主 accepted 回调失败时恢复上一代原对象；确认成功后释放。 */
   previous: AwaitingReport | null;
   historyScan: ReportHistoryScan | null;
@@ -116,6 +123,7 @@ interface WorkerState {
   awaiting: AwaitingReport | null;
   /** 运行设备上的工作目录(只做展示)；重启后首次轮询时补读。 */
   workingDir: string | null;
+  persistence: Promise<void>;
 }
 
 function errorCode(err: unknown): string | null {
@@ -222,6 +230,39 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
   let timer: unknown = null;
   let polling = false;
   let stopped = false;
+
+  const current = (state: WorkerState) =>
+    !stopped &&
+    workers.get(state.ref.proxySessionId) === state &&
+    deps.isOwnerCurrent?.() !== false;
+
+  function persist(
+    state: WorkerState,
+    settled?: AwaitingReport,
+    messageId?: string,
+  ): Promise<void> {
+    const write = state.persistence
+      .catch(() => undefined)
+      .then(async () => {
+        if (!current(state)) throw new Error('remote worker owner changed');
+        const pending = state.awaiting === settled ? null : state.awaiting;
+        await deps.saveReport(
+          state.ref.workerId,
+          pending
+            ? {
+                clientIds: pending.clientIds,
+                baselineMessageId: pending.baselineMessageId,
+              }
+            : null,
+          messageId,
+        );
+        if (!current(state)) return;
+        if (messageId) state.ref = { ...state.ref, lastBridgedMessageId: messageId };
+        if (settled && state.awaiting === settled) state.awaiting = null;
+      });
+    state.persistence = write;
+    return write;
+  }
 
   function deviceUnreachable(err: unknown): boolean {
     const code = errorCode(err);
@@ -333,7 +374,9 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           order: 'desc',
           contentCharLimit: MAX_REPORT_CHARS,
         },
-      ])) as HistoryPage<Pick<HistoryMessage, 'id' | 'clientId' | 'role' | 'content' | 'agentMeta'>> & {
+      ])) as HistoryPage<
+        Pick<HistoryMessage, 'id' | 'clientId' | 'role' | 'content' | 'agentMeta'>
+      > & {
         terminal?: { status?: unknown } | null;
       };
       if (scan.cursor === null) scan.terminalError = page?.terminal?.status === 'error';
@@ -369,27 +412,19 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     state: WorkerState,
     turn: RemoteWorkerTurnEnd,
     messageId: string | null,
-    terminalHandler: (turn: RemoteWorkerTurnEnd) => Promise<void>,
+    awaiting: AwaitingReport,
   ) {
-    state.awaiting = null;
+    if (!current(state) || state.awaiting !== awaiting) return;
     state.inTurn = false;
-    if (messageId) {
-      state.ref = { ...state.ref, lastBridgedMessageId: messageId };
-      await deps.saveLastBridgedMessageId(state.ref.workerId, messageId).catch((err) =>
-        deps.log.warn('orca remote worker: persist bridged message id failed', {
-          workerId: state.ref.workerId,
-          err: errorMessage(err),
-        }),
-      );
-    }
-    await terminalHandler(turn);
+    // TeamService 拒收回报时正常返回；必须取得结清确认后才推进去重游标。
+    if (!(await awaiting.terminalHandler!(turn)) || !current(state)) return;
+    await persist(state, awaiting, messageId ?? undefined);
     deps.onWorkerStateChanged(state.ref.leadSessionId);
   }
 
   async function checkAwaiting(state: WorkerState, running: boolean): Promise<void> {
     const awaiting = state.awaiting;
     if (!awaiting?.terminalHandler) return;
-    const terminalHandler = awaiting.terminalHandler;
     if (running) {
       if (!awaiting.startedNotified) {
         awaiting.startedNotified = true;
@@ -398,9 +433,9 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       return;
     }
     const states = await deliveryStates(state.ref, awaiting.clientIds);
-    if (state.awaiting !== awaiting) return;
+    if (!current(state) || state.awaiting !== awaiting) return;
     // 仍在运行设备的队列里(排在用户插话之后等)，继续等。
-    if (states.some((value) => value === 'pending' || value === 'unknown')) return;
+    if (states.some((value) => value === 'pending')) return;
     if (states.every((value) => value === 'removed')) {
       await finishTurn(
         state,
@@ -410,7 +445,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           diagnostic: `派给 ${deps.deviceName(state.ref.deviceId)} 的消息在那台电脑上被撤回，Worker 没有执行。`,
         },
         null,
-        terminalHandler,
+        awaiting,
       );
       return;
     }
@@ -422,11 +457,13 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     });
     const last = await replyForInputs(
       state.ref,
-      awaiting.clientIds.filter((_, index) => states[index] === 'accepted'),
+      // 崩溃可能发生在预写身份之后、enqueue 之前，也可能只是投递回执过期。
+      // unknown 同样查历史，查不到时按有限轮数报告未确认执行，绝不盲目重发。
+      awaiting.clientIds.filter((_, index) => states[index] !== 'removed'),
       scan,
     );
     // 历史读取期间又派入新任务时保留新的 awaiting，下一轮按完整输入集合复核。
-    if (state.awaiting !== awaiting) return;
+    if (!current(state) || state.awaiting !== awaiting) return;
     // 扫描预算不足不代表没有回复，保留当前游标与候选，下一轮继续。
     if (!last.complete) return;
     awaiting.historyScan = null;
@@ -439,7 +476,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         state,
         { status: last.terminalError ? 'error' : 'done', finalText: last.text },
         last.id,
-        terminalHandler,
+        awaiting,
       );
       return;
     }
@@ -450,12 +487,14 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         {
           status: 'error',
           finalText: '',
-          diagnostic: last.terminalError
-            ? `Worker 在 ${deps.deviceName(state.ref.deviceId)} 上异常结束，没有产生回复。`
-            : `Worker 在 ${deps.deviceName(state.ref.deviceId)} 上本轮结束，但没有产生回复。`,
+          diagnostic: states.some((value) => value === 'unknown')
+            ? `无法确认派给 ${deps.deviceName(state.ref.deviceId)} 的消息是否执行，请检查运行设备上的任务。消息没有重新发送。`
+            : last.terminalError
+              ? `Worker 在 ${deps.deviceName(state.ref.deviceId)} 上异常结束，没有产生回复。`
+              : `Worker 在 ${deps.deviceName(state.ref.deviceId)} 上本轮结束，但没有产生回复。`,
         },
         null,
-        terminalHandler,
+        awaiting,
       );
     }
   }
@@ -471,27 +510,32 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           .filter((entry) => typeof entry.sessionId === 'string')
           .map((entry) => [entry.sessionId as string, entry.isTurnRunning === true]),
       );
+      if (!states.some(current)) return;
       setReachable(deviceId, true);
     } catch (err) {
+      if (!states.some(current)) return;
       if (deviceUnreachable(err)) setReachable(deviceId, false);
       deps.log.warn('orca remote worker: poll failed', { deviceId, err: errorMessage(err) });
       return;
     }
     for (const state of states) {
+      if (!current(state)) continue;
       if (state.workingDir === null) await readWorkingDir(state);
+      if (!current(state)) continue;
       const running = active.get(state.ref.remoteSessionId) === true;
       const changed = running !== state.inTurn;
       state.inTurn = running;
       try {
         await checkAwaiting(state, running);
       } catch (err) {
+        if (!current(state)) continue;
         if (deviceUnreachable(err)) setReachable(deviceId, false);
         deps.log.warn('orca remote worker: report check failed', {
           workerId: state.ref.workerId,
           err: errorMessage(err),
         });
       }
-      if (changed) deps.onWorkerStateChanged(state.ref.leadSessionId);
+      if (changed && current(state)) deps.onWorkerStateChanged(state.ref.leadSessionId);
     }
   }
 
@@ -500,7 +544,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       const row = (await deps.invoke(state.ref.deviceId, 'local-db:sessions:get', [
         state.ref.remoteSessionId,
       ])) as RemoteSessionRow | null;
-      if (typeof row?.workingDir === 'string' && row.workingDir) {
+      if (current(state) && typeof row?.workingDir === 'string' && row.workingDir) {
         state.workingDir = row.workingDir;
         deps.onWorkerStateChanged(state.ref.leadSessionId);
       }
@@ -527,12 +571,27 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     track(ref: RemoteWorkerRef, opts: { workingDir?: string } = {}): void {
       const existing = workers.get(ref.proxySessionId);
       const workingDir = opts.workingDir || existing?.workingDir || null;
-      workers.set(
-        ref.proxySessionId,
-        existing
-          ? { ...existing, ref, workingDir }
-          : { ref, inTurn: false, awaiting: null, workingDir },
-      );
+      if (existing) {
+        existing.ref = ref;
+        existing.workingDir = workingDir;
+      } else {
+        workers.set(ref.proxySessionId, {
+          ref,
+          inTurn: false,
+          workingDir,
+          persistence: Promise.resolve(),
+          awaiting: ref.pendingReport
+            ? {
+                ...ref.pendingReport,
+                startedNotified: false,
+                missingReplyPolls: 0,
+                terminalHandler: deps.captureTurnEnded(ref.proxySessionId),
+                previous: null,
+                historyScan: null,
+              }
+            : null,
+        });
+      }
       if (timer === null) schedule();
     },
 
@@ -576,11 +635,13 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         return { ok: false, code: 'SESSION_NOT_FOUND', message: 'remote worker is not tracked' };
       const { ref } = state;
       const deviceName = deps.deviceName(ref.deviceId);
+      let prepared: AwaitingReport | null = null;
       try {
         const row = (await deps.invoke(ref.deviceId, 'local-db:sessions:get', [
           ref.remoteSessionId,
         ])) as (RemoteSessionRow & { status?: unknown }) | null;
-        if (typeof row?.workingDir === 'string' && row.workingDir) state.workingDir = row.workingDir;
+        if (typeof row?.workingDir === 'string' && row.workingDir)
+          state.workingDir = row.workingDir;
         if (!row || (row.status !== undefined && row.status !== 'active')) {
           return {
             ok: false,
@@ -589,24 +650,29 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           };
         }
         const baseline = state.awaiting?.baselineMessageId ?? (await lastAssistantMessage(ref)).id;
+        if (!current(state)) throw new Error('remote worker owner changed');
         const item = buildRemoteWorkerQueuedMessage({
           clientId: params.clientId,
           rawContent: params.rawContent,
           createOpts: createOptsFromRow(row),
           createdAt: new Date(deps.now()).toISOString(),
         });
+        prepared = {
+          clientIds: [...(state.awaiting?.clientIds ?? []), params.clientId].slice(-64),
+          baselineMessageId: baseline,
+          startedNotified: state.awaiting?.startedNotified ?? false,
+          missingReplyPolls: 0,
+          terminalHandler: null,
+          previous: state.awaiting,
+          historyScan: null,
+        };
+        state.awaiting = prepared;
+        // 先落盘再发送；重启后用同一 clientId 核对回执和历史。
+        await persist(state);
+        if (!current(state)) throw new Error('remote worker owner changed');
         const accept = (): RemoteWorkerDispatchResult => {
           setReachable(ref.deviceId, true);
           const mode = state.inTurn ? 'queued' : 'dispatched';
-          state.awaiting = {
-            clientIds: [...(state.awaiting?.clientIds ?? []), params.clientId].slice(-64),
-            baselineMessageId: baseline,
-            startedNotified: state.awaiting?.startedNotified ?? false,
-            missingReplyPolls: 0,
-            terminalHandler: null,
-            previous: state.awaiting,
-            historyScan: null,
-          };
           schedule();
           return { ok: true, mode };
         };
@@ -623,11 +689,24 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
               'unknown',
             ]);
             if (delivered === 'pending' || delivered === 'accepted') return accept();
+            // 已发出但无法确认的请求保留身份，后续轮询核对，不让调用方重派同一工作。
+            if (delivered === 'unknown') return accept();
           }
           throw err;
         }
         return accept();
       } catch (err) {
+        if (prepared && current(state) && state.awaiting === prepared) {
+          state.awaiting = prepared.previous;
+          await persist(state).catch((persistError) =>
+            deps.log.warn('orca remote worker: rollback persistence failed', {
+              workerId: ref.workerId,
+              err: errorMessage(persistError),
+            }),
+          );
+        }
+        if (!current(state))
+          return { ok: false, code: 'SEND_FAILED', message: 'remote worker owner changed' };
         if (deviceUnreachable(err)) {
           setReachable(ref.deviceId, false);
           return {
@@ -656,10 +735,11 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     },
 
     /** accepted 回调的原有异常继续上抛；这里只恢复 runtime 对应的旧回报代次。 */
-    rejectDispatchAcceptance(proxySessionId: string, clientId: string): void {
+    async rejectDispatchAcceptance(proxySessionId: string, clientId: string): Promise<void> {
       const state = workers.get(proxySessionId);
       if (!state?.awaiting || state.awaiting.clientIds.at(-1) !== clientId) return;
       state.awaiting = state.awaiting.previous;
+      await persist(state);
       schedule();
     },
 
@@ -670,7 +750,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       try {
         return (await lastAssistantMessage(state.ref)).text;
       } catch (err) {
-        if (deviceUnreachable(err)) setReachable(state.ref.deviceId, false);
+        if (current(state) && deviceUnreachable(err)) setReachable(state.ref.deviceId, false);
         return '';
       }
     },
@@ -683,9 +763,25 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         await deps.invoke(state.ref.deviceId, 'maker:abort-session', [state.ref.remoteSessionId]);
         return true;
       } catch (err) {
-        if (deviceUnreachable(err)) setReachable(state.ref.deviceId, false);
+        if (current(state) && deviceUnreachable(err)) setReachable(state.ref.deviceId, false);
         deps.log.warn('orca remote worker: abort failed', {
           proxySessionId,
+          err: errorMessage(err),
+        });
+        return false;
+      }
+    },
+
+    async abortRemote(
+      ref: Pick<RemoteWorkerRef, 'deviceId' | 'remoteSessionId'>,
+    ): Promise<boolean> {
+      try {
+        await deps.invoke(ref.deviceId, 'maker:abort-session', [ref.remoteSessionId]);
+        return true;
+      } catch (err) {
+        if (errorCode(err) === 'NOT_FOUND') return true;
+        deps.log.warn('orca remote worker: abort failed', {
+          deviceId: ref.deviceId,
           err: errorMessage(err),
         });
         return false;

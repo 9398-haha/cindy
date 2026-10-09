@@ -161,6 +161,10 @@ export type OrcaWorkerCreationErrorCode =
   | 'REMOTE_AGENT_DEVICE_UNREACHABLE'
   /** 指定的运行设备版本过旧，不支持协同远端 Worker。 */
   | 'UNSUPPORTED_CAPABILITY'
+  | 'REMOTE_WORKDIR_NOT_FOUND'
+  | 'REMOTE_WORKDIR_NOT_DIRECTORY'
+  | 'REMOTE_WORKDIR_INVALID'
+  | 'REMOTE_WORKDIR_UNAVAILABLE'
   | 'INTERNAL';
 
 /** worker 创建结果保留首条派活 outcome，让调用方区分 created-but-not-dispatched。 */
@@ -238,7 +242,9 @@ export type OrcaRemoteWorkerOpenResult =
     }
   | {
       ok: false;
-      errorCode: 'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'UNSUPPORTED_CAPABILITY' | 'INVALID_PARAMS' | 'INTERNAL';
+      errorCode: Extract<OrcaWorkerCreationErrorCode,
+        'REMOTE_AGENT_DEVICE_UNREACHABLE' | 'UNSUPPORTED_CAPABILITY' | 'INVALID_PARAMS' | 'INTERNAL' |
+        'REMOTE_WORKDIR_NOT_FOUND' | 'REMOTE_WORKDIR_NOT_DIRECTORY' | 'REMOTE_WORKDIR_INVALID' | 'REMOTE_WORKDIR_UNAVAILABLE'>;
       message: string;
     };
 

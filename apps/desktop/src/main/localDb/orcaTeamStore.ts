@@ -1,9 +1,10 @@
 import { BrowserWindow } from 'electron';
 import { and, desc, eq, gt, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 
 import { getDbClient } from './client/current.js';
-import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, sessions } from './schema.js';
+import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, orcaRemoteOpens, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -729,6 +730,8 @@ export interface RemoteWorkerRow {
   deviceId: string;
   remoteSessionId: string;
   lastBridgedMessageId: string | null;
+  pendingReport: OrcaRemotePendingReport | null;
+  remoteStopConfirmedAt: number | null;
 }
 
 /**
@@ -769,17 +772,66 @@ export async function setWorkerRemoteExecution(
   workerId: string,
   input: { deviceId: string; remoteSessionId: string },
 ): Promise<void> {
-  await getDbClient()
+  const db = getDbClient();
+  await db
     .drizzle.update(orcaWorkers)
     .set({ executionDeviceId: input.deviceId, remoteSessionId: input.remoteSessionId, updatedAt: Date.now() })
     .where(eq(orcaWorkers.id, workerId));
+  await db.drizzle.delete(orcaRemoteOpens).where(eq(orcaRemoteOpens.remoteSessionId, input.remoteSessionId));
 }
 
-export async function setWorkerLastBridgedMessageId(workerId: string, messageId: string): Promise<void> {
-  await getDbClient()
+export async function saveWorkerRemoteReport(
+  workerId: string,
+  pending: OrcaRemotePendingReport | null,
+  lastBridgedMessageId?: string,
+): Promise<void> {
+  const db = getDbClient();
+  await db
     .drizzle.update(orcaWorkers)
-    .set({ lastBridgedMessageId: messageId })
+    .set({ pendingRemoteReport: pending ? JSON.stringify(pending) : null,
+      ...(lastBridgedMessageId ? { lastBridgedMessageId } : {}) })
     .where(eq(orcaWorkers.id, workerId));
+}
+
+export async function saveRemoteWorkerOpen(deviceId: string, remoteSessionId: string): Promise<void> {
+  await getDbClient().drizzle.insert(orcaRemoteOpens).values({ deviceId, remoteSessionId, createdAt: Date.now() });
+}
+
+export async function removeRemoteWorkerOpen(remoteSessionId: string): Promise<void> {
+  await getDbClient().drizzle.delete(orcaRemoteOpens).where(eq(orcaRemoteOpens.remoteSessionId, remoteSessionId));
+}
+
+export async function listOrphanRemoteWorkerOpens(remoteSessionId?: string) {
+  return getDbClient().drizzle.select({ deviceId: orcaRemoteOpens.deviceId,
+    remoteSessionId: orcaRemoteOpens.remoteSessionId, createdAt: orcaRemoteOpens.createdAt })
+    .from(orcaRemoteOpens).leftJoin(orcaWorkers, and(
+      eq(orcaWorkers.remoteSessionId, orcaRemoteOpens.remoteSessionId),
+      eq(orcaWorkers.executionDeviceId, orcaRemoteOpens.deviceId),
+    )).where(and(isNull(orcaWorkers.id),
+      remoteSessionId ? eq(orcaRemoteOpens.remoteSessionId, remoteSessionId) : undefined));
+}
+
+export async function markWorkerRemoteStopConfirmed(workerId: string, at = Date.now()): Promise<void> {
+  await getDbClient().drizzle.update(orcaWorkers)
+    .set({ remoteStopConfirmedAt: at }).where(eq(orcaWorkers.id, workerId));
+}
+
+export async function getWorkerRemoteReleaseState(workerId: string) {
+  const [row] = await getDbClient().drizzle.select({
+    remoteStopConfirmedAt: orcaWorkers.remoteStopConfirmedAt, remoteReleasedAt: orcaWorkers.remoteReleasedAt,
+  }).from(orcaWorkers).where(eq(orcaWorkers.id, workerId)).limit(1);
+  return row ?? null;
+}
+
+function parsePendingReport(raw: string | null): OrcaRemotePendingReport | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as OrcaRemotePendingReport;
+    if (!Array.isArray(value.clientIds) || value.clientIds.length === 0 || value.clientIds.length > 64 ||
+      !value.clientIds.every((id) => typeof id === 'string' && id.length > 0) ||
+      !(value.baselineMessageId === null || typeof value.baselineMessageId === 'string')) return null;
+    return { clientIds: value.clientIds, baselineMessageId: value.baselineMessageId };
+  } catch { return null; }
 }
 
 export async function markWorkerRemoteReleased(workerId: string, at = Date.now()): Promise<void> {
@@ -802,6 +854,8 @@ function remoteWorkerRow(
     deviceId: worker.executionDeviceId,
     remoteSessionId: worker.remoteSessionId,
     lastBridgedMessageId: worker.lastBridgedMessageId,
+    pendingReport: parsePendingReport(worker.pendingRemoteReport),
+    remoteStopConfirmedAt: worker.remoteStopConfirmedAt,
   };
 }
 

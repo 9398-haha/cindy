@@ -13442,7 +13442,8 @@
       "errors": {
         "deviceUnreachable": "{{device}} isn't available: it must be online with remote control enabled. The Worker wasn't created.",
         "deviceOutdated": "Cindy on {{device}} is out of date. Update it to run Workers there.",
-        "dirRejected": "The folder wasn't found on {{device}} or can't be used. The Worker wasn't created."
+        "dirRejected": "The folder wasn't found on {{device}} or can't be used. The Worker wasn't created.",
+        "dirUnavailable": "The folder on {{device}} is temporarily unavailable. Check the connection or network drive, then try again. The Worker wasn't created."
       }
     },
     "rolePill": {

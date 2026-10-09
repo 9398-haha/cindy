@@ -9,8 +9,12 @@ import { Folder, Monitor, WifiOff } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -35,22 +39,30 @@ export function RemoteWorkerSessionPane({
 }: RemoteWorkerSessionPaneProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<LoadState>('loading');
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const { deviceId, remoteSessionId, reachable } = device;
+  const sessionKey = `${deviceId}:${remoteSessionId}`;
   const name = workerDeviceName(t, device);
 
   useEffect(() => {
     let disposed = false;
     const owner = getDataOwnerGeneration();
     setState('loading');
-    if (reachable === false) {
-      setState('failed');
-      return;
-    }
     void (async () => {
       const existingOrigin = remoteProjectsStore.getSessionDeviceId(remoteSessionId);
-      if (existingOrigin && existingOrigin !== deviceId) throw new Error('Conflicting session owner');
+      if (existingOrigin && existingOrigin !== deviceId)
+        throw new Error('Conflicting session owner');
       // 归属必须先于任何读写登记，任务视图才会把请求发到运行设备。
       remoteProjectsStore.pinSessionOrigin(deviceId, remoteSessionId);
+      const cached = remoteProjectsStore
+        .getDeviceSessions(deviceId)
+        .some((row) => row.id === remoteSessionId);
+      if (cached) setLoadedKey(sessionKey);
+      if (reachable === false) {
+        setState('failed');
+        return;
+      }
       const isReadCurrent = remoteProjectsStore.captureSessionRead(deviceId, remoteSessionId);
       const value = (await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [
         remoteSessionId,
@@ -68,14 +80,15 @@ export function RemoteWorkerSessionPane({
         );
       }
       setState('ready');
+      setLoadedKey(sessionKey);
     })().catch(() => {
-      if (!disposed) setState('failed');
+      if (!disposed && isDataOwnerGenerationCurrent(owner)) setState('failed');
     });
     return () => {
       disposed = true;
     };
     // name 只用于镜像分片缺名时的兜底，不触发重读。
-  }, [deviceId, remoteSessionId, reachable]);
+  }, [deviceId, remoteSessionId, reachable, retry, sessionKey]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -99,9 +112,20 @@ export function RemoteWorkerSessionPane({
             {t('orca.rolePill.deviceUnreachable')}
           </span>
         ) : null}
+        {state === 'failed' && reachable !== false ? (
+          <Button
+            variant="secondary"
+            tone="quiet"
+            size="sm"
+            className="ml-auto"
+            onClick={() => setRetry((value) => value + 1)}
+          >
+            {t('commonUi.retry')}
+          </Button>
+        ) : null}
       </div>
       <div className="min-h-0 flex-1">
-        {state === 'ready' ? (
+        {loadedKey === sessionKey ? (
           <CCAgentSessionView
             key={`${deviceId}:${remoteSessionId}`}
             sessionIdProp={remoteSessionId}
@@ -109,6 +133,7 @@ export function RemoteWorkerSessionPane({
             compactToolbar
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
+            readOnly={reachable === false || state !== 'ready'}
             navigationMode="sidebar-embedded"
             sidebarTargetSessionId={leadSessionId}
           />

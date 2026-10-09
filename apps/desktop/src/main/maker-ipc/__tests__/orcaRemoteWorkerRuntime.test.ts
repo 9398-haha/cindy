@@ -118,11 +118,11 @@ function setup(device: Partial<FakeDevice> = {}) {
         throw new Error(`[CHANNEL_NOT_ALLOWED] ${channel}`);
     }
   });
-  const onTurnEnded = vi.fn(async (_proxySessionId: string, _turn: RemoteWorkerTurnEnd) => undefined);
+  const onTurnEnded = vi.fn(async (_proxySessionId: string, _turn: RemoteWorkerTurnEnd) => true);
   const deps: OrcaRemoteWorkerRuntimeDeps = {
     invoke,
     deviceName: () => 'Mac mini',
-    saveLastBridgedMessageId: vi.fn(async () => undefined),
+    saveReport: vi.fn(async () => undefined),
     onTurnStarted: vi.fn(async () => undefined),
     captureTurnEnded: (proxySessionId) => (turn) => onTurnEnded(proxySessionId, turn),
     onWorkerStateChanged: vi.fn(),
@@ -182,7 +182,7 @@ describe('orca remote worker runtime', () => {
       status: 'done',
       finalText: '逐字稿已生成',
     });
-    expect(deps.saveLastBridgedMessageId).toHaveBeenCalledWith('worker-1', 'msg-1');
+    expect(deps.saveReport).toHaveBeenCalledWith('worker-1', null, 'msg-1');
     expect(runtime.hasPendingReport('proxy-1')).toBe(false);
 
     await runtime.pollNow();
@@ -226,7 +226,7 @@ describe('orca remote worker runtime', () => {
     state.terminalError = true;
     await runtime.pollNow();
     expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Lead final' });
-    expect(deps.saveLastBridgedMessageId).toHaveBeenCalledWith('worker-1', 'lead-final');
+    expect(deps.saveReport).toHaveBeenCalledWith('worker-1', null, 'lead-final');
     expect(invoke.mock.calls.some(([, channel, args]) => channel === 'local-db:history:messages'
       && (args[0] as { cursor: unknown }).cursor !== null)).toBe(true);
     expect(runtime.hasPendingReport('proxy-1')).toBe(false);
@@ -319,7 +319,7 @@ describe('orca remote worker runtime', () => {
     ];
     await runtime.pollNow();
     expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Second reply' });
-    expect(deps.saveLastBridgedMessageId).toHaveBeenCalledWith('worker-1', 'reply-2');
+    expect(deps.saveReport).toHaveBeenCalledWith('worker-1', null, 'reply-2');
   });
 
   it('retains a new dispatch accepted while reading the previous reply', async () => {
@@ -455,5 +455,117 @@ describe('orca remote worker runtime', () => {
     expect(deps.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 2_000);
     runtime.untrack('proxy-1');
     expect(runtime.isRemote('proxy-1')).toBe(false);
+  });
+
+  it('persists the input identity before enqueue and restores its report without resending', async () => {
+    const { runtime, deps, state, invoke } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'c-1' });
+    expect(vi.mocked(deps.saveReport).mock.invocationCallOrder[0]).toBeLessThan(
+      invoke.mock.invocationCallOrder[invoke.mock.calls.findIndex(([, channel]) => channel === 'maker:input:enqueue')]!,
+    );
+    const pendingReport = vi.mocked(deps.saveReport).mock.calls[0]![1];
+    runtime.stop();
+    const restored = createOrcaRemoteWorkerRuntime(deps);
+    restored.track({ ...ref, pendingReport });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'restored-reply', content: 'Recovered result' };
+    await restored.pollNow();
+    await restored.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledOnce();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', { status: 'done', finalText: 'Recovered result' });
+    expect(state.enqueued).toHaveLength(1);
+    expect(restored.hasPendingReport('proxy-1')).toBe(false);
+  });
+
+  it('keeps retrying a rejected report and advances the cursor only after acceptance', async () => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'reply-1', content: 'Result' };
+    deps.onTurnEnded.mockResolvedValueOnce(false);
+    await runtime.pollNow();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(runtime.get('proxy-1')?.lastBridgedMessageId).toBeNull();
+    expect(deps.saveReport).not.toHaveBeenCalledWith('worker-1', null, 'reply-1');
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledTimes(2);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+    expect(runtime.get('proxy-1')?.lastBridgedMessageId).toBe('reply-1');
+  });
+
+  it('retains pending bookkeeping when completion persistence fails, then retries it', async () => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'reply-1', content: 'Result' };
+    vi.mocked(deps.saveReport).mockRejectedValueOnce(new Error('database busy'));
+    await runtime.pollNow();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(runtime.get('proxy-1')?.lastBridgedMessageId).toBeNull();
+    await runtime.pollNow();
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+  });
+
+  it('does not erase a newer dispatch while saving an older completion', async () => {
+    const { runtime, deps, state } = setup();
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'first', clientId: 'c-1' });
+    state.receipts['c-1'] = 'accepted';
+    state.assistant = { id: 'reply-1', content: 'First result' };
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const writing = new Promise<void>((resolve) => { entered = resolve; });
+    vi.mocked(deps.saveReport).mockImplementationOnce(async () => { entered(); await gate; });
+    const poll = runtime.pollNow();
+    await writing;
+    const dispatch = runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'second', clientId: 'c-2' });
+    // Let the dispatch reach its prewrite while the previous write is in flight.
+    await vi.waitFor(() => expect(deps.saveReport).toHaveBeenCalledTimes(2));
+    release();
+    await Promise.all([poll, dispatch]);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(deps.saveReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ clientIds: ['c-1', 'c-2'] }), undefined);
+    state.receipts['c-2'] = 'accepted';
+    state.assistant = { id: 'reply-2', content: 'Second result' };
+    await runtime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenLastCalledWith('proxy-1', { status: 'done', finalText: 'Second result' });
+  });
+
+  it.each([true, false])('reconciles unknown receipts with history and bounds missing execution (history=%s)', async (hasHistory) => {
+    const { coreRuntime, deps, state } = setup({ history: hasHistory ? [
+      { id: 'input-1', clientId: 'c-1', role: 'user', content: 'Lead input' },
+      { id: 'reply-1', role: 'assistant', content: 'Recovered result' },
+    ] : [] });
+    coreRuntime.untrack('proxy-1');
+    coreRuntime.track({ ...ref, pendingReport: { clientIds: ['c-1'], baselineMessageId: null } });
+    for (let i = 0; i < 15; i++) await coreRuntime.pollNow();
+    expect(deps.onTurnEnded).toHaveBeenCalledOnce();
+    expect(deps.onTurnEnded).toHaveBeenCalledWith('proxy-1', expect.objectContaining({ status: hasHistory ? 'done' : 'error' }));
+    expect(coreRuntime.hasPendingReport('proxy-1')).toBe(false);
+    expect(state.enqueued).toHaveLength(0);
+  });
+
+  it('does not send if pending identity cannot be persisted', async () => {
+    const { runtime, deps, state } = setup();
+    vi.mocked(deps.saveReport).mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'c-1' })).resolves.toMatchObject({ ok: false });
+    expect(state.enqueued).toHaveLength(0);
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+  });
+
+  it('ignores a late poll after tracking has been reset for another account', async () => {
+    const { runtime, deps, invoke } = setup();
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (deviceId, channel, args) => {
+      if (channel === 'maker:list-active') {
+        runtime.reset();
+        runtime.track({ ...ref, proxySessionId: 'new-proxy' });
+      }
+      return original(deviceId, channel, args);
+    });
+    await runtime.pollNow();
+    expect(runtime.workingDir('new-proxy')).toBeNull();
+    expect(deps.onTurnEnded).not.toHaveBeenCalled();
+    expect(deps.saveReport).not.toHaveBeenCalled();
   });
 });

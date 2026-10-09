@@ -12627,6 +12627,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 协同远端 Worker：Worker 在同账号另一台电脑运行(见 orcaRemoteWorkers.ts)。
   // 其代理任务行永不在本机跑 Agent，团队服务的会话依赖按是否远端分流。
   const orcaRemoteWorkers = createOrcaRemoteWorkers({
+    getOwnerToken: getCurrentDbClientSnapshot,
     remoteInvoke: (deviceId, channel, args) => invokeBotPeer(deviceId, channel, args),
     listDevices: () => handleListDevices(deviceDirectoryDeps()),
     getTeamService: () => orcaTeamServiceForEvents,

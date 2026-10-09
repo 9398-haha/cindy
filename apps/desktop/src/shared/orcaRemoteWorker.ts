@@ -16,6 +16,12 @@ export interface OrcaRemoteLead {
   releasedAt?: number;
 }
 
+/** Lead 侧待回报身份；仅保存消息身份，不重发消息正文。 */
+export interface OrcaRemotePendingReport {
+  clientIds: string[];
+  baselineMessageId: string | null;
+}
+
 const MAX_TEXT = 200;
 
 function text(value: unknown, max = MAX_TEXT): string | null {

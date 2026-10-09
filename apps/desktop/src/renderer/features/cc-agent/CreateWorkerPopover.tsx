@@ -373,6 +373,8 @@ export function CreateWorkerPopover({
     (next: string | null) => {
       if (next === executionDeviceId) return;
       setExecutionDeviceId(next);
+      setRemoteDirMode('dialogue');
+      setRemoteDir('');
       // 另一台电脑的模型目录没有本机的来源维度；回到这台电脑时恢复本机记忆的来源。
       setProviderSource(next || leadDeviceId ? null : prefs[agent].providerId);
     },

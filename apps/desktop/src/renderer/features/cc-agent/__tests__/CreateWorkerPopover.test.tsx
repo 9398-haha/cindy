@@ -1759,6 +1759,31 @@ describe('CreateWorkerPopover execution device', () => {
     expect(onCreate.mock.calls[1]![0]).not.toHaveProperty('workingDir');
   });
 
+  it('clears the selected folder and resets to chat when switching remote computers', async () => {
+    listExecutionDevices.mockResolvedValueOnce({ devices: [
+      { deviceId: 'mac-mini', name: 'Mac mini', platform: 'darwin', supported: true },
+      { deviceId: 'windows-pc', name: 'Windows PC', platform: 'win32', supported: true },
+    ] });
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open executionDevicesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    const picker = await screen.findByRole('combobox', { name: 'orca.createWorker.executionDeviceLabel' });
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    mocks.directoryPath = '/Users/demo/Interviews';
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.remoteDirLabel' }));
+    fireEvent.click(screen.getByTestId('choose-worker-folder'));
+    fireEvent.keyDown(picker, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: /Windows PC/ }));
+    expect(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirChat' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    expect(onCreate.mock.calls[0]![0]).toMatchObject({ executionDeviceId: 'windows-pc' });
+    expect(onCreate.mock.calls[0]![0]).not.toHaveProperty('workingDir');
+    fireEvent.click(screen.getByRole('radio', { name: 'orca.createWorker.remoteDirPath' }));
+    expect((screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('keeps a large device list in the dropdown and locates a device by keyboard typeahead', async () => {
     listExecutionDevices.mockResolvedValueOnce({
       devices: Array.from({ length: 100 }, (_, index) => ({

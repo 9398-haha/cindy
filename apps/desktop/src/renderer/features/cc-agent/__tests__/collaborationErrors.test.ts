@@ -68,4 +68,11 @@ describe('executionDeviceErrorMessage', () => {
     expect(executionDeviceErrorMessage(new Error('[INVALID_PARAMS] x'), t, 'Mac mini', false)).toBeNull();
     expect(executionDeviceErrorMessage(new Error('[INTERNAL] x'), t, undefined, true)).toBeNull();
   });
+
+  it.each(['REMOTE_WORKDIR_NOT_FOUND', 'REMOTE_WORKDIR_NOT_DIRECTORY', 'REMOTE_WORKDIR_INVALID', 'REMOTE_WORKDIR_UNAVAILABLE'])(
+    'shows an actionable directory error for %s instead of generic startup failure', (code) => {
+      expect(executionDeviceErrorMessage(new Error(`[${code}] unavailable`), t, 'Mac mini', true))
+        .toBe(code === 'REMOTE_WORKDIR_UNAVAILABLE' ? 'orca.createWorker.errors.dirUnavailable' : 'orca.createWorker.errors.dirRejected');
+    },
+  );
 });

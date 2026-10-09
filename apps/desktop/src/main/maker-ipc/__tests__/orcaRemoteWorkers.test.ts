@@ -12,7 +12,12 @@ const store = vi.hoisted(() => ({
   listActiveRemoteWorkers: vi.fn(async () => []),
   listUnreleasedEndedRemoteWorkers: vi.fn(async () => []),
   markWorkerRemoteReleased: vi.fn(async () => undefined),
-  setWorkerLastBridgedMessageId: vi.fn(async () => undefined),
+  saveWorkerRemoteReport: vi.fn(async () => undefined),
+  markWorkerRemoteStopConfirmed: vi.fn(async () => undefined),
+  getWorkerRemoteReleaseState: vi.fn(async () => ({ remoteStopConfirmedAt: null as number | null, remoteReleasedAt: null as number | null })),
+  saveRemoteWorkerOpen: vi.fn(async () => undefined),
+  removeRemoteWorkerOpen: vi.fn(async () => undefined),
+  listOrphanRemoteWorkerOpens: vi.fn(async (_sessionId?: string) => []),
   setWorkerRemoteExecution: vi.fn(async () => undefined),
 }));
 vi.mock('../../localDb/orcaTeamStore.js', () => store);
@@ -45,6 +50,7 @@ const fail = (code: string, message: string): InvokeResultPayload =>
   ({ ok: false, error: { code, message } }) as InvokeResultPayload;
 
 function setup(opts: {
+  getOwnerToken?: () => unknown;
   devices?: DeviceLinkDeviceView[];
   handle?: (deviceId: string, channel: string, args: unknown[]) => InvokeResultPayload | undefined | Promise<InvokeResultPayload | undefined>;
   getTeamService?: () => OrcaTeamService | null;
@@ -78,6 +84,7 @@ function setup(opts: {
     }
   });
   const workers = createOrcaRemoteWorkers({
+    getOwnerToken: opts.getOwnerToken,
     remoteInvoke,
     listDevices: async () => ({ devices }),
     getTeamService: opts.getTeamService ?? (() => null),
@@ -252,14 +259,59 @@ describe('start', () => {
       remoteSessionId: 'remote-1',
       lastBridgedMessageId: null,
     };
-    const { workers } = setup();
+    let owner = {};
+    const { workers } = setup({ getOwnerToken: () => owner });
     store.listActiveRemoteWorkers.mockResolvedValueOnce([row] as never);
     await workers.start();
     expect(workers.runtime.isRemote('proxy-1')).toBe(true);
     // 换账号后重建：上一账号的 Worker 不再被当作远端处理。
+    owner = {};
     store.listActiveRemoteWorkers.mockResolvedValueOnce([] as never);
     await workers.start();
     expect(workers.runtime.isRemote('proxy-1')).toBe(false);
+    workers.stop();
+  });
+
+  it('keeps accepted reports when ensureReady starts the same owner again', async () => {
+    const { workers } = setup();
+    const row = { ...openInput, proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', lastBridgedMessageId: null };
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([row] as never);
+    await workers.start();
+    await workers.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'c-1' });
+    await workers.start();
+    expect(store.listActiveRemoteWorkers).toHaveBeenCalledOnce();
+    expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+    workers.stop();
+  });
+
+  it('restores the TeamService report identity before tracking its durable pending input', async () => {
+    const restore = vi.fn();
+    const service = { restoreWorkerPendingReport: restore, captureWorkerTerminalTurn: vi.fn(() => ({ autoBridgeIdentity: {} })) };
+    const { workers } = setup({ getTeamService: () => service as unknown as OrcaTeamService });
+    const row = { ...openInput, proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', lastBridgedMessageId: null,
+      pendingReport: { clientIds: ['c-1'], baselineMessageId: null } };
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([row] as never);
+    await workers.start();
+    expect(restore).toHaveBeenCalledWith('proxy-1', row);
+    expect(restore.mock.invocationCallOrder[0]).toBeLessThan(service.captureWorkerTerminalTurn.mock.invocationCallOrder[0]!);
+    expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+    workers.stop();
+  });
+
+  it('does not install an old account snapshot after another owner has restored', async () => {
+    let owner = {};
+    const { workers } = setup({ getOwnerToken: () => owner });
+    let resolveRows!: (rows: never[]) => void;
+    const gate = new Promise<never[]>((resolve) => { resolveRows = resolve; });
+    store.listActiveRemoteWorkers.mockImplementationOnce(() => gate);
+    const first = workers.start();
+    await vi.waitFor(() => expect(store.listActiveRemoteWorkers).toHaveBeenCalledOnce());
+    owner = {};
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([]);
+    await workers.start();
+    resolveRows([{ ...openInput, proxySessionId: 'old-proxy', remoteSessionId: 'remote-1' }] as never[]);
+    await first;
+    expect(workers.runtime.isRemote('old-proxy')).toBe(false);
     workers.stop();
   });
 });
@@ -286,7 +338,7 @@ describe('wrapTeamDeps', () => {
     const service = {
       captureWorkerTerminalTurn: vi.fn(() => capture),
       captureWorkerText: vi.fn(),
-      handleWorkerTerminalTurn: vi.fn(async () => undefined),
+      handleWorkerTerminalTurn: vi.fn(async () => { capture = { ...capture, autoBridgeIdentity: null }; }),
       handleWorkerTurnStarted: vi.fn(async () => undefined),
     };
     const history: Array<{ id: string; clientId?: string; role: string; content: string }> = [];
@@ -337,7 +389,7 @@ describe('wrapTeamDeps', () => {
       await dispatch;
       await workers.runtime.pollNow();
       expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({
-        finalText: 'Immediate result', capture: report.capture(),
+        finalText: 'Immediate result', capture: expect.objectContaining({ sessionId: 'proxy-1' }),
       }));
     } finally {
       finishCommit();
@@ -358,7 +410,7 @@ describe('wrapTeamDeps', () => {
       await dispatch();
       const firstCapture = report.capture();
       report.history.push({ id: 'reply-1', role: 'assistant', content: 'First result' });
-      store.setWorkerLastBridgedMessageId.mockImplementationOnce(async () => { await dispatch(); });
+      report.service.handleWorkerTerminalTurn.mockImplementationOnce(async () => { await dispatch(); });
       await workers.runtime.pollNow();
       expect(report.capture()).not.toBe(firstCapture);
       expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({
@@ -369,7 +421,7 @@ describe('wrapTeamDeps', () => {
       report.history.push({ id: 'reply-2', role: 'assistant', content: 'Second result' });
       await workers.runtime.pollNow();
       expect(report.service.handleWorkerTerminalTurn).toHaveBeenLastCalledWith(expect.objectContaining({
-        finalText: 'Second result', capture: report.capture(),
+        finalText: 'Second result', capture: expect.objectContaining({ sessionId: 'proxy-1' }),
       }));
     } finally { workers.stop(); }
   });
@@ -401,10 +453,11 @@ describe('wrapTeamDeps', () => {
       expect(results.every((result) => result.ok)).toBe(true);
       expect(report.history.filter((row) => row.role === 'user')).toHaveLength(2);
       report.history.push({ id: 'reply-final', role: 'assistant', content: 'Latest result' });
+      const latestCapture = report.capture();
       await workers.runtime.pollNow();
       expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledOnce();
       expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({
-        finalText: 'Latest result', capture: report.capture(),
+        finalText: 'Latest result', capture: latestCapture,
       }));
     } finally {
       releaseFirst();
@@ -432,8 +485,9 @@ describe('wrapTeamDeps', () => {
       } as never)).rejects.toThrow('accepted lifecycle rolled back');
       expect(workers.runtime.hasPendingReport('proxy-1')).toBe(previous);
       if (previous) {
+        const previousCapture = report.capture();
         await workers.runtime.pollNow();
-        expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({ finalText: 'First result', capture: report.capture() }));
+        expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledWith(expect.objectContaining({ finalText: 'First result', capture: previousCapture }));
       }
     } finally { workers.stop(); }
   });
@@ -506,9 +560,170 @@ describe('wrapTeamDeps', () => {
     const base = baseDeps();
     await workers.wrapTeamDeps(base).archiveWorkerSession('proxy-1');
     expect(base.archiveWorkerSession).not.toHaveBeenCalled();
-    expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', undefined);
+    expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
     expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
     expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
     expect(workers.runtime.isRemote('proxy-1')).toBe(false);
   });
+
+  it('keeps remote routing when archive persistence or authorization fails', async () => {
+    const { workers } = await trackedWorker();
+    store.archiveSingleWorkerSession.mockRejectedValueOnce(new Error('permission revoked'));
+    const base = baseDeps();
+    const wrapped = workers.wrapTeamDeps(base);
+    await expect(wrapped.archiveWorkerSession('proxy-1')).rejects.toThrow('permission revoked');
+    expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+    await wrapped.dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'task', dispatchMeta: { source: 'mcp' } } as never);
+    expect(base.dispatchWorkerMessage).not.toHaveBeenCalled();
+    workers.stop();
+  });
+
+  it('retries a Lead refusal until its captured report identity is settled', async () => {
+    const report = reportService();
+    const { workers } = await trackedWorker({ handle: report.handle, getTeamService: () => report.service as unknown as OrcaTeamService });
+    await workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({ targetSessionId: 'proxy-1', message: 'task',
+      dispatchMeta: { source: 'mcp' }, onAccepted: report.onAccepted } as never);
+    report.history.push({ id: 'reply-1', role: 'assistant', content: 'Result' });
+    report.service.handleWorkerTerminalTurn.mockImplementationOnce(async () => undefined);
+    await workers.runtime.pollNow();
+    expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+    await workers.runtime.pollNow();
+    expect(workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+    expect(report.service.handleWorkerTerminalTurn).toHaveBeenCalledTimes(2);
+    workers.stop();
+  });
+
+  it('stops a freshly dispatched Worker without waiting for the running poll and persists that phase', async () => {
+    const { workers, remoteInvoke } = await trackedWorker();
+    const row = { workerId: 'w-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1', remoteStopConfirmedAt: null };
+    store.listUnreleasedEndedRemoteWorkers.mockResolvedValueOnce([row] as never);
+    await workers.releaseEnded(['proxy-1']);
+    expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:abort-session')).toHaveLength(1);
+    expect(store.markWorkerRemoteStopConfirmed).toHaveBeenCalledWith('w-1');
+    expect(store.markWorkerRemoteStopConfirmed.mock.invocationCallOrder[0]).toBeLessThan(
+      remoteInvoke.mock.invocationCallOrder[remoteInvoke.mock.calls.findIndex(([, channel]) => channel === 'maker:orca:remote-worker:release')]!,
+    );
+    store.listUnreleasedEndedRemoteWorkers.mockResolvedValueOnce([{ ...row, remoteStopConfirmedAt: Date.now() }] as never);
+    store.getWorkerRemoteReleaseState.mockResolvedValueOnce({ remoteStopConfirmedAt: Date.now(), remoteReleasedAt: null });
+    await workers.releaseEnded([]);
+    // A lost release reply must not stop a new ordinary task on the same B session.
+    expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:abort-session')).toHaveLength(1);
+    workers.stop();
+  });
+
+  it('coalesces overlapping releases and rereads phase before processing a stale snapshot', async () => {
+    let releaseGate!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+    const releasing = new Promise<void>((resolve) => { entered = resolve; });
+    const { workers, remoteInvoke } = await trackedWorker({ handle: async (_device, channel) => {
+      if (channel === 'maker:orca:remote-worker:release') { entered(); await gate; }
+      return undefined;
+    } });
+    const row = { workerId: 'w-1', deviceId: 'mac-mini', remoteSessionId: 'remote-1' };
+    store.listUnreleasedEndedRemoteWorkers.mockResolvedValueOnce([row] as never).mockResolvedValueOnce([row] as never);
+    const first = workers.releaseEnded(['proxy-1']);
+    await releasing;
+    const second = workers.releaseEnded([]);
+    await vi.waitFor(() => expect(store.listUnreleasedEndedRemoteWorkers).toHaveBeenCalledTimes(2));
+    releaseGate();
+    await Promise.all([first, second]);
+    store.getWorkerRemoteReleaseState.mockResolvedValueOnce({ remoteStopConfirmedAt: 1, remoteReleasedAt: 2 });
+    store.listUnreleasedEndedRemoteWorkers.mockResolvedValueOnce([row] as never);
+    await workers.releaseEnded([]);
+    expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:abort-session')).toHaveLength(1);
+    expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:orca:remote-worker:release')).toHaveLength(1);
+    workers.stop();
+  });
+});
+
+describe('remote open recovery', () => {
+  it('rechecks an orphan snapshot after a Worker has become associated', async () => {
+    const { workers, remoteInvoke } = setup();
+    let deliver!: (rows: never[]) => void;
+    let entered!: () => void;
+    const gate = new Promise<never[]>((resolve) => { deliver = resolve; });
+    const reading = new Promise<void>((resolve) => { entered = resolve; });
+    store.listOrphanRemoteWorkerOpens.mockImplementationOnce(async () => { entered(); return gate; });
+    const cleanup = workers.releaseEnded([]);
+    await reading;
+    await workers.recordRemoteWorker({ ...openInput, proxySessionId: 'proxy-1', remoteSessionId: 'remote-1' });
+    store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([]);
+    deliver([{ deviceId: 'mac-mini', remoteSessionId: 'remote-1', createdAt: Date.now() }] as never[]);
+    await cleanup;
+    expect(store.listOrphanRemoteWorkerOpens).toHaveBeenLastCalledWith('remote-1');
+    expect(workers.runtime.isRemote('proxy-1')).toBe(true);
+    expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(false);
+    workers.stop();
+  });
+
+  it('rejects an old owner open that resumes after a new account starts', async () => {
+    let owner = {};
+    let finishList!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { finishList = resolve; });
+    const listing = new Promise<void>((resolve) => { entered = resolve; });
+    const invoke = vi.fn(async () => ok({ version: 1 }));
+    let first = true;
+    const workers = createOrcaRemoteWorkers({ getOwnerToken: () => owner, remoteInvoke: invoke,
+      listDevices: async () => { if (first) { first = false; entered(); await gate; } return { devices: [device({})] }; },
+      getTeamService: () => null, broadcastOrcaWorkerChanged: vi.fn(), readLeadTitle: async () => 'Old Lead',
+      log: { info: vi.fn(), warn: vi.fn() } });
+    const opening = workers.openRemoteWorker(openInput);
+    // Attach the rejection assertion before allowing the old asynchronous request to resume.
+    const rejected = expect(opening).rejects.toThrow('owner changed');
+    await listing;
+    workers.stop(); owner = {};
+    await workers.start();
+    finishList(); await rejected;
+    expect(store.saveRemoteWorkerOpen).not.toHaveBeenCalled();
+    expect(store.insertRemoteWorkerProxySession).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    workers.stop();
+  });
+
+  it('does not associate or discard an old creation in a new account', async () => {
+    let owner = {};
+    const { workers, remoteInvoke } = setup({ getOwnerToken: () => owner });
+    const opened = await workers.openRemoteWorker(openInput);
+    if (!opened.ok) throw Error('expected successful open');
+    workers.stop(); owner = {}; await workers.start();
+    const record = { ...openInput, proxySessionId: opened.proxySessionId, remoteSessionId: opened.remoteSessionId };
+    await expect(workers.recordRemoteWorker(record)).rejects.toThrow('owner changed');
+    await workers.discardRemoteWorker(record);
+    expect(store.setWorkerRemoteExecution).not.toHaveBeenCalled();
+    expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(false);
+    workers.stop();
+  });
+
+  it('reuses the same remote session id after losing an open reply', async () => {
+    let opens = 0;
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel) => {
+      if (channel === 'maker:orca:remote-worker:open' && ++opens === 1) return fail('INVOKE_TIMEOUT', 'reply lost');
+      return undefined;
+    } });
+    await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: true });
+    const calls = remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:orca:remote-worker:open');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]![2]).toEqual(calls[1]![2]);
+    expect(store.saveRemoteWorkerOpen).toHaveBeenCalledOnce();
+    workers.stop();
+  });
+
+  it('retains an uncertain open for durable cleanup when both replies are lost', async () => {
+    const { workers } = setup({ handle: (_device, channel) =>
+      channel === 'maker:orca:remote-worker:open' ? fail('INVOKE_TIMEOUT', 'reply lost') : undefined });
+    await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
+    expect(store.saveRemoteWorkerOpen).toHaveBeenCalledOnce();
+    expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
+    workers.stop();
+  });
+
+  it.each(['REMOTE_WORKDIR_NOT_FOUND', 'REMOTE_WORKDIR_NOT_DIRECTORY', 'REMOTE_WORKDIR_INVALID', 'REMOTE_WORKDIR_UNAVAILABLE'])(
+    'preserves the target directory error %s', async (code) => {
+      const { workers } = setup({ handle: (_device, channel) => channel === 'maker:orca:remote-worker:open' ? fail(code, 'directory unavailable') : undefined });
+      await expect(workers.openRemoteWorker({ ...openInput, workingDir: '/remote/folder' })).resolves.toMatchObject({ ok: false, errorCode: code });
+      workers.stop();
+    },
+  );
 });

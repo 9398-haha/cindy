@@ -1469,6 +1469,21 @@ describe('OrcaTeamService', () => {
     expect(onLeadWorkerReportsSettled).not.toHaveBeenCalled();
   });
 
+  it('restores a report for an already done Worker and retries until Lead accepts it', async () => {
+    const send = vi.fn(async () => ({ accepted: true })).mockResolvedValueOnce({ accepted: false });
+    const { service, setWorker } = createDeps({ sendAutoBridgeToLead: send });
+    setWorker(createWorker({ status: 'done' }));
+    service.restoreWorkerPendingReport('worker-session-1', { workerId: 'worker-1', leadSessionId: 'lead-1' });
+    const capture = service.captureWorkerTerminalTurn('worker-session-1');
+    service.restoreWorkerPendingReport('worker-session-1', { workerId: 'worker-1', leadSessionId: 'lead-1' });
+    expect(service.captureWorkerTerminalTurn('worker-session-1').autoBridgeIdentity).toBe(capture.autoBridgeIdentity);
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'Recovered result', capture });
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(true);
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'Recovered result', capture });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+  });
+
   it('settles the lead report when a manual stop discards it', async () => {
     const onLeadWorkerReportsSettled = vi.fn();
     const { deps, service, setManualInterrupt } = createDeps({ onLeadWorkerReportsSettled });

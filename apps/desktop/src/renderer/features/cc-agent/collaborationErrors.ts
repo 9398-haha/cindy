@@ -66,6 +66,12 @@ export function executionDeviceErrorMessage(
       return t('orca.createWorker.errors.deviceUnreachable', { device });
     case 'UNSUPPORTED_CAPABILITY':
       return t('orca.createWorker.errors.deviceOutdated', { device });
+    case 'REMOTE_WORKDIR_NOT_FOUND':
+    case 'REMOTE_WORKDIR_NOT_DIRECTORY':
+    case 'REMOTE_WORKDIR_INVALID':
+      return t('orca.createWorker.errors.dirRejected', { device });
+    case 'REMOTE_WORKDIR_UNAVAILABLE':
+      return t('orca.createWorker.errors.dirUnavailable', { device });
     case 'INVALID_PARAMS':
       return withDir ? t('orca.createWorker.errors.dirRejected', { device }) : null;
     default:

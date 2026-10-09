@@ -13413,7 +13413,8 @@
       "errors": {
         "deviceUnreachable": "{{device}} は現在使用できません。オンラインでリモート操作が有効になっている必要があります。Worker は作成されていません。",
         "deviceOutdated": "{{device}} の Cindy が古いため、アップデートすると Worker を実行できます。",
-        "dirRejected": "{{device}} 上にこのフォルダーが見つからないか、使用できません。Worker は作成されていません。"
+        "dirRejected": "{{device}} 上にこのフォルダーが見つからないか、使用できません。Worker は作成されていません。",
+        "dirUnavailable": "{{device}} のフォルダーは一時的に使用できません。接続やネットワークドライブを確認して再試行してください。Worker は作成されていません。"
       }
     },
     "rolePill": {

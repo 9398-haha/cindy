@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteWorkerSessionPane } from '../RemoteWorkerSessionPane';
@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
     captureSessionRead: vi.fn(() =>
       Object.assign(() => true, { mergeActivity: (session: unknown) => session }),
     ),
-    getDeviceSessions: vi.fn(() => []),
+    getDeviceSessions: vi.fn<() => Array<{ id: string }>>(() => []),
     getDeviceName: vi.fn(() => 'Mac mini'),
     mergeDeviceSessions: vi.fn(),
   },
@@ -47,6 +47,7 @@ describe('RemoteWorkerSessionPane', () => {
     mocks.sessionViewProps = null;
     Object.values(mocks.store).forEach((fn) => fn.mockClear());
     mocks.store.getSessionDeviceId.mockReturnValue(undefined);
+    mocks.store.getDeviceSessions.mockReturnValue([]);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       deviceLink: { invoke: mocks.invoke },
     };
@@ -110,5 +111,34 @@ describe('RemoteWorkerSessionPane', () => {
     );
     expect(mocks.store.pinSessionOrigin).not.toHaveBeenCalled();
     expect(mocks.sessionViewProps).toBeNull();
+  });
+
+  it('keeps a loaded task mounted and read only while offline, then recovers', async () => {
+    mocks.invoke.mockResolvedValue({ id: 'remote-1', status: 'active' });
+    const { rerender } = render(<RemoteWorkerSessionPane leadSessionId="lead-1" device={device} viewVisible chatRealtime />);
+    const view = await screen.findByTestId('session-view');
+    rerender(<RemoteWorkerSessionPane leadSessionId="lead-1" device={{ ...device, reachable: false }} viewVisible chatRealtime />);
+    expect(screen.getByTestId('session-view')).toBe(view);
+    expect(mocks.sessionViewProps?.readOnly).toBe(true);
+    rerender(<RemoteWorkerSessionPane leadSessionId="lead-1" device={device} viewVisible chatRealtime />);
+    await waitFor(() => expect(mocks.sessionViewProps?.readOnly).toBe(false));
+    expect(screen.getByTestId('session-view')).toBe(view);
+  });
+
+  it('opens an already cached task while offline without a remote call', async () => {
+    mocks.store.getDeviceSessions.mockReturnValue([{ id: 'remote-1' }]);
+    render(<RemoteWorkerSessionPane leadSessionId="lead-1" device={{ ...device, reachable: false }} viewVisible chatRealtime />);
+    await screen.findByTestId('session-view');
+    expect(mocks.sessionViewProps?.readOnly).toBe(true);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it('allows retry after a transient read failure on a reachable device', async () => {
+    mocks.invoke.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ id: 'remote-1', status: 'active' });
+    render(<RemoteWorkerSessionPane leadSessionId="lead-1" device={device} viewVisible chatRealtime />);
+    fireEvent.click(await screen.findByRole('button', { name: 'commonUi.retry' }));
+    await screen.findByTestId('session-view');
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(mocks.sessionViewProps?.readOnly).toBe(false);
   });
 });
