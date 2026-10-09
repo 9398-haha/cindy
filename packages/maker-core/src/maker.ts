@@ -1065,7 +1065,7 @@ export class Maker {
       // (不用每次 send 回 DB 读 SessionMeta — register.ts checkWorkDirExists 走这条)。
       remoteHostId: meta.remoteHostId ?? null,
       // 取实际决定启动分支的 startOpts：任务记录事后读回的旧值不能把本机启动的会话标成远端。
-      agentDeviceId: startOpts.agentDeviceId ?? null,
+      agentDeviceId: startOpts.agentDeviceId || null,
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,

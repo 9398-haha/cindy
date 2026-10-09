@@ -140,6 +140,19 @@ describe('Maker: agent on another computer', () => {
     await maker.shutdown();
   });
 
+  it('treats an empty agent device id as local at the send boundary', async () => {
+    const agent = localAgent();
+    const startDeviceAgentSession = vi.fn(async () => handle('remote-sdk'));
+    const maker = new Maker({ agents: { pi: agent }, storage: storage(), logger, startDeviceAgentSession });
+    const session = await maker.createSession({
+      id: 'task-empty-device', agentKind: 'pi', workingDir: '/repo', model: 'm', agentDeviceId: '',
+    });
+    expect(startDeviceAgentSession).not.toHaveBeenCalled();
+    expect(agent.startSession).toHaveBeenCalledTimes(1);
+    expect(session.agentDeviceId).toBeNull();
+    await maker.shutdown();
+  });
+
   it('refuses to mix with SSH hosts and reports a missing starter instead of running here', async () => {
     const maker = new Maker({ agents: { pi: localAgent() }, storage: storage(), logger });
     await expect(maker.createSession({ id: 't2', agentKind: 'pi', workingDir: '/repo', model: 'm', agentDeviceId: 'dev-b' }))
