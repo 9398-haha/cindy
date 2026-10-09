@@ -9882,7 +9882,9 @@
       "label": "Created from another session"
     },
     "imageMissing": {
-      "title": "Image missing"
+      "title": "Image missing",
+      "unavailable": "Image Unavailable",
+      "loading": "Loading image…"
     },
     "visionBridge": {
       "analyzing": "Analyzing {{count}} image(s)…",
