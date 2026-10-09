@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import React, { act } from 'react';
+import React, { act, useEffect, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +12,11 @@ const native = vi.hoisted(() => ({
   selectAccount: vi.fn(),
   requestBinding: vi.fn(),
   requestVerification: vi.fn(),
+  providers: vi.fn(),
+  initialUrl: vi.fn(),
+  requestCode: vi.fn(),
+  discoverOrganization: vi.fn(),
+  crossRealm: false,
   state: 0,
 }));
 
@@ -19,7 +24,7 @@ vi.mock('react-native', () => ({
   Platform: { get OS() { return native.platform; } },
   AppState: { addEventListener: () => ({ remove() {} }) },
   Linking: {
-    getInitialURL: async () => null,
+    getInitialURL: native.initialUrl,
     addEventListener: (_: string, listener: (event: { url: string }) => void) => {
       native.links.add(listener);
       return { remove: () => native.links.delete(listener) };
@@ -36,7 +41,7 @@ vi.mock('@/config/env', () => ({
   IS_OTA_SELFHOST: false, MOBILE_VISUAL_MOCK_ENABLED: false,
   OAUTH_BROKER_API_BASE_URL: 'https://auth.example.invalid',
   getMobileEndpointForRealm: () => 'https://auth.example.invalid',
-  getMobileEndpointRealmConfig: () => ({ crossRealmOrgLoginEnabled: false }),
+  getMobileEndpointRealmConfig: () => ({ crossRealmOrgLoginEnabled: native.crossRealm }),
   loadMobileEndpointsForRealm: async () => {},
   activateMobileSessionRealm() {}, resetMobileSessionRealm() {},
 }));
@@ -45,11 +50,9 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
   return {
     ...actual,
     CindyAuthClient: class {
-      getProviders = async () => ({ social: ['wechat'], emailCode: true, smsCode: false });
-      discoverSsoOrg = async () => ({
-        region: 'cn', orgName: 'Fixture Organization',
-        connections: [{ connectionId: 'fixture-connection', connectionName: 'Fixture SSO', protocol: 'wecom' }],
-      });
+      getProviders = native.providers;
+      requestCode = native.requestCode;
+      discoverSsoOrg = native.discoverOrganization;
       buildAuthorizeUrl = ({ state }: { state: string }) => `https://auth.example.invalid/authorize?state=${state}`;
       exchangeAuthorizationCode = native.exchange;
       selectAccount = native.selectAccount;
@@ -99,7 +102,6 @@ vi.mock('@/update/betaChannelStore', () => ({ prepareBetaChannelForDevice: async
 vi.mock('@/update/fetchLatestRelease', () => ({}));
 
 import { AuthProvider, useAuth } from '../AuthContext';
-import { useLoginScreenInitialization } from '../useLoginScreenInitialization';
 
 const pendingKey = 'cindy.mobile.auth.pendingOAuth';
 const verifiedOutcome = {
@@ -116,7 +118,12 @@ function Probe() {
 
 function LoginScreenLifecycle() {
   const value = useAuth();
-  useLoginScreenInitialization(value, false);
+  const initialized = useRef(false);
+  useEffect(() => {
+    if (!value.initialized || value.isAuthenticated || initialized.current) return;
+    initialized.current = true;
+    void value.dispatchLoginAction({ type: 'initialize' });
+  }, [value]);
   return null;
 }
 
@@ -148,6 +155,14 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
   beforeEach(async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     native.platform = 'android';
+    native.crossRealm = false;
+    native.discoverOrganization.mockReset().mockResolvedValue({
+      region: 'cn', orgName: 'Fixture Organization',
+      connections: [{ connectionId: 'fixture-connection', connectionName: 'Fixture SSO', protocol: 'wecom' }],
+    });
+    native.providers.mockReset().mockResolvedValue({ social: ['wechat'], emailCode: true, smsCode: false });
+    native.initialUrl.mockReset().mockResolvedValue(null);
+    native.requestCode.mockReset().mockResolvedValue(undefined);
     native.storage.clear();
     native.state = 0;
     native.open.mockReset().mockResolvedValue({ type: 'dismiss' });
@@ -415,6 +430,153 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
       await act(async () => { expect(await auth.dispatchLoginAction(fixture.action)).toBe(false); });
       expect(fixture.request).not.toHaveBeenCalled();
     });
+  });
+
+  it.each(['android', 'ios'])('retains the personal OAuth organization confirmation on %s', async platform => {
+    native.platform = platform;
+    native.exchange.mockResolvedValueOnce({
+      status: 'ok', accessToken: 'fixture-access', refreshToken: 'fixture-refresh', expiresIn: 3600,
+      membership: { id: 'fixture-personal', kind: 'personal', role: 'owner', displayName: 'Fixture',
+        email: 'user@example.invalid', orgId: null, orgName: null },
+    });
+    native.open.mockImplementation(async () => ({ type: 'success', url: callbackUrl() }));
+    await mountLoginScreen('initial');
+    await start('social');
+    expect(auth.loginState).toMatchObject({ step: 'realm-confirmation', personalLoginAvailable: true });
+    await mountLoginScreen('remounted-after-personal-exchange');
+    expect(auth.loginState).toMatchObject({ step: 'realm-confirmation', personalLoginAvailable: true });
+    await act(async () => { expect(await auth.dispatchLoginAction({ type: 'confirm-sso-realm' })).toBe(true); });
+    expect(native.open).toHaveBeenCalledTimes(2);
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it('initializes an empty flow once without consuming persisted OAuth', async () => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    const pending = JSON.stringify({ state: 'fixture-cold-state', codeVerifier: 'fixture-verifier',
+      deviceId: 'fixture-device', realm: 'cn', label: 'Fixture SSO', createdAt: Date.now() });
+    native.storage.set(pendingKey, pending);
+    native.providers.mockClear();
+    await mountLoginScreen('initial');
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(native.storage.get(pendingKey)).toBe(pending);
+    await mountLoginScreen('remounted');
+    expect(native.providers).toHaveBeenCalledTimes(1);
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it.each(['pending', 'finished', 'failed-provider'] as const)(
+    'does not let slow initialization overwrite a cold callback (%s)', async timing => {
+      await act(async () => { await auth.cancelAddAccount(); });
+      native.storage.set(pendingKey, JSON.stringify({ state: 'fixture-cold-state', codeVerifier: 'fixture-verifier',
+        deviceId: 'fixture-device', realm: 'cn', label: 'Fixture SSO', createdAt: Date.now() }));
+      let finishProviders!: (value: unknown) => void;
+      let failProviders!: (error: Error) => void;
+      native.providers.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        finishProviders = resolve; failProviders = reject;
+      }));
+      let complete!: (value: typeof verifiedOutcome) => void;
+      native.exchange.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+      await mountLoginScreen('initial');
+      await emitLink(callbackUrl());
+      expect(native.exchange).toHaveBeenCalledTimes(1);
+      if (timing !== 'pending') await act(async () => { complete(verifiedOutcome); });
+      await act(async () => {
+        if (timing === 'failed-provider') failProviders(new Error('fixture network failure'));
+        else finishProviders({ social: ['wechat'], emailCode: true, smsCode: false });
+      });
+      if (timing === 'pending') {
+        expect(auth.isBusy).toBe(true);
+        expect(auth.loginState).toBeNull();
+        await act(async () => { complete(verifiedOutcome); });
+      }
+      expect(auth.loginState?.step).toBe('sso-verification');
+      expect(auth.authError).toBeNull();
+      expect(auth.isBusy).toBe(false);
+    },
+  );
+
+  it('keeps a cold getInitialURL callback alive when the login screen mounts during exchange', async () => {
+    await act(async () => root.unmount());
+    native.storage.set(pendingKey, JSON.stringify({ state: 'fixture-cold-state', codeVerifier: 'fixture-verifier',
+      deviceId: 'fixture-device', realm: 'cn', label: 'Fixture SSO', createdAt: Date.now() }));
+    native.initialUrl.mockResolvedValue(callbackUrl());
+    let complete!: (value: typeof verifiedOutcome) => void;
+    native.exchange.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    root = createRoot(document.createElement('div'));
+    await mountLoginScreen('cold-start');
+    expect(native.exchange).toHaveBeenCalledTimes(1);
+    expect(native.storage.has(pendingKey)).toBe(true);
+    await act(async () => { complete(verifiedOutcome); });
+    expect(auth.loginState?.step).toBe('sso-verification');
+    expect(auth.authError).toBeNull();
+  });
+
+  it('preserves personal verification-code state and explicitly resets it', async () => {
+    await act(async () => { expect(await auth.dispatchLoginAction({
+      type: 'request-code', kind: 'email', identifier: 'user@example.invalid',
+    })).toBe(true); });
+    const before = auth.loginState;
+    expect(before?.step).toBe('verification-code');
+    await mountLoginScreen('remounted-code-entry');
+    expect(auth.loginState).toBe(before);
+    await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    expect(auth.loginState?.step).toBe('identifier');
+  });
+
+  it('keeps add-account initialization and cancellation as explicit lifecycle boundaries', async () => {
+    await start();
+    const oldUrl = callbackUrl();
+    await act(async () => { await auth.beginAddAccount(); });
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(native.storage.has(pendingKey)).toBe(false);
+    await start();
+    await mountLoginScreen('add-account-remount');
+    await emitLink(oldUrl);
+    expect(native.exchange).not.toHaveBeenCalled();
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+    await act(async () => { await auth.cancelAddAccount(); });
+    expect(auth.loginState).toBeNull();
+    await act(async () => { expect(await auth.dispatchLoginAction({ type: 'request-sso-verification-code' })).toBe(false); });
+    expect(native.requestVerification).not.toHaveBeenCalled();
+  });
+
+  it.each(['method-choice', 'realm-confirmation'] as const)('preserves %s before starting browser authorization', async step => {
+    native.crossRealm = true;
+    native.discoverOrganization.mockResolvedValue({
+      region: step === 'realm-confirmation' ? 'global' : 'cn', orgName: 'Fixture Organization',
+      connections: [
+        { connectionId: 'fixture-one', connectionName: 'Fixture One', protocol: 'wecom' },
+        { connectionId: 'fixture-two', connectionName: 'Fixture Two', protocol: 'oidc' },
+      ],
+    });
+    await start();
+    const state = auth.loginState;
+    expect(state?.step).toBe(step);
+    await mountLoginScreen('remounted-discovery');
+    expect(auth.loginState).toBe(state);
+    expect(native.open).not.toHaveBeenCalled();
+    if (step === 'realm-confirmation') {
+      await act(async () => { expect(await auth.dispatchLoginAction({ type: 'cancel-sso-realm' })).toBe(true); });
+    } else {
+      await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+    }
+    expect(auth.loginState?.step).toBe('identifier');
+  });
+
+  it('reports initial provider failures without deleting pending OAuth and allows retry', async () => {
+    await act(async () => { await auth.cancelAddAccount(); });
+    native.storage.set(pendingKey, 'fixture-pending-record');
+    native.providers.mockRejectedValueOnce(new Error('fixture provider unavailable'));
+    await mountLoginScreen('failed-initialization');
+    expect(auth.loginState).toBeNull();
+    expect(auth.authError).not.toBeNull();
+    expect(auth.isBusy).toBe(false);
+    expect(native.storage.get(pendingKey)).toBe('fixture-pending-record');
+    await mountLoginScreen('retried-initialization');
+    expect(auth.loginState?.step).toBe('identifier');
+    expect(auth.authError).toBeNull();
   });
 
   it('still exchanges only once when Linking and the browser both report success', async () => {

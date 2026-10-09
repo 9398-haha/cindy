@@ -245,6 +245,7 @@ interface CachedUserProfileRecord {
 }
 
 export type MobileLoginAction =
+  | { type: 'initialize' }
   | { type: 'reset' }
   | { type: 'discover'; email: string }
   | { type: 'discover-sso-org'; org: string }
@@ -1788,6 +1789,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const dispatchLoginAction = useCallback(
     (action: MobileLoginAction): Promise<boolean> => {
+      // Mounting a login screen only initializes an absent flow. Existing state
+      // and callbacks belong to AuthProvider, not to the route's lifetime.
+      if (
+        action.type === 'initialize' &&
+        (loginStateRef.current || browserCompletionRef.current)
+      ) {
+        return Promise.resolve(true);
+      }
       // Cancelling a browser login must invalidate its in-flight callback before
       // any await or deduplication. Other login actions retain their lifecycle.
       if (action.type === 'reset' && loginStateRef.current?.step === 'browser-redirect') {
@@ -1897,6 +1906,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pendingAuthRealmRef.current = discovery.region;
             return discovery;
           };
+          if (action.type === 'initialize') {
+            const providers = await authClientFor(did, BUILD_AUTH_REGION).getProviders();
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            // A cold-start callback may begin or finish while providers load.
+            // Never clear PKCE/tickets or overwrite the state it has established.
+            if (!loginStateRef.current && !browserCompletionRef.current) {
+              updateLoginState(reduceAuthFlow(null, { type: 'providers-loaded', providers }));
+            }
+            return true;
+          }
           if (action.type === 'reset') {
             pendingAccountTokenRef.current = null;
             pendingAccountRefreshTokenRef.current = null;
@@ -2284,6 +2303,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return true;
         } catch (error) {
           if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) return false;
+          if (action.type === 'initialize') {
+            if (!loginStateRef.current && !browserCompletionRef.current) {
+              setAuthError(authErrorCode(error));
+            }
+            return false;
+          }
           const code = authErrorCode(error);
           if (
             code === 'INVALID_LOGIN_TICKET' ||
@@ -2310,7 +2335,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setAuthError(code);
           return false;
         } finally {
-          if (loginFlowEpochRef.current === expectedLoginFlowEpoch) {
+          if (
+            loginFlowEpochRef.current === expectedLoginFlowEpoch &&
+            (action.type !== 'initialize' || !browserCompletionRef.current)
+          ) {
             setIsBusy(false);
           }
         }

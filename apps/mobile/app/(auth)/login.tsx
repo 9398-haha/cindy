@@ -12,7 +12,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
 import { useAuth } from '@/auth/AuthContext';
-import { useLoginScreenInitialization } from '@/auth/useLoginScreenInitialization';
 import { LoginCaptchaWebView } from '@/auth/LoginCaptchaWebView';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
 import {
@@ -144,6 +143,7 @@ export function LoginScreen({
     handoffDispatch?.({ type: 'panel-mounted' });
   }, [handoffDispatch]);
   const handoffPhase: LoginHandoffPhase = handoff?.state.phase ?? 'done';
+  const initializedLoginRef = useRef(false);
   // identifier 形态 = 构建区域确定性推导(用户拍板 2026-07-21:手机/邮箱分区互斥,
   // 双 tab 切换移除);providers 仅兜底区域首选方式未下发的场景。
   const identifierKind: VerificationKind = useMemo(
@@ -320,7 +320,15 @@ export function LoginScreen({
     [],
   );
 
-  useLoginScreenInitialization(auth, additionalAccount);
+  useEffect(() => {
+    if (
+      !auth.initialized ||
+      (!additionalAccount && auth.isAuthenticated) ||
+      initializedLoginRef.current
+    ) return;
+    initializedLoginRef.current = true;
+    void auth.dispatchLoginAction({ type: 'initialize' });
+  }, [additionalAccount, auth]);
 
   useEffect(() => {
     if (additionalAccount || !auth.initialized || auth.isAuthenticated) return;
