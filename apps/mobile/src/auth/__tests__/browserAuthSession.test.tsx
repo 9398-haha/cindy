@@ -414,6 +414,59 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState?.step).toBe('sso-verification');
   });
 
+  it('retires add-account credentials on provider startup without a login screen or initial URL', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    await restartProvider();
+    expect(native.initialUrl).toHaveReturned();
+    expect(auth.initialized).toBe(true);
+    expect(auth.loginState).toBeNull();
+    expect(native.exchange).not.toHaveBeenCalled();
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
+  it('does not let delayed startup cleanup retire a newly started login', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const oldRecord = native.storage.get(pendingKey)!;
+    let finishRead!: () => void;
+    let delayed = false;
+    native.readSecure.mockImplementation(async (key: string) => {
+      if (key === pendingKey && !delayed) {
+        delayed = true;
+        return new Promise<string>(resolve => { finishRead = () => resolve(oldRecord); });
+      }
+      return native.storage.get(key) ?? null;
+    });
+    await restartProvider();
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const newRecord = native.storage.get(pendingKey);
+    await act(async () => { finishRead(); });
+    expect(native.storage.get(pendingKey)).toBe(newRecord);
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
+  it('does not fail provider startup when stale add-account retirement cannot be persisted', async () => {
+    await act(async () => { await auth.beginAddAccount(); });
+    await start();
+    const url = callbackUrl();
+    native.writeSecure.mockRejectedValueOnce(new Error('fixture storage failure'));
+    native.deleteSecure.mockImplementation(async (key: string) => {
+      if (key === pendingKey) throw new Error('fixture storage failure');
+      native.storage.delete(key);
+    });
+    await restartProvider();
+    expect(auth.initialized).toBe(true);
+    expect(auth.isBusy).toBe(false);
+    await emitLink(url);
+    expect(native.exchange).not.toHaveBeenCalled();
+    native.deleteSecure.mockImplementation(async (key: string) => { native.storage.delete(key); });
+    await restartProvider();
+    expect(native.storage.has(pendingKey)).toBe(false);
+  });
+
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {
     await start();
     const oldCallback = callbackUrl();
