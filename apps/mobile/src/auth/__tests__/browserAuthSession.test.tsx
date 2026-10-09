@@ -534,6 +534,27 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(auth.loginState?.step).toBe('sso-verification');
   });
 
+  it.each(['cancel', 'dismiss', 'success'] as const)('preserves a terminal Linking error when the browser later returns %s', async type => {
+    native.platform = 'ios';
+    let finishBrowser!: (value: {type: string; url?: string}) => void;
+    native.open.mockImplementationOnce(() => new Promise(resolve => { finishBrowser = resolve; }));
+    let opening!: Promise<unknown>;
+    await act(async () => { opening = auth.dispatchLoginAction({type: 'start-social-browser', provider: 'wechat', label: 'WeChat'}).catch(e => e); });
+    const errorUrl = callbackUrl().replace('code=fixture-code', 'error=access_denied');
+    await emitLink(errorUrl);
+    const errorState = auth.loginState;
+    expect(errorState?.step).toBe('error');
+    await act(async () => { finishBrowser({type, url: errorUrl}); await opening; });
+    expect(auth.loginState).toBe(errorState);
+    expect(auth.authError).toBe('access_denied');
+    expect(native.exchange).not.toHaveBeenCalled();
+    await act(async () => { await auth.dispatchLoginAction({type: 'reset'}); });
+    native.platform = 'android';
+    await start();
+    await emitLink(callbackUrl());
+    expect(auth.loginState?.step).toBe('sso-verification');
+  });
+
   it('explicit reset cancels the pending login; its late callback cannot authenticate', async () => {
     await start();
     const oldCallback = callbackUrl();

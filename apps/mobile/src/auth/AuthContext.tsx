@@ -1825,6 +1825,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) throw error;
           const code = authErrorCode(error);
           if (!parsedCallback) {
+            // Terminal Linking results own the error/retry screen just as a
+            // successful exchange owns its continuation, even during cleanup.
+            if (loginActionInFlightRef.current === browserAction) {
+              loginActionInFlightRef.current = null;
+              loginActionInFlightEpochRef.current = null;
+            }
             oauthCancelledRef.current = true;
             let reportedCode = code;
             try {
