@@ -12,8 +12,15 @@ export function useLoginScreenInitialization(auth: AuthContextValue, additionalA
       return;
     initializedLoginRef.current = true;
     // Deep-link navigation can remount this screen while AuthProvider survives.
-    // Mounting is not a user cancellation of the pending browser authorization.
-    if (auth.loginState?.step === 'browser-redirect') return;
+    // The exchange may already have advanced to a continuation requiring a ticket.
+    // Mounting must not cancel either the browser wait or that continuation.
+    const step = auth.loginState?.step;
+    if (
+      step === 'browser-redirect' ||
+      step === 'account-selection' ||
+      step === 'binding' ||
+      step === 'sso-verification'
+    ) return;
     void auth.dispatchLoginAction({ type: 'reset' });
   }, [additionalAccount, auth]);
 }

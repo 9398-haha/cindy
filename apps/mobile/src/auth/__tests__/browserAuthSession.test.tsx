@@ -9,6 +9,9 @@ const native = vi.hoisted(() => ({
   links: new Set<(event: { url: string }) => void>(),
   open: vi.fn(),
   exchange: vi.fn(),
+  selectAccount: vi.fn(),
+  requestBinding: vi.fn(),
+  requestVerification: vi.fn(),
   state: 0,
 }));
 
@@ -49,6 +52,9 @@ vi.mock('@cindy/auth-client', async (importOriginal) => {
       });
       buildAuthorizeUrl = ({ state }: { state: string }) => `https://auth.example.invalid/authorize?state=${state}`;
       exchangeAuthorizationCode = native.exchange;
+      selectAccount = native.selectAccount;
+      requestBindingCode = native.requestBinding;
+      requestSsoVerificationCode = native.requestVerification;
     },
   };
 });
@@ -146,6 +152,9 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     native.state = 0;
     native.open.mockReset().mockResolvedValue({ type: 'dismiss' });
     native.exchange.mockReset().mockResolvedValue(verifiedOutcome);
+    native.selectAccount.mockReset().mockResolvedValue(verifiedOutcome);
+    native.requestBinding.mockReset().mockResolvedValue(undefined);
+    native.requestVerification.mockReset().mockResolvedValue(undefined);
     root = createRoot(document.createElement('div'));
     await act(async () => { root.render(<AuthProvider><Probe /></AuthProvider>); });
     expect(auth.initialized).toBe(true);
@@ -374,6 +383,38 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.exchange).toHaveBeenCalledTimes(1);
     expect(auth.loginState?.step).toBe('sso-verification');
     expect(auth.authError).toBeNull();
+  });
+
+  describe.each(['android', 'ios'])('completed browser exchange on %s', platform => {
+    it.each([
+      { outcome: { status: 'select_account', loginTicket: 'fixture-login-ticket', accounts: [] }, step: 'account-selection',
+        action: { type: 'select-account', accountId: 'fixture-account' }, request: native.selectAccount,
+        args: ['fixture-login-ticket', 'fixture-account'] },
+      { outcome: { status: 'binding_required', bindType: 'email', bindTicket: 'fixture-bind-ticket' }, step: 'binding',
+        action: { type: 'request-binding-code', contact: 'user@example.invalid' }, request: native.requestBinding,
+        args: ['fixture-bind-ticket', 'email', 'user@example.invalid'] },
+      { outcome: verifiedOutcome, step: 'sso-verification',
+        action: { type: 'request-sso-verification-code' }, request: native.requestVerification,
+        args: ['fixture-ticket'] },
+    ] as const)('preserves $step and its ticket when navigation remounts the screen', async fixture => {
+      native.platform = platform;
+      native.exchange.mockResolvedValue(fixture.outcome);
+      native.open.mockImplementation(async () => ({ type: 'success', url: callbackUrl() }));
+      await mountLoginScreen('initial');
+      await start();
+      expect(auth.loginState?.step).toBe(fixture.step);
+      expect(native.storage.has(pendingKey)).toBe(false);
+      await mountLoginScreen('remounted-after-exchange');
+      expect(auth.loginState?.step).toBe(fixture.step);
+      await act(async () => { expect(await auth.dispatchLoginAction(fixture.action)).toBe(true); });
+      expect(fixture.request).toHaveBeenCalledExactlyOnceWith(...fixture.args);
+      expect(auth.authError).toBeNull();
+      // An explicit cancellation must still clear the retained continuation ticket.
+      await act(async () => { await auth.dispatchLoginAction({ type: 'reset' }); });
+      fixture.request.mockClear();
+      await act(async () => { expect(await auth.dispatchLoginAction(fixture.action)).toBe(false); });
+      expect(fixture.request).not.toHaveBeenCalled();
+    });
   });
 
   it('still exchanges only once when Linking and the browser both report success', async () => {
