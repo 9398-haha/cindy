@@ -11,6 +11,22 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 任务列表提前同步聊天正文
+
+同账号控制端声明 `session-list-messages-v1` 后，`sessions` 订阅同时接收普通用户／助手
+正文、文本增量与收尾／删除事件，复用原有 channel、微批和背压恢复。仅列表接收的 payload
+带 `listMessage: true`，不建立活跃控制意图，也不因正文到达自动拉取整段历史。工具正文、
+思考、附件及超过 200,000 字符的异常长消息仍按需读取；列表显示行数不变。
+共享任务访客和供应商分享不扩展订阅范围。旧控制端未声明能力时保持原来的路由。
+
+`messages:list` / `messages:view` 的 options 可选携带 `messageBodies: { version: 1, known }`，
+known 是消息 ID 与主机提供的 SHA-256 正文指纹对。支持的主机在授权、净化之后返回
+`message-bodies-v1` 包装，只省略指纹吻合的正文，顺序、分页与消息元数据始终重新读取。
+共享 DeviceLinkClient 从本次请求固定的正文快照还原后再交给两端界面。缓存不命中或正文
+变更时仍发送全文；旧主机返回普通页面，新控制端兼容；旧控制端不请求此格式。
+传输去重仅保留有界内存，两端持久展示缓存继续使用原有账号隔离与删除屏障。
+不修改 relay、不新增权限、数据库 migration 或 Mobile 原生指纹。
+
 ## 支付宝已付下一期的升级拒绝
 
 升级报价和确认可返回 HTTP 409 `PLAN_CHANGE_RENEWAL_PREPAID`。Desktop Main 仅放行该

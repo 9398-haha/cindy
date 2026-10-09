@@ -151,7 +151,7 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { clearCachedMessages, readCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import { clearCachedMessages, readCachedMessages, persistListMessage } from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -8940,7 +8940,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         inboundEvent?.type === 'text' &&
         inboundEvent.data?.isFinal === false &&
         inboundEvent.data?.isFullText !== true;
-      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta) {
+      const listMessage = (push.payload as { listMessage?: unknown } | null)?.listMessage === true;
+      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta && !listMessage) {
         scheduleRemoteMessageRepair(inboundSid);
       }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
@@ -8962,6 +8963,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             invalidateHistory: (sessionId) => {
               const state = sessions.get(sessionId);
               if (!state) return;
+              if (listMessage) {
+                bumpMessagesEpoch(sessionId);
+                setState(sessionId, current => ({ ...current, historyLoaded: false }));
+                return;
+              }
               if (getRemoteHistoryView(sessionId)) {
                 // resyncRequired also repairs unrelated durable rows; a full
                 // text snapshot only protects its own live block.
@@ -9003,6 +9009,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload, remoteIngress);
+          if (listMessage && push.deviceId && inboundSid) {
+            const row = (push.payload as { message?: Message }).message;
+            if (row && !isBeforeOrAtRendererClearBoundary(inboundSid, row.createdAt)) persistListMessage(push.deviceId, inboundSid, row);
+          }
           break;
         case 'local-db:messages:deleted':
           handleMessageDeletedRaw(push.payload, remoteIngress);

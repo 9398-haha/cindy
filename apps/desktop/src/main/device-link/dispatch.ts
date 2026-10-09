@@ -1,4 +1,5 @@
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
+import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
@@ -7,6 +8,11 @@ import {
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
   scrubSharedProvider,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
+  isListMessagePush,
+  mapMessageBodies,
+  messageRecord,
+  MESSAGE_BODY_FORMAT,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
 import { requestTaskMigration } from '../task-migration/service';
@@ -1277,7 +1283,7 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
       return;
     }
     for (const sid of stage.sessions.keys()) {
-      if (!subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
+      if (!receivesSessionText(dst, sid)) {
         stage.sessions.delete(sid);
         continue;
       }
@@ -1300,8 +1306,8 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
         let admissionFailed = false;
         sendBotCheckedPush(dst, SESSION_SYNC_CHANNEL, payload,
           (projected) => {
-            if (activeClient && subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
-              activeClient.sendPush(dst, SESSION_SYNC_CHANNEL, projected, ownerStamp);
+            if (activeClient && receivesSessionText(dst, sid)) {
+              activeClient.sendPush(dst, SESSION_SYNC_CHANNEL, listMessagePayload(dst, sid, projected), ownerStamp);
               // Admission is not delivery/ACK. Log once per admitted repair,
               // never per retry or token, and never include the snapshot body.
               log.debug(`session sync repair admitted to=${shortId(dst)}`
@@ -1601,6 +1607,7 @@ function flushMakerEventBatchSession(
     while (segment.events.length > 0) {
       const slice = takeMakerEventBatchSlice(segment);
       if (slice.length === 0) break;
+      if (!receivesSessionText(dst, sessionId)) continue;
       // relay 已确认离线:只把缓冲取空(维持强不变量),不再制造成功率恒为 0 的帧。
       if (outcome.offline) {
         outcome.droppedEvents += slice.length;
@@ -1887,6 +1894,11 @@ export function pushSessionActivityToController(
   if (!activeClient) return;
   if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
   stageSessionActivityPush(controllerDeviceId, payload, broadcastTap.getSafeDataOwnerPushStamp?.());
+  const sessionId = readPushSessionId(payload);
+  if (sessionId && receivesListMessages(controllerDeviceId)
+    && (payload as { phase?: unknown }).phase === 'running') {
+    stageSessionSync(controllerDeviceId, sessionId, false);
+  }
 }
 
 /**
@@ -1911,6 +1923,21 @@ function stageHistoryNotice(dst: string, sessionId: string, ownerStamp?: PushOwn
 function clearHistoryNotices(dst: string): void {
   for (const item of historyNoticeStages.get(dst)?.values() ?? []) clearTimeout(item.timer);
   historyNoticeStages.delete(dst);
+}
+
+function receivesListMessages(dst: string): boolean {
+  return !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)
+    && subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1)
+    && subscriptions.controllerHasTopic(dst, 'sessions');
+}
+
+function receivesSessionText(dst: string, sessionId: string): boolean {
+  return subscriptions.controllerHasTopic(dst, `session:${sessionId}`) || receivesListMessages(dst);
+}
+
+function listMessagePayload(dst: string, sessionId: string, payload: unknown): unknown {
+  return receivesListMessages(dst) && !subscriptions.controllerHasTopic(dst, `session:${sessionId}`)
+    ? { ...(payload as object), listMessage: true } : payload;
 }
 
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
@@ -1948,9 +1975,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     remotePayload = projectInteractionDismissedForRemote(remotePayload);
   }
   const sharedTaskTopic = sharedTaskMetadataTopic(channel, remotePayload);
+  const listMessage = isListMessagePush(channel, remotePayload);
   const targetsFor = (known: boolean): string[] => {
     const lookup = known ? subscriptions.getKnownControllersForTopic : subscriptions.getControllersForTopic;
-    const ordinary = lookup(topic);
+    const ordinary = [...new Set([...lookup(topic), ...(listMessage
+      ? lookup('sessions').filter(receivesListMessages) : [])])];
     if (!sharedTaskTopic) return ordinary;
     const shared = lookup(sharedTaskTopic).filter((dst) => isSharedTaskPeer(dst)
       && captureSharedTaskPush(dst, channel, remotePayload)?.() === true);
@@ -1994,7 +2023,14 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
-    const projected = projectedPayloadFor(dst);
+    let projected = projectedPayloadFor(dst);
+    if (listMessage && receivesListMessages(dst)) {
+      if (channel === 'local-db:messages:created') {
+        const push = projected as { message: Record<string, unknown> };
+        projected = { ...push, message: versionMessageBody(push.message) };
+      }
+      projected = listMessagePayload(dst, readPushSessionId(remotePayload)!, projected);
+    }
     return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
@@ -3270,7 +3306,11 @@ function sendInvokeResultSafe(
     channel === 'local-db:messages:list' && normalized.ok && Array.isArray(normalized.result)
       ? { ...normalized, result: projectMobileMessagePage(normalized.result, args?.[1]) }
       : normalized;
-  const attempt = trySendInvokeResult(client, src, requestId, proactive, channel, args);
+  const encoded = proactive.ok && !isSharedTaskPeer(src)
+    ? encodeMessageBodies(channel, args, proactive.result) : undefined;
+  const reused = proactive.ok && encoded !== undefined && encoded !== proactive.result
+    ? { ...proactive, result: encoded } : proactive;
+  const attempt = trySendInvokeResult(client, src, requestId, reused, channel, args);
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
   // 远程 Agent 的每个 op 自带幂等(poll 按游标、其余按各自 id 去重)，高频的事件流结果不进
@@ -3547,6 +3587,14 @@ function compactInvokeResultForDeviceLink(
   frame: { dst: string; requestId: string },
   args?: unknown[],
 ): InvokeResultPayload | null {
+  if (result.ok && messageRecord(result.result) && result.result.format === MESSAGE_BODY_FORMAT) {
+    const compact = compactInvokeResultForDeviceLink(channel, { ok: true, result: result.result.value }, frame, args);
+    if (!compact?.ok) return null;
+    // Compaction may change a body; never advertise its pre-compaction digest.
+    const wrapped: InvokeResultPayload = { ok: true, result: { format: MESSAGE_BODY_FORMAT,
+      value: mapMessageBodies(compact.result, versionMessageBody) } };
+    return fitsInvokeResultFrame(frame, wrapped) ? wrapped : null;
+  }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
     const page = result.result as Record<string, unknown>;
@@ -3640,6 +3688,7 @@ function fitsInvokeResultFrame(frame: { dst: string; requestId: string }, payloa
 function forceCompactRemoteMessageContent(message: unknown): unknown {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return message;
   const record = message as Record<string, unknown>;
+  if (typeof record.remoteBodyVersion === 'string' && !Object.prototype.hasOwnProperty.call(record, 'content')) return record;
   return {
     ...record,
     agentMeta: markRemoteContentTruncated(record.agentMeta),
@@ -3885,6 +3934,7 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
       const sessionId = topic.startsWith('session:') ? topic.slice('session:'.length) : null;
       if (sessionId) dropMakerEventBatch(src, sessionId);
       if (sessionId) sessionSyncStages.get(src)?.sessions.delete(sessionId);
+      if (sessionId && receivesListMessages(src)) stageSessionSync(src, sessionId, false);
     }
   }
   syncForwarding();

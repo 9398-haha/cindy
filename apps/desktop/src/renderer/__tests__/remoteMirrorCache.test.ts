@@ -46,6 +46,7 @@ import {
   readCachedMessages,
   readCachedSessionList,
   scheduleSessionListPersist,
+  persistListMessage,
 } from '@/features/device-link/mirrorCacheClient';
 import {
   __testing as dataOwnerGenTesting,
@@ -269,6 +270,35 @@ afterEach(() => {
 });
 
 describe('冷缓存 hydrate', () => {
+  it('shows a list-pushed reply immediately when opening a task while its history request is still pending', async () => {
+    const s = sid();
+    setDataOwnerGeneration('owner-a', 1);
+    registerRemote(s);
+    let push!: Parameters<typeof window.electronAPI.deviceLink.onRemotePush>[0];
+    window.electronAPI.deviceLink.onRemotePush = vi.fn(callback => { push = callback; return () => {}; });
+    makerChatStore.initGlobalListeners();
+    const row = dbMessage(s, 'prefetched', '完整长正文'.repeat(2000), '2026-10-10T00:00:00.000Z');
+    push({ deviceId: DEVICE_ID, channel: 'local-db:messages:created', payload: { sessionId: s, listMessage: true, message: row } });
+    await flush(30);
+    expect(makerChatStore.getSnapshot(s).messages.map(message => message.content)).toEqual([row.content]);
+    expect(invoke.mock.calls.filter(([, channel]) => channel.startsWith('local-db:messages:'))).toEqual([]);
+    expectPut(DEVICE_ID, s, [row]);
+    remoteListPromise = new Promise<Message[]>(() => {});
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    expect(makerChatStore.getSnapshot(s).messages.map(message => message.content)).toEqual([row.content]);
+  });
+
+  it('merges prefetched list text into the protected disk window', async () => {
+    const s = sid();
+    const earlier = dbMessage(s, 'old', 'earlier', '2026-10-10T00:00:00.000Z');
+    const latest = dbMessage(s, 'new', '完整正文'.repeat(2000), '2026-10-10T00:01:00.000Z');
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [earlier as unknown as Record<string, unknown>]);
+    persistListMessage(DEVICE_ID, s, latest);
+    await vi.waitFor(() => expectPut(DEVICE_ID, s, [earlier, latest]));
+    expect(putMessages.mock.calls[0].slice(3, 6)).toEqual([7, cachedOwnerToken, 0]);
+  });
+
   it('restores the structured view through the actual offline session entry', async () => {
     const s = sid();
     const rows = [{ id: 'cached', clientId: 'cached', role: 'user', content: 'offline history', createdAt: '2026-09-17T00:00:00Z' }];

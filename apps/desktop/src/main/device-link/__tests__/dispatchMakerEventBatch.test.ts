@@ -15,6 +15,7 @@ import {
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SESSION_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -136,6 +137,27 @@ afterEach(() => {
 });
 
 describe('[1] 能力协商', () => {
+  it('prefetches full prose for new list subscribers only, without duplicate delivery or tools', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    const caps = [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1];
+    subscriptions.subscribe('phone', ['sessions'], 'phone', caps);
+    subscriptions.subscribe('desktop', ['sessions', 'session:s1'], 'desktop', caps);
+    subscriptions.subscribe('old', ['sessions'], 'old');
+    const content = '完整长回复'.repeat(2000);
+    __testing.forwardPush('maker:event', { sessionId: 's1', persistId: 'm1', event: { type: 'text', data: { text: content, isFinal: false } } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'm1', clientId: 'm1', role: 'assistant', content } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', message: { id: 'tool', role: 'tool_result', content } });
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    const phone = h.sent.filter(push => push.dst === 'phone');
+    expect(phone.map(push => push.channel)).toEqual([MAKER_EVENT_BATCH_CHANNEL, 'local-db:messages:created']);
+    expect(phone[1].payload).toMatchObject({ listMessage: true, message: { content, remoteBodyVersion: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    expect((phone[0].payload as MakerEventBatchPayload).events[0]).toMatchObject({ listMessage: true });
+    expect(h.sent.filter(push => push.dst === 'old')).toEqual([]);
+    expect(h.sent.filter(push => push.dst === 'desktop' && push.channel === MAKER_EVENT_BATCH_CHANNEL)).toHaveLength(1);
+    expect(subscriptions.controllerHasTopic('phone', 'session:s1')).toBe(false);
+  });
+
   it('coalesces task patches even for legacy list subscribers and cancels offline peers', async () => {
     const h = mkClient();
     __testing.setActiveClient(h.client as never);
@@ -703,6 +725,26 @@ describe('running session recovery on slow links', () => {
   const snapshot = { ...delta('whole prefix'), event: {
     type: 'text', data: { text: 'whole prefix', isFinal: false, isFullText: true },
   } };
+
+  it('repairs the prefix when leaving chat and continues list text until the list is unsubscribed', async () => {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    setSessionTextSnapshotReader(() => snapshot);
+    subscriptions.subscribe('phone', ['sessions', 'session:s1'], 'phone',
+      [...capabilities, CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1]);
+    __testing.forwardPush('maker:event', delta('pending detail suffix'));
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['session:s1'] }] });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ channel: SESSION_SYNC_CHANNEL, payload: { ...snapshot, listMessage: true } });
+    __testing.forwardPush('maker:event', delta('list suffix'));
+    await vi.advanceTimersByTimeAsync(WINDOW_MS);
+    expect(batchesIn(h.sent)[0].events).toEqual([{ ...delta('list suffix'), listMessage: true }]);
+    __testing.forwardPush('maker:event', delta('cancelled suffix'));
+    __testing.handleSubscriptionFrame('phone', { channel: DL_UNSUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'] }] });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.sent).toHaveLength(2);
+  });
 
   it.each([
     ['batch', 'queue'], ['batch', 'peer'], ['legacy', 'queue'], ['legacy', 'peer'],
