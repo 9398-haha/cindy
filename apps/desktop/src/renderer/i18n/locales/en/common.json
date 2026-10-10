@@ -2137,6 +2137,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "Local Cursor CLI account",
+        "setup": "Install Cursor CLI using the official instructions, then restart Cindy. Sign in to Cursor in your terminal, then refresh the model list.",
+        "installGuide": "View installation instructions",
+        "modelsUnavailable": "Models not ready",
+        "refreshFailed": "Could not read Cursor models. Check that the CLI is installed and signed in, then retry. Restart Cindy if you just installed the CLI."
+      },
       "llamacpp": {
         "ownedElsewhere": "The model service is running in another Cindy instance. Download models or change context there, or stop its service first.",
         "primaryPick": "Primary pick · try this first",

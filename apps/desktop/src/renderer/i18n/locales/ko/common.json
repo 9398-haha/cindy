@@ -2135,6 +2135,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "이 컴퓨터의 Cursor CLI 계정",
+        "setup": "공식 안내에 따라 Cursor CLI를 설치한 후 Cindy를 다시 시작하세요. 터미널에서 Cursor에 로그인한 다음 모델 목록을 새로 고침하세요.",
+        "installGuide": "설치 안내 보기",
+        "modelsUnavailable": "모델이 아직 준비되지 않음",
+        "refreshFailed": "Cursor 모델을 읽지 못했습니다. CLI가 설치되어 있고 로그인되어 있는지 확인한 후 다시 시도하세요. CLI를 방금 설치했다면 Cindy를 먼저 다시 시작하세요."
+      },
       "llamacpp": {
         "ownedElsewhere": "다른 Cindy 인스턴스에서 모델 서비스가 실행 중입니다. 해당 인스턴스에서 모델을 다운로드하거나 컨텍스트를 변경하거나, 먼저 서비스를 중지하세요.",
         "primaryPick": "우선 선택 · 먼저 사용",

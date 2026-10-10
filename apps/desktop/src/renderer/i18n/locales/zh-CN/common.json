@@ -2135,6 +2135,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "使用本机 Cursor CLI 账号",
+        "setup": "先按官方说明安装 Cursor CLI，安装后重启 Cindy。然后在终端登录 Cursor，再刷新模型列表。",
+        "installGuide": "查看安装说明",
+        "modelsUnavailable": "模型尚未就绪",
+        "refreshFailed": "未能读取 Cursor 模型。请确认 CLI 已安装并登录，再重试；刚安装时请先重启 Cindy。"
+      },
       "llamacpp": {
         "ownedElsewhere": "模型服务正在另一个 Cindy 实例中运行。请在那里下载模型或修改上下文，或先在该实例停止服务。",
         "primaryPick": "主推 · 先试这个",

@@ -2135,6 +2135,13 @@
       }
     },
     "providers": {
+      "cursor": {
+        "localAccount": "この端末の Cursor CLI アカウント",
+        "setup": "公式の手順で Cursor CLI をインストールし、Cindy を再起動してください。その後、ターミナルで Cursor にログインし、モデル一覧を更新してください。",
+        "installGuide": "インストール手順を表示",
+        "modelsUnavailable": "モデルの準備ができていません",
+        "refreshFailed": "Cursor のモデルを取得できませんでした。CLI がインストール済みでログインしていることを確認し、再試行してください。CLI をインストールした直後は Cindy を再起動してください。"
+      },
       "llamacpp": {
         "ownedElsewhere": "モデルサービスは別の Cindy インスタンスで実行中です。モデルのダウンロードやコンテキストの変更はそちらで行うか、先にそのサービスを停止してください。",
         "primaryPick": "第一候補 · まず試す",

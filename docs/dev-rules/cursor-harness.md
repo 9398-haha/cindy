@@ -12,6 +12,17 @@ Cindy never copies credentials, directly rewrites Cursor's global configuration,
 installs Cursor automatically, or changes the native sandbox. Model/mode choices
 use the advertised ACP APIs; native persistence remains owned by Cursor.
 
+Desktop Settings → Model Providers offers Cursor in the add-provider wizard even
+before native model discovery succeeds. Its setup step shows CLI installation and
+terminal login instructions, then uses the existing native model-refresh API;
+it does not start an OAuth flow or create a second connection. An installed Cursor
+CLI stays visible in the settings rail while models are unavailable, with setup
+instructions and a retryable refresh. The installation/login scan asks the CLI
+for status and returns booleans only. The detail header identifies the Cursor
+engine and shows a connected state only when its discovered source is ready.
+Regression coverage: `addProviderWizardCursorEntry.test.tsx`,
+`providersSectionDeepLink.test.tsx`, and `localCliDetect.test.ts`.
+
 The desktop host discovers supported native executables and starts the exact
 absolute executable with `acp`, in the task working directory. Mobile and another
 desktop control that host through the existing device-link APIs. SSH execution,
