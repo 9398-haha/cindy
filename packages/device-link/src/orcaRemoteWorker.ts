@@ -70,6 +70,8 @@ export interface OrcaRemoteWorkerOpenResult {
   agentKind: OrcaRemoteWorkerAgentKind;
   /** 运行设备实际保存的档位；空字符串 = 不使用档位，缺省 = 旧设备未返回。 */
   effort?: string;
+  /** 运行设备实际保存的 Fast 状态；缺省 = 旧设备未返回。 */
+  fastMode?: boolean;
 }
 
 export interface OrcaRemoteWorkerReleaseRequest {

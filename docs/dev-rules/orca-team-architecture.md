@@ -402,6 +402,8 @@ open 成功后未关联即退出时，本机没有半成品代理，仅按持久
 进程在两者之间退出时，同一来源与 Lead 仍能按任务 ID 对账，不留下无来源标记的普通任务。
 实现见 `orcaRemoteWorkerHost.ts` 的 `createOrcaRemoteWorkerSessionOpener`，回归见
 `apps/desktop/src/main/localDb/__tests__/sessionOpening.test.ts`。
+新建和同 ID 重试的 open 回包带运行设备实际保存的 `fastMode`，本机代理与创建结果共同沿用；
+旧运行设备缺少该可选字段时才按请求值降级，不用本机目录猜测远端 Fast 能力。
 恢复完成前派发和本机启动入口
 不得按缺失的运行期路由回退到本机，读取失败或 owner 改变时应拒绝继续。
 创建回滚原子归档代理并释放名称与名额，未确认释放的 Worker 行保留供重启补发；正常

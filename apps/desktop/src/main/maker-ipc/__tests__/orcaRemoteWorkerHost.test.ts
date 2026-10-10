@@ -121,6 +121,20 @@ describe('orca remote worker host', () => {
     expect(deps.openSession).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])('replays stored Fast %s after rebuilding the host instead of a changed request', async fastMode => {
+    const { host, deps, sessions } = setup();
+    deps.openSession = vi.fn(async (req, lead) => {
+      const stored = { orcaRemoteLead: lead, workingDir: '/remote', model: 'm',
+        agentKind: req.agentKind, fastMode };
+      sessions.set(req.sessionId, stored);
+      return stored;
+    });
+    await expect(host.open({ ...request, fastMode: !fastMode })).resolves.toMatchObject({ fastMode });
+    await expect(createOrcaRemoteWorkerHost(deps).open({ ...request, fastMode: !fastMode }))
+      .resolves.toMatchObject({ fastMode });
+    expect(deps.openSession).toHaveBeenCalledOnce();
+  });
+
   it('refuses an id already used by another task or device', async () => {
     const plain = setup({
       existing: { orcaRemoteLead: null, workingDir: '/x', model: 'm', agentKind: 'codex' },

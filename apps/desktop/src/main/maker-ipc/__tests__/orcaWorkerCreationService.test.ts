@@ -389,6 +389,24 @@ describe('Worker running on another device (execution device)', () => {
     expect(windows.ok).toBe(true);
   });
 
+  it.each([false, true])('reports admitted remote Fast %s instead of the request after recording the Worker', async fastMode => {
+    const { deps, service } = remoteDeps({
+      openRemoteWorker: vi.fn(async () => ({ ok: true as const,
+        proxySessionId: 'proxy-1', remoteSessionId: 'remote-1', agent: 'codex' as const,
+        model: 'device-model', workingDir: '/remote',
+        proxySession: { title: 'Worker', model: 'device-model', agentKind: 'codex', effort: null,
+          permissionMode: 'auto', fastMode },
+      })),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', role: 'dev', label: 'a',
+      agent: 'codex', executionDeviceId: 'mac-mini', fast: !fastMode })).resolves.toMatchObject({
+      ok: true, resolved: { fastMode },
+    });
+    expect(deps.recordRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      proxySession: expect.objectContaining({ fastMode }),
+    }));
+  });
+
   it.each(['medium', 'low', ''])('reports the admitted remote effort %s after recording the Worker', async effort => {
     const { deps, service } = remoteDeps({
       openRemoteWorker: vi.fn(async () => ({ ok: true as const,

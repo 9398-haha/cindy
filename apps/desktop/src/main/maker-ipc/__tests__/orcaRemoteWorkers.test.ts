@@ -200,6 +200,31 @@ describe('execution devices', () => {
 
 describe('openRemoteWorker', () => {
   it.each([
+    [false, true, false],
+    [true, false, true],
+    [true, undefined, true],
+    [undefined, true, true],
+    [undefined, undefined, false],
+  ] as const)('uses admitted remote Fast %s with requested Fast %s (old hosts omit it)', async (fastMode, requested, expected) => {
+    const { workers } = setup({ handle: (_device, channel, args) =>
+      channel === 'maker:orca:remote-worker:open' ? ok({
+        sessionId: (args[0] as { sessionId: string }).sessionId,
+        agentKind: 'claude-code', model: 'device-model', workingDir: '/remote',
+        ...(fastMode !== undefined ? { fastMode } : {}),
+      }) : undefined });
+    try {
+      const result = await workers.openRemoteWorker({ ...openInput, fast: requested });
+      expect(result).toMatchObject({ ok: true, proxySession: { fastMode: expected } });
+      if (!result.ok) throw Error('expected successful open');
+      await workers.recordRemoteWorker({ ...openInput, proxySessionId: result.proxySessionId,
+        proxySession: result.proxySession, remoteSessionId: result.remoteSessionId });
+      expect(store.addRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+        proxySession: expect.objectContaining({ fastMode: expected }),
+      }));
+    } finally { workers.stop(); }
+  });
+
+  it.each([
     ['medium', undefined, 'medium'],
     ['low', 'high', 'low'],
     ['', 'high', ''],

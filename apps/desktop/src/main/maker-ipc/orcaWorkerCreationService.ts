@@ -884,7 +884,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           agent: opened.agent,
           model: opened.model,
           effort: opened.proxySession.effort || null,
-          fastMode: params.fast === true,
+          fastMode: opened.proxySession.fastMode,
           providerId: explicitSourceId ?? null,
           role,
           label,

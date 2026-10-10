@@ -52,7 +52,7 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
     });
     deps.broadcastSessionCreated(row.id);
     const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
-    return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort };
+    return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode };
   };
 }
 
@@ -69,6 +69,7 @@ export interface OrcaRemoteWorkerExistingSession {
   model: string;
   agentKind: OrcaRemoteWorkerOpenResult['agentKind'];
   effort?: string;
+  fastMode?: boolean;
 }
 
 export interface OrcaRemoteWorkerHostDeps {
@@ -86,6 +87,7 @@ export interface OrcaRemoteWorkerHostDeps {
     model: string;
     agentKind: OrcaRemoteWorkerOpenResult['agentKind'];
     effort?: string;
+    fastMode?: boolean;
   }>;
   writeRemoteLead(sessionId: string, lead: OrcaRemoteLead): Promise<void>;
   /** 同一任务 id 的 open / release 串行。 */
@@ -133,6 +135,7 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
               model: existing.model,
               agentKind: existing.agentKind,
               effort: existing.effort,
+              fastMode: existing.fastMode,
             };
           }
           fail('ALREADY_EXISTS', 'a different task already uses this id');

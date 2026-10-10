@@ -8501,6 +8501,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: sessions.model,
           agentKind: sessions.agentKind,
           effort: sessions.effort,
+          fastMode: sessions.fastMode,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -8512,6 +8513,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         model: row.model,
         agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
         effort: row.effort,
+        fastMode: row.fastMode,
       };
     },
     openSession: createOrcaRemoteWorkerSessionOpener({

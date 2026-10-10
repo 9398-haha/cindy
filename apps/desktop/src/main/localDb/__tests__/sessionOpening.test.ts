@@ -108,7 +108,7 @@ it.each([undefined, '/execution/project'])('inserts the remote Worker identity a
   expect(h.run.mock.invocationCallOrder[0]).toBeLessThan(bootstrapSession.mock.invocationCallOrder[0]!);
   expect(bootstrapSession.mock.invocationCallOrder[0]).toBeLessThan(broadcastSessionCreated.mock.invocationCallOrder[0]!);
   expect(h.values).toHaveBeenCalledOnce();
-  expect(result).toEqual({ agentKind: 'codex', model: 'model', workingDir: persisted.workingDir, effort: '' });
+  expect(result).toEqual({ agentKind: 'codex', model: 'model', workingDir: persisted.workingDir, effort: '', fastMode: false });
 });
 
 it.each(['medium', 'low', ''] as const)('returns the execution provider admitted effort %s', async effort => {
@@ -128,6 +128,49 @@ it.each(['medium', 'low', ''] as const)('returns the execution provider admitted
   await expect(open(remoteRequest, remoteLead)).resolves.toMatchObject({ effort });
   expect(h.values.mock.calls[0]![0]).toMatchObject({ effort });
   expect(bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ effort }), expect.any(Function));
+});
+
+it.each([
+  [true, true, true],
+  [true, false, false],
+  [false, undefined, false],
+] as const)('returns persisted Fast with provider support %s and requested Fast %s', async (supportsFast, requested, expected) => {
+  setSessionOpeningModelAdmission(async request => {
+    const route = resolveSessionExecutionSelection({ selection: request,
+      availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [], supportsFastMode: true }],
+      hasCindyAiApiKey: false,
+      providerRouting: {
+        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'],
+          fastModels: supportsFast ? ['model'] : [] }] },
+        resolveDefaultProviderIdForModel: () => 'connected',
+      },
+    });
+    return { ...request, model: route.model, providerId: route.providerId,
+      effort: route.effort ?? '', fastMode: route.fastMode };
+  });
+  const { open, bootstrapSession } = remoteOpener();
+  await expect(open({ ...remoteRequest, fastMode: requested }, remoteLead)).resolves.toMatchObject({ fastMode: expected });
+  expect(h.values.mock.calls[0]![0]).toMatchObject({ fastMode: expected });
+  expect(bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ fastMode: expected }), expect.any(Function));
+});
+
+it('keeps the current unsupported explicit Fast rejection before remote persistence', async () => {
+  setSessionOpeningModelAdmission(async request => {
+    const route = resolveSessionExecutionSelection({ selection: request,
+      availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [], supportsFastMode: true }],
+      hasCindyAiApiKey: false,
+      providerRouting: {
+        availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'], fastModels: [] }] },
+        resolveDefaultProviderIdForModel: () => 'connected',
+      },
+    });
+    return { ...request, model: route.model, providerId: route.providerId,
+      effort: route.effort ?? '', fastMode: route.fastMode };
+  });
+  const { open, bootstrapSession } = remoteOpener();
+  await expect(open({ ...remoteRequest, fastMode: true }, remoteLead)).rejects.toThrow('fast mode is not supported');
+  expect(h.values).not.toHaveBeenCalled();
+  expect(bootstrapSession).not.toHaveBeenCalled();
 });
 
 it('does not start or broadcast a remote Worker when its identity INSERT fails', async () => {
