@@ -89,6 +89,7 @@ import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate
 import { connectedProvidersForAgent, getModel } from '@cindy/model-providers/registry';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
+import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { fetchDeviceProvidersFresh, getCachedDeviceProviders, getDeviceProvidersGen, type DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { evictDeviceProviders, useDeviceProviders } from '@/device-link/useDeviceProviders';
 import { useDeviceApiKeyStatus, useDeviceModelPricing } from '@/device-link/useDeviceModelMeta';
@@ -140,6 +141,7 @@ import {
   ContextSheetRow,
 } from '@/session/ContextSheet';
 import { OrcaWorkerFormView } from '@/session/ContextSheetCollabView';
+import { OrcaWorkerDirectoryPicker } from '@/session/OrcaWorkerDirectoryPicker';
 import { useOrcaWorkerForm } from '@/session/useSessionOrcaCollab';
 import {
   buildOrcaEnableOptions,
@@ -614,8 +616,14 @@ export default function NewRemoteSessionScreen() {
   // 建目标时在 createSession 之后开启(首轮 Lead 才有协同工具)。一次性:创建后复位。
   const [collabDraft, setCollabDraft] = useState<OrcaWorkerFormValue | null>(null);
   const [collabEntryStatus, setCollabEntryStatus] = useState<OrcaCollabEntryStatus>('loading');
+  const executionMakerForDevice = useCallback(
+    (targetDeviceId: string) => createMobileMakerTransport({ deviceId: targetDeviceId, invoke }),
+    [invoke],
+  );
   const collabForm = useOrcaWorkerForm({
     maker,
+    executionMakerForDevice,
+    executionDevicesEnabled: true,
     // 按区域限定的账号键:Global 与中国大陆版同号不同人,记忆(含完全访问)不能串。
     prefsScope: outboxOwner.accountKey || null,
     active: contextSheetOpen && contextSheetView === 'collab',
@@ -1059,11 +1067,15 @@ export default function NewRemoteSessionScreen() {
   // 被控端供应商目录 → provider-aware 模型分段(对齐桌面)。0 供应商 / 旧被控端 → 回退扁平列表。
   const deviceProviders = useDeviceProviders(
     selectedDeviceId || undefined,
-    modelSheetOpen || collabForm.modelPicker.open,
+    modelSheetOpen,
   );
   // 模型列表元信息(单价 / 折扣版 key presence)+ 草稿 per-(agent,来源,模型) 记忆(对齐桌面)。
   const deviceModelPricing = useDeviceModelPricing(selectedDeviceId || undefined);
   const deviceApiKeyStatus = useDeviceApiKeyStatus(selectedDeviceId || undefined);
+  const collabWorkerDeviceId = collabForm.form.executionDeviceId ?? selectedDeviceId;
+  const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collabForm.modelPicker.open);
+  const collabModelPricing = useDeviceModelPricing(collabWorkerDeviceId || undefined);
+  const collabApiKeyStatus = useDeviceApiKeyStatus(collabWorkerDeviceId || undefined);
   const draftMemory = useMemo(() => draftModelMemoryFor(selectedDeviceId), [selectedDeviceId]);
   useEffect(() => {
     void hydrateDraftModelMemory();
@@ -5047,7 +5059,9 @@ export default function NewRemoteSessionScreen() {
         // 任务后(与桌面控制端老被控端兼容路径同口径,见 buildDraftWorkerInitialTask)。
         ...(collabDraft ? {
           orcaEnable: buildOrcaEnableOptions(
-            narrowOrcaWorkerProvider(collabDraft, deviceProviders.ready ? deviceProviders.providers : null),
+            narrowOrcaWorkerProvider(collabDraft, collabDraft.executionDeviceId
+              ? (collabDraft.executionDeviceId === collabWorkerDeviceId && collabDeviceProviders.ready ? collabDeviceProviders.providers : null)
+              : (deviceProviders.ready ? deviceProviders.providers : null)),
             buildDraftWorkerInitialTask(collabDraft.initialTask, effectiveDraft.firstMessage),
           ),
           collabDraft,
@@ -5160,6 +5174,9 @@ export default function NewRemoteSessionScreen() {
     agentAuthVerdict,
     auth.user?.id,
     collabDraft,
+    collabWorkerDeviceId,
+    collabDeviceProviders.providers,
+    collabDeviceProviders.ready,
     deviceProviders.ready,
     deviceProviders.providers,
     confirmAgentUnauthenticated,
@@ -5787,7 +5804,9 @@ export default function NewRemoteSessionScreen() {
       if (collabDraft) {
         try {
           await enableOrcaTeam(maker, result.sessionId, buildOrcaEnableOptions(
-            narrowOrcaWorkerProvider(collabDraft, deviceProviders.ready ? deviceProviders.providers : null),
+            narrowOrcaWorkerProvider(collabDraft, collabDraft.executionDeviceId
+              ? (collabDraft.executionDeviceId === collabWorkerDeviceId && collabDeviceProviders.ready ? collabDeviceProviders.providers : null)
+              : (deviceProviders.ready ? deviceProviders.providers : null)),
             buildDraftWorkerInitialTask(collabDraft.initialTask, input.objective),
           ));
           collabEnabled = true;
@@ -5952,6 +5971,9 @@ export default function NewRemoteSessionScreen() {
     agentAuthVerdict,
     auth,
     collabDraft,
+    collabWorkerDeviceId,
+    collabDeviceProviders.providers,
+    collabDeviceProviders.ready,
     deviceProviders.ready,
     deviceProviders.providers,
     confirmAgentUnauthenticated,
@@ -6752,6 +6774,9 @@ export default function NewRemoteSessionScreen() {
             <OrcaWorkerFormView
               agents={collabForm.agents}
               permissionModes={collabForm.permissionModes}
+              executionDevices={collabForm.executionDevices}
+              executionDevicesLoading={collabForm.executionDevicesLoading}
+              executionDevicesError={collabForm.executionDevicesError}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
               form={collabForm.form}
@@ -6761,6 +6786,7 @@ export default function NewRemoteSessionScreen() {
               onCustomRoleModeChange={collabForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collabForm.changePermission(mode)}
               onPickModel={collabForm.modelPicker.openPicker}
+              onPickDirectory={collabForm.directoryPicker.openPicker}
             />
             {collabDraft ? (
               <ContextSheetGroup label="">
@@ -6793,6 +6819,8 @@ export default function NewRemoteSessionScreen() {
           />
         )}
       </ContextSheet>
+      <OrcaWorkerDirectoryPicker picker={collabForm.directoryPicker}
+        deviceId={collabForm.form.executionDeviceId} workingDir={collabForm.form.remoteDir} mode={collabForm.form.remoteDirMode} />
       {nativeSelectionSheet ? <NewTaskSelectionSheet
         page={browseOpen ? 'directory' : devicePickerOpen ? 'device' : workspacePickerOpen ? 'workspace' : null}
         busy={creating || voiceIsProcessing}
@@ -6927,10 +6955,10 @@ export default function NewRemoteSessionScreen() {
               selectedEffort: collabForm.form.model.effort ?? '',
               selectedFastMode: collabForm.form.model.fast,
             } : undefined,
-            scope: JSON.stringify([auth.user?.id, selectedDeviceId, 'orca-worker']),
+            scope: JSON.stringify([auth.user?.id, collabWorkerDeviceId, 'orca-worker']),
             agents: collabForm.pickerAgents,
             loadCapabilities: async agent => {
-              const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+              const result = normalizeMobileAgentCapabilities(await collabForm.maker.getCapabilities(agent));
               if (!result) throw new Error('Capabilities unavailable');
               return result;
             },
@@ -6939,26 +6967,26 @@ export default function NewRemoteSessionScreen() {
           activeModelId={collabForm.form.model?.id ?? ''}
           activePermissionMode=""
           agentKind={collabForm.form.agent}
-          apiKeyStatus={deviceApiKeyStatus}
+          apiKeyStatus={collabApiKeyStatus}
           capabilities={null}
-          emptyHint={deviceProviders.error && !deviceProviders.unsupported
-            ? humanizeRemoteError(deviceProviders.error)
+          emptyHint={collabDeviceProviders.error && !collabDeviceProviders.unsupported
+            ? humanizeRemoteError(collabDeviceProviders.error)
             : undefined}
           flatOptions={collabForm.modelPicker.flatModelOptions}
           hidePermissionTrigger
           keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          loading={deviceProviders.loading}
-          modelVisibilityOverrides={deviceProviders.modelVisibilityOverrides}
+          loading={collabDeviceProviders.loading}
+          modelVisibilityOverrides={collabDeviceProviders.modelVisibilityOverrides}
           onClose={collabForm.modelPicker.close}
           onClosed={collabForm.modelPicker.closed}
           onSelectFlatModel={collabForm.modelPicker.selectFlatModel}
           onSelectPermissionMode={() => undefined}
           onSelectProviderRow={() => undefined}
           permissionOptions={[]}
-          pricing={deviceModelPricing}
-          providers={deviceProviders.providers}
-          providersReady={deviceProviders.ready}
-          providersUnsupported={deviceProviders.unsupported}
+          pricing={collabModelPricing}
+          providers={collabDeviceProviders.providers}
+          providersReady={collabDeviceProviders.ready}
+          providersUnsupported={collabDeviceProviders.unsupported}
           selectedEffort={collabForm.form.model?.effort ?? ''}
           selectedFastMode={!!collabForm.form.model?.fast}
           selectedProviderId={collabForm.form.model?.providerId ?? null}
