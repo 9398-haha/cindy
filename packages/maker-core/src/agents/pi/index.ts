@@ -6972,6 +6972,41 @@ export class PiAgent extends BaseAgent {
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
       mutableProviderId = effectiveProviderId;
+      // pi CLI 在 set_model 后会把思考档位重置成新模型自己的默认（转录实证：声明了档位的
+      // 模型落到 defaultEffort 如 high，未声明的落到 low/medium），而本函数原本只在
+      // setOpts.effort 上做校验、从不下发。不在这里把目标档位重新下发的话，每次切模型
+      // 都会掉回默认档，表现为「推理强度自动变低」。目标档 = 显式 effort > 会话原档位
+      // （mutableEffort）；新模型不支持（含未声明档位）时保持 pi 默认，与能力收敛一致。
+      const restoredEffort = setOpts?.effort ?? mutableEffort;
+      if (
+        restoredEffort &&
+        nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
+        nextEffortSnapshot.includes(restoredEffort)
+      ) {
+        // 恢复请求失败（被拒或超时/链路抛错）都不能让 setModel 失败：模型路由此刻已确认,
+        // 抛错只会跳过下面的子代理快照收尾（pending 卡死委派），档位本身却救不回来。
+        try {
+          const restore = await proc.request({
+            type: 'set_thinking_level',
+            level: effortToPiThinkingLevel(restoredEffort),
+          });
+          if (restore.success) {
+            // mutableEffort 只跟随**已确认生效**的档位：它是对外汇报（getEffort）与后续
+            // 切换恢复的依据；被 Pi 拒绝的目标档不能当成已生效值。
+            mutableEffort = restoredEffort;
+          } else {
+            deps.logger.warn('pi: restore thinking level after model switch failed', {
+              effort: restoredEffort,
+              error: restore.error,
+            });
+          }
+        } catch (err) {
+          deps.logger.warn('pi: restore thinking level after model switch errored', {
+            effort: restoredEffort,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       autoReviewDecisionCache.clear();
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
