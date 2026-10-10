@@ -595,7 +595,7 @@ describe('wrapTeamDeps', () => {
       second = wrapped.dispatchWorkerMessage(params as never);
       // Drain queued microtasks without releasing the first accepted callback.
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(report.history.filter((row) => row.role === 'user')).toHaveLength(1);
+      expect(report.history.filter((row) => row.role === 'user')).toHaveLength(0);
       releaseFirst();
       const results = await Promise.all([first, second]);
       expect(results.every((result) => result.ok)).toBe(true);
@@ -628,9 +628,11 @@ describe('wrapTeamDeps', () => {
         await wrapped.dispatchWorkerMessage(params as never);
         report.history.push({ id: 'reply-1', role: 'assistant', content: 'First result' });
       }
+      const historyBeforeRejectedDispatch = report.history.slice();
       await expect(wrapped.dispatchWorkerMessage({ ...params,
         onAccepted: async () => { throw new Error('accepted lifecycle rolled back'); },
       } as never)).rejects.toThrow('accepted lifecycle rolled back');
+      expect(report.history).toEqual(historyBeforeRejectedDispatch);
       expect(workers.runtime.hasPendingReport('proxy-1')).toBe(previous);
       if (previous) {
         const previousCapture = report.capture();
@@ -639,6 +641,104 @@ describe('wrapTeamDeps', () => {
       }
     } finally { workers.stop(); }
   });
+
+  it.each(['plugin source revoked', 'worker status write failed'])(
+    'does not enqueue remote work when accepted preflight rejects (%s)', async message => {
+      const { workers, remoteInvoke } = await trackedWorker();
+      const error = new Error(message);
+      const onAcceptedRollback = vi.fn(async () => undefined);
+      const onAcceptedCommit = vi.fn(async () => undefined);
+      try {
+        await expect(workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+          targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+          dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+          onAccepted: async () => { throw error; }, onAcceptedRollback, onAcceptedCommit,
+        })).rejects.toBe(error);
+        expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+        expect(onAcceptedRollback).toHaveBeenCalledOnce();
+        expect(onAcceptedCommit).not.toHaveBeenCalled();
+        expect(workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+      } finally { workers.stop(); }
+    },
+  );
+
+  it('rolls back accepted state when remote enqueue is definitively rejected', async () => {
+    const { workers } = await trackedWorker({ handle: (_device, channel) =>
+      channel === 'maker:input:enqueue' ? fail('PERMISSION_DENIED', 'remote control disabled') : undefined });
+    const onAccepted = vi.fn(async () => undefined);
+    const onAcceptedRollback = vi.fn(async () => undefined);
+    const onAcceptedCommit = vi.fn(async () => undefined);
+    try {
+      await expect(workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+        dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+        onAccepted, onAcceptedRollback, onAcceptedCommit,
+      })).resolves.toMatchObject({ ok: false });
+      expect(onAccepted).toHaveBeenCalledOnce();
+      expect(onAcceptedRollback).toHaveBeenCalledOnce();
+      expect(onAcceptedCommit).not.toHaveBeenCalled();
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+    } finally { workers.stop(); }
+  });
+
+  it('preserves accepted rejection when its rollback also fails', async () => {
+    const { workers, remoteInvoke } = await trackedWorker();
+    const error = new Error('permission revoked');
+    const onAcceptedRollback = vi.fn(async () => { throw new Error('rollback write failed'); });
+    try {
+      await expect(workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+        dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+        onAccepted: async () => { throw error; }, onAcceptedRollback,
+      })).rejects.toBe(error);
+      expect(onAcceptedRollback).toHaveBeenCalledOnce();
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+    } finally { workers.stop(); }
+  });
+
+  it('preserves accepted rejection when restoring the report record fails', async () => {
+    const { workers, remoteInvoke } = await trackedWorker();
+    const error = new Error('permission revoked');
+    store.saveWorkerRemoteReport.mockResolvedValueOnce(undefined);
+    store.saveWorkerRemoteReport.mockRejectedValueOnce(new Error('report rollback write failed'));
+    const onAcceptedRollback = vi.fn(async () => undefined);
+    try {
+      await expect(workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+        dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+        onAccepted: async () => { throw error; }, onAcceptedRollback,
+      })).rejects.toBe(error);
+      expect(store.saveWorkerRemoteReport).toHaveBeenCalledTimes(2);
+      expect(onAcceptedRollback).toHaveBeenCalledOnce();
+      expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+    } finally { workers.stop(); }
+  });
+
+  it.each(['account change', 'worker release'])(
+    'rechecks the dispatch after accepted preflight (%s)', async change => {
+      let owner = {};
+      const { workers, remoteInvoke } = setup({ getOwnerToken: () => owner });
+      workers.runtime.track(restoredRow);
+      const onAcceptedRollback = vi.fn(async () => undefined);
+      const onAcceptedCommit = vi.fn(async () => undefined);
+      try {
+        await expect(workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+          targetSessionId: 'proxy-1', workerId: 'w-1', message: 'task',
+          dispatchMeta: { source: 'mcp', context: 'send_to_worker' },
+          onAccepted: async () => {
+            await Promise.resolve();
+            if (change === 'account change') owner = {};
+            else workers.runtime.untrack('proxy-1');
+          }, onAcceptedRollback, onAcceptedCommit,
+        })).resolves.toMatchObject({ ok: false });
+        expect(remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:input:enqueue')).toBe(false);
+        expect(onAcceptedRollback).toHaveBeenCalledOnce();
+        expect(onAcceptedCommit).not.toHaveBeenCalled();
+      } finally { workers.stop(); }
+    },
+  );
 
   it('treats an idle remote worker as not live so dispatch reports it as resumed', async () => {
     const { workers } = await trackedWorker();

@@ -392,6 +392,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 远端回报身份在 enqueue 前保存于 `orca_workers.pending_remote_report`，恢复时重建 TeamService
 待回报身份；同一数据库 owner 的重复启动不清空派活。只有 Lead 接受回报或该捕获身份已被
 结清/替换后，才原子更新去重游标与对应等待记录；拒收或落盘失败继续重试，不清掉新派活。
+远端派活先保存未冻结的待回报身份，再执行 Lead 的 `onAccepted` 权限／状态复核；成功后
+再次核对 owner 与派发身份，才向运行设备入队。复核拒绝时不发送，恢复上一代等待记录并
+按既有 accepted 回滚恢复 Lead 状态；回滚次生错误记日志，不覆盖原始拒绝异常。
+明确投递失败也回滚已暂存的 accepted 状态；投递成功或结果未知后才 commit 并冻结身份。
+这不改变 queued 派活尚未消费就提交回报身份的已知缺口，也不提供跨设备事务或撤销已执行输入。
 结束协同不依赖缓存 running：先确认停止并保存 `remote_stop_confirmed_at`，再解除协同标记；
 清理单飞且读取最新阶段，后续只补未完成阶段。归档提交成功后才取消远端路由。
 创建回执丢失时使用同一 sessionId 核对，未确认身份保存在 `orca_remote_opens`；孤儿清理与

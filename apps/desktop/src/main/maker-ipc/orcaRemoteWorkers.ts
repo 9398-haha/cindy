@@ -48,6 +48,7 @@ import {
   type RemoteWorkerTurnEnd,
 } from './orcaRemoteWorkerRuntime.js';
 import type { OrcaTeamService, OrcaTeamServiceDeps } from './orcaTeamService.js';
+import { runAcceptedRollback } from './acceptedCallbackRunner.js';
 
 const CAPS_PROBE_TIMEOUT_MS = 5_000;
 const RELEASE_RETRY_MS = 5 * 60_000;
@@ -666,52 +667,70 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         // 与本机派发复用同一会话锁，保持 enqueue 与 accepted/commit 身份的顺序一致。
         return base.withSessionSendLock(params.targetSessionId, async () => {
           const clientId = createId();
-          const result = await runtime.dispatch({
-            proxySessionId: params.targetSessionId,
-            rawContent: params.message,
-            clientId,
-          });
           const meta = { source: params.dispatchMeta.source, context: params.dispatchMeta.context };
-          if (!result.ok) {
-            return {
-              ok: false,
-              dispatchOutcome: {
-                ...createHostSendFailure(
-                  result.code === 'DEVICE_UNREACHABLE'
-                    ? 'HOST_NOT_READY'
-                    : result.code === 'SESSION_NOT_FOUND'
-                      ? 'SESSION_NOT_FOUND'
-                      : 'SEND_FAILED',
-                  result.message,
-                ),
-                ...meta,
-              },
-            };
-          }
+          let acceptedDidRun = false;
+          let rollbackDidRun = false;
+          const rollbackAccepted = async () => {
+            if (!acceptedDidRun || rollbackDidRun) return;
+            rollbackDidRun = true;
+            await runAcceptedRollback(params.onAcceptedRollback, params.targetSessionId, clientId, deps.log);
+          };
           try {
-            await params.onAccepted?.();
+            const result = await runtime.dispatch({
+              proxySessionId: params.targetSessionId,
+              rawContent: params.message,
+              clientId,
+              beforeEnqueue: async () => {
+                if (!params.onAccepted) return;
+                acceptedDidRun = true;
+                await params.onAccepted();
+              },
+            });
+            if (!result.ok) {
+              await rollbackAccepted();
+              return {
+                ok: false,
+                dispatchOutcome: {
+                  ...createHostSendFailure(
+                    result.code === 'DEVICE_UNREACHABLE'
+                      ? 'HOST_NOT_READY'
+                      : result.code === 'SESSION_NOT_FOUND'
+                        ? 'SESSION_NOT_FOUND'
+                        : 'SEND_FAILED',
+                    result.message,
+                  ),
+                  ...meta,
+                },
+              };
+            }
             await params.onAcceptedCommit?.();
+            runtime.confirmDispatchAccepted(params.targetSessionId, clientId);
+            return {
+              ok: true,
+              mode: result.mode,
+              clientId,
+              dispatchOutcome:
+                result.mode === 'queued'
+                  ? {
+                      kind: 'session-dispatch',
+                      source: meta.source,
+                      dispatched: true,
+                      wakeKind: 'queued',
+                    }
+                  : { kind: 'session-dispatch', source: meta.source, dispatched: true },
+              targetTitle: null,
+              targetLastUserSendAt: null,
+            };
           } catch (err) {
-            await runtime.rejectDispatchAcceptance(params.targetSessionId, clientId);
+            await runtime.rejectDispatchAcceptance(params.targetSessionId, clientId).catch((rollbackError) =>
+              deps.log.warn('orca remote worker: acceptance rollback persistence failed', {
+                workerId: params.workerId,
+                err: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+              }),
+            );
+            await rollbackAccepted();
             throw err;
           }
-          runtime.confirmDispatchAccepted(params.targetSessionId, clientId);
-          return {
-            ok: true,
-            mode: result.mode,
-            clientId,
-            dispatchOutcome:
-              result.mode === 'queued'
-                ? {
-                    kind: 'session-dispatch',
-                    source: meta.source,
-                    dispatched: true,
-                    wakeKind: 'queued',
-                  }
-                : { kind: 'session-dispatch', source: meta.source, dispatched: true },
-            targetTitle: null,
-            targetLastUserSendAt: null,
-          };
         });
       },
       reserveWorkerMessage: async (params) => {

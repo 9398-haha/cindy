@@ -629,6 +629,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       proxySessionId: string;
       rawContent: string;
       clientId: string;
+      /** Lead 的 accepted 权限／状态复核必须先于运行设备持久入队。 */
+      beforeEnqueue?: () => void | Promise<void>;
     }): Promise<RemoteWorkerDispatchResult> {
       const state = workers.get(params.proxySessionId);
       if (!state)
@@ -636,6 +638,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       const { ref } = state;
       const deviceName = deps.deviceName(ref.deviceId);
       let prepared: AwaitingReport | null = null;
+      let acceptedCheckFailed = false;
       try {
         const row = (await deps.invoke(ref.deviceId, 'local-db:sessions:get', [
           ref.remoteSessionId,
@@ -670,6 +673,14 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         // 先落盘再发送；重启后用同一 clientId 核对回执和历史。
         await persist(state);
         if (!current(state)) throw new Error('remote worker owner changed');
+        try {
+          await params.beforeEnqueue?.();
+        } catch (err) {
+          acceptedCheckFailed = true;
+          throw err;
+        }
+        if (!current(state) || state.awaiting !== prepared)
+          throw new Error('remote worker owner or dispatch changed');
         const accept = (): RemoteWorkerDispatchResult => {
           setReachable(ref.deviceId, true);
           const mode = state.inTurn ? 'queued' : 'dispatched';
@@ -705,6 +716,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             }),
           );
         }
+        // 权限／状态拒绝沿用 TeamService 的取消异常，不能转换为已送达或吞掉原始原因。
+        if (acceptedCheckFailed) throw err;
         if (!current(state))
           return { ok: false, code: 'SEND_FAILED', message: 'remote worker owner changed' };
         if (deviceUnreachable(err)) {
