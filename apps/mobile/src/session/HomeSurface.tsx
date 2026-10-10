@@ -24,6 +24,7 @@ import {
   Alert,
   Animated,
   AppState,
+  Keyboard,
   Platform,
   Modal,
   type NativeScrollEvent,
@@ -134,7 +135,6 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import {
   discoverRemoteHomeCollections,
   remoteResourceDiscoveryTargets,
-  serializeRemoteResourceTargets,
   type RemoteHomeCollection,
 } from '@/device-link/remoteResources';
 import {
@@ -2784,7 +2784,7 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
   const openRemoteCollection = useCallback((collection: RemoteHomeCollection) => {
     openHomeRemoteCollection({
       collection, teammateCollectionId: TEAMMATE_COLLECTION_ID, embedded,
-      setMode: homeNavigation.setMode, push: guardedPush, onModeChange,
+      setMode: homeNavigation.setMode, push: guardedPush, onModeChange, dismissKeyboard: Keyboard.dismiss,
     });
   }, [embedded, guardedPush, homeNavigation.setMode, onModeChange]);
   const homeScopePullDownActions = useMemo(

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
 vi.mock("react-native", () => ({
+  Keyboard: { dismiss: vi.fn() },
   Platform: { OS: "android" },
   NativeModules: {},
   UIManager: { getViewManagerConfig: () => ({}) },
@@ -13,6 +14,7 @@ vi.mock("@/theme", () => ({ useTheme: () => ({ colors: {} }) }));
 vi.mock("@/platform/chrome/AnchoredPullDownMenu", () => ({ AnchoredPullDownMenu: () => null }));
 
 import { usesNativePullDownMenu } from "@/platform/chrome/NativePullDownMenu";
+import { Keyboard } from "react-native";
 import { buildPullDownMenuSections, resolvePullDownSubmenu } from "@/platform/chrome/pullDownMenuModel";
 import {
   buildHomeDisplayPullDownActions,
@@ -139,6 +141,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
   });
 
   it("opens Teammates from both scope menus through the teammate home path", () => {
+    vi.mocked(Keyboard.dismiss).mockClear();
     const collections = [
       { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
       { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
@@ -151,14 +154,17 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
       const parsed = parseHomeScopePullDownAction(action.id);
       const collection = parsed.kind === "collection" ? collections.find(item => item.id === parsed.collectionId) : undefined;
       expect(collection).toBeDefined();
-      openHomeRemoteCollection({ collection: collection!, teammateCollectionId: "teammates", embedded: true, setMode, push, onModeChange });
+      openHomeRemoteCollection({ collection: collection!, teammateCollectionId: "teammates", embedded: true, setMode, push, onModeChange, dismissKeyboard: Keyboard.dismiss });
     }
     expect(setMode).toHaveBeenCalledExactlyOnceWith("teammates");
     expect(push).toHaveBeenNthCalledWith(1, "/devices");
     expect(push).toHaveBeenNthCalledWith(2, expect.objectContaining({ pathname: "/resources/[collectionId]", params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
     expect(onModeChange).not.toHaveBeenCalled();
-    openHomeRemoteCollection({ collection: collections[0], teammateCollectionId: "teammates", embedded: false, setMode, push, onModeChange });
+    expect(Keyboard.dismiss).toHaveBeenCalledOnce();
+    onModeChange.mockImplementation(() => expect(Keyboard.dismiss).toHaveBeenCalledTimes(2));
+    openHomeRemoteCollection({ collection: collections[0], teammateCollectionId: "teammates", embedded: false, setMode, push, onModeChange, dismissKeyboard: Keyboard.dismiss });
     expect(onModeChange).toHaveBeenCalledExactlyOnceWith("teammates");
+    expect(push).toHaveBeenCalledTimes(2);
   });
 
   it("routes settings pickers and local-log options through the pull-down on Android", () => {

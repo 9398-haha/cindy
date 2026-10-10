@@ -1,6 +1,6 @@
 import { useRemoteResourceList } from '@/session/useRemoteResourceList';
 import { isRemoteResourceUnread } from '@/device-link/remoteResourceCache';
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
@@ -18,7 +18,7 @@ import {
 } from '@cindy/device-link';
 
 import { Text } from '@/components/AppText';
-import { useHomeMode } from '@/session/useHomeMode';
+import { useTeammateNavigation } from '@/session/useTeammateNavigation';
 import { TEAMMATE_COLLECTION_ID } from '@/session/useTeammateRoster';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { MainWindowActionButton, MainWindowEmptyState, RemoteListSyncingPlaceholder, StatusDot } from '@/components/MobilePrimitives';
@@ -56,12 +56,12 @@ export default function RemoteCollectionScreen() {
 }
 
 function LegacyTeammatesHomeRedirect() {
-  const navigation = useHomeMode();
+  const navigation = useTeammateNavigation();
+  const focused = useIsFocused();
   useEffect(() => {
-    if (navigation.hydrated && navigation.mode !== 'teammates') void navigation.setMode('teammates');
-  }, [navigation.hydrated, navigation.mode, navigation.setMode]);
-  if (!navigation.hydrated || navigation.mode !== 'teammates') return null;
-  return <Redirect href="/devices" />;
+    if (focused && navigation.hydrated) void navigation.chooseMode('teammates');
+  }, [focused, navigation.hydrated, navigation.chooseMode]);
+  return null;
 }
 
 function RemoteCollectionScreenContent() {

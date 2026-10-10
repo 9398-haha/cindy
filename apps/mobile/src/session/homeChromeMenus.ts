@@ -74,6 +74,7 @@ export function openHomeRemoteCollection({
   collection,
   teammateCollectionId,
   embedded,
+  dismissKeyboard,
   setMode,
   push,
   onModeChange,
@@ -81,11 +82,13 @@ export function openHomeRemoteCollection({
   collection: RemoteHomeCollection;
   teammateCollectionId: string;
   embedded: boolean;
+  dismissKeyboard(): void;
   setMode(mode: "teammates"): void | Promise<void>;
   push(href: string | { pathname: string; params: Record<string, string> }): void;
   onModeChange?: (mode: "teammates") => void;
 }) {
   if (collection.id === teammateCollectionId) {
+    dismissKeyboard();
     if (embedded) {
       void setMode("teammates");
       push("/devices");
