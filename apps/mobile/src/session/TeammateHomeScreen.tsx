@@ -149,7 +149,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   navDot: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: radius.pill, backgroundColor: colors.textPrimary,
     borderWidth: 2, borderColor: colors.surface },
   titleMenu: { flex: 1 },
-  titleTrigger: { alignItems: 'center', flex: 1, justifyContent: 'center' },
+  titleTrigger: { alignItems: 'center', flex: 1, justifyContent: 'center', minHeight: navigationChrome.target, minWidth: navigationChrome.target },
   titleCluster: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   title: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold },
   pressed: { opacity: 0.72 },

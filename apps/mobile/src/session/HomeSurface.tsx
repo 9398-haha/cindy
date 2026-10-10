@@ -105,6 +105,7 @@ import {
   type HomeDisplayPatch,
   buildHomeScopePullDownActions,
   parseHomeScopePullDownAction,
+  openHomeRemoteCollection,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
 import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
@@ -2781,22 +2782,9 @@ function HomeScreenContent({ active = true, onModeChange, width, newSessionInSys
 
   const nativeHomeMenus = usesNativePullDownMenu();
   const openRemoteCollection = useCallback((collection: RemoteHomeCollection) => {
-    if (collection.id === TEAMMATE_COLLECTION_ID) {
-      if (embedded) {
-        void homeNavigation.setMode('teammates');
-        guardedPush('/devices');
-      } else {
-        onModeChange?.('teammates');
-      }
-      return;
-    }
-    guardedPush({
-      pathname: '/resources/[collectionId]',
-      params: {
-        collectionId: collection.id,
-        title: collection.title,
-        targets: serializeRemoteResourceTargets(collection.targets),
-      },
+    openHomeRemoteCollection({
+      collection, teammateCollectionId: TEAMMATE_COLLECTION_ID, embedded,
+      setMode: homeNavigation.setMode, push: guardedPush, onModeChange,
     });
   }, [embedded, guardedPush, homeNavigation.setMode, onModeChange]);
   const homeScopePullDownActions = useMemo(

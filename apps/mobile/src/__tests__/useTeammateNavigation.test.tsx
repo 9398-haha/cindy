@@ -4,11 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobileUser } from '@/auth/AuthContext';
 const h = vi.hoisted(() => ({
-  disk: new Map<string, string>(), push: vi.fn(), dismissTo: vi.fn(), dismiss: vi.fn(), accountGeneration: 1,
+  disk: new Map<string, string>(), push: vi.fn(), dismissTo: vi.fn(), dismiss: vi.fn(), reset: vi.fn(), accountGeneration: 1,
   user: { id: 'account', passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser,
   get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss }), useNavigation: () => ({ getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss }), useNavigation: () => ({ reset: h.reset, getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
 vi.mock('react-native', () => ({ Keyboard: { dismiss() {} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration }) }));
@@ -18,6 +18,7 @@ import { useTeammateNavigation } from '@/session/useTeammateNavigation';
 import { homeNavigationOwner } from '@/session/useHomeMode';
 import { readHomeNavigationPreferences, saveHomeNavigationPreferences } from '@/session/homeViewPreferenceStore';
 import { teammateIdentity } from '@/session/teammateNavigation';
+import { StackRouter, StackActions } from 'expo-router/build/react-navigation/routers/StackRouter';
 const teammate = { key: 'mac:writer', host: { deviceId: 'mac', deviceName: 'My Mac' }, item: {
   ref: { collectionId: 'teammates', kind: 'bot', id: 'writer' }, revision: '1', display: { title: 'Writer' }, links: [],
 } };
@@ -141,16 +142,35 @@ it.each([
   await act(async () => result.chooseMode('teammates'));
   expect(h.dismiss).toHaveBeenCalledExactlyOnceWith(1);
   expect(h.dismissTo).not.toHaveBeenCalled();
+  expect(h.reset).not.toHaveBeenCalled();
 });
-it('replaces a retired teammate collection entry instead of returning to it', async () => {
-  h.routes = [
+it.each(['tasks', 'teammates'] as const)('removes the retired stack before returning to %s', async mode => {
+  const router = StackRouter({ initialRouteName: 'resources/[collectionId]' });
+  const options = { routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'],
+    routeParamList: { 'resources/[collectionId]': { collectionId: 'teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
+  let state = router.getInitialState(options);
+  state = router.getStateForAction(state, StackActions.push('sessions/[sessionId]'), options)! as typeof state;
+  h.routes = state.routes;
+  h.reset.mockImplementationOnce(next => { state = router.getRehydratedState({ ...next, stale: true }, options) as typeof state; });
+  await render();
+  await act(async () => result.chooseMode(mode));
+  expect(h.dismiss).not.toHaveBeenCalled();
+  expect(h.dismissTo).not.toHaveBeenCalled();
+  expect(state.routes.map(route => route.name)).toEqual(['devices/index']);
+  expect(router.getStateForAction(state, StackActions.pop(), options)).toBeNull();
+});
+it('preserves earlier unrelated routes when removing multiple retired entries', async () => {
+  const prior = { name: 'resources/[collectionId]', params: { collectionId: 'tools', targets: 'hosts' } };
+  h.routes = [prior,
+    { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+    { name: 'sessions/[sessionId]' },
     { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
     { name: 'sessions/[sessionId]' },
   ];
   await render();
-  await act(async () => result.chooseMode('teammates'));
-  expect(h.dismiss).not.toHaveBeenCalled();
-  expect(h.dismissTo).toHaveBeenCalledWith('/devices');
+  await act(async () => result.chooseMode('tasks'));
+  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [prior, { name: 'devices/index' }] });
+  expect(h.dismissTo).not.toHaveBeenCalled();
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {
   const { readRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');

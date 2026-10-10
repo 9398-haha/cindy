@@ -17,6 +17,8 @@ import { buildPullDownMenuSections, resolvePullDownSubmenu } from "@/platform/ch
 import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
+  openHomeRemoteCollection,
+  parseHomeScopePullDownAction,
 } from "@/session/homeChromeMenus";
 
 const readSource = (path: string) =>
@@ -137,16 +139,26 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
   });
 
   it("opens Teammates from both scope menus through the teammate home path", () => {
-    const home = readSource("src/session/HomeSurface.tsx");
-    const sharedHandler = home.slice(
-      home.indexOf("const openRemoteCollection"),
-      home.indexOf("const homeScopePullDownActions"),
-    );
-    expect(sharedHandler).toContain("collection.id === TEAMMATE_COLLECTION_ID");
-    expect(sharedHandler).toContain("void homeNavigation.setMode('teammates')");
-    expect(sharedHandler).toContain("guardedPush('/devices')");
-    expect(sharedHandler).toContain("onModeChange?.('teammates')");
-    expect(home.match(/openRemoteCollection\(collection\)/g)).toHaveLength(2);
+    const collections = [
+      { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+      { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+    ];
+    const actions = buildHomeScopePullDownActions([], "All", collections);
+    const teammateAction = actions.find(action => action.id === "scope.collection:teammates")!;
+    const genericAction = actions.find(action => action.id === "scope.collection:tools")!;
+    const setMode = vi.fn(); const push = vi.fn(); const onModeChange = vi.fn();
+    for (const action of [teammateAction, genericAction]) {
+      const parsed = parseHomeScopePullDownAction(action.id);
+      const collection = parsed.kind === "collection" ? collections.find(item => item.id === parsed.collectionId) : undefined;
+      expect(collection).toBeDefined();
+      openHomeRemoteCollection({ collection: collection!, teammateCollectionId: "teammates", embedded: true, setMode, push, onModeChange });
+    }
+    expect(setMode).toHaveBeenCalledExactlyOnceWith("teammates");
+    expect(push).toHaveBeenNthCalledWith(1, "/devices");
+    expect(push).toHaveBeenNthCalledWith(2, expect.objectContaining({ pathname: "/resources/[collectionId]", params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
+    expect(onModeChange).not.toHaveBeenCalled();
+    openHomeRemoteCollection({ collection: collections[0], teammateCollectionId: "teammates", embedded: false, setMode, push, onModeChange });
+    expect(onModeChange).toHaveBeenCalledExactlyOnceWith("teammates");
   });
 
   it("routes settings pickers and local-log options through the pull-down on Android", () => {
