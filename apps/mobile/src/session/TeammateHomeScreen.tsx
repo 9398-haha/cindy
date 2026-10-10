@@ -85,7 +85,7 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
         <Pressable
           accessibilityLabel={t('devices.companions.title')}
           accessibilityRole="button"
-          onPress={nativeMenus ? undefined : () => setDrawer(true)}
+          onPress={nativeMenus ? undefined : () => { Keyboard.dismiss(); setDrawer(true); }}
           style={({ pressed }) => [styles.titleTrigger, pressed && styles.pressed]}
           testID="teammates.modeMenu"
         >
