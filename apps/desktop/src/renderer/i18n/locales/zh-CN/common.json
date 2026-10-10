@@ -449,7 +449,7 @@
       "remove": "移出组",
       "status": {
         "checking": "正在检查…",
-        "available": "可用",
+        "idle": "空闲",
         "full": "已满",
         "paused": "已暂停分配",
         "cooling": "冷却中",
