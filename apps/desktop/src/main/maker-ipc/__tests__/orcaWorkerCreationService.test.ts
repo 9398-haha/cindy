@@ -51,7 +51,7 @@ describe('Host provenance across Orca creation waits', () => {
     let configured = change === 'config' ? candidate : undefined, picked = change === 'pick';
     let directoryResolved = false, directoryReads = 0;
     let queuedAcceptance: (() => void | Promise<void>) | undefined;
-    let receipt: { operation: string; pluginId: string; payload: string } | null = {
+    let receipt: { operation: string; pluginId: string; payload: string } | null = change === 'ordinary' ? null : {
       operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: change === 'already-revoked' }),
     };
     const task = { revision: 1, status: 'active', permissionMode: 'auto', planModeEnabled: false, workingDir: path.resolve('synthetic-project') };
@@ -83,11 +83,11 @@ describe('Host provenance across Orca creation waits', () => {
         return { ...task };
       } }),
       isPluginTaskAuthorized: () => enabled, readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
-      resolvePluginWorkerDirectory: async () => {
+      resolvePluginWorkerDirectory: vi.fn(async () => {
         directoryResolved = true; directoryReads = 0;
         if (directoryCase && !configured && !picked) throw new PluginTaskError('PERMISSION_DENIED', 'Directory revoked');
         return directoryCase ? candidate : task.workingDir;
-      }, isGhostPickedDir: () => picked,
+      }), isGhostPickedDir: () => picked,
     };
     const { deps, service: creation } = createDeps(callback('    validateCreationPlan: async (', '    getLeadSessionRow: async (', bindings));
     for (const [key, point] of [
@@ -142,12 +142,88 @@ describe('Host provenance across Orca creation waits', () => {
       : action === 'enableTeam'
         ? lifecycle.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'eval', label: 'sample', delegateTask: entry === 'placeholder' ? undefined : 'Synthetic task', deferDelegateTask: entry === 'deferred', ...(directoryCase ? { workingDir: candidate } : {}) })
         : lifecycle.startTeam({ leadSessionId: 'lead-1' });
-    return { deps, lifecycleDeps, run, acceptQueued: async () => {
+    return { deps, lifecycleDeps, run, creation, receipt, task,
+      resolveDirectory: bindings.resolvePluginWorkerDirectory, acceptQueued: async () => {
       expect(queuedAcceptance).toBeTypeOf('function');
       mutate('accepted');
       return runAcceptedCallback(queuedAcceptance, WORKER_SESSION_ID, 'queued-1');
     } };
   }
+
+  function wireRemoteCreation(deps: OrcaWorkerCreationDeps) {
+    deps.openRemoteWorker = vi.fn(async (input: Parameters<NonNullable<OrcaWorkerCreationDeps['openRemoteWorker']>>[0]) => ({
+      ok: true as const, proxySessionId: 'remote-proxy', remoteSessionId: 'remote-session',
+      agent: input.agent, model: input.model ?? 'remote-default',
+      workingDir: input.workingDir ?? '/remote/dialogue',
+      proxySession: {
+        title: input.title, agentKind: input.agent === 'claude-code' ? 'cc' : input.agent,
+        model: input.model ?? 'remote-default', effort: input.effort ?? null,
+        permissionMode: input.permissionMode, fastMode: input.fast === true,
+      },
+    }));
+    deps.recordRemoteWorker = vi.fn(async () => undefined);
+    deps.discardRemoteWorker = vi.fn(async () => undefined);
+  }
+
+  function registerPlan(receipt: NonNullable<ReturnType<typeof setup>['receipt']>, directory: string) {
+    receipt.payload = JSON.stringify({ teamPlan: { concurrency: 1, items: [{
+      label: 'sample', workingDir: directory,
+      route: { agentKind: 'codex', model: 'gpt-5.5', providerId: 'xd', effort: 'medium', fastMode: false },
+    }] } });
+  }
+
+  it.each([false, true].flatMap(withPlan => ['omitted', 'same-path', 'remote-only'].map(directory => ({ withPlan, directory }))))(
+    'rejects plugin-owned execution devices before directory or remote effects (plan: $withPlan, directory: $directory)', async ({ withPlan, directory }) => {
+      const { deps, creation, receipt, task, resolveDirectory } = setup('createWorker', '', 'healthy');
+      if (withPlan) registerPlan(receipt!, task.workingDir);
+      wireRemoteCreation(deps);
+      const params: OrcaWorkerCreateParams = {
+        leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample',
+        executionDeviceId: 'device-b',
+        ...(directory === 'omitted' ? {} : { workingDir: directory === 'same-path' ? task.workingDir : '/device-b-only' }),
+        // The remote branch must not bypass the registered route even when it differs.
+        model: 'remote-only-model', providerId: 'remote-provider', effort: 'high', fast: true,
+      };
+      await expect(creation.createWorker(params)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      expect(resolveDirectory).not.toHaveBeenCalled();
+      expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+      expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+      expect(deps.openRemoteWorker).not.toHaveBeenCalled();
+      expect(deps.recordRemoteWorker).not.toHaveBeenCalled();
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['ordinary', 'send-receipt', 'already-revoked'])(
+    'preserves user-owned remote creation after $change', async change => {
+      const { deps, creation, receipt, resolveDirectory } = setup('createWorker', '', change);
+      if (change === 'send-receipt') receipt!.operation = 'send';
+      wireRemoteCreation(deps);
+      await expect(creation.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval',
+        label: 'sample', executionDeviceId: 'device-b', workingDir: '/device-b-only' })).resolves.toMatchObject({
+        ok: true, workerSessionId: 'remote-proxy', executionDeviceId: 'device-b',
+      });
+      expect(resolveDirectory).not.toHaveBeenCalled();
+      expect(deps.openRemoteWorker).toHaveBeenCalledOnce();
+      expect(deps.recordRemoteWorker).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])('still validates a local plugin Worker against its registered route (mismatch: %s)', async mismatch => {
+    const { deps, creation, receipt, task } = setup('createWorker', '', 'healthy');
+    registerPlan(receipt!, task.workingDir);
+    const result = await creation.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval',
+      label: 'sample', workingDir: task.workingDir, ...(mismatch ? { model: 'gpt-5.4' } : {}) });
+    expect(result.ok).toBe(!mismatch);
+    if (mismatch) {
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.addOrUpdateWorker).not.toHaveBeenCalled();
+    } else {
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+      expect(deps.addOrUpdateWorker).toHaveBeenCalledOnce();
+    }
+  });
   const cases = (Object.keys(phases) as Action[]).flatMap(action => phases[action].flatMap(phase =>
     ['uninstalled', 'reinstalled', 'account'].map(change => ({ action, phase, change }))));
   cases.push(...(['createWorker', 'enableTeam'] as Action[]).flatMap(action =>

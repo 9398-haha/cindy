@@ -13162,6 +13162,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
       assertPluginWorkerAutoAuthorized(receipt.pluginId, task);
+      // Plugin directory grants identify resources on this computer, not same-named
+      // paths on another device. Reject before directory lookup or remote creation.
+      if (params.executionDeviceId !== undefined) {
+        throw new PluginTaskError('PERMISSION_DENIED', 'Plugin-owned tasks cannot create Workers on another device');
+      }
       const cfg = readPluginTaskConfig(receipt.pluginId);
       const resolveAuthorizedDirectory = (requested: string) => resolvePluginWorkerDirectory({
         requested, leadDirectory: task.workingDir,
