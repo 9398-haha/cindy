@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   firstProviderChatModel,
+  providerConnectionProbeFailureMessage,
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
   connectionTestCanUseSaved,
@@ -150,6 +151,7 @@ describe('resolveProviderConnectionProbeRoute', () => {
         baseUrl: 'https://api.example/model',
         wireProtocol: modelWireProtocol,
         requestPath: '/model-responses',
+        modelId: 'model-a',
       });
     },
   );
@@ -165,6 +167,7 @@ describe('resolveProviderConnectionProbeRoute', () => {
     ).toEqual({
       baseUrl: 'https://api.example/provider',
       wireProtocol: 'openai-responses',
+      modelId: 'model-a',
     });
   });
 });
@@ -483,6 +486,42 @@ describe('connectionTestCanUseSaved', () => {
   });
 });
 
+it('prefers a protocol-compatible model over the first chat model (#4954)', () => {
+  const input = {
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+    requestPath: '',
+    wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'grok-4.6' }, { id: 'glm-5.2' }],
+  };
+  expect(resolveProviderConnectionProbeRoute('codex', input)).toMatchObject({
+    modelId: 'glm-5.2',
+    wireProtocol: 'openai-chat',
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+  });
+  expect(resolveProviderConnectionProbeRoute('codex', {
+    ...input,
+    baseUrl: 'https://relay.example/v1',
+  })?.modelId).toBe('grok-4.6');
+});
+
+it('shows the probed model, HTTP status and upstream summary', () => {
+  const failure = providerConnectionProbeFailureMessage({
+    code: 'UNKNOWN',
+    modelId: 'grok-4.6',
+    status: 400,
+    detail: `model grok-4.6 is not served by this endpoint ${'x'.repeat(200)}`,
+  });
+  expect(failure?.key).toBe('settings.providers.custom.test.failModelStatusDetail');
+  expect(failure?.values).toMatchObject({ model: 'grok-4.6', status: 400 });
+  expect(String(failure?.values.detail)).toContain('not served by this endpoint');
+  expect(String(failure?.values.detail).endsWith('…')).toBe(true);
+  expect(String(failure?.values.detail).length).toBeLessThanOrEqual(180);
+  expect(failure?.title).toContain('not served by this endpoint');
+  expect(providerConnectionProbeFailureMessage({ code: 'AUTH_INVALID', modelId: 'm', status: 401 }))
+    .toMatchObject({ key: 'settings.providers.custom.test.failModelStatus', values: { model: 'm', status: 401 } });
+  expect(providerConnectionProbeFailureMessage({ code: 'UNKNOWN' })).toBeNull();
+});
+
 it('uses the same eligible chat model for probe ID, route and request signature', () => {
   const media = { id: 'image', mode: 'image_generation', route: { baseUrl: 'https://image.example', wireProtocol: 'openai-chat' as const } };
   const chat = { id: 'flux-image-x', route: { baseUrl: 'https://chat.example', wireProtocol: 'openai-chat' as const } };
@@ -499,6 +538,7 @@ it.each(['pi', 'codex', 'claude-code'] as const)('retains Vertex SDK identity fo
     requestPath: '', wireProtocol: 'google-generative-ai',
     models: [{ id: 'gemini-fixture', piApi: 'google-vertex' }] })).toEqual({
       baseUrl: 'https://us-central1-aiplatform.googleapis.com', wireProtocol: 'google-generative-ai', api: 'google-vertex',
+      modelId: 'gemini-fixture',
     });
 });
 

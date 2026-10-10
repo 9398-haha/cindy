@@ -2558,7 +2558,10 @@
           "testing": "測試中…",
           "ok": "連線成功（{{ms}}ms）",
           "needFields": "請先填寫基礎 URL 和至少一個模型 ID",
-          "unsupportedProtocol": "測試連線暫不支援此模型協定"
+          "unsupportedProtocol": "測試連線暫不支援此模型協定",
+          "failModel": "已測試模型 {{model}}，{{message}}",
+          "failModelStatus": "已測試模型 {{model}}（HTTP {{status}}），{{message}}",
+          "failModelStatusDetail": "已測試模型 {{model}}（HTTP {{status}}）：{{detail}}"
         },
         "fetch": {
           "button": "獲取模型列表",

@@ -2564,7 +2564,10 @@
           "testing": "Testing…",
           "ok": "Connected ({{ms}} ms)",
           "needFields": "Fill in the base URL and at least one model ID first",
-          "unsupportedProtocol": "This model protocol is not supported by connection testing"
+          "unsupportedProtocol": "This model protocol is not supported by connection testing",
+          "failModel": "Tested {{model}}. {{message}}",
+          "failModelStatus": "Tested {{model}} (HTTP {{status}}). {{message}}",
+          "failModelStatusDetail": "Tested {{model}} (HTTP {{status}}): {{detail}}"
         },
         "fetch": {
           "button": "Fetch model list",

@@ -2558,7 +2558,10 @@
           "testing": "테스트 중…",
           "ok": "연결 성공 ({{ms}}ms)",
           "needFields": "먼저 기본 URL과 모델 ID를 하나 이상 입력하세요",
-          "unsupportedProtocol": "연결 테스트는 이 모델 프로토콜을 지원하지 않습니다"
+          "unsupportedProtocol": "연결 테스트는 이 모델 프로토콜을 지원하지 않습니다",
+          "failModel": "{{model}} 모델을 테스트했습니다. {{message}}",
+          "failModelStatus": "{{model}} 모델을 테스트했습니다 (HTTP {{status}}). {{message}}",
+          "failModelStatusDetail": "{{model}} 모델을 테스트했습니다 (HTTP {{status}}): {{detail}}"
         },
         "fetch": {
           "button": "모델 목록 가져오기",
