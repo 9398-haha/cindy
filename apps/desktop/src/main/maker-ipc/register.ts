@@ -8497,6 +8497,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const [row] = await getDbClient()
         .drizzle.select({
           orcaRemoteLead: sessions.orcaRemoteLead,
+          status: sessions.status,
           workingDir: sessions.workingDir,
           model: sessions.model,
           agentKind: sessions.agentKind,
@@ -8509,6 +8510,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!row) return null;
       return {
         orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead),
+        status: row.status,
         workingDir: row.workingDir,
         model: row.model,
         agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),

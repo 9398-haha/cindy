@@ -828,6 +828,56 @@ describe('wrapTeamDeps', () => {
 });
 
 describe('remote open recovery', () => {
+  it.each(['archived', 'deleted'] as const)('rejects a lost open ACK retry after the task becomes %s and releases only its marker', async status => {
+    let session: OrcaRemoteWorkerExistingSession | null = null;
+    const host = createOrcaRemoteWorkerHost({
+      getCaller: () => ({ controllerDeviceId: 'lead-device' }),
+      readSession: async () => session,
+      openSession: vi.fn(async (request, lead) => {
+        session = { status: 'active', orcaRemoteLead: lead, workingDir: '/remote', model: 'device-model',
+          agentKind: request.agentKind, effort: 'medium' };
+        return { workingDir: '/remote', model: 'device-model', agentKind: request.agentKind, effort: 'medium' };
+      }),
+      writeRemoteLead: async (_id, lead) => { session = { ...session!, orcaRemoteLead: lead }; },
+      withSessionLock: async <T,>(_id: string, task: () => Promise<T>) => task(),
+      now: () => 123,
+    });
+    let loseOpenReply = true;
+    const handle = async (_device: string, channel: string, args: unknown[]) => {
+      if (channel === 'maker:orca:remote-worker:open') {
+        try {
+          const result = await host.open(args[0]);
+          if (loseOpenReply) {
+            loseOpenReply = false;
+            session = { ...session!, status };
+            return fail('INVOKE_TIMEOUT', 'ACK lost');
+          }
+          return ok(result);
+        } catch (err) { return fail('IPC_ERROR', (err as Error).message); }
+      }
+      if (channel === 'local-db:sessions:get') return ok(session);
+      if (channel === 'maker:orca:remote-worker:release') return ok(await host.release(args[0]));
+      return undefined;
+    };
+    const { workers, remoteInvoke } = setup({ handle });
+    try {
+      await expect(workers.openRemoteWorker(openInput)).resolves.toMatchObject({ ok: false });
+      expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:orca:remote-worker:open')).toHaveLength(2);
+      expect(store.addRemoteWorker).not.toHaveBeenCalled();
+      expect(store.removeRemoteWorkerOpen).not.toHaveBeenCalled();
+      const [, remoteSessionId] = store.saveRemoteWorkerOpen.mock.calls[0] as unknown as [string, string];
+      const receipt = { deviceId: 'mac-mini', remoteSessionId, createdAt: Date.now() };
+      store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+      store.listOrphanRemoteWorkerOpens.mockResolvedValueOnce([receipt] as never[]);
+      await workers.releaseEnded([]);
+      expect(session).toMatchObject({ status, orcaRemoteLead: { releasedAt: 123 } });
+      expect(store.removeRemoteWorkerOpen).toHaveBeenCalledWith(remoteSessionId);
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+      expect(remoteInvoke.mock.calls.some(([, channel]) =>
+        channel === 'maker:abort-session' || channel === 'maker:input:enqueue')).toBe(false);
+    } finally { workers.stop(); }
+  });
+
   it.each(['startup failed', '[INTERNAL] startup failed'])(
     'reconciles a persisted task after a non-timeout startup error (%s)', async message => {
       let session: OrcaRemoteWorkerExistingSession | null = null;
@@ -835,7 +885,7 @@ describe('remote open recovery', () => {
         getCaller: () => ({ controllerDeviceId: 'lead-device' }),
         readSession: async () => session,
         openSession: async (_request, lead) => {
-          session = { orcaRemoteLead: lead, workingDir: '/remote', model: 'device-model',
+          session = { status: 'active', orcaRemoteLead: lead, workingDir: '/remote', model: 'device-model',
             agentKind: 'claude-code', effort: 'medium' };
           throw new Error(message);
         },
@@ -891,7 +941,7 @@ describe('remote open recovery', () => {
       readSession: async id => sessions.get(id) ?? null,
       openSession: async (request, lead) => {
         const opened = { workingDir: '/remote', model: 'device-model', agentKind: request.agentKind, effort: 'medium' };
-        sessions.set(request.sessionId, { ...opened, orcaRemoteLead: lead });
+        sessions.set(request.sessionId, { ...opened, status: 'active', orcaRemoteLead: lead });
         if (controllerDeviceId === 'first-controller') throw new Error('startup failed');
         return opened;
       },

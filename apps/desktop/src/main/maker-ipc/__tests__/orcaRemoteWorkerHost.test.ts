@@ -39,6 +39,7 @@ function setup(
     readSession: vi.fn(async (id: string) => sessions.get(id) ?? null),
     openSession: vi.fn(async (req, lead: OrcaRemoteLead) => {
       sessions.set(req.sessionId, {
+        status: 'active',
         orcaRemoteLead: lead,
         workingDir: req.workingDir ?? '/Users/demo/Cindy/dialogues/w_remote_1',
         model: 'claude-opus-5-5',
@@ -114,6 +115,18 @@ describe('orca remote worker host', () => {
     expect(deps.openSession).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['archived', 'deleted'] as const)('does not reopen a %s task after rebuilding the host', async status => {
+    const { host, deps, sessions } = setup();
+    await host.open(request);
+    sessions.set(request.sessionId, { ...sessions.get(request.sessionId)!, status });
+
+    await expect(createOrcaRemoteWorkerHost(deps).open(request)).rejects.toThrow(/PRECONDITION_FAILED/);
+    expect(deps.openSession).toHaveBeenCalledOnce();
+    expect(deps.writeRemoteLead).not.toHaveBeenCalled();
+    expect(sessions.get(request.sessionId)?.status).toBe(status);
+    expect(sessions.get(request.sessionId)?.orcaRemoteLead?.releasedAt).toBeUndefined();
+  });
+
   it('replays the stored effort instead of a changed request or device default', async () => {
     const { host, deps } = setup();
     await host.open({ ...request, effort: 'low' });
@@ -124,7 +137,7 @@ describe('orca remote worker host', () => {
   it.each([false, true])('replays stored Fast %s after rebuilding the host instead of a changed request', async fastMode => {
     const { host, deps, sessions } = setup();
     deps.openSession = vi.fn(async (req, lead) => {
-      const stored = { orcaRemoteLead: lead, workingDir: '/remote', model: 'm',
+      const stored = { status: 'active' as const, orcaRemoteLead: lead, workingDir: '/remote', model: 'm',
         agentKind: req.agentKind, fastMode };
       sessions.set(req.sessionId, stored);
       return stored;
@@ -137,7 +150,7 @@ describe('orca remote worker host', () => {
 
   it('refuses an id already used by another task or device', async () => {
     const plain = setup({
-      existing: { orcaRemoteLead: null, workingDir: '/x', model: 'm', agentKind: 'codex' },
+      existing: { status: 'active', orcaRemoteLead: null, workingDir: '/x', model: 'm', agentKind: 'codex' },
     });
     await expect(plain.host.open(request)).rejects.toThrow(/ALREADY_EXISTS/);
 

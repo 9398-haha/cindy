@@ -190,6 +190,7 @@ it('keeps a persisted remote Worker recognizable after startup fails or the host
     readSession: async () => {
       const row = h.values.mock.calls[0]?.[0] as OpenedSessionRow | undefined;
       return row ? { orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead),
+        status: row.status ?? 'active',
         workingDir: row.workingDir ?? null, model: row.model, agentKind: 'codex' as const, effort: row.effort } : null;
     },
     openSession: start,

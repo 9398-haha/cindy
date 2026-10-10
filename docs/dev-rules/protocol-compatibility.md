@@ -631,6 +631,10 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   `maker:orca:remote-worker:caps`(能力探测，回 `{ version }`)、`…:open`(按 A 给定的任务 id 新建 Worker 任务，
   幂等；超时 60s)、`…:release`(结束协同，任务与文件保留，幂等)。B 侧实现见
   `apps/desktop/src/main/maker-ipc/orcaRemoteWorkerHost.ts`。
+- **幂等 open 的终态检查**：同来源、同 Lead 且未 release 的已有任务也必须仍为 `active`；
+  已归档／软删除时拒绝并返回既有 `PRECONDITION_FAILED`，不新建、不复活。A 保留未确认创建
+  收据，恢复仅解除未关联标记。该检查使用 B 的现有 status 列，不新增 wire 字段或改变版本；
+  旧 B 仍保留原行为，B 更新后生效。
 - **实际档位**：`open` 回包可选 `effort` 是 B 已保存的解析结果，同 ID 重试也从已有任务读取。
   空字符串保留无档位状态；旧 B 不返回该字段时，A 保留原来的请求值降级规则。字段增量不改协议版本，
   旧 A 忽略它，新 A 不向旧 B 要求新增请求字段。
@@ -656,6 +660,9 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 - **恢复暂停**：B 的 `INPUT_ENQUEUE` 按已有自动消息来源判据处理 `origin.kind`，Orca 派活不解除
   崩溃恢复后的队列暂停；普通手机／桌面用户输入仍可解除恢复暂停，用户 Stop 暂停不受影响。
   不新增 wire 字段或改变版本，A 的既有派活载荷不变；旧 B 保持其原有行为，需更新 B 才有此修复。
+- **收尾限制**：当前 abort/release 不取消未消费的远端派活，结束协同后队列仍可能继续执行。
+  远控入队后的来源不足以可靠区分 Lead 派活与用户输入，本轮不通过清空队列规避；待专门设计
+  持久投递归属、取消回执与释放边界后修复，详见 `orca-team-architecture.md` 的已知限制。
 - **B 侧约束**：带标记的任务不能再开启协同(`assertLeadCollabProjectEnabled` 统一拒绝 Worker 与远端 Worker，
   覆盖 IPC、远程与 Agent 工具入口)，不能复制到其他电脑(`task-migration/service.ts`)；侧栏照常显示，
   任务头标注「来自 X 的协同」，结束后显示「协同已结束」。

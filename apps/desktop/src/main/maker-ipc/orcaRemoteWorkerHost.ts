@@ -64,6 +64,7 @@ export interface OrcaRemoteWorkerCaller {
 }
 
 export interface OrcaRemoteWorkerExistingSession {
+  status: 'active' | 'archived' | 'deleted';
   orcaRemoteLead: OrcaRemoteLead | null;
   workingDir: string | null;
   model: string;
@@ -122,13 +123,16 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
         const existing = await deps.readSession(request.sessionId);
         if (existing) {
           const lead = existing.orcaRemoteLead;
-          // 幂等：同一来源电脑、同一 Lead 重复 open(例如超时后重试)返回同一任务。
+          // 幂等：同一来源电脑、同一 Lead 重复 open(例如超时后重试)只返回仍活跃的任务。
           if (
             lead &&
             lead.leadDeviceId === caller.controllerDeviceId &&
             lead.leadSessionId === request.lead.leadSessionId &&
             lead.releasedAt === undefined
           ) {
+            if (existing.status !== 'active') {
+              fail('PRECONDITION_FAILED', 'remote worker task is no longer active');
+            }
             return {
               sessionId: request.sessionId,
               workingDir: existing.workingDir ?? '',
