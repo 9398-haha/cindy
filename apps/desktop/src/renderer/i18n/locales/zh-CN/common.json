@@ -407,18 +407,16 @@
     },
     "page": {
       "title": "{{provider}} · 远程与分享",
-      "description": "这台电脑上 {{provider}} 的供应商组与分享设置。",
-      "descriptionWithDevice": "这台电脑（{{device}}）上 {{provider}} 的供应商组与分享设置。",
       "shareTitle": "分享"
     },
     "section": {
       "title": "供应商组",
       "addComputer": "添加电脑",
-      "delete": "删除供应商组",
-      "empty": "还没有供应商组。添加其他电脑上的 {{provider}}，这台电脑上的任务会自动选一台运行。",
+      "delete": "删除组",
+      "empty": "加入其他电脑上的 {{provider}}，任务会自动选一台运行",
       "loading": "正在读取供应商组…",
       "loadFailed": "未能读取供应商组",
-      "note": "这台电脑上的任务按组分配，Agent 在被选中的电脑上运行；你的其他电脑和你分享的人经这台电脑使用时，暂时仍在这台电脑上运行。"
+      "note": "这台电脑上的任务，Agent 在被选中的电脑上运行"
     },
     "strategy": {
       "label": "组策略",
@@ -427,28 +425,27 @@
       "order": "按顺序",
       "weight": "按权重",
       "description": {
-        "least": "新任务给正在运行任务最少的那台",
-        "round": "新任务依次分给可用的电脑",
-        "order": "排在前面的优先，前面的不可用才用后面的",
-        "weight": "按权重比例分配新任务"
+        "least": "给最闲的那台",
+        "round": "依次轮流",
+        "order": "排前面的优先",
+        "weight": "按权重比例"
       }
     },
     "autoSwitch": {
       "label": "自动换电脑",
-      "description": "组里的电脑撞到用量上限、登录失效或连不上时，自动换一台接着运行"
+      "description": "撞上限、连不上或登录失效时自动换一台"
     },
     "member": {
       "local": "本机",
       "sourceDevice": "我的其他电脑",
       "sourceShare": "来自 {{name}} 的分享",
-      "runningLabel": "运行中 / 上限",
+      "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",
-      "limitOption_other": "最多 {{count}} 个",
+      "limitOption_other": "上限 {{count}}",
       "weightAria": "{{name}} 的权重",
       "weightOption": "权重 {{weight}}",
-      "localAria": "本机参与分配",
-      "pause": "暂停分配",
-      "resume": "恢复分配",
+      "assignAria": "给 {{name}} 分配任务",
+      "moreAria": "{{name}} 的更多操作",
       "remove": "移出组",
       "status": {
         "checking": "正在检查…",
@@ -482,7 +479,7 @@
       "sourceAria": "电脑来源",
       "tabAvailable": "已经能用的",
       "tabLink": "分享链接",
-      "availableDescription": "这台电脑已经能用的 {{provider}}：你的其他电脑和别人分享给你的，与模型列表里的远程供应商一致。勾选即可加入，不需要再申请。",
+      "availableDescription": "你的其他电脑和别人分享给你的，勾选即可加入，不用再申请",
       "loading": "正在查找可以加入的电脑…",
       "loadFailed": "未能读取可以加入的电脑",
       "empty": "没有可以加入的电脑。在其他电脑上对 {{provider}} 打开「允许被远程调用」，或用别人的分享链接申请。",
@@ -495,8 +492,6 @@
     "toast": {
       "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的供应商组",
       "removed": "已把 {{name}} 移出供应商组",
-      "paused": "已暂停给 {{name}} 分配任务",
-      "resumed": "已恢复给 {{name}} 分配任务",
       "deleted": "已删除 {{provider}} 的供应商组"
     }
   },

@@ -128,7 +128,8 @@ export function ProviderGroupAddDialog({
         {tab === 'available' ? (
           <>
             <p className="mt-3 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-              {t('providerGroup.add.availableDescription', { provider: providerName })}
+              {/* 标题已经写了供应商与供应商组，这里只说来源与「不用再申请」。 */}
+              {t('providerGroup.add.availableDescription')}
             </p>
             <div className="mt-3 overflow-hidden rounded-xl border border-[var(--border-default)]">
               {candidates === null && !failed ? (

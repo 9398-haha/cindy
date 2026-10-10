@@ -407,18 +407,16 @@
     },
     "page": {
       "title": "{{provider}} · リモートと共有",
-      "description": "このパソコンの {{provider}} のプロバイダーグループと共有の設定です。",
-      "descriptionWithDevice": "このパソコン（{{device}}）の {{provider}} のプロバイダーグループと共有の設定です。",
       "shareTitle": "共有"
     },
     "section": {
       "title": "プロバイダーグループ",
       "addComputer": "パソコンを追加",
       "delete": "グループを削除",
-      "empty": "プロバイダーグループはまだありません。ほかのパソコンの {{provider}} を追加すると、このパソコンのセッションが自動でいずれかを選んで実行します。",
+      "empty": "ほかのパソコンの {{provider}} を追加すると、セッションが自動でいずれかを選んで実行します",
       "loading": "プロバイダーグループを読み込み中…",
       "loadFailed": "プロバイダーグループを読み込めませんでした",
-      "note": "このパソコンのセッションはグループで割り当てられ、Agent は選ばれたパソコンで実行されます。ほかのパソコンや共有相手がこのパソコン経由で使う場合は、当面このパソコンで実行されます。"
+      "note": "このパソコンのセッションは、Agent がグループに選ばれたパソコンで実行されます"
     },
     "strategy": {
       "label": "グループの割り当て方式",
@@ -427,28 +425,27 @@
       "order": "並び順",
       "weight": "重み付け",
       "description": {
-        "least": "実行中のセッションが最も少ないパソコンに割り当てます",
-        "round": "利用できるパソコンに順番に割り当てます",
-        "order": "上のパソコンを優先し、使えないときだけ下のパソコンを使います",
-        "weight": "重みの比率で割り当てます"
+        "least": "空いているパソコンへ",
+        "round": "順番に割り当て",
+        "order": "上のパソコンを優先",
+        "weight": "重みの比率で"
       }
     },
     "autoSwitch": {
       "label": "パソコンを自動で切り替え",
-      "description": "グループ内のパソコンが使用量の上限に達した、ログインが切れた、または接続できないときに、別のパソコンで続行します"
+      "description": "上限・接続不可・ログイン切れのときに切り替えます"
     },
     "member": {
       "local": "このパソコン",
       "sourceDevice": "自分のほかのパソコン",
       "sourceShare": "{{name}} からの共有",
-      "runningLabel": "実行中 / 上限",
+      "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "最大 {{count}} 件",
+      "limitOption_other": "上限 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
-      "localAria": "このパソコンにも割り当てる",
-      "pause": "割り当てを停止",
-      "resume": "割り当てを再開",
+      "assignAria": "{{name}} に割り当てる",
+      "moreAria": "{{name}} の他の操作",
       "remove": "グループから外す",
       "status": {
         "checking": "確認中…",
@@ -482,7 +479,7 @@
       "sourceAria": "パソコンの追加元",
       "tabAvailable": "すでに使えるもの",
       "tabLink": "共有リンク",
-      "availableDescription": "このパソコンがすでに使える {{provider}} です。自分のほかのパソコンと共有されたものが含まれ、モデル一覧のリモートプロバイダーと同じです。選ぶだけで追加でき、申請は不要です。",
+      "availableDescription": "自分のほかのパソコンと共有されたものです。選ぶだけで追加でき、申請は不要です。",
       "loading": "追加できるパソコンを探しています…",
       "loadFailed": "追加できるパソコンを読み込めませんでした",
       "empty": "追加できるパソコンがありません。ほかのパソコンで {{provider}} の「リモート利用を許可」をオンにするか、共有リンクで申請してください。",
@@ -495,8 +492,6 @@
     "toast": {
       "added_other": "{{count}} 台のパソコンを {{provider}} のプロバイダーグループに追加しました",
       "removed": "{{name}} をプロバイダーグループから外しました",
-      "paused": "{{name}} への割り当てを停止しました",
-      "resumed": "{{name}} への割り当てを再開しました",
       "deleted": "{{provider}} のプロバイダーグループを削除しました"
     }
   },

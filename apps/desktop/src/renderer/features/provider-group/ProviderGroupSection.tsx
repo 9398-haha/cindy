@@ -1,16 +1,29 @@
 /**
  * 「远程与分享」页的供应商组一块(docs/product-rules/provider-groups.md §10、设计稿场景 2)：
- * 组内电脑列表(来源、状态、正在运行 / 并发上限)、添加电脑、组策略与自动换电脑。
+ * 组内电脑列表(来源、状态、运行数与并发上限)、添加电脑、组策略与自动换电脑。
+ *
+ * 行结构对所有来源一致，右侧才能真正成列：上限(与按权重时的权重)下拉 → 参与分配开关 →
+ * 行内更多操作。`paused` 是同一个布尔值(shared/providerGroup.ts)，本机与远程都用开关表达，
+ * 不再按来源分叉成「开关 / 暂停分配按钮」两套控件；暂停的结果由状态行文字说明，不再弹 toast。
+ * 「移出组」是罕用且不可逆的操作，收进 `···` 菜单(与 ProvidersSection 的供应商级菜单同模式)；
+ * 本机不能移出(§3)，该位置留空占位以保持列宽。
  */
+import { CircleMinus, Monitor, MoreHorizontal } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { ShareAvatar } from '@/features/provider-share/ShareAvatar';
+import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -60,9 +73,9 @@ export function ProviderGroupSection({ providerId, providerName }: { providerId:
   );
 
   const updateMember = useCallback(
-    (key: string, patch: Partial<ProviderGroupMember>, success?: string) => {
+    (key: string, patch: Partial<ProviderGroupMember>) => {
       if (!config) return;
-      void save({ ...config, members: config.members.map((m) => (m.key === key ? { ...m, ...patch } : m)) }, success);
+      void save({ ...config, members: config.members.map((m) => (m.key === key ? { ...m, ...patch } : m)) });
     },
     [config, save],
   );
@@ -146,7 +159,7 @@ export function ProviderGroupSection({ providerId, providerName }: { providerId:
                 strategy={config.strategy}
                 first={index === 0}
                 disabled={saving}
-                onChange={(patch, success) => updateMember(member.key, patch, success)}
+                onChange={(patch) => updateMember(member.key, patch)}
                 onRemove={(label) => void removeMember(member, label)}
               />
             ))}
@@ -215,7 +228,7 @@ function MemberRow({
   strategy: ProviderGroupStrategy;
   first: boolean;
   disabled: boolean;
-  onChange: (patch: Partial<ProviderGroupMember>, success?: string) => void;
+  onChange: (patch: Partial<ProviderGroupMember>) => void;
   onRemove: (label: string) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -226,6 +239,7 @@ function MemberRow({
       ? t('providerGroup.member.sourceDevice')
       : t('providerGroup.member.sourceShare', { name: status?.ownerName ?? '' });
   const ready = status?.state === 'available' || status?.state === 'full';
+  const running = status?.running ?? 0;
   return (
     <div
       data-testid="provider-group-member"
@@ -235,26 +249,35 @@ function MemberRow({
         !first && 'border-t border-[var(--settings-theme-card-border)]',
       )}
     >
-      <ShareAvatar displayName={label} avatarUrl={null} />
+      {/* 组内电脑用设备图标；人像头像留给下方「分享」块里真实的人。 */}
+      <span
+        aria-hidden="true"
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]"
+      >
+        <Monitor size={16} />
+      </span>
       <div className={cn('flex min-w-[200px] flex-1 flex-col gap-0.5', member.paused && 'opacity-60')}>
         <div className="flex flex-wrap items-baseline gap-2 text-13">
           <span className="font-medium text-[var(--text-primary)]">{label}</span>
           {source && <span className="text-12 text-[var(--text-secondary)]">{source}</span>}
         </div>
-        <div className="flex items-center gap-1.5 text-12 text-[var(--text-secondary)]">
+        <div className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
           <span
             aria-hidden="true"
             className="h-1.5 w-1.5 shrink-0 rounded-full"
             style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
           />
           <span>{memberStatusText(t, status, i18n.language)}</span>
+          {/* 运行数是状态，上限是设置：各说一次，不再出现「0 / 10」与下拉里重复同一个上限。 */}
+          {running > 0 && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="[font-variant-numeric:tabular-nums]">
+                {t('providerGroup.member.runningCount', { count: running })}
+              </span>
+            </>
+          )}
         </div>
-      </div>
-      <div className="flex shrink-0 flex-col items-end text-12 leading-[1.4]">
-        <span className="font-medium text-[var(--text-primary)] [font-variant-numeric:tabular-nums]">
-          {status ? `${status.running} / ${member.limit}` : `— / ${member.limit}`}
-        </span>
-        <span className="text-[var(--text-tertiary)]">{t('providerGroup.member.runningLabel')}</span>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         <Select
@@ -272,36 +295,38 @@ function MemberRow({
             options={WEIGHT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.weightOption', { weight: value }) }))}
             onValueChange={(value) => onChange({ weight: Number(value) })}
             disabled={disabled}
-            className="w-[104px]"
+            /* 权重最大 100，各语言的「权重 100」都比「上限 16」长：按内容定宽，避免 trigger 自己截断。 */
+            className="w-[120px]"
           />
         )}
+        <Switch
+          checked={!member.paused}
+          disabled={disabled}
+          aria-label={t('providerGroup.member.assignAria', { name: label })}
+          onCheckedChange={(on) => onChange({ paused: !on })}
+        />
         {member.kind === 'local' ? (
-          <Switch
-            checked={!member.paused}
-            disabled={disabled}
-            aria-label={t('providerGroup.member.localAria')}
-            onCheckedChange={(on) => onChange({ paused: !on })}
-          />
+          <span aria-hidden="true" className="h-8 w-8 shrink-0" />
         ) : (
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              compact
-              disabled={disabled}
-              onClick={() =>
-                onChange(
-                  { paused: !member.paused },
-                  t(member.paused ? 'providerGroup.toast.resumed' : 'providerGroup.toast.paused', { name: label }),
-                )
-              }
-            >
-              {member.paused ? t('providerGroup.member.resume') : t('providerGroup.member.pause')}
-            </Button>
-            <Button variant="secondary" size="sm" compact tone="danger" disabled={disabled} onClick={() => onRemove(label)}>
-              {t('providerGroup.member.remove')}
-            </Button>
-          </>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Tip text={t('providerGroup.member.moreAria', { name: label })}>
+                <button
+                  type="button"
+                  aria-label={t('providerGroup.member.moreAria', { name: label })}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <MoreHorizontal size={18} />
+                </button>
+              </Tip>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="danger" disabled={disabled} onClick={() => onRemove(label)}>
+                <CircleMinus size={18} className="mr-2.5" />
+                {t('providerGroup.member.remove')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
     </div>

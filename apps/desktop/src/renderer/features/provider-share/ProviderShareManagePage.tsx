@@ -196,23 +196,17 @@ export function ProviderShareManagePage({
         {t('settings.providers.title')}
       </button>
 
-      <div className="flex shrink-0 flex-wrap items-start gap-3">
+      {/* 标题已经说明这页是什么；这台电脑的名字由本机那行与下方「分享」说明承载，不在这里重复一遍。 */}
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         <div
           aria-hidden="true"
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--settings-integration-avatar-border)] bg-[var(--settings-integration-avatar-bg)] text-[var(--settings-integration-avatar-icon)]"
         >
           {providerIcon}
         </div>
-        <div className="flex min-w-[240px] flex-1 flex-col gap-1">
-          <h2 className="text-16 font-medium leading-[1.3] text-[var(--settings-section-title)]">
-            {t('providerGroup.page.title', { provider: providerName })}
-          </h2>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {selfDeviceName
-              ? t('providerGroup.page.descriptionWithDevice', { provider: providerName, device: selfDeviceName })
-              : t('providerGroup.page.description', { provider: providerName })}
-          </p>
-        </div>
+        <h2 className="min-w-0 flex-1 text-16 font-medium leading-[1.3] text-[var(--settings-section-title)]">
+          {t('providerGroup.page.title', { provider: providerName })}
+        </h2>
       </div>
 
       <ProviderGroupSection providerId={providerId} providerName={providerName} />

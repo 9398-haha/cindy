@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
- * 「远程与分享」页的供应商组一块：建组(本机默认在组里)、组内电脑状态、暂停分配、组策略与自动换电脑。
+ * 「远程与分享」页的供应商组一块：建组(本机默认在组里)、组内电脑状态、参与分配开关、组策略与自动换电脑。
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupView } from '../../../../shared/providerGroup';
@@ -19,6 +20,26 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 const confirmSpy = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: confirmSpy }) }));
+// Radix 的浮层要 ResizeObserver,jsdom 里没有;行内「更多操作」菜单只需要验证菜单项的行为,
+// 所以把菜单摊平成普通按钮,不去驱动真实的 Radix 开合。
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuItem: ({
+    children,
+    onClick,
+    disabled,
+  }: {
+    children: ReactNode;
+    onClick?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button type="button" onClick={onClick} disabled={disabled}>
+      {children}
+    </button>
+  ),
+}));
 
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
@@ -104,10 +125,18 @@ describe('ProviderGroupSection', () => {
     render(<ProviderGroupSection providerId="anthropic" providerName="Anthropic" />);
     const rows = await screen.findAllByTestId('provider-group-member');
     expect(rows[0].getAttribute('data-member-state')).toBe('available');
-    expect(within(rows[0]).getByText('1 / 4')).toBeTruthy();
+    // 运行数在状态行，上限只在下拉里：同一个数字不出现两次。
+    expect(within(rows[0]).getByText('providerGroup.member.runningCount:{"count":1}')).toBeTruthy();
+    expect(within(rows[0]).getByText('providerGroup.member.limitOption:{"count":4}')).toBeTruthy();
+    expect(within(rows[1]).queryByText(/providerGroup\.member\.runningCount/)).toBeNull();
     expect(rows[1].getAttribute('data-member-state')).toBe('cooling');
     expect(within(rows[1]).getByText(/providerGroup\.member\.status\.coolingUntil/)).toBeTruthy();
-    fireEvent.click(within(rows[1]).getByRole('button', { name: 'providerGroup.member.pause' }));
+    // 本机与远程共用同一个开关；本机不能移出组。
+    expect(within(rows[0]).getByRole('switch')).toBeTruthy();
+    expect(within(rows[0]).queryByRole('button', { name: 'providerGroup.member.remove' })).toBeNull();
+    fireEvent.click(
+      within(rows[1]).getByRole('switch', { name: 'providerGroup.member.assignAria:{"name":"Mac mini"}' }),
+    );
     await waitFor(() => expect(stored?.members[1].paused).toBe(true));
   });
 

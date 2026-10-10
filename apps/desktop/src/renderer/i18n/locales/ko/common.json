@@ -407,18 +407,16 @@
     },
     "page": {
       "title": "{{provider}} · 원격 및 공유",
-      "description": "이 컴퓨터에 있는 {{provider}}의 제공자 그룹과 공유 설정입니다.",
-      "descriptionWithDevice": "이 컴퓨터({{device}})에 있는 {{provider}}의 제공자 그룹과 공유 설정입니다.",
       "shareTitle": "공유"
     },
     "section": {
       "title": "제공자 그룹",
       "addComputer": "컴퓨터 추가",
       "delete": "그룹 삭제",
-      "empty": "아직 제공자 그룹이 없습니다. 다른 컴퓨터의 {{provider}}을(를) 추가하면 이 컴퓨터의 세션이 자동으로 한 대를 골라 실행합니다.",
+      "empty": "다른 컴퓨터의 {{provider}}을(를) 추가하면 세션이 자동으로 한 대를 골라 실행합니다",
       "loading": "제공자 그룹을 불러오는 중…",
       "loadFailed": "제공자 그룹을 불러오지 못했습니다",
-      "note": "이 컴퓨터의 세션은 그룹에 따라 배정되고, Agent는 선택된 컴퓨터에서 실행됩니다. 내 다른 컴퓨터나 공유한 사람이 이 컴퓨터를 통해 사용할 때는 당분간 이 컴퓨터에서 실행됩니다."
+      "note": "이 컴퓨터의 세션은 Agent가 그룹이 선택한 컴퓨터에서 실행됩니다"
     },
     "strategy": {
       "label": "그룹 배정 방식",
@@ -427,28 +425,27 @@
       "order": "순서대로",
       "weight": "가중치",
       "description": {
-        "least": "실행 중인 세션이 가장 적은 컴퓨터에 배정합니다",
-        "round": "사용 가능한 컴퓨터에 차례로 배정합니다",
-        "order": "목록 앞쪽의 컴퓨터를 우선하고, 사용할 수 없을 때만 뒤쪽 컴퓨터를 씁니다",
-        "weight": "가중치 비율로 배정합니다"
+        "least": "가장 여유로운 컴퓨터로",
+        "round": "차례대로 배정",
+        "order": "목록 앞쪽 우선",
+        "weight": "가중치 비율로"
       }
     },
     "autoSwitch": {
       "label": "컴퓨터 자동 전환",
-      "description": "그룹의 컴퓨터가 사용량 한도에 도달했거나, 로그인이 만료되었거나, 연결되지 않으면 다른 컴퓨터에서 이어서 진행합니다"
+      "description": "한도 초과, 연결 불가, 로그인 만료 시 전환합니다"
     },
     "member": {
       "local": "이 컴퓨터",
       "sourceDevice": "내 다른 컴퓨터",
       "sourceShare": "{{name}}님의 공유",
-      "runningLabel": "실행 중 / 한도",
+      "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
-      "limitOption_other": "최대 {{count}}개",
+      "limitOption_other": "한도 {{count}}",
       "weightAria": "{{name}}의 가중치",
       "weightOption": "가중치 {{weight}}",
-      "localAria": "이 컴퓨터에도 배정",
-      "pause": "배정 일시 중지",
-      "resume": "배정 재개",
+      "assignAria": "{{name}}에 배정",
+      "moreAria": "{{name}} 추가 작업",
       "remove": "그룹에서 제외",
       "status": {
         "checking": "확인 중…",
@@ -482,7 +479,7 @@
       "sourceAria": "컴퓨터 출처",
       "tabAvailable": "이미 사용 가능",
       "tabLink": "공유 링크",
-      "availableDescription": "이 컴퓨터가 이미 사용할 수 있는 {{provider}}입니다. 내 다른 컴퓨터와 나에게 공유된 것이 포함되며, 모델 목록의 원격 제공자와 같습니다. 선택만 하면 추가되고 요청은 필요 없습니다.",
+      "availableDescription": "내 다른 컴퓨터와 나에게 공유된 것입니다. 선택만 하면 추가되고 요청은 필요 없습니다.",
       "loading": "추가할 수 있는 컴퓨터를 찾는 중…",
       "loadFailed": "추가할 수 있는 컴퓨터를 불러오지 못했습니다",
       "empty": "추가할 수 있는 컴퓨터가 없습니다. 다른 컴퓨터에서 {{provider}}의 원격 사용 허용을 켜거나, 다른 사람의 공유 링크로 요청하세요.",
@@ -495,8 +492,6 @@
     "toast": {
       "added_other": "컴퓨터 {{count}}대를 {{provider}} 제공자 그룹에 추가했습니다",
       "removed": "{{name}}을(를) 제공자 그룹에서 제외했습니다",
-      "paused": "{{name}}에 대한 배정을 일시 중지했습니다",
-      "resumed": "{{name}}에 대한 배정을 재개했습니다",
       "deleted": "{{provider}} 제공자 그룹을 삭제했습니다"
     }
   },

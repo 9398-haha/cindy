@@ -410,18 +410,16 @@
     },
     "page": {
       "title": "{{provider}} · Remote & Sharing",
-      "description": "Provider group and sharing for {{provider}} on this computer.",
-      "descriptionWithDevice": "Provider group and sharing for {{provider}} on this computer ({{device}}).",
       "shareTitle": "Sharing"
     },
     "section": {
       "title": "Provider Group",
       "addComputer": "Add Computer",
       "delete": "Delete Group",
-      "empty": "No provider group yet. Add {{provider}} from other computers, and tasks on this computer will pick one automatically.",
+      "empty": "Add {{provider}} from your other computers and tasks will pick one automatically",
       "loading": "Loading provider group…",
       "loadFailed": "Couldn’t load the provider group",
-      "note": "Tasks on this computer are assigned by the group, and the Agent runs on the chosen computer. When your other computers or people you share with use it through this computer, the Agent still runs here for now."
+      "note": "For tasks on this computer, the Agent runs on the computer the group picks"
     },
     "strategy": {
       "label": "Group Strategy",
@@ -430,29 +428,29 @@
       "order": "In Order",
       "weight": "By Weight",
       "description": {
-        "least": "New tasks go to the computer running the fewest tasks",
-        "round": "New tasks rotate across available computers",
-        "order": "Computers higher in the list come first; later ones are used only when earlier ones are unavailable",
-        "weight": "New tasks are split by weight"
+        "least": "Goes to the least busy one",
+        "round": "Rotates across computers",
+        "order": "Earlier in the list first",
+        "weight": "Split by weight"
       }
     },
     "autoSwitch": {
       "label": "Switch Computers Automatically",
-      "description": "When a computer in the group hits its usage limit, is signed out, or can’t be reached, the task continues on another one"
+      "description": "Switches when one hits its limit, is unreachable or is signed out"
     },
     "member": {
       "local": "This Computer",
       "sourceDevice": "My other computer",
       "sourceShare": "Shared by {{name}}",
-      "runningLabel": "running / limit",
+      "runningCount_one": "{{count}} task running",
+      "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
-      "limitOption_one": "Up to {{count}} task",
-      "limitOption_other": "Up to {{count}} tasks",
+      "limitOption_one": "Max {{count}}",
+      "limitOption_other": "Max {{count}}",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
-      "localAria": "Assign tasks to this computer",
-      "pause": "Pause Assignments",
-      "resume": "Resume Assignments",
+      "assignAria": "Assign tasks to {{name}}",
+      "moreAria": "More actions for {{name}}",
       "remove": "Remove from Group",
       "status": {
         "checking": "Checking…",
@@ -486,7 +484,7 @@
       "sourceAria": "Computer source",
       "tabAvailable": "Already Available",
       "tabLink": "Share Link",
-      "availableDescription": "{{provider}} that this computer can already use: your other computers and providers shared with you, the same as the remote providers in the model list. Select one to add it—no request needed.",
+      "availableDescription": "Your other computers and providers shared with you. Select to add—no request needed.",
       "loading": "Looking for computers to add…",
       "loadFailed": "Couldn’t load computers to add",
       "empty": "No computers to add. Enable “Allow remote use” for {{provider}} on another computer, or request access with someone’s share link.",
@@ -500,8 +498,6 @@
       "added_one": "Added {{count}} computer to the {{provider}} provider group",
       "added_other": "Added {{count}} computers to the {{provider}} provider group",
       "removed": "Removed {{name}} from the provider group",
-      "paused": "Paused assignments to {{name}}",
-      "resumed": "Resumed assignments to {{name}}",
       "deleted": "Deleted the {{provider}} provider group"
     }
   },

@@ -280,9 +280,16 @@
   .group-row .desc { font-size: 12px; color: var(--tertiary); line-height: 1.45; }
   .group-row .summary { color: var(--secondary); font-size: 13px; white-space: nowrap; }
   .member .src { font-size: 12px; color: var(--secondary); font-weight: 400; }
-  .member .cap { font-size: 12px; color: var(--secondary); white-space: nowrap; text-align: right; min-width: 88px; }
-  .member .cap b { display: block; color: var(--text); font-weight: 500; font-size: 13px; }
-  .member[data-state="off"] .who, .member[data-state="off"] .cap { opacity: .6; }
+  /* 上限是设置、运行数是状态：上限只出现在这个下拉里，运行数只出现在状态行。 */
+  .member .sel {
+    display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; white-space: nowrap;
+    border: 1px solid var(--border); border-radius: 9999px; font-size: 13px; color: var(--text);
+  }
+  .member .run { font-variant-numeric: tabular-nums; }
+  .member .avatar { color: var(--secondary); }
+  /* 本机不能移出组，用等宽占位保持右侧成列。 */
+  .member .ph { width: 28px; flex-shrink: 0; }
+  .member[data-state="off"] .who { opacity: .6; }
   .status .d.gray { background: var(--tertiary); }
   .strategy { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--secondary); }
   .strategy .grow { flex: 1; }
@@ -405,9 +412,9 @@
       </button>
       <div class="mhead">
         <span class="mark" style="width:36px;height:36px;border-radius:12px">A</span>
+        <!-- 标题已经说明这页是什么；这台电脑的名字由本机那行与下方「分享」说明承载，不在这里重复。 -->
         <div class="grow">
           <h1>Anthropic · 远程与分享</h1>
-          <p class="lead" style="margin-bottom:0">这台电脑（Home Mac Studio）上的 Anthropic 有供应商组：本机任务、你的其他电脑和你分享的人使用它时，按组策略选一台组内电脑运行 Agent。文件和命令仍在发起任务的电脑上执行。</p>
         </div>
       </div>
 
@@ -429,7 +436,7 @@
             <span id="strategy-desc"></span>
           </div>
         </div>
-        <p class="est" style="margin:8px 0 0;font-size:12px">本机、你的其他电脑和你分享的人的任务都按组分配；分享的人不会收到提示，也看不到组里电脑的名称。</p>
+        <p class="est" style="margin:8px 0 0;font-size:12px">这台电脑上的任务，Agent 在被选中的电脑上运行</p>
       </div>
 
       <div class="section">
@@ -618,17 +625,17 @@
   /* ---------- 模拟数据 ---------- */
   let hasGroup = true;
   const members = [
-    { id: 'self', name: '本机', sub: 'Home Mac Studio', avatar: 'H', state: 'on', running: 1, limit: 4, status: '可用' },
-    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', avatar: 'L', state: 'on', running: 0, limit: 4, status: '可用' },
-    { id: 'mini', name: "Magi's Mac Mini", sub: '来自 Magi 的分享', avatar: 'M', state: 'on', running: 2, limit: 4, status: '可用' },
-    { id: 'pc', name: 'Studio-PC', sub: '来自 Kai 的分享', avatar: 'K', state: 'cool', running: 0, limit: 4, status: '冷却中 · 撞到用量上限，约 15:20 恢复' },
-    { id: 'imac', name: 'Office-iMac', sub: '来自 王一 的分享', avatar: '王', state: 'off', running: 0, limit: 2, status: '不在线' },
+    { id: 'self', name: '本机', sub: 'Home Mac Studio', state: 'on', running: 1, limit: 4, status: '可用' },
+    { id: 'mbp', name: "Lizi's MacBook Pro", sub: '我的其他电脑', state: 'on', running: 0, limit: 4, status: '可用' },
+    { id: 'mini', name: "Magi's Mac Mini", sub: '来自 Magi 的分享', state: 'on', running: 2, limit: 4, status: '可用' },
+    { id: 'pc', name: 'Studio-PC', sub: '来自 Kai 的分享', state: 'cool', running: 0, limit: 4, status: '冷却中 · 撞到用量上限，约 15:20 恢复' },
+    { id: 'imac', name: 'Office-iMac', sub: '来自 王一 的分享', state: 'off', running: 0, limit: 2, status: '不在线' },
   ];
   const strategyDesc = {
-    least: '新任务给正在运行任务最少的那台',
-    round: '新任务依次分给可用的电脑',
-    order: '排在前面的优先，不可用时才用后面的',
-    weight: '按每台的权重比例分配',
+    least: '给最闲的那台',
+    round: '依次轮流',
+    order: '排前面的优先',
+    weight: '按权重比例',
   };
   /* 每行：[名称, 说明, 头像, [[模型, 轮次, 输入, 输出, 估算金额]]]；两个维度合计相同。 */
   const base = {
@@ -657,24 +664,33 @@
   const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.round(n / 1000) + 'K';
   const fmtUsd = (n) => '$' + n.toFixed(2);
   const check = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>';
+  /* 组内电脑用设备图标；人像头像留给「用量」与「分享」里真实的人。 */
+  const monitor = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
+  const dots = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+  const chevron = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 
   function renderMembers() {
     $('#member-count').textContent = members.length + ' 台';
     $('#members').innerHTML = members.map((m) => {
       const dot = m.state === 'on' ? '<span class="d"></span>' : '<span class="d gray"></span>';
-      const cap = m.state === 'off' ? `<b>—</b>上限 ${m.limit}` : `<b>${m.running} / ${m.limit}</b>运行中 / 上限`;
-      const actions = m.id === 'self'
-        ? '<button type="button" class="switch" role="switch" aria-checked="true" aria-label="本机参与运行"></button>'
-        : '<button type="button" class="btn secondary sm">暂停分配</button><button type="button" class="btn danger-text sm">移出</button>';
+      const run = m.running > 0 ? ` · <span class="run">${m.running} 个任务运行中</span>` : '';
+      // 参与分配对所有来源都是同一个开关(同一个 paused 布尔值)，不按来源分叉成「开关 / 暂停分配按钮」。
+      // 「移出组」罕用且不可逆，收进行内 ··· 菜单；本机不能移出，留等宽占位。
+      const more = m.id === 'self'
+        ? '<span class="ph" aria-hidden="true"></span>'
+        : `<button type="button" class="icon-btn" aria-label="${m.name} 的更多操作">${dots}</button>`;
       return `
       <div class="row member" data-state="${m.state}">
-        <span class="avatar">${m.avatar}</span>
+        <span class="avatar" aria-hidden="true">${monitor}</span>
         <div class="who">
           <div class="line1">${m.name} <span class="src">${m.sub}</span></div>
-          <div class="line2"><span class="status">${dot}${m.status}</span></div>
+          <div class="line2"><span class="status">${dot}${m.status}</span>${run}</div>
         </div>
-        <div class="cap">${cap}</div>
-        <div class="actions">${actions}</div>
+        <div class="actions">
+          <span class="sel">上限 ${m.limit}${chevron}</span>
+          <button type="button" class="switch" role="switch" aria-checked="${m.state !== 'off'}" aria-label="给 ${m.name} 分配任务"></button>
+          ${more}
+        </div>
       </div>`;
     }).join('');
     $('#strategy-desc').textContent = strategyDesc[strategy];

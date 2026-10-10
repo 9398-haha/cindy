@@ -407,18 +407,16 @@
     },
     "page": {
       "title": "{{provider}} · 遠端與分享",
-      "description": "這臺電腦上 {{provider}} 的供應商組與分享設定。",
-      "descriptionWithDevice": "這臺電腦（{{device}}）上 {{provider}} 的供應商組與分享設定。",
       "shareTitle": "分享"
     },
     "section": {
       "title": "供應商組",
       "addComputer": "新增電腦",
-      "delete": "刪除供應商組",
-      "empty": "還沒有供應商組。加入其他電腦上的 {{provider}}，這臺電腦上的任務會自動選一臺執行。",
+      "delete": "刪除組",
+      "empty": "加入其他電腦上的 {{provider}}，任務會自動選一臺執行",
       "loading": "正在讀取供應商組…",
       "loadFailed": "未能讀取供應商組",
-      "note": "這臺電腦上的任務按組分配，Agent 在被選中的電腦上執行；你的其他電腦和你分享的人經這臺電腦使用時，暫時仍在這臺電腦上執行。"
+      "note": "這臺電腦上的任務，Agent 在被選中的電腦上執行"
     },
     "strategy": {
       "label": "組策略",
@@ -427,28 +425,27 @@
       "order": "依順序",
       "weight": "依權重",
       "description": {
-        "least": "新任務給正在執行任務最少的那臺",
-        "round": "新任務依序分給可用的電腦",
-        "order": "排在前面的優先，前面的不可用才用後面的",
-        "weight": "依權重比例分配新任務"
+        "least": "給最閒的那臺",
+        "round": "依序輪流",
+        "order": "排前面的優先",
+        "weight": "依權重比例"
       }
     },
     "autoSwitch": {
       "label": "自動換電腦",
-      "description": "組裡的電腦達到用量上限、登入失效或連不上時，自動換一臺接著執行"
+      "description": "達到上限、連不上或登入失效時自動換一臺"
     },
     "member": {
       "local": "本機",
       "sourceDevice": "我的其他電腦",
       "sourceShare": "來自 {{name}} 的分享",
-      "runningLabel": "執行中 / 上限",
+      "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
-      "limitOption_other": "最多 {{count}} 個",
+      "limitOption_other": "上限 {{count}}",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
-      "localAria": "本機參與分配",
-      "pause": "暫停分配",
-      "resume": "恢復分配",
+      "assignAria": "給 {{name}} 分配任務",
+      "moreAria": "{{name}} 的更多操作",
       "remove": "移出組",
       "status": {
         "checking": "正在檢查…",
@@ -482,7 +479,7 @@
       "sourceAria": "電腦來源",
       "tabAvailable": "已經能用的",
       "tabLink": "分享連結",
-      "availableDescription": "這臺電腦已經能用的 {{provider}}：你的其他電腦和別人分享給你的，與模型清單裡的遠端供應商一致。勾選即可加入，不需要再申請。",
+      "availableDescription": "你的其他電腦和別人分享給你的，勾選即可加入，不用再申請",
       "loading": "正在尋找可以加入的電腦…",
       "loadFailed": "未能讀取可以加入的電腦",
       "empty": "沒有可以加入的電腦。在其他電腦上對 {{provider}} 開啟「允許遠端呼叫」，或用別人的分享連結申請。",
@@ -495,8 +492,6 @@
     "toast": {
       "added_other": "已把 {{count}} 臺電腦加入 {{provider}} 的供應商組",
       "removed": "已把 {{name}} 移出供應商組",
-      "paused": "已暫停給 {{name}} 分配任務",
-      "resumed": "已恢復給 {{name}} 分配任務",
       "deleted": "已刪除 {{provider}} 的供應商組"
     }
   },
