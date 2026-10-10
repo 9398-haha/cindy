@@ -449,7 +449,7 @@
       "remove": "그룹에서 제외",
       "status": {
         "checking": "확인 중…",
-        "available": "사용 가능",
+        "idle": "대기 중",
         "full": "한도 도달",
         "paused": "배정 일시 중지됨",
         "cooling": "대기 중",
