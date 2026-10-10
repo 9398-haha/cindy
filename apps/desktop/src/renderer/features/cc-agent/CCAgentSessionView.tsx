@@ -105,10 +105,7 @@ import {
   readSendFollowCancelGeneration,
   tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
-import {
-  getMessageStreamIndicatorResizeTargets,
-  measureMessageStreamIndicatorClearanceOffset,
-} from '@/components/chat/messageStreamIndicatorPosition';
+import { useComposerOverlayMetrics } from './useComposerOverlayMetrics';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -171,6 +168,7 @@ import {
   controlledTaskSupportsAgentLocation,
   selectControlledTaskAgentDevices,
 } from '@/lib/controlledTaskAgentLocation';
+import { resolveUsageAccountLocation } from '@/lib/usageAccountLocation';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import {
   canExposeWritableDirsChange,
@@ -1501,10 +1499,7 @@ export function CCAgentSessionView({
   const overlayRef = useCallback((node: HTMLDivElement | null) => {
     setOverlayEl(node);
   }, []);
-  const [overlayHeight, setOverlayHeight] = useState(200);
-  const [bottomCenterClearanceOffset, setBottomCenterClearanceOffset] = useState<
-    number | undefined
-  >(undefined);
+  const { overlayHeight, bottomCenterClearanceOffset } = useComposerOverlayMetrics(overlayEl);
   const [inlinePlanVisibilityState, setInlinePlanVisibilityState] = useState<{
     sessionId: string | undefined;
     value: InlinePlanVisibility | null;
@@ -1529,42 +1524,6 @@ export function CCAgentSessionView({
     },
     [sessionId],
   );
-
-  useEffect(() => {
-    if (!overlayEl) return;
-    const measureOverlay = () => {
-      // 状态行会动态出现 / 收起，overlay 总高度不等于底部中央控件的避让边界。
-      // 空中央行仍以 composer 栈为锚；步骤 / 接管胶囊在场时改取中央组顶边，
-      // 让消息流悬浮按钮与它们纵向成栈，而不是共享同一块 32px 区域。
-      setOverlayHeight(overlayEl.offsetHeight);
-      setBottomCenterClearanceOffset(measureMessageStreamIndicatorClearanceOffset(overlayEl));
-    };
-    const ro = new ResizeObserver(measureOverlay);
-    let observedTargets = new Set<HTMLElement>();
-    const syncResizeTargetsAndMeasure = () => {
-      const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
-      for (const target of observedTargets) {
-        if (!nextTargets.has(target)) ro.unobserve(target);
-      }
-      for (const target of nextTargets) {
-        if (!observedTargets.has(target)) ro.observe(target);
-      }
-      observedTargets = nextTargets;
-      measureOverlay();
-    };
-
-    // Seed with the current geometry so the first paint after remount does not
-    // reuse stale state. The plan flyout is absolutely positioned and mounts
-    // only on hover/click, so its insertion does not resize the center group;
-    // resync observed targets whenever that subtree changes.
-    syncResizeTargetsAndMeasure();
-    const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);
-    mutationObserver.observe(overlayEl, { childList: true, subtree: true });
-    return () => {
-      mutationObserver.disconnect();
-      ro.disconnect();
-    };
-  }, [overlayEl]);
 
   // F-FP-5: 点击 workingDir → 在系统文件管理器里直接打开目录(复用 shell:open-path IPC)。
   // local only:remote session 的 chip 仅作展示,不响应点击(见下方 remoteHostId 早返 +
@@ -2168,6 +2127,31 @@ export function CCAgentSessionView({
       selectableDevices.find((device) => device.deviceId === remoteDeviceId)?.name ||
       null)
     : null;
+  // 底部用量 chip 按意图显示下一轮的模型与来源;余量同样读下一轮 Agent 所在那台的账号
+  // (远程 Agent,本机任务或远程控制的任务都一样),不读任务所在电脑的同名账号。
+  const usageChipProviderId = agentSwitchIntent
+    ? agentSwitchIntent.providerId
+    : (session?.providerId ?? null);
+  const usageAccount = useMemo(
+    () =>
+      resolveUsageAccountLocation({
+        taskDeviceId: remoteDeviceId,
+        agentDeviceId: session?.agentDeviceId,
+        pendingAgentDeviceId,
+        providerId: usageChipProviderId,
+        selfDeviceId,
+        sharedTaskGuest: !!remoteDeviceId && isSharedTaskPeer(remoteDeviceId),
+        remoteHostId: session?.remoteHostId,
+      }),
+    [
+      remoteDeviceId,
+      session?.agentDeviceId,
+      pendingAgentDeviceId,
+      usageChipProviderId,
+      selfDeviceId,
+      session?.remoteHostId,
+    ],
+  );
   const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
@@ -5822,17 +5806,14 @@ export function CCAgentSessionView({
                     <TodaySpendChip
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
                       modelId={agentSwitchIntent?.model ?? session?.model ?? null}
-                      providerId={
-                        agentSwitchIntent
-                          ? agentSwitchIntent.providerId
-                          : (session?.providerId ?? null)
-                      }
+                      providerId={usageChipProviderId}
                       sessionId={sessionId}
                       sessionInitialMoney={session?.totalMoney ?? null}
                       sessionInitialCostUsd={session?.totalCostUsd ?? null}
                       sessionInitialTokens={session?.totalTokenUsage ?? null}
                       remoteHostId={session?.remoteHostId ?? null}
                       deviceLinkDeviceId={remoteDeviceId ?? null}
+                      usageAccount={usageAccount}
                     />
                     <ContextCapacityRing
                       isRunning={agentStatus.isRunning}

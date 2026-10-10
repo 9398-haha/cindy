@@ -257,6 +257,7 @@ export interface AgentInputSendOpts {
   /** Session reservation 时回调本轮 vendor generation；必须在 send 返回前绑定 leftover。 */
   onVendorTurnReserved?: (generation: number) => void;
   persistUserMessage?: {
+    botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     /** 插件来源:写入 agentMeta.sourcePlugin 并生成 `[消息来源]`(不传给 maker-core)。 */
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
@@ -1210,6 +1211,16 @@ export class AgentInputCoordinator {
       && vendorGeneration !== active.vendorTurnGeneration) return null;
     // A human steering a private reply takes ownership of the resulting output.
     return active.latestSteeringClientId ?? active.item?.clientId ?? null;
+  }
+
+  /** Only a main-owned accepted receipt can silence this turn. Human steering restores visibility. */
+  isActiveTaskCoordination(sessionId: string, vendorGeneration?: number): boolean {
+    const active = this.states.get(sessionId)?.activeTurn;
+    // Pending steering attribution precedes policy/attachment/provider acceptance.
+    // Only replacement of active.item after acceptance may release this silence.
+    return !!active?.item?.botTaskCoordination
+      && (vendorGeneration === undefined || active.vendorTurnGeneration === null
+        || vendorGeneration === active.vendorTurnGeneration);
   }
 
   /** Authority follows the active input, never pending steering or cumulative reply attribution. */
@@ -2251,6 +2262,10 @@ export class AgentInputCoordinator {
           typeof item.hostAcceptedAtMs === 'number' && Number.isFinite(item.hostAcceptedAtMs);
       }
     }
+    // Coordination must wait for its own turn and the normal dispatch-time
+    // relationship check. Read the host-owned row first: UI projections omit
+    // the receipt, and queue-to-steer must not silence an existing user turn.
+    if (item.botTaskCoordination) return false;
     if (state.steeringQueueClientIds.includes(item.clientId)) {
       log.info('steer ignored: duplicate in-flight clientId (control-side resend)', {
         sessionId,
@@ -4298,6 +4313,7 @@ export class AgentInputCoordinator {
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.autoReviewUserText;
+    delete projected.botTaskCoordination;
     delete projected.fromDeviceLinkClient;
     // Main-only wire-assembly hint; renderers mask rows from `text` alone.
     delete projected.agentOmitsTriggerPrefix;
@@ -4881,6 +4897,7 @@ export class AgentInputCoordinator {
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {
+          ...(head.botTaskCoordination ? { botTaskCoordination: head.botTaskCoordination } : {}),
           ...(head.sharedTaskAuthor ? { sharedTaskAuthor: head.sharedTaskAuthor } : {}),
           ...(head.sourcePlugin ? { sourcePlugin: head.sourcePlugin } : {}),
           clientId: head.clientId,
@@ -6489,6 +6506,44 @@ export class AgentInputCoordinator {
     state.usageLimitWait = { ...state.usageLimitWait!, resumeAt };
     this.emit(sessionId);
     return true;
+  }
+
+  /**
+   * 供应商组自动换电脑(docs/product-rules/provider-groups.md §6.1)：交接会关闭旧会话，而关闭会
+   * 撤销限额等待。交接前用终态错误下发的候选令牌取得这次错误的重试入口(不透明句柄)，交接完成后凭它
+   * `rearmUsageLimitWait` 重新挂上等待。返回 null = 那次错误已不是当前状态(用户已接手等)。
+   */
+  leaseUsageLimitRecovery(sessionId: string, token: number): object | null {
+    const state = this.states.get(sessionId);
+    if (!state || state.activeTurn !== null || !isUsageLimitCandidateCurrent(state, token)) return null;
+    return state.recovery;
+  }
+
+  /** 句柄对应的那次错误是否仍是当前状态(没有新 turn、用户没有接手、没有被中断自愈接管)。 */
+  isUsageLimitRecoveryLeaseCurrent(sessionId: string, lease: object): boolean {
+    const state = this.states.get(sessionId);
+    return Boolean(
+      state &&
+        state.activeTurn === null &&
+        state.recovery !== null &&
+        state.recovery === lease &&
+        state.error !== null &&
+        state.autoResumePending === null,
+    );
+  }
+
+  /**
+   * 凭 `leaseUsageLimitRecovery` 的句柄重新挂上限额等待并返回新令牌(resumeAt 为 null 只登记候选，
+   * 交给额度重置后自动继续去排期)。重试入口已变(用户发消息、重试、收下错误)、已有 turn 在跑或已被
+   * 中断自愈接管时返回 null，不替用户续跑。
+   */
+  rearmUsageLimitWait(sessionId: string, lease: object, resumeAt: number | null): number | null {
+    const state = this.states.get(sessionId);
+    if (!state || !state.recovery || !this.isUsageLimitRecoveryLeaseCurrent(sessionId, lease)) return null;
+    const token = ++this.usageLimitWaitSeq;
+    state.usageLimitWait = { resumeAt, token, recovery: state.recovery };
+    this.emit(sessionId);
+    return token;
   }
 
   /** 等待计划是否仍有效（host 到点前复核用）。 */

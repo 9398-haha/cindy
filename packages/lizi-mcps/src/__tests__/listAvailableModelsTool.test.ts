@@ -11,6 +11,25 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('list_available_models tool', () => {
+  it.each(['openai-codex/gpt-5.5', 'codex/gpt-5.5'])(
+    'distinguishes the gateway route from an opaque Cursor ID: %s',
+    async (id) => {
+      const registry = new XdtHelperToolRegistry();
+      registerListAvailableModelsTool(registry, {
+        listAvailableModels: async () => ({
+          ok: true as const,
+          codex: [{ id, label: 'Gateway route' }],
+          cursor: [{ id, label: 'Native Cursor choice' }],
+        }),
+      });
+
+      const result = parse(await registry.call('list_available_models', {}));
+
+      expect(result.codex).toEqual([{ id, label: 'Gateway route', tier: 'budget' }]);
+      expect(result.cursor).toEqual([{ id, label: 'Native Cursor choice', tier: 'standard' }]);
+    },
+  );
+
   it('preserves native Cursor model IDs and keeps the Pi catalog separate', async () => {
     const listAvailableModels = vi.fn(async () => ({
       ok: true as const,

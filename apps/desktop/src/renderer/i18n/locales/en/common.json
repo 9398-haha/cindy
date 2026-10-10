@@ -206,7 +206,6 @@
       "descriptionOff": "When on, your other computers and the people you share with can use this provider’s models. While it’s off, existing shares are paused, not deleted."
     },
     "manage": {
-      "title": "Share {{provider}}",
       "description": "People you share with can pick {{provider}} models in their own sessions. The Agent runs on this computer and usage counts toward your {{provider}}; their files and commands still run on their own computer.",
       "descriptionWithDevice": "People you share with can pick {{provider}} models in their own sessions. The Agent runs on this computer ({{device}}) and usage counts toward your {{provider}}; their files and commands still run on their own computer.",
       "createLink": "Create Share Link",
@@ -398,6 +397,108 @@
       "approvedBody": "{{name}} shared {{provider}} with you",
       "rejectedTitle": "Share Request Declined",
       "rejectedBody": "{{name}} declined to share {{provider}}"
+    }
+  },
+  "providerGroup": {
+    "row": {
+      "label": "Provider Group",
+      "description": "Combine this provider across your computers. Tasks are assigned automatically and move to another computer when one fails.",
+      "summary_one": "{{count}} computer · {{strategy}}",
+      "summary_other": "{{count}} computers · {{strategy}}",
+      "setUp": "Set Up Group",
+      "manage": "Manage Group"
+    },
+    "page": {
+      "title": "{{provider}} · Remote & Sharing",
+      "shareTitle": "Sharing"
+    },
+    "section": {
+      "title": "Provider Group",
+      "addComputer": "Add Computer",
+      "delete": "Delete Group",
+      "empty": "Add {{provider}} from your other computers and tasks will pick one automatically",
+      "loading": "Loading provider group…",
+      "loadFailed": "Couldn’t load the provider group",
+      "note": "For tasks on this computer, the Agent runs on the computer the group picks"
+    },
+    "strategy": {
+      "label": "Group Strategy",
+      "least": "Least Busy",
+      "round": "Round Robin",
+      "order": "In Order",
+      "weight": "By Weight",
+      "description": {
+        "least": "Goes to the least busy one",
+        "round": "Rotates across computers",
+        "order": "Earlier in the list first",
+        "weight": "Split by weight"
+      }
+    },
+    "autoSwitch": {
+      "label": "Switch Computers Automatically",
+      "description": "Switches when one hits its limit, is unreachable or is signed out"
+    },
+    "member": {
+      "local": "This Computer",
+      "sourceDevice": "My other computer",
+      "sourceShare": "Shared by {{name}}",
+      "runningCount_one": "{{count}} task running",
+      "runningCount_other": "{{count}} tasks running",
+      "limitAria": "Task limit for {{name}}",
+      "limitOption_one": "Max {{count}}",
+      "limitOption_other": "Max {{count}}",
+      "weightAria": "Weight for {{name}}",
+      "weightOption": "Weight {{weight}}",
+      "assignAria": "Assign tasks to {{name}}",
+      "moreAria": "More actions for {{name}}",
+      "remove": "Remove from Group",
+      "status": {
+        "checking": "Checking…",
+        "available": "Available",
+        "full": "Full",
+        "paused": "Assignments paused",
+        "cooling": "Cooling down",
+        "coolingUntil": "Cooling down · back around {{time}}",
+        "offline": "Offline",
+        "unavailable": {
+          "provider-off": "“Allow remote use” is off for this provider on that computer",
+          "disconnected": "Provider not connected or turned off",
+          "share-paused": "Share paused",
+          "share-removed": "Share removed"
+        }
+      },
+      "removeConfirm": {
+        "title": "Remove {{name}} from the provider group?",
+        "description": "It won’t get new tasks. Tasks already running there stay on that computer.",
+        "lastDescription": "It’s the last computer in the group, so removing it deletes the {{provider}} provider group.",
+        "confirm": "Remove from Group"
+      }
+    },
+    "deleteConfirm": {
+      "title": "Delete the {{provider}} provider group?",
+      "description": "New tasks on this computer will run here. Tasks already on other computers stay where they are.",
+      "confirm": "Delete Group"
+    },
+    "add": {
+      "title": "Add Computers to the {{provider}} Provider Group",
+      "sourceAria": "Computer source",
+      "tabAvailable": "Already Available",
+      "tabLink": "Share Link",
+      "availableDescription": "Your other computers and providers shared with you. Select to add—no request needed.",
+      "loading": "Looking for computers to add…",
+      "loadFailed": "Couldn’t load computers to add",
+      "empty": "No computers to add. Enable “Allow remote use” for {{provider}} on another computer, or request access with someone’s share link.",
+      "alreadyMember": "Already in group",
+      "confirm": "Add to Group",
+      "cancel": "Cancel",
+      "linkDescription": "Paste a {{provider}} share link from someone else. After they approve, come back to “Already Available” and select it.",
+      "pasteLink": "Paste Share Link"
+    },
+    "toast": {
+      "added_one": "Added {{count}} computer to the {{provider}} provider group",
+      "added_other": "Added {{count}} computers to the {{provider}} provider group",
+      "removed": "Removed {{name}} from the provider group",
+      "deleted": "Deleted the {{provider}} provider group"
     }
   },
   "privacyExit": {
@@ -635,7 +736,8 @@
     "PROVIDER_SHARE_CROSS_REGION_DISABLED": "Cross-region sharing isn’t available yet. This link comes from Cindy’s service in another region.",
     "REMOTE_AGENT_SHARE_PAUSED": "Model not changed: the owner has paused this share for you. Pick another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "Model not changed: this share is no longer available (the owner removed it or you left). Pick another model.",
-    "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model."
+    "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model.",
+    "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed"
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -715,7 +817,7 @@
       "ariaLabel": "Search settings",
       "placeholder": "Search settings",
       "resultsLabel": "Settings search results",
-      "noResults": "No matching settings",
+      "noResults": "No settings found. Try another keyword.",
       "clear": "Clear search"
     },
     "back": "Back",
@@ -723,7 +825,7 @@
       "customizedBadge": "Custom",
       "restore": "Restore default",
       "restored": "Restored default settings",
-      "restoreFailed": "Failed to restore default settings"
+      "restoreFailed": "Could not restore defaults."
     },
     "tabs": {
       "storage": "Storage",
@@ -772,8 +874,8 @@
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
-      "linkOpen": "Link open behavior",
-      "streamFade": "Streaming motion",
+      "linkOpen": "Open Links",
+      "streamFade": "Reply Animation",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
       "import": "Session Import",
@@ -1040,6 +1142,15 @@
         "preparingRuntime": "Preparing runtime on {{hostId}}…",
         "installingAgent": "Installing {{agent}} on remote {{hostId}}…",
         "failed": "Failed to install {{agent}} on {{hostId}}: {{message}}. Open Settings → Remote → expand {{hostId}} for the full log."
+      },
+      "hostKey": {
+        "title": "SSH Host Key Changed",
+        "review": "Review Host Key",
+        "explanation": "The identity key for {{host}} no longer matches the key Cindy saved. Verify the new fingerprint with the server administrator before updating trust.",
+        "details": "Previously trusted: {{trusted}}\nNew fingerprint: {{presented}}\n\nA server reinstall or an intercepted connection can cause this change. Compare the new fingerprint through a trusted channel, such as the server console.\n\nCindy’s trust record: {{file}}\nCindy does not read ~/.ssh/known_hosts. Changing your login key or deleting and adding the host will not fix this.\n\nUpdating trust replaces only this host’s fingerprint and reconnects. Other hosts stay unchanged.",
+        "cancel": "Keep Existing Key",
+        "trust": "Trust New Key and Reconnect",
+        "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
       }
     },
     "appearance": {
@@ -1074,26 +1185,26 @@
         "defaultPreset": "Default",
         "presets": "Presets",
         "custom": "Custom",
-        "customPlaceholder": "Enter font-family",
-        "applyCustom": "Apply",
+        "customPlaceholder": "Enter a font name, such as Arial",
+        "applyCustom": "Apply Font",
         "uiFamily": {
           "label": "UI font",
-          "description": "Used by menus, settings, chat text, and other interface text.",
+          "description": "Used for menus, settings, and chat text.",
           "aria": "Select UI font"
         },
         "uiSize": {
           "label": "UI font size",
-          "description": "Affects chat text, settings, menus, dialogs, and other interface text.",
+          "description": "Adjust text size in menus, settings, and chats.",
           "aria": "Adjust UI font size"
         },
         "codeFamily": {
           "label": "Code font",
-          "description": "Used by code blocks, diffs, editors, and path-like monospace text.",
+          "description": "Used for code, editors, change comparisons, and file paths.",
           "aria": "Select code font"
         },
         "codeSize": {
           "label": "Code font size",
-          "description": "Only affects code blocks, diffs, and editors, not inline code, status numbers, badges, or path labels.",
+          "description": "Resize text only in code blocks, change comparisons, and editors. Inline code, status numbers, badges, and path labels keep their size.",
           "aria": "Adjust code font size"
         },
         "presetsUi": {
@@ -1122,13 +1233,13 @@
         "system": "Follow system"
       },
       "sidebarCardMode": {
-        "label": "Sidebar card mode",
-        "hint": "Pinned sessions are shown as cards with task-status summaries; card heights vary with summary length, and the cards flow into 2–3 columns when the sidebar is widened.",
-        "aria": "Toggle sidebar card mode"
+        "label": "Pinned Style",
+        "hint": "Show pinned sessions as text, cards, or a list.",
+        "aria": "Choose how pinned sessions appear"
       },
       "sidebarMainListMode": {
-        "label": "Session list style",
-        "hint": "Display style for the main sidebar list (below Pinned): Text is a compact single row; List is a two-line row with a preview.",
+        "label": "List Style",
+        "hint": "For unpinned sessions: Text uses one line; List adds a preview.",
         "aria": "Switch session list style"
       },
       "ghostPanelRestore": {
@@ -1170,19 +1281,19 @@
       },
       "layout": {
         "label": "Panel layout",
-        "hint": "Panel positions and widths persist across restarts. Restore the default arrangement if the layout becomes difficult to use.",
+        "hint": "Panel positions and widths are saved automatically. Restore defaults anytime.",
         "reset": "Restore default layout",
         "resetSuccess": "Default panel layout restored",
-        "resetFailed": "Could not restore the default panel layout",
+        "resetFailed": "Could not restore the panel layout.",
         "saved": "Panel position saved. Restore the default layout in the Appearance section under Settings → General.",
-        "saveFailed": "Could not save the panel position"
+        "saveFailed": "Could not save panel positions."
       }
     },
     "notifications": {
       "title": "Notifications",
-      "sessionDoneLabel": "Show desktop notification when a session finishes",
-      "sessionDoneHint": "Only shown while the window is unfocused, to avoid foreground interruption.",
-      "sessionDoneAria": "Toggle session-done desktop notifications",
+      "sessionDoneLabel": "System Notifications",
+      "sessionDoneHint": "Notify when a session finishes, encounters an error, or needs a reply. Regular sessions notify only while the window is in the background. When Agent Island is enabled, it handles these alerts instead.",
+      "sessionDoneAria": "Toggle system notifications for sessions",
       "feishuLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
@@ -1221,8 +1332,8 @@
     },
     "windowBehavior": {
       "loginItem": {
-        "label": "Start Cindy at Login",
-        "hint": "Open Cindy automatically when you sign in to your computer. Off by default.",
+        "label": "Start at Login",
+        "hint": "Open Cindy when you sign in to your computer. Off by default.",
         "requiresApproval": "Allow Cindy in Login Items in macOS System Settings to finish enabling startup.",
         "loading": "Reading system settings…",
         "loadFailed": "Could not read startup settings. Reopen this settings page to retry.",
@@ -1232,7 +1343,7 @@
       "title": "App Behavior",
       "closeBehavior": {
         "label": "When closing the main window",
-        "hint": "You will be asked the first time. You can change the choice here later.",
+        "hint": "Applies every time you close the main window. If no choice is saved, you’ll be asked the first time. Change it here anytime.",
         "aria": "Choose what happens when the main window closes",
         "tray": "Minimize to tray",
         "minimize": "Minimize window",
@@ -1252,9 +1363,9 @@
         "title": "Could not minimize to tray",
         "message": "The system tray icon could not be created, so the window will stay open."
       },
-      "swallowActivationClickLabel": "First left-click on a background window only activates, doesn't fall through",
-      "swallowActivationClickHint": "When on, the first left-click that brings the window back from background only raises it — page buttons don't fire and no text is selected.\nTurn off to continue working with a single click (better for dual-monitor setups), at the cost of possibly triggering buttons unintentionally.",
-      "swallowActivationClickAria": "Toggle whether the first left-click on a background window is swallowed",
+      "swallowActivationClickLabel": "Prevent Accidental Clicks When Returning",
+      "swallowActivationClickHint": "When enabled, a left-click on a background window only brings it forward. When disabled, it also acts on the clicked item, which may cause accidental clicks.",
+      "swallowActivationClickAria": "Toggle protection from accidental clicks when returning to the window",
       "macRestartNote": "On macOS, restart the app for changes to take effect."
     },
     "agentIsland": {
@@ -1346,7 +1457,7 @@
     "language": {
       "title": "Language",
       "label": "Display language",
-      "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
+      "hint": "Used for the interface and AI error reports. Other replies follow your message or language request.",
       "ariaLabel": "Display language selection",
       "options": {
         "system": "Auto (follow system)",
@@ -1389,35 +1500,35 @@
         "nameHint": "Leave empty to keep the current name",
         "changeAvatar": "Change avatar",
         "resetAvatar": "Restore default avatar",
-        "save": "Save",
+        "save": "Save Profile",
         "cancel": "Cancel",
-        "syncHint": "Your name and avatar are saved to your account and sync across all devices.",
+        "syncHint": "Your name and avatar are saved to your account and synced across your devices.",
         "avatarInvalid": "Please choose a PNG / JPG / WebP image under 5MB",
         "saveFailed": "Failed to save, please try again"
       }
     },
     "help": {
       "title": "Help",
-      "description": "This overview explains how to get started in {{appName}} after you are already inside the app, plus the working styles that tend to work best.",
+      "description": "Learn how to get work done with {{appName}}.",
       "gettingStarted": {
         "title": "Getting started",
-        "step1": "Start by creating a session and telling Claude Code or Codex what you want to accomplish.",
-        "step2": "If your work is tied to a codebase, select a working directory before asking it to read files, explain code, or make changes.",
-        "step3": "Treat the chat area as a persistent work thread: ask for work, inspect results, and keep iterating from there."
+        "step1": "Create a session and tell the AI what you want done.",
+        "step2": "Choose a working directory before working on project files.",
+        "step3": "Review the result and ask for changes as needed."
       },
       "workflows": {
-        "title": "Recommended workflows",
-        "description": "{{appName}} works best when you split different goals into separate threads and switch between them from the sidebar.",
-        "item1": "Explore first: ask the agent to explain the project structure, key files, and constraints before changing code.",
-        "item2": "Ship in small steps: ask for narrow edits, review the results, then keep iterating until the task is complete.",
-        "item3": "Parallelize when needed: create separate sessions when you want to isolate context for different goals."
+        "title": "Ways to Work",
+        "description": "Use a separate {{appName}} session for each goal.",
+        "item1": "Read code: understand the project before making changes.",
+        "item2": "Edit code: make small changes and check each one.",
+        "item3": "Work in parallel: create a session for each separate job."
       },
       "recommendedWays": {
-        "title": "Recommended ways to work",
-        "description": "Describe the goal and the surrounding context first, then state the form of result you want. This usually works better than sending one short command alone.",
-        "item1": "Be explicit about what you want done, then add the relevant directory, files, or constraints.",
-        "item2": "Break large tasks into multiple turns: understand first, edit second, verify third.",
-        "item3": "Create a new session for independent problems instead of mixing everything into one thread."
+        "title": "How to Ask",
+        "description": "Describe your goal, the background, and the result you want.",
+        "item1": "Include relevant files, requirements, and limits.",
+        "item2": "For complex work, understand first, then edit and check.",
+        "item3": "Start a new session for unrelated work."
       },
       "linuxUpdates": {
         "title": "Linux install and updates",
@@ -1427,9 +1538,9 @@
         "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Linux updates are applied only when you choose to restart, never automatically while idle."
       },
       "qnaTitle": "Ask directly",
-      "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
+      "qnaDescription": "Still need help? Ask how to do what you have in mind.",
       "qnaPlaceholder": "For example: how do I import a Codex session?",
-      "qnaSend": "Send",
+      "qnaSend": "Send Question",
       "qnaPending": "Preparing an answer…",
       "qnaNoAnswer": "I do not have a reliable answer yet. Try asking again with a different wording.",
       "qnaAiDisclaimer": "AI-generated, may be inaccurate",
@@ -1449,7 +1560,7 @@
       "panelAriaLabel": "Help Assistant panel",
       "newSession": "New session",
       "threadEmptyTitle": "Ask me anything",
-      "threadEmptyHint": "Quick answers to common questions — you can follow up to correct me"
+      "threadEmptyHint": "Tell me what you want to do. You can ask follow-up questions."
     },
     "about": {
       "title": "About",
@@ -3802,28 +3913,28 @@
       }
     },
     "linkOpen": {
-      "title": "Link open behavior",
-      "description": "Where message links open on left click. Right-click still lets you pick the other option once.",
+      "title": "Open Links",
+      "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
       "web": {
         "label": "Web pages",
         "description": "Links on the public internet.",
         "ariaLabel": "Choose where web pages open"
       },
       "local": {
-        "label": "Local pages",
-        "description": "HTML files on this computer, and localhost addresses.",
-        "ariaLabel": "Choose where local pages open"
+        "label": "Local Pages",
+        "description": "Web page files or local web addresses on this computer.",
+        "ariaLabel": "Choose where pages on this computer open"
       },
       "options": {
-        "sidebar": "Sidebar browser",
-        "external": "System browser"
+        "sidebar": "Built-In Browser",
+        "external": "System Default Browser"
       }
     },
     "streamFade": {
-      "title": "Streaming motion",
-      "label": "Fade in streamed text",
-      "hint": "While a reply streams, new words fade in one after another. Turn on to enable the effect; content shows instantly when off. Always off when the system reduce-motion setting is on.",
-      "toggleAria": "Toggle streaming fade-in motion"
+      "title": "Reply Animation",
+      "label": "Fade In Text",
+      "hint": "New reply text fades in when enabled and appears immediately when disabled. This effect stays off when your system reduces motion.",
+      "toggleAria": "Toggle fading in reply text"
     },
     "chatEmbedding": {
       "cell": {
@@ -3846,9 +3957,9 @@
       "toggleAria": "Toggle question navigation rail"
     },
     "promptRecommendation": {
-      "label": "Prompt recommendations in input",
-      "description": "After a reply finishes, the input shows a predicted follow-up prompt. Press Tab to fill it in.",
-      "toggleAria": "Toggle prompt recommendations"
+      "label": "Input Suggestions",
+      "description": "After a reply, the input shows a suggestion for your next message. Press Tab to insert it.",
+      "toggleAria": "Toggle suggestions for the next message"
     },
     "collaboration": {
       "loading": "Loading collaboration settings…",
@@ -8544,10 +8655,22 @@
       "errors": {
         "memberLimit": "A group chat needs 2–6 teammates",
         "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+        "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
         "notFound": "This group chat no longer exists",
         "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
         "planOpen": "A work split is underway. Finish or stop it before starting another.",
-        "planClosed": "This plan has already ended or been updated."
+        "planClosed": "This plan has already ended or been updated.",
+        "invalidAttachment": "This attachment cannot be read. Select it again and send.",
+        "attachmentUnavailable": "Could not retrieve the attachment from your phone. Check the device connection and retry.",
+        "attachmentTooLarge": "The attachment exceeds 100 MB. Choose a smaller file.",
+        "mediaUploadFailed": "Could not upload the attachment to the chat service. Try again later.",
+        "authRequired": "Your sign-in has expired. Sign in again on your computer.",
+        "chatUnavailable": "The chat service is unavailable. Check your connection and retry.",
+        "importPending": "Group history is still syncing. Try again later.",
+        "requestTimeout": "The result is not confirmed yet. Refresh to check before retrying.",
+        "permissionDenied": "You do not have permission to manage this group.",
+        "serviceError": "The chat service could not complete the request. Try again later.",
+        "groupArchived": "This group is archived. This action is unavailable."
       },
       "organizer": "Organizer",
       "plan": {
@@ -8588,7 +8711,14 @@
         "reactionCount": "{{emoji}} · {{count}} reactions",
         "invite": "Invite to group",
         "join": "Join group",
-        "inviteDescription": "This single-use link expires in 24 hours. Accepting joins the group and gives access to its chat history.",
+        "inviteDescription": "People who accept the invitation join the group and can read its chat history.",
+        "revokeLink": "Revoke this link",
+        "revokeDescription": "This link will stop accepting new members. Other invitation links and existing members are unaffected.",
+        "revokedLink": "This invitation link has been revoked.",
+        "revokeUnsupported": "This server does not support revoking invitation links.",
+        "reusableLink": "No expiration · Reusable by multiple people",
+        "singleUseUntil": "Single use · Expires {{date}}",
+        "expiredLink": "This invitation link has expired.",
         "joinDescription": "Paste an invitation link to preview the group before joining.",
         "inviteLink": "Invitation link",
         "pasteLink": "Paste invitation link…",
@@ -8599,7 +8729,7 @@
         "accept": "Accept and join",
         "openGroup": "Open group",
         "previewInvite": "Preview invitation",
-        "invalidInvite": "This invitation is invalid, used or expired. Request a new link.",
+        "invalidInvite": "This invitation is invalid, used, expired or revoked. Request a new link.",
         "notAllowed": "This account does not have permission. Check your account or contact the group owner.",
         "loginRequired": "Sign in to your account and try again.",
         "requestFailed": "The chat service is unavailable. Please try again shortly.",
@@ -9907,7 +10037,9 @@
       "label": "Created from another session"
     },
     "imageMissing": {
-      "title": "Image missing"
+      "title": "Image missing",
+      "unavailable": "Image Unavailable",
+      "loading": "Loading image…"
     },
     "visionBridge": {
       "analyzing": "Analyzing {{count}} image(s)…",
@@ -10438,6 +10570,12 @@
           "reason": "Interruption reason",
           "attempt": "Attempt {{attempt}}/{{total}}",
           "sessionTotal": "{{count}} reconnects in this session"
+        },
+        "agentSwitch": {
+          "usage-limit": "{{from}} hit its usage limit; continued on {{to}}",
+          "auth": "{{from}} is signed out; continued on {{to}}",
+          "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
+          "overload": "{{from}} was overloaded; continued on {{to}}"
         }
       },
       "autoResumeSeparator": {
@@ -10699,7 +10837,8 @@
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
-      "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue."
+      "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page."
     },
     "generatedFiles": {
       "title": "Files created this message",
@@ -11003,7 +11142,8 @@
       "sessionInactive": "Session is no longer active",
       "remoteProjectBanner": "New session in {{project}} on {{device}}",
       "remoteDialogueBanner": "New chat on {{device}} (no project)",
-      "agentDeviceBanner": "Session and files stay on this computer — the Agent runs on {{device}}"
+      "agentDeviceBanner": "Session and files stay on this computer — the Agent runs on {{device}}",
+      "agentDeviceElsewhereBanner": "The Agent runs on {{device}}"
     },
     "jumpSession": {
       "emptyId": "Enter a sessionId to jump to",
@@ -13520,17 +13660,12 @@
     "pluginDisabled": "Disabled",
     "pluginAgentInvoked": "Used automatically by Agent",
     "pluginNoCommand": "Not available here",
-    "sectionTitle": "Reference directories (read-only)",
+    "sectionTitle": "Directories",
     "empty": "No reference directories yet",
     "add": "Add directory…",
     "addReadOnly": "Add read-only directory…",
-    "addWritable": "Add read-write directory…",
-    "writableSectionTitle": "Read-write directories",
-    "writableEmpty": "No read-write directories yet",
     "atLimit": "Limit reached ({{max}})",
     "remove": "Remove {{name}}",
-    "parentConfirmTitle": "Add a parent directory?",
-    "parentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. This expands the Agent's visible scope beyond the working directory.\n\nAdd it anyway?\n\n{{path}}",
     "writableParentConfirmTitle": "Allow read-write access to a parent directory?",
     "writableParentConfirmDescription": "The selected directory is a parent or ancestor of the current working directory. The Agent will be able to read, create, modify, and delete files inside it.\n\nAllow it anyway?\n\n{{path}}",
     "parentConfirmAccept": "Add anyway",
