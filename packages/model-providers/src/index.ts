@@ -218,6 +218,9 @@ export {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
+  CODEX_GATEWAY_WIRE_PREFIXES,
+  isCodexGatewayWireModel,
+  stripCodexGatewayWirePrefix,
   isSubscriptionDirectModel,
   isExclusiveXaiModelId,
   exclusiveXaiCatalogModelId,
@@ -330,3 +333,4 @@ export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+export { CURSOR_MODEL_GROUPS, cursorModelGroup, providerModelDisplayGroups, providerModelDisplayGroupTitle } from './cursorModelGroups.js';

@@ -19,7 +19,7 @@ export interface ModelDescriptor {
   defaultProviderId?: string | null;
 }
 
-/** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
+/** tier: 'budget' = openai-codex/ 或 codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
 type ModelTier = 'budget' | 'standard';
 
 interface TaggedModel {
@@ -33,18 +33,26 @@ interface TaggedModel {
 /**
  * 给每个 model 打 tier 标记。
  *
- * tier='budget'(gateway 折扣 codex 路由) 的唯一判定依据是 model id 的 `codex/` 前缀 ——
- * 与 renderer ModelSelector.categorize() 的归类规则保持一致 (codex/* → 折扣分组),
+ * tier='budget'(gateway 折扣路由) 的判定依据是 model id 的 `openai-codex/` 或 `codex/` 前缀 ——
+ * 与 `@cindy/model-providers` 的 `CODEX_GATEWAY_WIRE_PREFIXES` 保持一致,
  * 也与 host CODEX_BUDGET_MODELS 的 id 命名约定一致。据此打 tier 后, agent 不必再从
  * label / description 里语义推断, 直接按 tier 精准匹配用户指定的档位。
  * label (= host displayName, 同时是 UI 下拉展示名) 不受影响, 保持干净。
  */
-function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
+function isBudgetWireModel(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  return (
+    (id.startsWith('openai-codex/') && id.length > 'openai-codex/'.length) ||
+    (id.startsWith('codex/') && id.length > 'codex/'.length)
+  );
+}
+
+function tagTier(models: ModelDescriptor[] | undefined, nativeCatalog = false): TaggedModel[] | undefined {
   if (!models) return undefined;
   return models.map((m) => ({
     id: m.id,
     label: m.label,
-    tier: m.id.startsWith('codex/') ? 'budget' : 'standard',
+    tier: !nativeCatalog && isBudgetWireModel(m.id) ? 'budget' : 'standard',
     ...(m.providers
       ? {
           providers: m.providers.map((provider) => ({
@@ -63,31 +71,33 @@ export interface ListAvailableModelsDeps {
   /** 调用方任务(可选)：它的 Agent 在另一台电脑运行时，按那台的模型目录列出。 */
   getSessionContext?: () => { sessionId?: string };
   listAvailableModels: (params: {
-    agent?: 'claude-code' | 'codex' | 'pi';
+    agent?: 'claude-code' | 'codex' | 'pi' | 'cursor';
     callerSessionId?: string;
   }) => Promise<ControlResult<{
     codex?: ModelDescriptor[];
     claude_code?: ModelDescriptor[];
     pi?: ModelDescriptor[];
+    cursor?: ModelDescriptor[];
   }>>;
 }
 
 const DESCRIPTION = [
   '列出每个 agent 当前 host 支持的 model id 清单, 用于 create_worker 前确认 model 名拼写。',
-  'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
+  '各引擎的 model id 不可跨用；Cursor 必须原样使用其原生目录公布的 id，不根据显示名称推断。',
   '',
   '参数:',
-  '- agent: 可选, codex / claude-code / pi; 不传返三者',
+  '- agent: 可选, codex / claude-code / pi / cursor; 不传返所有引擎',
   '',
   '返回值:',
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
+  '- cursor: Cursor agent 原生公布的 model 列表 [{id, label, tier}]',
   '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。创建 Worker 时把选定的 provider_id 原样传给 create_worker/create_workers。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
-  "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",
+  "- tier='budget': openai-codex/ 或 codex/ 前缀的 gateway 折扣路由 (如 openai-codex/gpt-5.5、codex/gpt-5.5)",
   "- tier='standard': 官方原版 (如 gpt-5.5)",
   '选型规则: 用户明确要求折扣路由 → 选 tier=budget 的模型; 说「官方 / 原版 / 普通版」→ 选 tier=standard。',
   '默认规则: 用户只报模型名 (如 "gpt-5.5") 时, 一律默认 tier=standard (官方原版); 只有用户明确要求折扣路由才允许选 tier=budget。',
@@ -105,9 +115,9 @@ export function registerListAvailableModelsTool(
     description: DESCRIPTION,
     inputShape: {
       agent: z
-        .enum(['codex', 'claude-code', 'pi'])
+        .enum(['codex', 'claude-code', 'pi', 'cursor'])
         .optional()
-        .describe('可选, 只查某一 agent 的 model 列表; 不传返三者'),
+        .describe('可选, 只查某一 agent 的 model 列表; 不传返所有引擎'),
     },
     handler: async ({ agent }) => {
       const callerSessionId = deps.getSessionContext?.().sessionId;
@@ -122,6 +132,8 @@ export function registerListAvailableModelsTool(
         codex: tagTier(result.codex),
         claude_code: tagTier(result.claude_code),
         pi: tagTier(result.pi),
+        // Cursor IDs are opaque native IDs, never Cindy gateway budget routes.
+        cursor: tagTier(result.cursor, true),
       });
     },
   });

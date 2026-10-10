@@ -1,3 +1,4 @@
+import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
  *
@@ -159,7 +160,7 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   workingDir: string;
   model: string;
   providerId?: string | null;
@@ -203,6 +204,21 @@ export interface AutoResumeInfo {
   maxAttempts: number;
   /** 本会话累计自动重连次数（不设上限，纯展示）。 */
   sessionTotal: number;
+  /**
+   * 供应商组自动换电脑后的续跑(reason 仍为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON，记账与额度重置
+   * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
+   */
+  agentSwitch?: AutoResumeAgentSwitch;
+}
+
+export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload';
+
+export interface AutoResumeAgentSwitch {
+  /** 原电脑的显示名。 */
+  from: string;
+  /** 换到的电脑的显示名。 */
+  to: string;
+  cause: AutoResumeAgentSwitchCause;
 }
 
 /** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
@@ -244,7 +260,13 @@ export interface RecoveryCheckpoint {
   }>;
 }
 
+/** Same-process model source prefix; cannot be supplied by JSON or survive queue persistence. */
+export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
+
 export interface AgentInputQueuedMessage {
+  /** Main-owned delegation receipt; stripped from renderer/device-link input. */
+  botTaskCoordination?: BotTaskCoordination;
+  [HOST_ONLY_AGENT_PREFIX]?: string;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
@@ -593,7 +615,7 @@ export function sanitizeQueuedMessageForPersistence(
     // Historical plain-text queue payloads have no embedded reference bodies.
   }
 
-  if (!changed && !item.trustedSessionReferenceContexts) return item;
+  if (!changed && !item.trustedSessionReferenceContexts && item[HOST_ONLY_AGENT_PREFIX] === undefined) return item;
   const sanitized: AgentInputQueuedMessage = {
     ...item,
     persistedContent,
@@ -603,6 +625,7 @@ export function sanitizeQueuedMessageForPersistence(
       ? { sessionReferencesRequireTrustedSnapshot: true }
       : {}),
   };
+  delete sanitized[HOST_ONLY_AGENT_PREFIX];
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
   return sanitized;
@@ -629,8 +652,9 @@ export function updateQueuedMessageText(
   newText: string,
   sessionRefs: AgentInputSessionRef[] = reconcileSessionRefsForText(newText, entry.sessionRefs),
 ): AgentInputQueuedMessage {
-  // A plugin rewrite must not turn a hidden host welcome into an editable user draft.
-  if (entry.toolsDisabled === true && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+  // A plugin rewrite must not turn a hidden host message into an editable user draft.
+  if ((entry.toolsDisabled === true || entry.agentOmitsTriggerPrefix === true)
+    && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
     && !newText.startsWith(UI_ACTION_TRIGGER_PREFIX)) {
     newText = `${UI_ACTION_TRIGGER_PREFIX}${newText}`;
   }
@@ -986,9 +1010,8 @@ const REF_CONTINUATION_CHARS = new Set([
  * 「ASCII 路径 + 紧跟一个汉字/假名」这个形状判成边界是安全的(PR #510 review P1)。
  */
 function isScriptChangeBoundary(ref: string, next: string): boolean {
-  // eslint-disable-next-line no-control-regex
-  if (!/^[\x00-\x7F]*$/.test(ref)) return false;
-  return /[^\x00-\x7F]/.test(next) && /\p{L}/u.test(next);
+  if (!/^\p{ASCII}*$/u.test(ref)) return false;
+  return /\P{ASCII}/u.test(next) && /\p{L}/u.test(next);
 }
 
 function isRefBoundary(ch: string): boolean {
@@ -1100,9 +1123,12 @@ export function buildMakerUserMessage(
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
   const facingText = getAgentFacingText(queued);
   // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
-  const agentFacingText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
+  const authoredText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
     : facingText;
+  // Combine the host source with the latest body, including any Ghost rewrite.
+  const agentFacingText = (queued.botTaskCoordination ? coordinationModelPrefix(queued.botTaskCoordination) : '')
+    + (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }

@@ -355,6 +355,8 @@ import {
   agentDeviceModelMemoryAccessors,
   useAgentDeviceModelMemoryVersion,
 } from '@/state/agentDeviceModelMemory';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { controlledTaskAgentLocationReadable } from '@/lib/controlledTaskAgentLocation';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -534,18 +536,22 @@ interface ChatInputProps {
    * 由 CCAgentSessionView(reactive remoteDeviceId)/ NewMakerDraftRoute(目标设备)传入;本地会话 undefined。
    */
   deviceLinkDeviceId?: string | null;
+  /** deviceLinkDeviceId 那台电脑的名字(换 Agent 所在电脑的确认文案用)。 */
+  deviceLinkDeviceName?: string | null;
   /**
-   * 本机任务、但 Agent 在同账号另一台电脑上运行:那台电脑的 deviceId。只决定**模型目录**
-   * (能力、供应商、可用引擎)从哪台读 —— 任务、文件、命令、斜杠命令、附件仍按本机任务处理,
-   * 切换模型也走本机 IPC(由本机转给那台的 Agent)。与 deviceLinkDeviceId 互斥。
+   * Agent 在同账号另一台电脑上运行:那台电脑的 deviceId(null = 任务所在电脑)。只决定**模型目录**
+   * (能力、供应商、可用引擎)从哪台读 —— 任务、文件、命令、斜杠命令、附件仍按任务所在电脑处理,
+   * 切换模型也走任务所在电脑(由它转给那台的 Agent)。被控电脑上的任务(已建任务传被控电脑投影的值,
+   * 草稿传草稿里的选择)只在传了 remoteAgentDevices 时生效。
    */
   agentDeviceId?: string | null;
   /** agentDeviceId 那台电脑的名字(模型选择器悬停 / 读屏用);未知时显示「另一台电脑」。 */
   agentDeviceName?: string | null;
   /**
-   * 新任务草稿可选的「Agent 在其他电脑运行」目标(在线的同账号电脑)。传了且非空时,模型面板
-   * 左侧栏在本机供应商之后列出这些电脑上的供应商;选中那里的模型会经 onUnifiedDraftSelect 的
-   * agentDevice 交给草稿层。已建任务 / 远程任务 / SSH 任务不传。
+   * 「Agent 在其他电脑运行」的可选目标(同账号电脑,不含任务所在电脑)。传了且非空时,模型面板
+   * 左侧栏在任务所在电脑的供应商之后列出这些电脑上的供应商:草稿里选中会经 onUnifiedDraftSelect
+   * 的 agentDevice 交给草稿层;已建任务里选中 = 把 Agent 挪过去。被控电脑上的任务(已建任务与建到
+   * 被控电脑的草稿)只在那台支持远程 Agent 时传;SSH 任务不传。
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
   /**
@@ -732,7 +738,7 @@ interface ChatInputProps {
    * M35: Vendor lock — when provided, ModelSelector only shows models
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'cursor';
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -856,7 +862,7 @@ interface ChatInputProps {
    * `lastByVendor.model` 并原样进 createSession,写错就是首条请求路由到一个不存在的模型。
    */
   onUnifiedDraftSelect?: (selection: {
-    vendor: 'cc' | 'codex' | 'pi';
+    vendor: 'cc' | 'codex' | 'pi' | 'cursor';
     providerId: string;
     /** 选中引擎的 **wire model id**。 */
     modelId: string;
@@ -894,8 +900,9 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
 };
 
 /**
- * 把已有任务里选定的档位 / Fast 记进**这个模型所在目录**的那份记忆:deviceId = null 写本机预设,
- * 否则写本机为那台电脑单独记的一份。只写模型档位,不碰新建任务记忆。来源缺失时不写。
+ * 把已有任务里选定的档位 / Fast 记进**这个模型所在目录**的那份记忆:deviceId = null 写任务所在电脑
+ * 那份(本机任务 = 本机预设,被控电脑上的任务 = 被控电脑的镜像,没有镜像就不写),否则写本机为
+ * 那台电脑单独记的一份。只写模型档位,不碰新建任务记忆。来源缺失时不写。
  */
 function rememberCatalogModelPrefs(
   deviceId: string | null,
@@ -903,25 +910,28 @@ function rememberCatalogModelPrefs(
   providerId: string | null | undefined,
   modelId: string,
   patch: { effort?: Effort; fast?: boolean },
+  taskComputerMemory: ModelMemoryAccessors | undefined,
 ): void {
   if (!providerId || !modelId) return;
-  const memory = deviceId ? agentDeviceModelMemoryAccessors(deviceId) : LOCAL_MODEL_MEMORY;
+  const memory = deviceId ? agentDeviceModelMemoryAccessors(deviceId) : taskComputerMemory;
+  if (!memory) return;
   if (patch.effort !== undefined) memory.setEffort(agent, providerId, modelId, patch.effort);
   if (patch.fast !== undefined) memory.setFast(agent, providerId, modelId, patch.fast);
 }
 
 /** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
-const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'cursor'];
 
 /** AgentKind → NewMaker vendor(useAvailableAgents 用 vendor 口径)。 */
-function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' | 'cursor' {
+  return kind === 'codex' ? 'codex' : kind === 'cursor' ? 'cursor' : kind === 'pi' ? 'pi' : 'cc';
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'cursor'): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'cursor') return 'cursor';
   return null;
 }
 
@@ -1170,6 +1180,7 @@ export function ChatInput({
   initialWorkingDir,
   remoteHostId,
   deviceLinkDeviceId: _deviceLinkDeviceId,
+  deviceLinkDeviceName = null,
   agentDeviceId: _agentDeviceId,
   agentDeviceName = null,
   remoteAgentDevices,
@@ -1250,22 +1261,42 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
-  /** Agent 在另一台电脑运行的本机任务(只影响模型目录来源)。 */
-  const agentDeviceId = deviceLinkDeviceId ? null : (_agentDeviceId ?? null);
+  const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
+  const selfDeviceId = useOptionalAuthDeviceId();
+  /**
+   * 远程控制的被控电脑上的任务(已建任务,或建到被控电脑的新任务草稿),Agent 同样可以在第三台电脑
+   * 运行(与手机同一套)。调用方只在被控电脑支持时才传 remoteAgentDevices;SSH 任务与共享任务访客
+   * 不走这条。已建任务里 Agent 现在或挂着的位置是本机读不到目录的地方(被控电脑收到的分享 / 本机
+   * 自己)时,维持原有的被控电脑列表;草稿的落点只会是 remoteAgentDevices 里的电脑。
+   */
+  const deviceLinkAgentLocation =
+    !!deviceLinkDeviceId &&
+    !remoteHostId &&
+    !sharedGuest &&
+    remoteAgentDevices !== undefined &&
+    (!sessionId ||
+      controlledTaskAgentLocationReadable({
+        agentDeviceId: _agentDeviceId,
+        pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
+        selfDeviceId,
+      }));
+  /** 这个任务的 Agent 位置由本机呈现与切换:本机任务,或上面那种被控电脑上的任务。 */
+  const agentLocationAware = !deviceLinkDeviceId || deviceLinkAgentLocation;
+  /** Agent 在另一台电脑运行(null = 任务所在电脑);只影响模型目录来源。 */
+  const agentDeviceId = agentLocationAware ? (_agentDeviceId ?? null) : null;
   /**
    * 已建任务选了换电脑、下一条消息才生效时(意图带位置):模型目录、选中态与 trigger 都按意图里的
    * 电脑显示。undefined = 没有换位置的意图。
    */
   const intentAgentDeviceId =
-    sessionId && !deviceLinkDeviceId && !remoteHostId
+    sessionId && agentLocationAware && !remoteHostId
       ? makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId
       : undefined;
-  /** 下一条消息时 Agent 所在的电脑(null = 本机)。 */
+  /** 下一条消息时 Agent 所在的电脑(null = 任务所在电脑)。 */
   const effectiveAgentDeviceId =
     intentAgentDeviceId !== undefined ? intentAgentDeviceId : agentDeviceId;
-  /** 模型目录所在的电脑:远程任务在那台;Agent 在另一台电脑运行时也是那台。 */
-  const catalogDeviceId = deviceLinkDeviceId ?? effectiveAgentDeviceId ?? undefined;
-  const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
+  /** 模型目录所在的电脑:Agent 在另一台电脑运行时是那台;否则远程任务在被控电脑,本机任务在本机。 */
+  const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
@@ -1703,7 +1734,7 @@ export function ChatInput({
   // (localStorage,按 agent 分槽、sanitize 恒有种子值)。默认模型/档位偏好已全量本地化,
   // 不再依赖服务端 UserPreferences(登录态失效/离线时模型与档位选择必须照常工作)。
   const localVendorDefaults =
-    getDraft().lastByVendor[vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'];
+    getDraft().lastByVendor[vendorKey === 'cursor' ? 'cursor' : vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'];
   // session-agent-switch 意图制:意图期内 chip / 选择器显示用户选择的目标
   // (model/effort/provider/fast),props(镜像 DB)仍是旧引擎值——真切换在下一条
   // 消息发送时刻 apply,patched 回流后意图清除、显示交回 props。意图存放在
@@ -1806,8 +1837,9 @@ export function ChatInput({
   const ccCaps = useAgentCapabilities('claude-code', catalogDeviceId);
   const codexCaps = useAgentCapabilities('codex', catalogDeviceId);
   const piCaps = useAgentCapabilities('pi', catalogDeviceId);
+  const cursorCaps = useAgentCapabilities('cursor', catalogDeviceId);
   const activeAgentCapabilities =
-    agentKind === 'codex'
+    agentKind === 'cursor' ? cursorCaps.capabilities : agentKind === 'codex'
       ? codexCaps.capabilities
       : agentKind === 'pi'
         ? piCaps.capabilities
@@ -1821,18 +1853,29 @@ export function ChatInput({
   // SSH 远程(remoteHostId)是另一套引擎生命周期,继续不支持,由调用点单独排除。
   // Orca 会话(lead / worker)同样排除:被控端 handler 对带 orcaRole 的会话一律拒
   // UNSUPPORTED_CAPABILITY。角色未加载(undefined)也 fail-closed,避免冷启动短暂露出入口。
+  // 切换事务与 SET_MODEL 都由**任务所在的被控电脑**执行,这两个能力位按它判定,不跟着模型目录
+  // 走:Agent 在第三台电脑(目录读那台)且那台离线时,仍要能在这里把 Agent 改回被控电脑。
+  // 目录本就在被控电脑时与上面同一份缓存;本机会话不读(下面 !deviceLinkDeviceId 直接放行)。
+  const hostCcCaps = useAgentCapabilities(
+    deviceLinkDeviceId ? 'claude-code' : null,
+    deviceLinkDeviceId ?? undefined,
+  );
+  const hostCodexCaps = useAgentCapabilities(
+    deviceLinkDeviceId ? 'codex' : null,
+    deviceLinkDeviceId ?? undefined,
+  );
   const ccSupportsSessionAgentSwitch =
-    ccCaps.capabilities?.supportsSessionAgentSwitch === true &&
-    ccCaps.capabilities.supportsSessionAgentSwitchCas === true;
+    hostCcCaps.capabilities?.supportsSessionAgentSwitch === true &&
+    hostCcCaps.capabilities.supportsSessionAgentSwitchCas === true;
   const codexSupportsSessionAgentSwitch =
-    codexCaps.capabilities?.supportsSessionAgentSwitch === true &&
-    codexCaps.capabilities.supportsSessionAgentSwitchCas === true;
+    hostCodexCaps.capabilities?.supportsSessionAgentSwitch === true &&
+    hostCodexCaps.capabilities.supportsSessionAgentSwitchCas === true;
   // 此能力与原子 model-selection payload 同版发布。旧被控端会忽略 SET_MODEL 第 5 参，
   // 因此缺能力位时保留原来的 SET_MODEL → SET_EFFORT → SET_FAST 兼容链；同引擎
   // reselect 入口本就要求 CAS=true，不会退回这条非原子路径。
   const remoteAtomicModelSelectionSupported =
-    ccCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
-    codexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
+    hostCcCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
+    hostCodexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
   const sessionAgentSwitchSupported =
     sessionOrcaRole === null &&
     (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
@@ -1927,7 +1970,7 @@ export function ChatInput({
       return 'pi';
     }
     return null;
-  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities, cursorCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   const sshCodexHostId = currentModelAgentKind === 'codex' && !deviceLinkDeviceId ? remoteHostId : null;
@@ -1955,6 +1998,7 @@ export function ChatInput({
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
+    cursor: cursorCaps,
     providers: remoteProviders,
   });
   const providersLoading = catalogDeviceId
@@ -2058,32 +2102,52 @@ export function ChatInput({
   //     该会话切走后再切回此模型,才会采用最新全局预设。
   //   - 首页草稿无 live 会话,NewMakerDraftRoute 会把当前显示模型的 props 也从全局预设派生。
   //   - device-link 必须使用被控端镜像 override;旧被控端拿不到镜像时宁可无记忆,也不掺控制端本机。
-  //   - 远程 Agent(Agent 在另一台电脑,任务在本机)用本机为那台电脑单独记的一份(按电脑分开,
-  //     跨重启保留),不掺本机目录的记忆。
+  //   - 远程 Agent(Agent 在另一台电脑;任务在本机,或在远程控制的被控电脑上)用本机为那台电脑
+  //     单独记的一份(按电脑分开,跨重启保留),不掺本机目录与被控电脑镜像的记忆。
   useProviderModelMemoryVersion();
   useAgentDeviceModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
     if (sshCodexHostId) return undefined;
+    // 模型目录在运行 Agent 的另一台电脑(那台的来源 id 与本机、被控电脑的都不是一回事)。
+    if (effectiveAgentDeviceId) return agentDeviceModelMemoryAccessors(effectiveAgentDeviceId);
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
-    // 模型目录在另一台电脑时不掺本机记忆(那台的来源 id 与本机的不是一回事)。
+    // 旧被控端拿不到镜像:宁可无记忆,也不掺控制端本机。
     if (deviceLinkDeviceId) return undefined;
-    if (catalogDeviceId) return agentDeviceModelMemoryAccessors(catalogDeviceId);
     return LOCAL_MODEL_MEMORY;
-  }, [catalogDeviceId, deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
+  }, [effectiveAgentDeviceId, deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
+  /**
+   * 任务所在电脑那份目录的档位记忆:本机任务 = 本机预设;被控电脑上的任务 = 被控电脑的镜像
+   * (写穿过去,旧被控端没有镜像时不记)。Agent 在别的电脑时浏览 / 换回任务所在电脑都用它。
+   */
+  const taskComputerModelMemory = deviceLinkDeviceId ? modelMemoryOverride : LOCAL_MODEL_MEMORY;
 
-  // 远程 Agent(仅本机新任务草稿):模型面板左侧栏同时列出其他电脑上的供应商。
+  // 远程 Agent · 新任务草稿:模型面板左侧栏同时列出其他电脑上的供应商。本机草稿先列本机目录;
+  // 建到被控电脑的草稿(被控电脑支持时调用方才传候选电脑)先列被控电脑的目录与它的镜像记忆。
   const remoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(
     () =>
-      !sessionId && !deviceLinkDeviceId && !remoteHostId && remoteAgentDevices && remoteAgentDevices.length > 0
+      !sessionId &&
+      agentLocationAware &&
+      !remoteHostId &&
+      remoteAgentDevices &&
+      remoteAgentDevices.length > 0
         ? {
             devices: remoteAgentDevices,
             selectedDeviceId: agentDeviceId,
-            localModelMemory: LOCAL_MODEL_MEMORY,
+            ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
+            ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
             deviceModelMemory: agentDeviceModelMemoryAccessors,
           }
         : undefined,
-    [sessionId, deviceLinkDeviceId, remoteHostId, remoteAgentDevices, agentDeviceId],
+    [
+      sessionId,
+      agentLocationAware,
+      deviceLinkDeviceId,
+      taskComputerModelMemory,
+      remoteHostId,
+      remoteAgentDevices,
+      agentDeviceId,
+    ],
   );
 
   // 把「用户在当前来源下选定的 (model, effort)」记进模型全局预设,供其它非活跃行和之后的
@@ -3510,7 +3574,6 @@ export function ChatInput({
   useEffect(() => {
     if (!composerLongPressVoiceInputEnabled) return;
     let capture: { pointerId: number; target: Element } | null = null;
-    let gesture: ComposerLongPressVoiceGesture;
 
     const handleLostPointerCapture = (event: Event) => {
       if (!(event instanceof PointerEvent)) return;
@@ -3532,7 +3595,7 @@ export function ChatInput({
       }
     };
 
-    gesture = createComposerLongPressVoiceGesture({
+    const gesture = createComposerLongPressVoiceGesture({
       getState: () => voiceInputGetStateRef.current(),
       start: () => handleVoiceInputStartRef.current(),
       stop: () => voiceInputStopRef.current(),
@@ -3866,7 +3929,7 @@ export function ChatInput({
       saveComposerTextAfterAsyncTransition(prevEditorKey, editor.getJSON(), recoveryCheckpoint!);
     };
 
-    let cancelled = false;
+    const cancelled = false;
     const isCurrentTransition = () =>
       !cancelled &&
       !editor.isDestroyed &&
@@ -4540,7 +4603,9 @@ export function ChatInput({
         },
       });
     }
-    if (onExtraDirsChange) {
+    // A new directory uses the existing Main-issued writable grant. The local
+    // picker cannot authorize paths on an SSH or device-link execution host.
+    if (onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
       const totalDirs =
@@ -4550,44 +4615,7 @@ export function ChatInput({
         label:
           totalDirs >= MAX_EXTRA_DIRS
             ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
-            : t('extraDirs.addReadOnly'),
-        disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
-        run: () => {
-          void pickAndAddExtraDir({
-            extraDirs: currentExtraDirs,
-            otherDirs: currentWritableDirs,
-            workingDir,
-            onChange: onExtraDirsChange,
-            confirm: confirmDialog,
-            parentDirectoryConfirm: {
-              title: t('extraDirs.parentConfirmTitle'),
-              description: (path) => t('extraDirs.parentConfirmDescription', { path }),
-              confirmText: t('extraDirs.parentConfirmAccept'),
-              cancelText: t('extraDirs.parentConfirmCancel'),
-            },
-          });
-        },
-      });
-    }
-    // 远端已有授权仍通过 onWritableDirsChange 展示并可撤销；但这里调用的是控制端
-    // 原生目录选择器，只能在已确认本机会话中提供，不能把本机绝对路径发给 SSH/
-    // device-link 被控端。undefined 表示归属尚未解析，同样 fail closed。
-    if (
-      onWritableDirsChange &&
-      writableGrantScope &&
-      !remoteHostId &&
-      deviceLinkDeviceId === null
-    ) {
-      const currentExtraDirs = extraDirs ?? [];
-      const currentWritableDirs = writableDirs ?? [];
-      const totalDirs =
-        countUserExtraDirs(currentExtraDirs) + countUserExtraDirs(currentWritableDirs);
-      actions.push({
-        id: 'add-writable-dir',
-        label:
-          totalDirs >= MAX_EXTRA_DIRS
-            ? t('extraDirs.atLimit', { max: MAX_EXTRA_DIRS })
-            : t('extraDirs.addWritable'),
+            : t('extraDirs.add'),
         disabled: composerMutationLocked || totalDirs >= MAX_EXTRA_DIRS,
         run: () => {
           void pickAndAddExtraDir({
@@ -6172,7 +6200,7 @@ export function ChatInput({
         ? [targetAgentKind]
         : currentModelAgentKind
           ? [currentModelAgentKind]
-          : ['claude-code', 'codex', 'pi'];
+          : ['claude-code', 'codex', 'pi', 'cursor'];
       if (providerId) {
         for (const kind of kinds) {
           const scoped = resolveProviderModelEfforts({
@@ -6210,7 +6238,7 @@ export function ChatInput({
         deviceProviders: remoteProviders.providers,
         localProviders: providers,
         capabilities:
-          currentModelAgentKind === 'codex'
+          currentModelAgentKind === 'cursor' ? cursorCaps.capabilities : currentModelAgentKind === 'codex'
             ? codexCaps.capabilities
             : currentModelAgentKind === 'pi'
               ? piCaps.capabilities
@@ -6227,6 +6255,7 @@ export function ChatInput({
       ccCaps.capabilities,
       codexCaps.capabilities,
       piCaps.capabilities,
+      cursorCaps.capabilities,
     ],
   );
 
@@ -6261,17 +6290,25 @@ export function ChatInput({
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
         opts.memoryProviderId !== undefined ? opts.memoryProviderId : effectiveSourceId;
-      // Agent 在另一台电脑运行的任务:模型属于那台的目录,不写回本机的新建任务记忆;
-      // 档位与 Fast 只记进本机为那台电脑单独记的一份(换模后意图期调档也走这里)。
+      // Agent 在另一台电脑运行的任务(本机任务,或被控电脑上的任务):模型属于那台的目录,不写回
+      // 本机或被控电脑的新建任务记忆;档位与 Fast 只记进本机为那台电脑单独记的一份(换模后意图期
+      // 调档也走这里)。
       if (agentDeviceId) {
-        rememberCatalogModelPrefs(agentDeviceId, agentKind, memoryProviderId, modelId, patch);
+        rememberCatalogModelPrefs(
+          agentDeviceId,
+          agentKind,
+          memoryProviderId,
+          modelId,
+          patch,
+          taskComputerModelMemory,
+        );
         return;
       }
       const remoteDeviceId =
         opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId;
       const markModelChoice = opts.markModelChoice === true;
       if (!remoteDeviceId) {
-        const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
+        const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'cursor' ? 'cursor' : agentKind === 'pi' ? 'pi' : 'cc';
         const persistPrefs = markModelChoice
           ? patchVendorPrefs
           : patchVendorPrefsPreservingModelChoice;
@@ -6309,7 +6346,7 @@ export function ChatInput({
           log.warn('session draft model preference sync failed:', err);
         });
     },
-    [sessionId, deviceLinkDeviceId, agentDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
+    [sessionId, deviceLinkDeviceId, agentDeviceId, taskComputerModelMemory, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
   );
 
   const persistFastModeChange = useCallback(
@@ -6553,6 +6590,7 @@ export function ChatInput({
       runtimeAgentKind,
       deviceLinkDeviceId,
       piCaps.capabilities,
+      cursorCaps.capabilities,
     ],
   );
 
@@ -6620,7 +6658,7 @@ export function ChatInput({
     ) => void | boolean | Promise<void | boolean>;
   }>({ byProvider: () => {}, byModel: () => {} });
   const confirmAgentBrowseSwitch = useCallback(
-    (targetAgent: 'claude-code' | 'codex' | 'pi' | null) =>
+    (targetAgent: 'claude-code' | 'codex' | 'pi' | 'cursor' | null) =>
       confirmAgentSwitchRisk({
         // 不必再问的两种:回原引擎(same-engine no-op),或点的就是已经确认过的意图目标
         // Harness(只换模型,不换引擎)。换到第三家仍要问(Chris 2026-08-20:Claude 任务里
@@ -6644,7 +6682,7 @@ export function ChatInput({
   );
   const performAgentSwitch = useCallback(
     async (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       newModelId: string,
       providerId: string | null = null,
       // 意图期内的档位/Fast 改动经此显式覆盖(用户手选优先于记忆/默认解析)。
@@ -6682,13 +6720,14 @@ export function ChatInput({
         await exclusiveTurn.ready;
         // 远程 Agent:这次选择落在哪台电脑。左侧栏点了另一台电脑的目录就用那台;否则沿用已登记
         // 的换位置意图 —— 意图期内在同一份目录里改选,不能被当成原来那台的选择。与任务当前
-        // 所在电脑相同 = 位置不变,不带给 main(旧被控端 / 内部调用同样不带)。
+        // 所在电脑相同 = 位置不变,不带给 main(旧被控端 / 内部调用同样不带)。被控电脑上的任务
+        // 只在那台支持远程 Agent 时才带(null = 改回被控电脑)。
         const pendingAgentDeviceId =
           makerChatStore.getAgentSwitchIntent(sourceSessionId)?.agentDeviceId;
         const requestedAgentDeviceId =
           overrides?.agentDeviceId !== undefined ? overrides.agentDeviceId : pendingAgentDeviceId;
         const relocateTo =
-          !deviceLinkDeviceId &&
+          agentLocationAware &&
           requestedAgentDeviceId !== undefined &&
           requestedAgentDeviceId !== agentDeviceId
             ? requestedAgentDeviceId
@@ -6729,7 +6768,7 @@ export function ChatInput({
           deviceProviders: remoteProviders.providers,
           localProviders: providers,
           capabilities:
-            targetAgentKind === 'codex'
+            targetAgentKind === 'cursor' ? cursorCaps.capabilities : targetAgentKind === 'codex'
               ? codexCaps.capabilities
               : targetAgentKind === 'pi'
                 ? piCaps.capabilities
@@ -6866,8 +6905,8 @@ export function ChatInput({
             ...(syncedEffort ? { effort: syncedEffort } : {}),
             ...(syncedFast !== undefined ? { fast: syncedFast } : {}),
           };
-          // 换电脑的选择属于目标电脑的目录:不写进本机的新建任务记忆,档位与 Fast 记进目标
-          // 那份目录的记忆(意图期再调档同样落在这里)。
+          // 换电脑的选择属于目标电脑的目录:不写进新建任务记忆,档位与 Fast 记进目标那份目录的
+          // 记忆(意图期再调档同样落在这里;改回被控电脑时记进被控电脑的镜像)。
           if (relocateTo !== undefined) {
             rememberCatalogModelPrefs(
               relocateTo,
@@ -6875,6 +6914,7 @@ export function ChatInput({
               syncedProviderId,
               newModelId,
               syncedPatch,
+              taskComputerModelMemory,
             );
           } else {
             syncSessionDraftModelPrefs(newModelId, syncedPatch, {
@@ -6943,7 +6983,7 @@ export function ChatInput({
           rememberCatalogModelPrefs(relocateTo, targetAgentKind, providerId, newModelId, {
             effort: newEffort,
             fast: targetFast,
-          });
+          }, taskComputerModelMemory);
         } else {
           syncSessionDraftModelPrefs(
             newModelId,
@@ -6982,7 +7022,9 @@ export function ChatInput({
       t,
       providers,
       modelMemory,
+      taskComputerModelMemory,
       deviceLinkDeviceId,
+      agentLocationAware,
       agentDeviceId,
       effectiveAgentDeviceId,
       remoteProviders.providers,
@@ -6990,6 +7032,7 @@ export function ChatInput({
       ccCaps.capabilities,
       codexCaps.capabilities,
       piCaps.capabilities,
+      cursorCaps.capabilities,
       syncSessionDraftModelPrefs,
     ],
   );
@@ -7110,7 +7153,8 @@ export function ChatInput({
   // ── 远程 Agent · 已建任务:选另一台电脑(或本机)目录里的模型 = 把 Agent 挪过去 ──────────
   // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地,交接摘要接续)。换电脑
   // 同样续接不了原生会话,复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
-  // 所在电脑(撤销挂着的换位置)或已确认过的同一目标不再问。
+  // 所在电脑(撤销挂着的换位置)或已确认过的同一目标不再问。被控电脑上的任务改回被控电脑时,
+  // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const confirmAgentRelocation = useCallback(
     (target: UnifiedSelectionAgentDevice) =>
       confirmAgentSwitchRisk({
@@ -7121,25 +7165,31 @@ export function ChatInput({
         copy: {
           title: target
             ? t('newChat.chatInput.agentRelocation.titleOther', { device: target.name })
-            : t('newChat.chatInput.agentRelocation.titleLocal'),
+            : deviceLinkDeviceId
+              ? t('newChat.chatInput.agentRelocation.titleOther', {
+                  device: deviceLinkDeviceName || deviceLinkDeviceId,
+                })
+              : t('newChat.chatInput.agentRelocation.titleLocal'),
           description: t('newChat.chatInput.agentRelocation.description'),
           confirmText: t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
       }),
-    [agentDeviceId, intentAgentDeviceId, confirmDialog, t],
+    [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
-    // 只有本机任务、且会话内能走切换事务时才开放(SSH / 被控端任务 / 协同任务都不行)。
-    if (!sessionId || deviceLinkDeviceId || remoteHostId || !sessionEngineFilter) return undefined;
+    // 本机任务,或被控电脑支持远程 Agent 的被控端任务;且会话内能走切换事务(SSH / 协同任务不行)。
+    if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter) return undefined;
     if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
       return undefined;
     }
     return {
       devices: remoteAgentDevices,
       selectedDeviceId: effectiveAgentDeviceId,
-      localModelMemory: LOCAL_MODEL_MEMORY,
+      // 被控电脑上的任务:没在浏览其他电脑时列被控电脑自己的目录与它的镜像记忆。
+      ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
+      ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
       deviceModelMemory: agentDeviceModelMemoryAccessors,
       onRelocate: async (selection) => {
         if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
@@ -7152,7 +7202,9 @@ export function ChatInput({
     };
   }, [
     sessionId,
+    agentLocationAware,
     deviceLinkDeviceId,
+    taskComputerModelMemory,
     remoteHostId,
     sessionEngineFilter,
     remoteAgentDevices,
@@ -7234,7 +7286,7 @@ export function ChatInput({
       /** 选中引擎的 **wire model id** —— 唯一可发送、可当记忆键的那个 id。 */
       modelId: string;
       effort?: Effort;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: 'cc' | 'codex' | 'pi' | 'cursor';
       fast: boolean;
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
@@ -7244,8 +7296,8 @@ export function ChatInput({
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
-      // 这一行与当前目录不在同一台电脑(远程 Agent 换落点):记忆按目标目录写 —— 落到本机就写
-      // 本机预设;落到另一台电脑就写本机为那台记的那一份。
+      // 这一行与当前目录不在同一台电脑(远程 Agent 换落点):记忆按目标目录写 —— 落回任务所在
+      // 电脑就写那份(本机预设 / 被控电脑的镜像);落到另一台电脑就写本机为那台记的那一份。
       const crossDevice =
         selection.agentDevice !== undefined &&
         (selection.agentDevice?.deviceId ?? null) !== agentDeviceId;
@@ -7253,7 +7305,7 @@ export function ChatInput({
         ? modelMemory
         : selection.agentDevice
           ? agentDeviceModelMemoryAccessors(selection.agentDevice.deviceId)
-          : LOCAL_MODEL_MEMORY;
+          : taskComputerModelMemory;
       if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
           targetMemory?.setEffort(
@@ -7278,7 +7330,7 @@ export function ChatInput({
         ...(selection.agentDevice !== undefined ? { agentDevice: selection.agentDevice } : {}),
       });
     },
-    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId],
+    [sessionId, settingsLocked, modelMemory, taskComputerModelMemory, onUnifiedDraftSelect, agentDeviceId],
   );
 
   const showModelSwitchFailure = useCallback(
@@ -8293,9 +8345,9 @@ export function ChatInput({
       if (requiresFullAccessConfirmation(previousMode, newMode)) {
         const confirmed = await confirmDialog({
           title: t('newChat.chatInput.fullAccessConfirmation.title'),
-          description: t('newChat.chatInput.fullAccessConfirmation.description'),
+          description: t(vendorKey === 'cursor' ? 'newChat.chatInput.fullAccessConfirmation.cursor.description' : 'newChat.chatInput.fullAccessConfirmation.description'),
           // 逐类权限清单(文件 / 终端命令 / 网络)+ 高风险操作仍确认的脚注。
-          content: <FullAccessConfirmContent />,
+          content: <FullAccessConfirmContent cursor={vendorKey === 'cursor'} />,
           // 高风险授权:开场朗读必须覆盖清单全文,SR 用户听全权限再确认。
           describeContent: true,
           // 带清单的确认框放宽到 440(§4:普通确认 400,富内容可适度放宽)。
@@ -8324,7 +8376,7 @@ export function ChatInput({
         toast.error(t('newChat.chatInput.permissionSwitchFailed'));
       }
     },
-    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked],
+    [sessionId, onPermissionModeDidChange, t, confirmDialog, settingsLocked, vendorKey],
   );
   useEffect(() => {
     handlePermissionModeChangeRef.current = handlePermissionModeChange;
@@ -9276,7 +9328,7 @@ export function ChatInput({
                             currentVendor: vendorKey,
                             // 两步分段的目标是 vendor 口径,确认门按 AgentKind 判(与意图
                             // 记录同形),在边界上转一次 —— 见 confirmAgentBrowseSwitch。
-                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi') =>
+                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi' | 'cursor') =>
                               confirmAgentBrowseSwitch(vendorKeyToAgentKind(targetVendor)),
                             onSwitch: performAgentSwitch,
                           }

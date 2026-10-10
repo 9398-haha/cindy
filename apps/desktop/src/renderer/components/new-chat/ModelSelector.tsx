@@ -106,11 +106,13 @@ import {
 } from '@/lib/providerModels';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { SessionRuntimeProfileProjection } from '@/lib/ccAgent.types';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
+import { extractIpcError } from '@/utils/ipcError';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { seedDefaultFavorite } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
@@ -125,6 +127,7 @@ import {
   nativeDefaultSourceId,
   getModel,
   isCustomRoutedProvider,
+  isCodexGatewayWireModel,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -559,10 +562,13 @@ function RemoteModelLoadNotice({
   status,
   onRetry,
   compact = false,
+  message,
 }: {
   status: 'loading' | 'error';
   onRetry: () => void;
   compact?: boolean;
+  /** 失败时代替笼统的「读取失败」，说明具体原因(例如分享者需要更新 Cindy)。 */
+  message?: string;
 }) {
   const { t } = useTranslation();
   if (status === 'loading') {
@@ -591,7 +597,7 @@ function RemoteModelLoadNotice({
       <CircleAlert size={14} className="mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className={cn(compact ? 'text-11 leading-[1.45]' : 'text-xs leading-[1.45]')}>
-          {t('newChat.modelSelector.remoteLoadFailed')}
+          {message ?? t('newChat.modelSelector.remoteLoadFailed')}
         </p>
         <Button
           variant="secondary"
@@ -611,7 +617,7 @@ function RemoteModelLoadNotice({
 }
 
 export interface ModelSelectorAgentIdentity {
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: 'cc' | 'codex' | 'pi' | 'cursor';
   /**
    * current = 已由会话/runtime 元数据确认的当前 Agent；
    * pending = 已登记、将在下一条消息应用的切换目标。
@@ -623,8 +629,8 @@ export function resolveModelSelectorAgentIdentity(
   runtimeAgentKind: AgentKind | null | undefined,
   pendingTarget: AgentKind | null | undefined,
 ): ModelSelectorAgentIdentity | undefined {
-  const toVendorKey = (kind: AgentKind): 'cc' | 'codex' | 'pi' =>
-    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  const toVendorKey = (kind: AgentKind): 'cc' | 'codex' | 'pi' | 'cursor' =>
+    kind === 'codex' ? 'codex' : kind === 'cursor' ? 'cursor' : kind === 'pi' ? 'pi' : 'cc';
   if (pendingTarget) {
     return {
       vendorKey: toVendorKey(pendingTarget),
@@ -655,15 +661,22 @@ export interface RemoteAgentRelocation {
 }
 
 /**
- * 远程 Agent 的选择入口(本机新任务草稿与本机已建任务传)。模型面板的左侧栏在本机供应商之后
- * 列出这些电脑上的供应商;选中那台电脑上的模型 = Agent 在那台电脑运行,任务和文件仍在本机。
+ * 远程 Agent 的选择入口(本机新任务草稿、本机已建任务,以及远程控制的被控电脑上的已建任务与
+ * 建到被控电脑的新任务草稿传)。
+ * 模型面板的左侧栏在任务所在电脑的供应商之后列出这些电脑上的供应商;选中那台电脑上的模型 =
+ * Agent 在那台电脑运行,任务和文件仍在任务所在电脑。
  */
 export interface RemoteAgentSelectorOptions {
-  /** 可以运行 Agent 的其他电脑(已配对、在线)。 */
+  /** 可以运行 Agent 的其他电脑(已配对、在线);不含任务所在电脑。 */
   devices: readonly { deviceId: string; name: string }[];
-  /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 本机。 */
+  /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 任务所在电脑。 */
   selectedDeviceId: string | null;
-  /** 本机目录的模型记忆。Agent 当前在其他电脑时,浏览本机目录用它显示各行的档位。 */
+  /**
+   * 任务所在电脑:远程控制的被控电脑上的任务(含草稿)传那台的 deviceId,它的目录照远程控制列出全部供应商;
+   * 不传 = 本机任务,用本机目录。
+   */
+  homeDeviceId?: string;
+  /** 任务所在电脑目录的模型记忆。Agent 当前在其他电脑时,浏览那份目录用它显示各行的档位。 */
   localModelMemory?: ModelMemoryAccessors;
   /**
    * 本机为某台电脑记的模型记忆。浏览不是 Agent 当前所在的那台电脑的目录时,用它显示 / 记住
@@ -737,7 +750,7 @@ interface ModelSelectorProps {
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'cursor';
   /**
    * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
    * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
@@ -859,7 +872,7 @@ interface ModelSelectorProps {
    * device-link / SSH 远程不传(v1 不支持切换)。
    */
   agentSwitch?: {
-    currentVendor: 'cc' | 'codex' | 'pi';
+    currentVendor: 'cc' | 'codex' | 'pi' | 'cursor';
     /**
      * 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。
      *
@@ -867,14 +880,14 @@ interface ModelSelectorProps {
      * 判据是「会话上已有**指向该目标**的切换意图」。不传目标,它只能判「有没有意图」,
      * 于是先切 Codex 再选 Pi 时确认框永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
      */
-    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
+    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi' | 'cursor') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
      * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
      */
     onSwitch: (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       modelId: string,
       providerId: string | null,
     ) => void | boolean | Promise<void | boolean>;
@@ -902,7 +915,7 @@ interface ModelSelectorContentProps {
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'cursor';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
   /** 远程 Agent 选择入口(语义同 ModelSelectorProps.remoteAgent)。 */
@@ -992,7 +1005,7 @@ interface ModelSelectorContentProps {
     anchor: {
       uid: string;
       wireModelId: string;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: 'cc' | 'codex' | 'pi' | 'cursor';
       /** 选中时的显式来源。来源也是锚点身份的一部分:同 wire id 同引擎、仅来源不同的
        *  配置是两份配置,少了它,别的窗口把会话来源从 A 切到 B 后,面板仍在 A 的收藏上
        *  打勾(2026-08-17 review)。 */
@@ -1017,7 +1030,7 @@ interface ModelSelectorContentProps {
     modelId: string;
     /** 该行生效档位;该 (模型, 引擎) 不可调档时为 undefined。 */
     effort?: Effort;
-    engine: 'cc' | 'codex' | 'pi';
+    engine: 'cc' | 'codex' | 'pi' | 'cursor';
     fast: boolean;
     favoriteUid: string | null;
     /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
@@ -1043,16 +1056,16 @@ interface ModelSelectorContentProps {
   fluidWidth?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
-    currentVendor: 'cc' | 'codex' | 'pi';
+    currentVendor: 'cc' | 'codex' | 'pi' | 'cursor';
     /** 语义同 ModelSelectorProps.agentSwitch.confirmBrowseSwitch(带本次目标引擎)。 */
-    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
+    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi' | 'cursor') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
      * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
      */
     onSwitch: (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       modelId: string,
       providerId: string | null,
     ) => void | boolean | Promise<void | boolean>;
@@ -1073,10 +1086,11 @@ interface ModelSelectorContentProps {
   interactionDisabled?: boolean;
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'cursor'): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'cursor') return 'cursor';
   return null;
 }
 
@@ -1104,6 +1118,7 @@ export function resolveRemoteModelListStatus({
   cc,
   codex,
   pi,
+  cursor,
   providers,
 }: {
   deviceId?: string;
@@ -1111,11 +1126,12 @@ export function resolveRemoteModelListStatus({
   cc: RemoteCapabilityLoadState;
   codex: RemoteCapabilityLoadState;
   pi: RemoteCapabilityLoadState;
+  cursor?: RemoteCapabilityLoadState;
   providers: RemoteProviderLoadState;
 }): RemoteModelListStatus {
   if (!deviceId) return 'idle';
   const required = agentKind
-    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi]
+    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : agentKind === 'cursor' ? (cursor ?? { loading: false, capabilities: null, error: 'unsupported' }) : pi]
     : [cc, codex, pi];
   if (required.some((state) => !!state.error)) return 'error';
   if (providers.error && !providers.unsupported) return 'error';
@@ -1217,7 +1233,9 @@ function ModelSelectorContentView({
           : null,
     );
   }, [remoteAgentDeviceId]);
-  const deviceId = remoteAgent ? remoteBrowse?.deviceId : deviceIdProp;
+  // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
+  const homeDeviceId = remoteAgent?.homeDeviceId;
+  const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
   /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
   const browsingSelectedCatalog =
     !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
@@ -1253,11 +1271,11 @@ function ModelSelectorContentView({
   const modelTagDensity = modelTagDensityForWidth(paneWidth ?? (fluidWidth ? null : 320));
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
-  const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex' | 'pi'>(
+  const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex' | 'pi' | 'cursor'>(
     agentSwitch?.currentVendor ?? vendorKey ?? 'cc',
   );
   const browseSwitchPendingRef = useRef(false);
-  const handleBrowseVendorChange = async (next: 'cc' | 'codex' | 'pi') => {
+  const handleBrowseVendorChange = async (next: 'cc' | 'codex' | 'pi' | 'cursor') => {
     if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
     // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
     // currentVendor 进入另一 Agent 浏览态才调用上层风险确认。确认前绝不翻分段。
@@ -1284,9 +1302,9 @@ function ModelSelectorContentView({
   const unifiedAgents = (browsingSelectedCatalog ? requestedUnifiedAgents : undefined) ??
     (vendorKey && agentKind && !onUnifiedSelect && !sessionEngineFilter ? [agentKind] : undefined);
   const browseTargetLabel =
-    browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
+    browseVendor === 'codex' ? 'Codex' : browseVendor === 'cursor' ? 'Cursor' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
   const enqueueAgentSwitch = (
-    targetAgentKind: 'claude-code' | 'codex' | 'pi',
+    targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
     targetModelId: string,
     targetProviderId: string | null,
   ) => {
@@ -1300,6 +1318,7 @@ function ModelSelectorContentView({
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
+  const cursor = useAgentCapabilities('cursor', deviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
@@ -1307,8 +1326,9 @@ function ModelSelectorContentView({
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
-  // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部)。
-  const remoteAgentBrowsing = remoteAgent !== undefined && !!deviceId;
+  // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
+  // 浏览被控电脑自己的目录时也一样)。
+  const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;
   const remoteCatalogProviders = useMemo(
     () =>
       remoteAgentBrowsing
@@ -1332,8 +1352,20 @@ function ModelSelectorContentView({
     cc,
     codex,
     pi,
+    cursor,
     providers: remoteProviders,
   });
+  // 分享来的供应商：分享者电脑上的 Cindy 太旧，只答得了模型目录、答不了 Agent 能力
+  // (新版受邀者才会读它)。如实说要对方更新，不报笼统的「读取失败」。
+  const remoteFailureMessage =
+    isProviderShareAgentDeviceId(deviceId) &&
+    [cc.error, codex.error, pi.error].some(
+      (error) =>
+        error != null &&
+        extractIpcError(new Error(error))?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+    )
+      ? t('providerShare.picker.hostOutdated')
+      : undefined;
   const retryRemoteModels = useCallback(() => {
     if (!deviceId) return;
     evictDeviceCapabilities(deviceId);
@@ -1530,23 +1562,38 @@ function ModelSelectorContentView({
     });
   }, [remoteAgentDevices, remoteDeviceCatalogs]);
   const hasRemoteAgent = remoteAgent !== undefined;
+  // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
+  // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
+  const homeDeviceProviders = useDeviceProviders(homeDeviceId);
+  const homeProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
+  const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
   const remoteAgentLocalRailItems = useMemo(() => {
     if (!hasRemoteAgent) return undefined;
     void visibilityVersion;
     const entries = unifiedModelEntries({
-      providers: localProviders.providers,
-      isVisible: (providerId, model, agent) => isModelEnabled(agent, providerId, model),
+      providers: homeProviders,
+      isVisible: homeDeviceId
+        ? (providerId, model, agent) =>
+            isDeviceModelVisible(homeModelVisibilityOverrides, agent, providerId, model)
+        : (providerId, model, agent) => isModelEnabled(agent, providerId, model),
       includePaymentRequired: true,
       scope: 'draft',
     });
-    return buildUnifiedRail(entries, undefined, localProviders.providerOrder);
-  }, [hasRemoteAgent, localProviders.providers, localProviders.providerOrder, visibilityVersion]);
+    return buildUnifiedRail(entries, undefined, homeDeviceId ? undefined : localProviders.providerOrder);
+  }, [
+    hasRemoteAgent,
+    homeDeviceId,
+    homeProviders,
+    homeModelVisibilityOverrides,
+    localProviders.providerOrder,
+    visibilityVersion,
+  ]);
   const remoteAgentLocalLabel = useCallback(
     (providerId: string): string => {
-      const provider = localProviders.providers.find((entry) => entry.id === providerId);
+      const provider = homeProviders.find((entry) => entry.id === providerId);
       return provider ? providerDisplayName(provider, t) : providerId;
     },
-    [localProviders.providers, t],
+    [homeProviders, t],
   );
   const remoteAgentLabelOf = useCallback(
     (targetDeviceId: string, providerId: string): string => {
@@ -1626,6 +1673,7 @@ function ModelSelectorContentView({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceCursorModels: cursor.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -1636,6 +1684,7 @@ function ModelSelectorContentView({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      cursor.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -1656,9 +1705,10 @@ function ModelSelectorContentView({
       ccModels: cc.capabilities?.availableModels ?? [],
       codexModels: codex.capabilities?.availableModels ?? [],
       piModels: pi.capabilities?.availableModels ?? [],
+      cursorModels: cursor.capabilities?.availableModels ?? [],
       providers,
     });
-  }, [agentKind, cc.capabilities, codex.capabilities, pi.capabilities, currentModel, providers]);
+  }, [agentKind, cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities, currentModel, providers]);
 
   const effortMeta = useMemo(() => {
     const levels =
@@ -1668,9 +1718,11 @@ function ModelSelectorContentView({
           ? (codex.capabilities?.effortLevels ?? [])
           : currentAgentKind === 'pi'
             ? (pi.capabilities?.effortLevels ?? [])
-            : [];
+            : currentAgentKind === 'cursor'
+              ? (cursor.capabilities?.effortLevels ?? [])
+              : [];
     return new Map(levels.map((e) => [e.id, e.displayName]));
-  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities]);
   // 档名多语言:i18n 词表(effortLevels.*) → 模型级 effortDisplayNames →
   // capabilities displayName(未知档兜底) → 原 id。
   const effortLabelFor = (m: RowModel, e: Effort) => modelEffortLabel(t, m, e, effortMeta.get(e));
@@ -1681,6 +1733,7 @@ function ModelSelectorContentView({
   const hasFastModeCap = useMemo(() => {
     if (currentAgentKind === 'claude-code') return !!cc.capabilities?.hasFastMode;
     if (currentAgentKind === 'codex') return !!codex.capabilities?.hasFastMode;
+    if (currentAgentKind === 'cursor') return !!cursor.capabilities?.hasFastMode;
     if (currentAgentKind === 'pi') return !!pi.capabilities?.hasFastMode;
     return false;
   }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
@@ -1794,12 +1847,12 @@ function ModelSelectorContentView({
   const modelDisabledOf = (provider: ProviderView | null, id: string, rowAgent?: AgentKind): boolean => {
     if (!deviceId) {
       if (subscriptionDirectDisabledReason(id)) return true;
-      // codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
+      // openai-codex/ 与 codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
       // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
       if (isCustomRoutedProvider(provider)) return false;
-      return id.startsWith('codex/') && !hasSavedKey;
+      return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
     if (remoteProviders.error) return remoteProviders.unsupported ? false : true;
@@ -1809,6 +1862,7 @@ function ModelSelectorContentView({
       ccModels: cc.capabilities?.availableModels ?? [],
       codexModels: codex.capabilities?.availableModels ?? [],
       piModels: pi.capabilities?.availableModels ?? [],
+      cursorModels: cursor.capabilities?.availableModels ?? [],
       providers,
     });
     if (!rowAgentKind) return true;
@@ -1931,7 +1985,7 @@ function ModelSelectorContentView({
       ? remoteProviders.modelVisibilityOverrides === undefined
         ? null
         : new Set(
-            (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi'] as const)).flatMap((agent) =>
+            (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi', 'cursor'] as const)).flatMap((agent) =>
               visibleModelUnion(providers, agent, (providerId, model) =>
                 isDeviceModelVisible(
                   remoteProviders.modelVisibilityOverrides,
@@ -1943,7 +1997,7 @@ function ModelSelectorContentView({
             ),
           )
       : new Set(
-          (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi'] as const)).flatMap((agent) =>
+          (agentKind ? [agentKind] : (['claude-code', 'codex', 'pi', 'cursor'] as const)).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
               isModelEnabled(agent, providerId, model),
             ).map((model) => model.id),
@@ -2067,7 +2121,7 @@ function ModelSelectorContentView({
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
     if (browsing && agentSwitch) {
       enqueueAgentSwitch(
-        browseVendor === 'codex' ? 'codex' : browseVendor === 'pi' ? 'pi' : 'claude-code',
+        browseVendor === 'codex' ? 'codex' : browseVendor === 'cursor' ? 'cursor' : browseVendor === 'pi' ? 'pi' : 'claude-code',
         id,
         providerId,
       );
@@ -2952,10 +3006,12 @@ function ModelSelectorContentView({
           ? (cc.capabilities?.effortLevels ?? [])
           : agent === 'codex'
             ? (codex.capabilities?.effortLevels ?? [])
-            : (pi.capabilities?.effortLevels ?? []);
+            : agent === 'cursor'
+              ? (cursor.capabilities?.effortLevels ?? [])
+              : (pi.capabilities?.effortLevels ?? []);
       return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
     },
-    [cc.capabilities, codex.capabilities, pi.capabilities, t],
+    [cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities, t],
   );
   const unifiedAgentFastCapable = useCallback(
     (agent: AgentKind): boolean =>
@@ -2963,8 +3019,10 @@ function ModelSelectorContentView({
         ? !!cc.capabilities?.hasFastMode
         : agent === 'codex'
           ? !!codex.capabilities?.hasFastMode
-          : !!pi.capabilities?.hasFastMode),
-    [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
+          : agent === 'cursor'
+            ? !!cursor.capabilities?.hasFastMode
+            : !!pi.capabilities?.hasFastMode),
+    [cc.capabilities, codex.capabilities, pi.capabilities, cursor.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
   if (providersOverrideState && providersOverrideState.status !== 'ready') {
@@ -3194,7 +3252,7 @@ function ModelSelectorContentView({
               ? {
                   remoteSources: {
                     localRailItems: remoteAgentLocalRailItems,
-                    localProviders: localProviders.providers,
+                    localProviders: homeProviders,
                     localProviderLabel: remoteAgentLocalLabel,
                     groups: remoteAgentGroups,
                     labelOf: remoteAgentLabelOf,
@@ -3211,6 +3269,7 @@ function ModelSelectorContentView({
                               status="error"
                               onRetry={retryRemoteModels}
                               compact
+                              message={remoteFailureMessage}
                             />
                           ),
                         }
@@ -3488,7 +3547,11 @@ function ModelSelectorContentView({
           // 发现还在途、且用户没在搜索时不摆「无结果」:那句话和下方的「正在获取」自相矛盾,
           // 而用户看到「没有模型」就会走。搜索无命中是本地过滤的确定结论,照常显示。
           remoteStatusInList && trimmedQuery.length === 0 ? (
-            <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} />
+            <RemoteModelLoadNotice
+              status={remoteStatusInList}
+              onRetry={retryRemoteModels}
+              message={remoteFailureMessage}
+            />
           ) : discoveringModels && trimmedQuery.length === 0 ? null : (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {t(
@@ -3531,7 +3594,12 @@ function ModelSelectorContentView({
       </div>
 
       {showRemoteStatusFooter && remoteStatusInList && (
-        <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} compact />
+        <RemoteModelLoadNotice
+          status={remoteStatusInList}
+          onRetry={retryRemoteModels}
+          compact
+          message={remoteFailureMessage}
+        />
       )}
 
       {/* 发现在途提示 —— 追加在列表下方,不接管列表(见 discoveringModels 注释)。
@@ -3715,7 +3783,7 @@ export function ModelSelector({
     if (!confirmBrowseSwitch) return agentSwitch;
     return {
       ...agentSwitch,
-      confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi') => {
+      confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi' | 'cursor') => {
         setKeepOpenForAgentConfirmation(true);
         try {
           return await confirmBrowseSwitch(targetVendor);
@@ -3777,6 +3845,7 @@ export function ModelSelector({
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
+  const cursor = useAgentCapabilities('cursor', deviceId);
   const gatewayPricing = useGatewayModelPricing();
   const referencePricing = useReferenceModelPricing();
   const { accountTier: modelAccessAccountTier } = useModelAccessStatus();
@@ -3793,13 +3862,14 @@ export function ModelSelector({
     cc,
     codex,
     pi,
+    cursor,
     providers: remoteProviders,
   });
   const remoteModelLoading = providersOverrideState?.status === 'loading' || (!!deviceId && remoteModelListStatus === 'loading');
   const remoteModelLoadFailed = providersOverrideState?.status === 'error' || (!!deviceId && remoteModelListStatus === 'error');
   const localModelLoading = !deviceId && !providersOverride && !localProviders.loadFailed && (
     localProviders.loading ||
-    (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
+    (agentKind === 'cursor' ? cursor.loading : agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
   );
   const visibleModels = useMemo(
     () =>
@@ -3810,6 +3880,7 @@ export function ModelSelector({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         devicePiModels: pi.capabilities?.availableModels ?? [],
+        deviceCursorModels: cursor.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
         excludeChatBridgedCodex,
       }),
@@ -3820,6 +3891,7 @@ export function ModelSelector({
       cc.capabilities,
       codex.capabilities,
       pi.capabilities,
+      cursor.capabilities,
       excludeSubscriptionDirect,
       excludeChatBridgedCodex,
     ],
@@ -3866,7 +3938,7 @@ export function ModelSelector({
     agentIdentity && !fallbackOption?.active
       ? agentIdentity.vendorKey === 'cc'
         ? t('newChat.modelSelector.trigger.agent.claudeCode')
-        : agentIdentity.vendorKey === 'pi'
+        : agentIdentity.vendorKey === 'cursor' ? 'Cursor' : agentIdentity.vendorKey === 'pi'
           ? t('newChat.modelSelector.trigger.agent.pi')
           : t('newChat.modelSelector.trigger.agent.codex')
       : null;
@@ -4028,7 +4100,7 @@ export function ModelSelector({
     const model = findCatalogModel(provider, selection.model, selection.agentKind);
     const selectionKey = JSON.stringify([deviceId ?? null, selection.providerId, selection.agentKind, selection.model]);
     const name = selectionKey === labelKey ? localizedName : model?.name ? localizedModelName(model.name, t) : undefined;
-    const vendor = selection.agentKind === 'claude-code' ? 'Claude Code' : selection.agentKind === 'pi' ? 'Pi' : 'Codex';
+    const vendor = selection.agentKind === 'claude-code' ? 'Claude Code' : selection.agentKind === 'cursor' ? 'Cursor' : selection.agentKind === 'pi' ? 'Pi' : 'Codex';
     return [vendor, name ?? t('newChat.modelSelector.trigger.placeholder'), provider ? providerDisplayName(provider, t) : selection.providerId,
       selection.effort ? modelEffortLabel(t, model, selection.effort) : null,
       selection.fastMode ? t('newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
@@ -4053,7 +4125,7 @@ export function ModelSelector({
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const accessibleLabel = pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel);
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
-  const isBudget = modelId.startsWith('codex/');
+  const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。

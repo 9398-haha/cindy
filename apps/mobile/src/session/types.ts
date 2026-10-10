@@ -74,7 +74,7 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
@@ -84,6 +84,15 @@ export interface RemoteSession {
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
   source?: string;
   orcaRole?: 'lead' | 'worker' | string | null;
+  /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  } | null;
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
@@ -109,7 +118,7 @@ export interface RemoteSession {
 }
 
 export interface RemoteSessionRuntimeProfile {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   providerId: string | null;
   effort: string | null;
@@ -226,7 +235,7 @@ export interface QueuedRemoteMessage {
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
   createOpts: {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
     workingDir: string;
     model: string;
     effort?: string;

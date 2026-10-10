@@ -13,12 +13,15 @@ import {
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   type InvokeResultPayload,
+  SessionMessageReuse,
 } from '@cindy/device-link';
+import { versionMessageBody } from '../sessionMessageReuse';
 
 vi.mock('electron', () => ({
   app: {
@@ -82,6 +85,24 @@ beforeEach(() => {
     revokedControllers: [],
   };
   __testing.reset();
+});
+
+it('projects Cursor picker capabilities independently for old and current controllers', async () => {
+  const capabilities = {
+    supportsSessionAgentSwitch: true,
+    availableModels: [{ id: 'cursor-default' }, { id: 'native[reasoning=medium,fast=false]' }],
+    permissionModes: [{ id: 'ask' }, { id: 'default' }],
+  };
+  registry.register('maker:get-capabilities', () => capabilities);
+  subscriptions.subscribe('legacy-cursor-phone', ['sessions'], 'legacy', []);
+  subscriptions.subscribe('current-cursor-phone', ['sessions'], 'current', [CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1]);
+  const [legacy, current] = await Promise.all([
+    runInvoke('legacy-cursor-phone', { channel: 'maker:get-capabilities', args: ['cursor'] }),
+    runInvoke('current-cursor-phone', { channel: 'maker:get-capabilities', args: ['cursor'] }),
+  ]);
+  expect(legacy).toEqual({ ok: true, result: { ...capabilities, supportsSessionAgentSwitch: false } });
+  expect(current).toEqual({ ok: true, result: capabilities });
+  expect(capabilities.supportsSessionAgentSwitch).toBe(true);
 });
 
 it('strips Desktop credential links from authorization history and live metadata pushes', () => {
@@ -299,6 +320,26 @@ describe('history detail interest', () => {
 });
 
 describe('[14] sendInvokeResultSafe — 结果超限兜底', () => {
+  it.each(['local-db:messages:list', 'local-db:messages:view'])('keeps cached prose exact when %s needs oversized tool fallback', (channel) => {
+    const cache = new SessionMessageReuse();
+    const prose = { id: 'prose', clientId: 'prose', role: 'assistant', content: '完整正文'.repeat(2000) };
+    cache.receive('host', 'local-db:messages:created', { sessionId: 's1', message: versionMessageBody(prose) });
+    const request = cache.prepare('host', { channel, args: ['s1'] });
+    const rows = [prose, { id: 'tool', role: 'tool_result', content: 'x'.repeat(MAX_FRAME_BYTES) }];
+    const value = channel.endsWith(':list') ? rows : { items: [{ type: 'messages', key: 'rows', messages: rows }], hasMore: false };
+    const sendInvokeResult = vi.fn().mockImplementationOnce(() => { throw tooLarge(); });
+    __testing.sendInvokeResultSafe(mkClient({ sendInvokeResult }) as never, 'host', 'reuse-large',
+      { ok: true, result: value }, channel, request.payload.args);
+    const sent = sendInvokeResult.mock.calls.at(-1)![2] as InvokeResultPayload;
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) throw new Error('Expected compact success');
+    const decoded = request.decode(sent.result) as typeof rows | { items: { messages: typeof rows }[] };
+    const restored = Array.isArray(decoded) ? decoded : decoded.items[0].messages;
+    expect(restored[0].content).toBe(prose.content);
+    expect(restored[1].content.length).toBeLessThan(MAX_FRAME_BYTES);
+    expect(JSON.stringify(sent)).not.toContain(prose.content);
+  });
+
   it('消息页首发抛 PAYLOAD_TOO_LARGE → 先压缩超大消息内容并重发 ok:true,不冒泡', () => {
     const sendInvokeResult = vi.fn().mockImplementationOnce(() => {
       throw tooLarge();

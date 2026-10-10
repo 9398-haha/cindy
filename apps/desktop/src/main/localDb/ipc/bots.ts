@@ -7,7 +7,6 @@ import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
@@ -276,19 +275,21 @@ type CanonicalLinkReconciliation = {
 };
 
 let createBotCanonicalSessionImpl:
-  ((input: CreateBotCanonicalSessionInput) => Promise<CreateBotCanonicalSessionResult>) | null =
+  ((input: CreateBotCanonicalSessionInput, beforeCommit?: () => Promise<void>) => Promise<CreateBotCanonicalSessionResult>) | null =
   null;
 
 /** Main-side canonical creator shared by first creation, restore and missing-task repair. */
 export async function createBotCanonicalSession(
   input: CreateBotCanonicalSessionInput,
+  // Host-only guard, never accepted from the IPC payload or serialized to the worker.
+  beforeCommit?: () => Promise<void>,
 ): Promise<CreateBotCanonicalSessionResult> {
   if (!createBotCanonicalSessionImpl) {
     throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
   }
   const owner = captureBotOperationOwner();
   owner.assertCurrent();
-  const result = await createBotCanonicalSessionImpl(input);
+  const result = await createBotCanonicalSessionImpl(input, beforeCommit);
   owner.assertCurrent();
   return result;
 }
@@ -495,11 +496,12 @@ export async function reconcileBotProfileFolder(
   return derived;
 }
 
-function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
-  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : 'cc';
+function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'cursor' {
+  return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : config.harness === 'cursor' ? 'cursor' : 'cc';
 }
 
 function defaultBotModelForConfig(config: Record<string, unknown>): string {
+  if (botSessionAgentKind(config) === 'cursor') return 'cursor-default';
   return botSessionAgentKind(config) === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : 'claude-sonnet-4-6';
 }
 
@@ -593,12 +595,15 @@ function normalizeBotModelCapabilitiesOrThrow(
 /** How many candidate rows the preview query inspects (see below). */
 const CANONICAL_PREVIEW_SCAN = 100;
 
-/** The transcript also accepts persisted usage/cost as a legacy turn seal. */
+/** Explicit group deliveries are complete replies independent of the canonical turn.
+ * The transcript also accepts persisted usage/cost as a legacy turn seal. */
 function canonicalReplyCompleted() {
   return sql`(json_extract(${messages.agentMeta}, '$.turnCompleted') = 1
     OR json_extract(${messages.agentMeta}, '$.turnMoney.amount') > 0
     OR json_extract(${messages.agentMeta}, '$.turnCostUsd') > 0
-    OR json_type(${messages.agentMeta}, '$.turnUsageDetails') IS NOT NULL)`;
+    OR json_type(${messages.agentMeta}, '$.turnUsageDetails') IS NOT NULL
+    OR (json_type(${messages.agentMeta}, '$.sourceGroup.groupId') = 'text'
+      AND length(trim(json_extract(${messages.agentMeta}, '$.sourceGroup.groupId'))) > 0))`;
 }
 
 /** Visibility shared by the local unread count and remote reply watermark. */
@@ -879,7 +884,7 @@ async function readProfile(
       fastMode: primaryModelRoute?.fastMode ?? config.fastMode === true,
       harness:
         primaryModelRoute?.harness ??
-        (config.harness === 'codex' || config.harness === 'pi' ? config.harness : 'claude'),
+        (config.harness === 'codex' || config.harness === 'pi' || config.harness === 'cursor' ? config.harness : 'claude'),
       modelChain,
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)
@@ -973,7 +978,8 @@ async function readRemoteBotProfile(client: ReturnType<typeof getDbClient>, botI
   if (!isBotVisibleRemotely(profile)) return null;
   const canonicalResolution = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
-  const { hiddenAt: _hiddenAt, ...visibleProfile } = profile;
+  const visibleProfile: Omit<typeof profile, 'hiddenAt'> = { ...profile };
+  Reflect.deleteProperty(visibleProfile, 'hiddenAt');
   return {
     ...visibleProfile,
     canonicalSessionId: canonicalResolution.canonicalSessionId ?? undefined,
@@ -1158,15 +1164,6 @@ function readLastReadAtMap(raw: unknown): Map<string, number> {
     out.set(botId, Math.floor(at));
   }
   return out;
-}
-
-async function fileExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.access(candidate);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function defaultNewBotCapabilities(): Promise<Record<string, unknown>> {
@@ -1835,6 +1832,7 @@ export function registerBotIpc(): void {
 
   const createBotCanonicalSessionUnlocked = async (
     input: CreateBotCanonicalSessionInput,
+    beforeCommit?: () => Promise<void>,
   ): Promise<CreateBotCanonicalSessionResult> => {
     const botId = readText(input.botId, 'botId', 128, true);
     const expectedCanonicalSessionId = input.expectedCanonicalSessionId;
@@ -1929,6 +1927,9 @@ export function registerBotIpc(): void {
     let canonicalSessionId: string | null = null;
     let archivedCanonicalSessionId: string | null = null;
     let created = false;
+    // Profile/model/workspace preparation can outlive the originating group
+    // grant. Revalidate immediately before committing the Session/link CAS.
+    await beforeCommit?.();
     owner.assertCurrent();
     const result = await client.tx<BotsReplaceCanonicalSessionResult>(
       'bots.replaceCanonicalSession',
@@ -2035,7 +2036,7 @@ export function registerBotIpc(): void {
     };
   };
 
-  const createBotCanonicalSessionPrepared = async (input: CreateBotCanonicalSessionInput) => {
+  const createBotCanonicalSessionPrepared = async (input: CreateBotCanonicalSessionInput, beforeCommit?: () => Promise<void>) => {
     const owner = captureBotOperationOwner();
     // Bring legacy pointer-only profiles into the link registry before any
     // create/replace CAS. Once a canonical link exists, the worker transaction
@@ -2043,13 +2044,13 @@ export function registerBotIpc(): void {
     await reconcileCanonicalLink(input.botId);
     owner.assertCurrent();
     const previousSessionId = input.expectedCanonicalSessionId;
-    if (!previousSessionId) return createBotCanonicalSessionUnlocked(input);
+    if (!previousSessionId) return createBotCanonicalSessionUnlocked(input, beforeCommit);
     return coordinateBotCanonicalReplacement(previousSessionId, () =>
-      createBotCanonicalSessionUnlocked(input),
+      createBotCanonicalSessionUnlocked(input, beforeCommit),
     );
   };
 
-  createBotCanonicalSessionImpl = async (input) => {
+  createBotCanonicalSessionImpl = async (input, beforeCommit) => {
     const owner = captureBotOperationOwner();
     /*
       解析主任务前先把家里的文件收进来。用户拿编辑器改完 SOUL.md、
@@ -2061,14 +2062,14 @@ export function registerBotIpc(): void {
     */
     const derived = await reconcileBotProfileFolder(input.botId);
     owner.assertCurrent();
-    if (!derived) return createBotCanonicalSessionPrepared(input);
+    if (!derived) return createBotCanonicalSessionPrepared(input, beforeCommit);
     // The host itself just folded the user's file edit into a new version. A caller
     // that saw the version before it is not racing a concurrent change; any other
     // mismatch still loses the create CAS.
     broadcastBotProfileChanged({ botId: input.botId, change: 'updated' });
     return createBotCanonicalSessionPrepared(input.expectedProfileVersion === derived.from
       ? { ...input, expectedProfileVersion: derived.to }
-      : input);
+      : input, beforeCommit);
   };
 
   ipcMain.handle('local-db:bots:create-canonical-session', async (event, raw: unknown) => {

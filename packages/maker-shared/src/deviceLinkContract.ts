@@ -246,7 +246,7 @@ export interface MobileCodexRateLimitResetResult {
 
 /** 下一条消息发送时才会应用的跨 Agent 切换意图。 */
 export interface MobileSessionAgentSwitchIntent {
-  targetAgentKind: 'claude-code' | 'codex' | 'pi';
+  targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -256,7 +256,7 @@ export interface MobileSessionAgentSwitchIntent {
 /** desktop 登记 / 取消跨 Agent 意图后的稳定结果。 */
 export interface MobileSessionAgentSwitchResult {
   switched: boolean;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   engineReady: boolean;
   deferred?: boolean;
@@ -358,6 +358,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:session:enable-orca',
   'maker:session:disable-orca',
   'maker:worker:create',
+  // 只读 Lead 所在电脑视角下的运行设备；旧端拒绝时保留本机 Worker 创建。
+  'maker:orca:execution-devices',
   'maker:worker:switch-focus',
   'maker:worker:acknowledge-done',
   'maker:worker:archive',

@@ -28,6 +28,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
+import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
@@ -403,6 +404,8 @@ type DiscordBotSessionAuthCheckWire = {
 
 /** Public shape of the local session-list bridge options. */
 type LocalDbSessionListOptions = {
+  /** Local list continuation; does not change the default capped query. */
+  before?: { updatedAt: number; id: string };
   includePinned?: boolean;
   fresh?: boolean;
   usageHistory?: boolean;
@@ -825,6 +828,7 @@ const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoke
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
 const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
+const fanOutProviderGroupChanged = createIpcFanOut(PROVIDER_GROUP_IPC.CHANGED);
 const fanOutProviderShareReceivedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.RECEIVED_CHANGED);
 const fanOutProviderShareRequested = createIpcFanOut(PROVIDER_SHARE_IPC.REQUESTED);
 const fanOutProviderShareSettled = createIpcFanOut(PROVIDER_SHARE_IPC.SETTLED);
@@ -2517,16 +2521,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * fire-and-forget。
    */
   syncNewMakerDraft: (snapshot: {
+    appDefaultModelRequestId?: string;
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
-    selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedRoute?: import('../shared/appDefaultModelSelection').AppModelRoute;
     lastByVendor: Partial<
       Record<
-        'cc' | 'codex' | 'pi',
+        'cc' | 'codex' | 'pi' | 'cursor',
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
     /** 每个 vendor 是否由用户在 New Maker 中明确选过模型；device-link 默认校准据此保护显式选择。 */
-    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
+    modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi' | 'cursor', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
     providerModelMemory?: Record<
@@ -2542,7 +2547,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
   syncWorkerCreationPrefs: (snapshot: {
-    workerPermissionMode: 'auto' | 'bypassPermissions';
+    workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
   }): void => ipcRenderer.send('maker:sync-worker-creation-prefs', snapshot),
 
   /**
@@ -4534,6 +4539,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onOpenJoin: fanOutProviderShareOpenJoin,
     onOpenManage: fanOutProviderShareOpenManage,
   },
+  // 供应商组：这台电脑上某个供应商的组设置(只接受本机应用窗口)。
+  providerGroup: {
+    command: (command: ProviderGroupCommand): Promise<unknown> =>
+      ipcRenderer.invoke(PROVIDER_GROUP_IPC.COMMAND, command),
+    onChanged: fanOutProviderGroupChanged,
+  },
   deviceLink: {
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
       ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
@@ -4665,6 +4676,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedOwnerToken?: string,
         expectedAccountCounter?: number,
         historyView?: string,
+        mergeListMessage?: boolean,
       ): Promise<{ ok: true; invalidation?: number }> =>
         ipcRenderer.invoke('device-link:mirror-cache:messages:put', {
           deviceId,
@@ -4674,6 +4686,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           expectedOwnerToken,
           expectedAccountCounter,
           historyView,
+          mergeListMessage,
         }),
       /** 读侧边栏远程会话列表快照 */
       getSessionList: (): Promise<{
@@ -4770,6 +4783,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ host: unknown }> => ipcRenderer.invoke('maker:remote-ssh:update', host),
     remove: (id: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:remote-ssh:remove', { id }),
+    reviewHostKey: (id: string): Promise<{ updated: boolean }> =>
+      ipcRenderer.invoke('maker:remote-ssh:review-host-key', { id }),
     connect: (id: string): Promise<{ host: unknown }> =>
       ipcRenderer.invoke('maker:remote-ssh:connect', { id }),
     disconnect: (id: string): Promise<{ host: unknown }> =>
@@ -5733,6 +5748,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:team:end', leadSessionId),
       getCollaborationSettings: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:collaboration-settings:get'),
+      listExecutionDevices: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:orca:execution-devices'),
       setCollaborationSetting: (key: string, value: number): Promise<unknown> =>
         ipcRenderer.invoke('maker:collaboration-settings:set', { key, value }),
       resetCollaborationSettings: (): Promise<unknown> =>
@@ -5924,12 +5941,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 详见下方 maker 块的 auth / agent / usage 三个子对象。
 
   // ─── Maker Core IPC ─────────────────────────────────────────────────────
-  // renderer 通过统一 maker API 按 agentKind 调用 Claude Code / Codex / Pi。
+  // renderer 通过统一 maker API 按 agentKind 调用 Claude Code / Codex / Pi / Cursor。
   maker: {
-    listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi'>> =>
+    listAvailableAgents: (): Promise<Array<'claude-code' | 'codex' | 'pi' | 'cursor'>> =>
       ipcRenderer.invoke('maker:list-available-agents'),
     onAgentsChanged: fanOutMakerAgentsChanged,
-    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-capabilities', agentKind),
     listBotDelegations: (
       parentSessionId: string,
@@ -5964,6 +5981,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:chat-server:react', input),
       createInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['createInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['createInvite']> =>
         ipcRenderer.invoke('maker:chat-server:createInvite', input),
+      revokeInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['revokeInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['revokeInvite']> =>
+        ipcRenderer.invoke('maker:chat-server:revokeInvite', input),
       previewInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['previewInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['previewInvite']> =>
         ipcRenderer.invoke('maker:chat-server:previewInvite', input),
       acceptInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['acceptInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['acceptInvite']> =>
@@ -6481,7 +6500,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ ok: true; runId: string; reviewerSessionId: string }> =>
       ipcRenderer.invoke('maker:review:start', input),
     listAgentCommands: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},
     ): Promise<{
       success: boolean;
@@ -6491,7 +6510,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind, params),
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       params: {
         workingDir?: string;
         remoteHostId?: string;
@@ -6610,7 +6629,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onGoalStatusChanged: fanOutGoalStatusChanged,
 
     scanAtResources: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       params: { workingDir: string; cap?: number; query?: string },
     ): Promise<{
       success: boolean;
@@ -6643,7 +6662,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */
       id?: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       workingDir: string;
       model: string;
       title?: string;
@@ -6706,9 +6725,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
-        workerPermissionMode?: 'auto' | 'bypassPermissions';
+        workerPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
         /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
         deferDelegateTask?: boolean;
+        /** 首个 Worker 放到同账号另一台电脑运行；缺省 = 本机。 */
+        executionDeviceId?: string;
+        /** 运行设备上的工作目录；缺省由那台分配。 */
+        workingDir?: string;
       },
       // main handler 实际返回 teamId(见 enableOrcaInternal);此前类型写成 workflowId 是漂移。
     ): Promise<{
@@ -6716,7 +6739,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workerSessionId: string;
       workerId: string;
       dispatched: boolean;
-      workerPermissionMode: 'auto' | 'bypassPermissions';
+      workerPermissionMode: 'ask' | 'auto' | 'bypassPermissions';
       uiAssignmentSnapshotBeforeMs: number;
     }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
 
@@ -6753,7 +6776,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       message:
         string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> },
       createOpts?: {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         workingDir: string;
         model: string;
         orcaRole?: 'lead' | 'worker' | null;
@@ -6798,7 +6821,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getContextUsage: (
       sessionId: string,
       createOpts?: {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         workingDir: string;
         model: string;
         orcaRole?: 'lead' | 'worker' | null;
@@ -6840,7 +6863,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: (): Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -6920,7 +6943,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // switched=false 且无 deferred = 同引擎 no-op(用户选回当前引擎,意图已清)。
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -6929,7 +6952,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { agentDeviceId?: string | null },
     ): Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       model: string;
       engineReady: boolean;
       deferred?: boolean;
@@ -6961,7 +6984,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getSessionAgentSwitchIntent: (
       sessionId: string,
     ): Promise<{
-      targetAgentKind: 'claude-code' | 'codex' | 'pi';
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       model: string;
       providerId: string | null;
       effort?: string;
@@ -7541,7 +7564,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)
     generateTitle: (
       message: string,
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
       sessionId?: string,
     ): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:generate-title', { message, agentKind, sessionId }),
@@ -7556,14 +7579,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),
     /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
     predictNextPrompt: (request: {
       sessionId: string;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;
@@ -7631,18 +7654,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 鉴权 (取代老 electronAPI.codex.auth.*) ────────────────────────
     auth: {
-      getState: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getState: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
       ): Promise<unknown> => ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
       cancelLogin: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         options?: { releaseOwner?: boolean; ownerId?: string },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:cancel-login', agentKind, options),
       logout: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         ownerScope?: { dataOwnerId: string | null; ownerGeneration: number },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:logout', agentKind, ownerScope),
       onStateChanged: fanOutMakerAuthStateChanged,
@@ -7660,7 +7683,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 联合状态 (取代老 electronAPI.codex.binary.getStatus) ──────────
     agent: {
-      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
         ipcRenderer.invoke('maker:agent:status', agentKind),
       /** spawn 当前应用使用的 binary `--version`, 进程内缓存。About 面板用。 */
       getBinaryVersion: (
@@ -7679,10 +7702,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Agent 今日累计 (取代老 electronAPI.codex.usage.* + electronAPI.onUsageTodaySpendChanged) ─
     usage: {
-      getToday: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<unknown> =>
+      getToday: (agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:today', agentKind),
       getAccount: (
-        agentKind: 'claude-code' | 'codex' | 'pi',
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
         providerId?: string,
       ): Promise<unknown> => ipcRenderer.invoke('maker:usage:account', agentKind, providerId),
       /** Codex app-server authoritative windows and banked reset-credit metadata. */

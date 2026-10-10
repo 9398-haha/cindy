@@ -53,12 +53,34 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  it('passes an explicit native Cursor route to the ordinary task host', async () => {
+    const { registry, sendToSession } = setup({ result: {
+      ok: true, targetSessionId: 'cursor-task', agentKind: 'cursor',
+      wakeKind: 'created', targetTitle: null, targetLastUserSendAt: null,
+    } });
+    const result = await registry.call('send_to_session', {
+      message: 'hello', agent_kind: 'cursor', model: 'cursor-default',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'cursor', model: 'cursor-default', message: 'hello',
+    }));
+    expect(parse(result)).toMatchObject({ agent_kind: 'cursor', target_session_id: 'cursor-task' });
+  });
+
   it('注册到 handoff 类目, 不混入 control(改名场景选错隔离的核心)', () => {
     const { registry } = setup();
     const handoff = registry.list('handoff').map((t) => t.name);
     const control = registry.list('control').map((t) => t.name);
     expect(handoff).toContain('send_to_session');
     expect(control).not.toContain('send_to_session');
+  });
+
+  it.each(['coordination', 'user-visible'])('passes message purpose with the bound caller identity: %s', async purpose => {
+    const { registry, sendToSession } = setup();
+    const result = await registry.call('send_to_session', { target_session_id: 'parent', message: 'Update', message_purpose: purpose });
+    expect(result.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'parent', messagePurpose: purpose, dispatcherSessionId: expect.any(String) }));
   });
 
   it('缺 message → INVALID_ARGS, host 不被调', async () => {

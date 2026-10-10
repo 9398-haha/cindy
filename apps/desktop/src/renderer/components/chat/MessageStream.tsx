@@ -308,6 +308,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { MessageSourceLabels } from './MessageSourceLabels';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
@@ -420,7 +421,7 @@ interface MessageStreamProps {
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
    *  (fork/rewind icon visibility) can read the right agent's capabilities. */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
   /** Owning session's remote SSH host id (null for local sessions). Forwarded
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
@@ -2526,7 +2527,7 @@ function renderWorkGroupChild(
     workingDir: string;
     sessionId?: string;
     sessionTitle?: string | null;
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
     remoteHostId?: string | null;
     sessionSource?: string | null;
     isSessionStreaming: boolean;
@@ -6643,7 +6644,7 @@ const MessageItem = memo(function MessageItem({
   remoteHostId?: string | null;
   /** Forwarded to User/AssistantMessage so they can read this agent's
    *  capabilities (gates Fork/Rewind icon visibility). */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
   /** Whether this session currently has an in-flight SDK turn. Rewind uses it
    *  to require an idle live query; fork can still target stable history. */
   sessionRunning?: boolean;
@@ -6749,7 +6750,7 @@ const MessageItem = memo(function MessageItem({
             workingDir={workingDir}
           />
         );
-        return simplifiedBotConversation && message.systemCardType === 'bot-session-task'
+        return simplifiedBotConversation && (message.systemCardType === 'bot-session-task' || message.systemCardType === 'bot-session-task-result')
           ? withAssistantAvatar(
               assistantAvatar ? (
                 <span aria-hidden="true" className="invisible">
@@ -6763,6 +6764,7 @@ const MessageItem = memo(function MessageItem({
       return withAssistantAvatar(
         assistantAvatar,
         <>
+          <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
             workingDir={workingDir}
             localFileRefs={localFileRefs}

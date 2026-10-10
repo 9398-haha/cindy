@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   unifiedModelEntries,
+  providerModelDisplayGroupTitle,
   type CatalogModel,
   type ProviderView,
   type UnifiedModelEntry,
@@ -960,7 +961,10 @@ export function UnifiedModelPanel({
       : section.kind === 'recommended'
         ? t('newChat.modelSelector.unified.recommended')
       : section.group
-        ? providerLabel(section.group.providerId)
+        ? providerModelDisplayGroupTitle(providerLabel(section.group.providerId), section.group.modelGroup, {
+            models: t('newChat.modelSelector.cursorGroups.models'),
+            other: t('newChat.modelSelector.cursorGroups.other'),
+          })
         : '';
 
   const rows = sections.flatMap((section) => section.rows);

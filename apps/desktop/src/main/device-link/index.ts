@@ -28,7 +28,9 @@ import {
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
@@ -526,9 +528,11 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * 必须用同一份 —— 只在一处声明会让另一条路径静默降级(mobile 侧 review 实测过这个坑)。
  */
 const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   // 桌面控制桌面时同样收微批:批的收益是**relay 帧数**,只要有一个控制端不支持,
   // 被控端就得为它保留逐帧流,聚合出站速率照旧能招来 1013 并连带踢掉已启用微批的
@@ -1879,6 +1883,15 @@ export async function remoteBackgroundInvoke(
     }
     throw error;
   }
+}
+
+/**
+ * 分享者那台电脑(已解析成本地 peer key)的只读请求：relay 只在建链时登记受邀者这台电脑，没建过链的
+ * 电脑直接发 invoke 会被当成不在分享名单里(`providerShare peer unavailable`)。与远程 Agent、手机代读
+ * 分享同一条路：先建后台链路，再请求。
+ */
+export function providerShareHostInvoke(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
+  return backgroundInvokeDevice(target, channel, args);
 }
 
 async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {

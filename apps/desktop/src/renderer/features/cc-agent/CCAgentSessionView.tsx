@@ -105,10 +105,7 @@ import {
   readSendFollowCancelGeneration,
   tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
-import {
-  getMessageStreamIndicatorResizeTargets,
-  measureMessageStreamIndicatorClearanceOffset,
-} from '@/components/chat/messageStreamIndicatorPosition';
+import { useComposerOverlayMetrics } from './useComposerOverlayMetrics';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -166,6 +163,12 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import {
+  controlledTaskAgentLocationReadable,
+  controlledTaskSupportsAgentLocation,
+  selectControlledTaskAgentDevices,
+} from '@/lib/controlledTaskAgentLocation';
+import { resolveUsageAccountLocation } from '@/lib/usageAccountLocation';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import {
   canExposeWritableDirsChange,
@@ -1496,10 +1499,7 @@ export function CCAgentSessionView({
   const overlayRef = useCallback((node: HTMLDivElement | null) => {
     setOverlayEl(node);
   }, []);
-  const [overlayHeight, setOverlayHeight] = useState(200);
-  const [bottomCenterClearanceOffset, setBottomCenterClearanceOffset] = useState<
-    number | undefined
-  >(undefined);
+  const { overlayHeight, bottomCenterClearanceOffset } = useComposerOverlayMetrics(overlayEl);
   const [inlinePlanVisibilityState, setInlinePlanVisibilityState] = useState<{
     sessionId: string | undefined;
     value: InlinePlanVisibility | null;
@@ -1524,42 +1524,6 @@ export function CCAgentSessionView({
     },
     [sessionId],
   );
-
-  useEffect(() => {
-    if (!overlayEl) return;
-    const measureOverlay = () => {
-      // 状态行会动态出现 / 收起，overlay 总高度不等于底部中央控件的避让边界。
-      // 空中央行仍以 composer 栈为锚；步骤 / 接管胶囊在场时改取中央组顶边，
-      // 让消息流悬浮按钮与它们纵向成栈，而不是共享同一块 32px 区域。
-      setOverlayHeight(overlayEl.offsetHeight);
-      setBottomCenterClearanceOffset(measureMessageStreamIndicatorClearanceOffset(overlayEl));
-    };
-    const ro = new ResizeObserver(measureOverlay);
-    let observedTargets = new Set<HTMLElement>();
-    const syncResizeTargetsAndMeasure = () => {
-      const nextTargets = new Set(getMessageStreamIndicatorResizeTargets(overlayEl));
-      for (const target of observedTargets) {
-        if (!nextTargets.has(target)) ro.unobserve(target);
-      }
-      for (const target of nextTargets) {
-        if (!observedTargets.has(target)) ro.observe(target);
-      }
-      observedTargets = nextTargets;
-      measureOverlay();
-    };
-
-    // Seed with the current geometry so the first paint after remount does not
-    // reuse stale state. The plan flyout is absolutely positioned and mounts
-    // only on hover/click, so its insertion does not resize the center group;
-    // resync observed targets whenever that subtree changes.
-    syncResizeTargetsAndMeasure();
-    const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);
-    mutationObserver.observe(overlayEl, { childList: true, subtree: true });
-    return () => {
-      mutationObserver.disconnect();
-      ro.disconnect();
-    };
-  }, [overlayEl]);
 
   // F-FP-5: 点击 workingDir → 在系统文件管理器里直接打开目录(复用 shell:open-path IPC)。
   // local only:remote session 的 chip 仅作展示,不响应点击(见下方 remoteHostId 早返 +
@@ -2091,46 +2055,104 @@ export function CCAgentSessionView({
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders } = useProviders();
-  const { mode: authMode, user: authUser, dataOwnerId } = useAuth();
+  const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
   // Agent 在另一台电脑运行的任务:模型目录同样以那台为准(任务本身在本机)。
   const agentDeviceId = remoteDeviceId ? undefined : (session?.agentDeviceId ?? undefined);
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
   const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
-  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，只并进这里，
-  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
+  // 远程控制的被控电脑上的任务:被控电脑支持远程 Agent 时,同样列出其他电脑的供应商(与手机同一
+  // 套)。共享任务访客读到的是自己账号的设备、与任务无关,SSH 任务不支持;Agent 现在或挂着的位置
+  // 在本机读不到目录的地方(被控电脑收到的分享 / 本机自己)时,维持原有的被控电脑列表。
+  const controlledAgentLocation =
+    !!remoteDeviceId &&
+    !session?.remoteHostId &&
+    !isSharedTaskPeer(remoteDeviceId) &&
+    controlledTaskSupportsAgentLocation(session) &&
+    controlledTaskAgentLocationReadable({
+      agentDeviceId: session?.agentDeviceId,
+      pendingAgentDeviceId,
+      selfDeviceId,
+    });
+  /** 被控电脑上的任务里 Agent 现在所在的电脑(undefined = 被控电脑本身)。 */
+  const controlledAgentDeviceId = controlledAgentLocation
+    ? (session?.agentDeviceId ?? undefined)
+    : undefined;
+  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，只并进本机任务，
+  // 不进设备切换器(被控电脑上的任务用不了本机收到的分享)。已暂停 / 已不在的分享只在它正是
+  // 当前或即将使用的位置时保留。
   const { devices: providerShareDevices, nameFor: providerShareDeviceName } =
     useProviderShareAgentDevices([agentDeviceId, pendingAgentDeviceId]);
-  const remoteAgentDevices = useMemo(
+  const remoteAgentDevices = useMemo(() => {
+    if (session?.remoteHostId) return undefined;
+    if (remoteDeviceId) {
+      return controlledAgentLocation
+        ? selectControlledTaskAgentDevices({
+            devices: selectableDevices,
+            controlledDeviceId: remoteDeviceId,
+            keepDeviceIds: [controlledAgentDeviceId, pendingAgentDeviceId],
+          })
+        : undefined;
+    }
+    return [
+      ...selectableDevices
+        .filter(
+          (device) =>
+            device.online ||
+            device.deviceId === agentDeviceId ||
+            device.deviceId === pendingAgentDeviceId,
+        )
+        .map(({ deviceId, name }) => ({ deviceId, name })),
+      ...providerShareDevices,
+    ];
+  }, [
+    selectableDevices,
+    providerShareDevices,
+    remoteDeviceId,
+    session?.remoteHostId,
+    controlledAgentLocation,
+    controlledAgentDeviceId,
+    agentDeviceId,
+    pendingAgentDeviceId,
+  ]);
+  const shownAgentDeviceId = agentDeviceId ?? controlledAgentDeviceId;
+  const agentDeviceName = shownAgentDeviceId
+    ? (selectableDevices.find((device) => device.deviceId === shownAgentDeviceId)?.name ??
+      providerShareDeviceName(shownAgentDeviceId))
+    : null;
+  /** 被控电脑的名字(换 Agent 所在电脑时「改回那台」的确认文案用)。 */
+  const controlledDeviceName = remoteDeviceId
+    ? (session?.deviceLinkDeviceName ||
+      selectableDevices.find((device) => device.deviceId === remoteDeviceId)?.name ||
+      null)
+    : null;
+  // 底部用量 chip 按意图显示下一轮的模型与来源;余量同样读下一轮 Agent 所在那台的账号
+  // (远程 Agent,本机任务或远程控制的任务都一样),不读任务所在电脑的同名账号。
+  const usageChipProviderId = agentSwitchIntent
+    ? agentSwitchIntent.providerId
+    : (session?.providerId ?? null);
+  const usageAccount = useMemo(
     () =>
-      remoteDeviceId || session?.remoteHostId
-        ? undefined
-        : [
-            ...selectableDevices
-              .filter(
-                (device) =>
-                  device.online ||
-                  device.deviceId === agentDeviceId ||
-                  device.deviceId === pendingAgentDeviceId,
-              )
-              .map(({ deviceId, name }) => ({ deviceId, name })),
-            ...providerShareDevices,
-          ],
+      resolveUsageAccountLocation({
+        taskDeviceId: remoteDeviceId,
+        agentDeviceId: session?.agentDeviceId,
+        pendingAgentDeviceId,
+        providerId: usageChipProviderId,
+        selfDeviceId,
+        sharedTaskGuest: !!remoteDeviceId && isSharedTaskPeer(remoteDeviceId),
+        remoteHostId: session?.remoteHostId,
+      }),
     [
-      selectableDevices,
-      providerShareDevices,
       remoteDeviceId,
-      session?.remoteHostId,
-      agentDeviceId,
+      session?.agentDeviceId,
       pendingAgentDeviceId,
+      usageChipProviderId,
+      selfDeviceId,
+      session?.remoteHostId,
     ],
   );
-  const agentDeviceName = agentDeviceId
-    ? (selectableDevices.find((device) => device.deviceId === agentDeviceId)?.name ??
-      providerShareDeviceName(agentDeviceId))
-    : null;
-  const catalogDeviceId = remoteDeviceId ?? agentDeviceId;
+  const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
   const canSwitchToClaudeSubscription = useMemo(() => {
@@ -2173,12 +2195,13 @@ export function CCAgentSessionView({
   // device-link 与 SSH 都只在实际执行端明确声明 setter 能力后开放；ChatInput 另行按
   // 文件系统来源关闭远端“新增”，因此这里开放的远端 callback 只会用于撤销。
   const writableDirsChangeSupported =
-    canExposeWritableDirsChange({
+    (displayAgentKind !== 'cursor' || sessionCaps?.writableDirs?.supported === true) &&
+    (canExposeWritableDirsChange({
       capabilities: sessionCaps,
       deviceId: remoteDeviceId,
       remoteHostId: session?.remoteHostId,
     }) ||
-    (session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true);
+    (session?.remoteHostId != null && sessionCaps?.writableDirs?.supported === true));
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
   // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
   // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
@@ -2734,7 +2757,7 @@ export function CCAgentSessionView({
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
   // 切换协同走 IPC enableOrca / disableOrca,失败时 toast。
-  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi'>('codex');
+  const [collabWorker, setCollabWorker] = useState<'cc' | 'codex' | 'pi' | 'cursor'>('codex');
   // enableBusy 只盖"开启协同"路径;关闭走 useStopOrcaCollab hook 自己管 busy。
   const [enableBusy, setEnableBusy] = useState(false);
   const [createWorkerOpen, setCreateWorkerOpen] = useState(false);
@@ -2888,9 +2911,11 @@ export function CCAgentSessionView({
   // ChatInput「+」菜单启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
   const collabWorkspaceKind = session?.workspaceKind;
   const collabEntry = resolveCollabEntryPolicy({
+    agentKind: displayAgentKind,
     workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
+    orcaRemoteWorker: !!session?.orcaRemoteLead,
     remoteHostId: session?.remoteHostId,
     // 粘滞归属:relay 瞬时重连清空注册表的窗口内不把远程会话误判成本机 —— 误判会让
     // 协同策略退回查控制端本机,读到的是另一台机器的开关。
@@ -3024,6 +3049,12 @@ export function CCAgentSessionView({
           providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
           workerPermissionMode: form.workerPermissionMode,
+          ...(form.executionDeviceId
+            ? {
+                executionDeviceId: form.executionDeviceId,
+                ...(form.workingDir ? { workingDir: form.workingDir } : {}),
+              }
+            : {}),
         };
         const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) {
@@ -3828,7 +3859,7 @@ export function CCAgentSessionView({
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
       if (!remoteDeviceId) {
-        const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
+        const authVendor = displayAgentKind === 'cursor' ? 'cursor' : displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
           // PR #744 review 第十七轮)。
@@ -4326,7 +4357,7 @@ export function CCAgentSessionView({
     // 用三值化后的 agent 映射选默认模型:Pi 会话必须回退到 Pi 目录默认,而不是被
     // `isCodex ? 'codex' : 'cc'` 误写成 CC 首选(可能是更贵的 Opus)(codex review)。
     const defaultModel = getDefaultModelForVendor(
-      agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : 'cc',
+      agent === 'cursor' ? 'cursor' : agent === 'pi' ? 'pi' : agent === 'codex' ? 'codex' : 'cc',
     );
     sessionService
       .update(sessionId, { model: defaultModel.id })
@@ -5537,6 +5568,7 @@ export function CCAgentSessionView({
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
+                  deviceLinkDeviceName={controlledDeviceName}
                   agentDeviceId={session?.agentDeviceId ?? null}
                   agentDeviceName={agentDeviceName}
                   {...(remoteAgentDevices ? { remoteAgentDevices } : {})}
@@ -5593,7 +5625,11 @@ export function CCAgentSessionView({
                   onComposerDropHandled={resetFullAreaDragState}
                   vendorKey={normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
-                  onExtraDirsChange={handleExtraDirsChange}
+                  onExtraDirsChange={
+                    displayAgentKind !== 'cursor' || sessionCaps?.extraDirs?.supported === true
+                      ? handleExtraDirsChange
+                      : undefined
+                  }
                   writableDirs={session?.writableDirs ?? []}
                   writableGrantScope={sessionId}
                   onWritableDirsChange={
@@ -5777,17 +5813,14 @@ export function CCAgentSessionView({
                     <TodaySpendChip
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
                       modelId={agentSwitchIntent?.model ?? session?.model ?? null}
-                      providerId={
-                        agentSwitchIntent
-                          ? agentSwitchIntent.providerId
-                          : (session?.providerId ?? null)
-                      }
+                      providerId={usageChipProviderId}
                       sessionId={sessionId}
                       sessionInitialMoney={session?.totalMoney ?? null}
                       sessionInitialCostUsd={session?.totalCostUsd ?? null}
                       sessionInitialTokens={session?.totalTokenUsage ?? null}
                       remoteHostId={session?.remoteHostId ?? null}
                       deviceLinkDeviceId={remoteDeviceId ?? null}
+                      usageAccount={usageAccount}
                     />
                     <ContextCapacityRing
                       isRunning={agentStatus.isRunning}
@@ -5888,6 +5921,10 @@ export function CCAgentSessionView({
         // openai-chat 桥接 Codex 只挂在本地 proxy),与 main 侧 remote-worker
         // guard 同规则(codex review R28)。
         sshRemote={!!session?.remoteHostId}
+        // 首个 Worker 也可放到另一台电脑：仅本机 Lead(非 SSH、Agent 也在本机)。
+        executionDevicesEnabled={
+          !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
+        }
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，
@@ -6362,7 +6399,7 @@ function formatTokenCount(n: number): string {
  */
 function getModelContextWindow(
   model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'cursor',
   deviceId?: string,
 ): number | undefined {
   const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
@@ -6386,7 +6423,7 @@ function ContextCapacityRing({
   providerId?: string | null;
   contextTokens: number;
   model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: 'cc' | 'codex' | 'pi' | 'cursor';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
   verifiedContextWindow?: number | null;

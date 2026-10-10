@@ -45,6 +45,7 @@ import {
   openRemoteLink,
   closeRemoteLink,
   remoteInvoke,
+  providerShareHostInvoke,
   remoteSubscribe,
   remoteUnsubscribe,
   disconnectAllControllers,
@@ -132,6 +133,8 @@ export interface DeviceLinkIpcDeps {
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   invoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
+  /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
+  invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   subscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   unsubscribe(deviceId: string, topics: string[]): Promise<InvokeResultPayload>;
   disconnectAll(): void;
@@ -195,6 +198,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
     },
+    invokeProviderShareHost: providerShareHostInvoke,
     subscribe: remoteSubscribe,
     unsubscribe: remoteUnsubscribe,
     disconnectAll: disconnectAllControllers,
@@ -760,8 +764,22 @@ function projectProviderShareResult(channel: string, value: unknown): unknown {
   return value;
 }
 
+/**
+ * 分享来的供应商读不到时在本机日志记下错误(同一分享、同一请求、同一错误每分钟最多一条)。
+ * 界面只能说「暂时读不到」，排查要靠这里和分享者电脑上的拒绝原因。
+ */
+const providerShareReadFailureLoggedAt = new Map<string, number>();
+function logProviderShareReadFailure(agentDeviceId: string, channel: string, code: string, message: string): void {
+  const key = `${agentDeviceId}\u0000${channel}\u0000${code}`;
+  const now = Date.now();
+  if (now - (providerShareReadFailureLoggedAt.get(key) ?? 0) < 60_000) return;
+  if (providerShareReadFailureLoggedAt.size >= 256) providerShareReadFailureLoggedAt.clear();
+  providerShareReadFailureLoggedAt.set(key, now);
+  log.warn(`provider share read failed: ${channel} on ${agentDeviceId}: ${code} ${message.slice(0, 200)}`);
+}
+
 export async function handleProviderShareInvoke(
-  deps: Pick<DeviceLinkIpcDeps, 'invoke'>,
+  deps: Pick<DeviceLinkIpcDeps, 'invoke' | 'invokeProviderShareHost'>,
   agentDeviceId: string,
   channel: unknown,
   args: unknown,
@@ -769,18 +787,32 @@ export async function handleProviderShareInvoke(
   if (typeof channel !== 'string' || !PROVIDER_SHARE_RENDERER_CHANNELS.has(channel)) {
     throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Not available for shared providers');
   }
-  const target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  let target: string;
+  try {
+    target = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logProviderShareReadFailure(agentDeviceId, channel, 'RESOLVE', message);
+    throw err;
+  }
   const callArgs = Array.isArray(args) ? args : [];
   let result: InvokeResultPayload;
   try {
     result = isCrossRegionProviderShareTarget(target)
       ? await crossRegionInvoke(target, channel, callArgs)
-      : await deps.invoke(target, channel, callArgs);
+      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
   } catch (err) {
+    logProviderShareReadFailure(
+      agentDeviceId,
+      channel,
+      err instanceof DeviceLinkError ? err.code : 'THROWN',
+      err instanceof Error ? err.message : String(err),
+    );
     if (err instanceof DeviceLinkError && isProviderShareRefusal(err.code, err.message)) refuseProviderShare();
     rethrowDeviceLinkError(err);
   }
   if (result.ok) return projectProviderShareResult(channel, result.result);
+  logProviderShareReadFailure(agentDeviceId, channel, result.error.code, result.error.message);
   // 分享者电脑拒绝了(暂停、关了远程控制或这个供应商的「允许被远程调用」)：分享专属原因。
   if (isProviderShareRefusal(result.error.code, result.error.message)) refuseProviderShare();
   if (result.error.code === 'IPC_ERROR') throw new Error(result.error.message);
@@ -1137,6 +1169,7 @@ export async function handleMirrorCachePutMessages(
   expectedOwnerToken?: unknown,
   expectedAccountCounter?: unknown,
   historyView?: unknown,
+  mergeListMessage?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
@@ -1167,6 +1200,8 @@ export async function handleMirrorCachePutMessages(
       ? expectedAccountCounter
       : undefined;
   try {
+    const historyArgs: [historyView?: string, mergeListMessage?: boolean] = mergeListMessage === true
+      ? [historyView as string | undefined, true] : historyView !== undefined ? [historyView as string] : [];
     const result = await cache.writeMessages(
       device,
       session,
@@ -1174,7 +1209,7 @@ export async function handleMirrorCachePutMessages(
       expected,
       expectedOwner,
       expectedAccount,
-      ...(historyView !== undefined ? [historyView as string] : []),
+      ...historyArgs,
     );
     return { ok: true, invalidation: result.invalidation };
   } catch (err) {
@@ -1573,6 +1608,7 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       expectedOwnerToken?: unknown;
       expectedAccountCounter?: unknown;
       historyView?: unknown;
+      mergeListMessage?: unknown;
     };
     return handleMirrorCachePutMessages(
       getMirrorCache(),
@@ -1584,6 +1620,7 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       p.expectedOwnerToken,
       p.expectedAccountCounter,
       p.historyView,
+      p.mergeListMessage,
     );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {

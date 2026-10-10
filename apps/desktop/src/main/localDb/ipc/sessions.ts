@@ -23,6 +23,7 @@ import {
   writePiSubagentDeletedTombstone,
 } from '@cindy/maker-core/pi-subagent-runs';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import type { SharedPermissionMode } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
@@ -636,13 +637,14 @@ const REMOTE_PERSIST_FIELDS = new Set([
 export async function applyAgentSwitchToSessionRow(
   sessionId: string,
   patch: {
-    agentKind: 'cc' | 'codex' | 'pi';
+    agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
     model: string;
     providerId: string | null | undefined;
     sdkSessionId?: string | null;
     /** 目标引擎下的 effort / fastMode(意图登记时 renderer 按目标目录解析,apply 一并落库)。 */
     effort?: string;
     fastMode?: boolean;
+    permissionMode?: SharedPermissionMode;
     contextWindow?: number | null;
     /** 远程 Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
     agentDeviceId?: string | null;
@@ -667,6 +669,7 @@ export async function applyAgentSwitchToSessionRow(
     setObj.effort = persistableEffort;
   }
   if (patch.fastMode !== undefined) setObj.fastMode = patch.fastMode;
+  if (patch.permissionMode !== undefined) setObj.permissionMode = patch.permissionMode;
   if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
     setObj.contextWindow = Math.floor(patch.contextWindow);
   }
@@ -676,6 +679,7 @@ export async function applyAgentSwitchToSessionRow(
     .returning({
       id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
       providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+      permissionMode: sessions.permissionMode,
     });
   if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
@@ -688,6 +692,7 @@ export async function applyAgentSwitchToSessionRow(
       ...(patch.agentDeviceId !== undefined ? { agentDeviceId: patch.agentDeviceId } : {}),
       ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
       ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
+      ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
         ? { contextWindow: Math.floor(patch.contextWindow) }
         : {}),
@@ -829,8 +834,12 @@ export interface SessionRowSnapshot {
   providerId: string | null;
   /** Hook exact-takeover must reject SSH-owned sessions. */
   remoteHostId?: string | null;
+  /** 远程 Agent 所在电脑(null = 本机);限额自动继续据此不拿本机账号快照推算。 */
+  agentDeviceId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
+  /** 协同远端 Worker 标记(raw JSON);非空时不能再开启协同。 */
+  orcaRemoteLead?: string | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
   /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
@@ -857,7 +866,9 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       providerId: sessions.providerId,
       clearedAt: sessions.clearedAt,
       remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
       orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
       agentKind: sessions.agentKind,
       source: sessions.source,
       model: sessions.model,
@@ -1055,7 +1066,7 @@ export interface OverwritableAutoTitleTarget {
    * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
    * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
    */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /**
    * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
    * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
@@ -1071,7 +1082,7 @@ export async function getOverwritableAutoTitle(
   const row = await selectSessionWithCount(db, id);
   if (!row) return null;
   const agentKind =
-    row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
+    row.agentKind === 'codex' || row.agentKind === 'pi' || row.agentKind === 'cursor' ? row.agentKind : 'claude-code';
   const overwritable =
     row.title === DEFAULT_DRAFT_SESSION_TITLE ||
     (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -1253,6 +1264,19 @@ export function registerSessionIpc(
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);
+      const rawBefore = options && typeof options === 'object' ? (options as { before?: unknown }).before : undefined;
+      let before: { updatedAt: number; id: string } | undefined;
+      if (rawBefore !== undefined) {
+        // Pagination is local renderer-only until remote capability negotiation exists.
+        assertTrustedAppRendererEvent(event);
+        const value = requireObject(rawBefore, 'before');
+        if (typeof value.updatedAt !== 'number' || !Number.isSafeInteger(value.updatedAt) || value.updatedAt < 0
+          || typeof value.id !== 'string' || !value.id || value.id.length > 200 || usageHistory || includePinned) {
+          throwIpcError('INVALID_PARAMS', 'Invalid session list cursor');
+        }
+        before = { updatedAt: value.updatedAt, id: value.id };
+      }
+
       // 支持 Sidebar Filter 的 Active/Archived/All status 过滤。
       //   - 'active' / 'archived' → WHERE status = ?
       //   - 'all' / undefined / 其它非法值 → WHERE status != 'deleted'
@@ -1267,7 +1291,7 @@ export function registerSessionIpc(
         const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
+        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap, before);
 
         let mergedRows = rows;
         if (includePinned) {
@@ -1300,7 +1324,7 @@ export function registerSessionIpc(
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
       const result = usageHistory
         ? await loadUsageHistoryRows()
-        : userId && !fresh
+        : userId && !fresh && !before
           ? await runSessionListSingleFlight(
               buildSessionListFlightKey({
                 userId,
@@ -1346,7 +1370,7 @@ export function registerSessionIpc(
     const id = resolveBusinessSessionId(bodyObj.id);
     const createBody = bodyObj as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi', 'cursor']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }

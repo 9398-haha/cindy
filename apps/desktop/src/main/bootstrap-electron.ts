@@ -325,6 +325,7 @@ import {
 } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
+import { readCachedImage } from './cindy-media/readCachedImage';
 import {
   collectStreamWithLimit,
   createLightboxMediaHandlers,
@@ -582,6 +583,7 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
+import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
@@ -745,7 +747,10 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  tryGetBotDelegationService,
   restoreBotRuntimeForCurrentOwner,
+  restoreOrcaRemoteWorkersForCurrentOwner,
+  stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
   isSessionInTurn,
   stopOrcaIdleWatcher,
@@ -1924,6 +1929,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     // 撞上它,先清再关)。
     clearDeferredCodexRestartForOwnerBoundary();
     clearWorkingDirectoryRecoveryForOwnerBoundary();
+    stopOrcaRemoteWorkersForOwnerBoundary();
     // interrupted-turn-resume:shutdown 批量 close 会话会触发 close teardown 的
     // markSessionTurnEnded,把"边界时还在飞的 turn"伪装成正常收尾 —— 被切换打断的
     // 任务从此既无中断横幅也无红点,呈现为"卡住且无报错"(与 ⌘Q 的 quit freeze 同款
@@ -4311,12 +4317,18 @@ const registerIpcHandlers = () => {
   });
 
   // 系统级通知（CC Agent session 完成时弹出 / 可选飞书私聊）
+  const isCompletionHandledByTeammate = (sessionId: string): Promise<boolean> =>
+    tryGetBotDelegationService()?.isCompletionHandledByTeammate(sessionId) ?? Promise.resolve(false);
   initNotificationService({
+    isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
+      ?? isCompletionHandledByTeammate(sessionId),
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
   initWecomGroupNotificationIpc();
   initAgentIslandService({
+    // The relay waits for native done before checking the durable result handoff.
+    isCompletionHandledByTeammate,
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {
@@ -8509,14 +8521,14 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'image-cache:read-base64',
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       params: { url: string },
     ): Promise<{ base64: string; mimeType: string }> => {
-      if (typeof params?.url === 'string' && params.url.startsWith('cindy-media://')) {
-        const { buffer, mimeType } = await cindyMediaBlobStore.readFile(params.url);
-        return { base64: buffer.toString('base64'), mimeType };
-      }
-      return imageCacheStore.readAsBase64(params.url);
+      assertTrustedAppRendererEvent(event);
+      return readCachedImage(params, {
+        readBlob: cindyMediaBlobStore.readFile,
+        readLegacy: imageCacheStore.readAsBase64,
+      });
     },
   );
 
@@ -9037,6 +9049,7 @@ app.on('ready', async () => {
       // takeover. registerMakerIpc also invokes this once its services exist,
       // covering both possible splash/login orderings without duplicate runs.
       void restoreBotRuntimeForCurrentOwner();
+      void restoreOrcaRemoteWorkersForCurrentOwner();
       startReadyWorktreeMaintenance();
       if (dbClientTakeover.mode === 'unchanged') {
         // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
@@ -9491,6 +9504,7 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerProviderShareIpc();
+  registerProviderGroupIpc();
   registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {
     name: getControllerName,

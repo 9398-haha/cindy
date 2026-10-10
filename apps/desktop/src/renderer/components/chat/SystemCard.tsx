@@ -963,7 +963,12 @@ function AutoResumeActionRow({
   //   - 已回填          → ✓ / ✗ 定格,`inFlight` 不参与(终态优先)
   const live = state === 'live' || (inFlight === true && info.outcome === undefined);
   const outcome = live ? undefined : info.outcome;
-  const label = usageLimitReset
+  const label = info.agentSwitch
+    ? t(`chat.systemCard.autoResume.agentSwitch.${info.agentSwitch.cause}`, {
+        from: info.agentSwitch.from,
+        to: info.agentSwitch.to,
+      })
+    : usageLimitReset
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
     ? hasProgress
@@ -1129,7 +1134,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const engineLabel = (kind: unknown): string =>
-    kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
+    kind === 'codex' ? 'Codex' : kind === 'cursor' ? 'Cursor' : kind === 'pi' ? 'Pi' : 'Claude Code';
   const fromLabel = engineLabel(data?.fromAgentKind);
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';

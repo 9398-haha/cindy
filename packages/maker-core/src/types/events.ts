@@ -86,7 +86,7 @@ export interface AgentTaskUsage {
 }
 
 export interface AgentTaskUpdateEventData {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** Provider task id when available; falls back to the parent tool call id. */
   taskId: string;
   /** The tool_use id that launched or controls this subagent task. */
@@ -160,7 +160,7 @@ export interface AgentEvent {
   type: AgentEventType;
   data: unknown;
   /** 事件来源标识，便于调试 */
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /**
    * Events that finish work owned by a completed turn can still arrive after a
    * later turn has started (for example, a V1 collab child). These are still
@@ -317,6 +317,8 @@ export type InteractionRequest =
   | (InteractionRequestBase & {
       kind: 'ask_user_question';
       questions: AskUserQuestionItem[];
+      /** Optional question: the provider keeps running; absence means a blocking question. */
+      delivery?: 'async';
     })
   | (InteractionRequestBase & {
       kind: 'plan_review';

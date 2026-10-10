@@ -11,8 +11,8 @@ export const ORCA_PREDEFINED_WORKER_ROLES = ['developer', 'designer', 'reviewer'
 /** 自定义角色名的长度上限(被控端 `maker:worker:create` 同口径校验)。 */
 export const ORCA_WORKER_ROLE_MAX_LENGTH = 32;
 
-export type OrcaWorkerAgentKind = 'claude-code' | 'codex' | 'pi';
-export type OrcaWorkerPermissionMode = 'auto' | 'bypassPermissions';
+export type OrcaWorkerAgentKind = 'claude-code' | 'codex' | 'pi' | 'cursor';
+export type OrcaWorkerPermissionMode = 'ask' | 'auto' | 'bypassPermissions';
 export type OrcaWorkerStatus = 'idle' | 'running' | 'done' | 'error';
 
 /**
@@ -26,6 +26,7 @@ export const DEFAULT_ORCA_WORKER_MODELS: Readonly<Record<OrcaWorkerAgentKind, st
   'claude-code': 'claude-opus-4-7',
   // 与被控端 orcaWorkerCreationService 的 pi 默认一致。
   pi: 'claude-sonnet-4-6',
+  cursor: 'cursor-default',
 };
 
 /**
@@ -102,6 +103,32 @@ export interface OrcaTeamWorker {
   model: string | null;
   effort: string | null;
   title: string | null;
+  /**
+   * 在同账号另一台电脑运行的 Worker：那台的设备 id 与真实任务 id(sessionId 是本机不跑
+   * Agent 的代理任务)。旧被控端不返回，按本机 Worker 处理。
+   */
+  executionDevice?: OrcaWorkerExecutionDevice;
+}
+
+export interface OrcaWorkerExecutionDevice {
+  deviceId: string;
+  remoteSessionId: string;
+  deviceName: string | null;
+  /** false = 被控端当前连不上那台；null = 尚未探测。 */
+  reachable: boolean | null;
+}
+
+function executionDevice(value: unknown): OrcaWorkerExecutionDevice | undefined {
+  const row = record(value);
+  const deviceId = text(row?.deviceId);
+  const remoteSessionId = text(row?.remoteSessionId);
+  if (!row || !deviceId || !remoteSessionId) return undefined;
+  return {
+    deviceId,
+    remoteSessionId,
+    deviceName: text(row.deviceName),
+    reachable: typeof row.reachable === 'boolean' ? row.reachable : null,
+  };
 }
 
 /** 被控端 `maker:collaboration-settings:get` 的控制端投影。 */
@@ -131,7 +158,7 @@ function text(value: unknown): string | null {
 }
 
 function agentKind(value: unknown): OrcaWorkerAgentKind {
-  return value === 'codex' || value === 'pi' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'cursor' ? value : 'claude-code';
 }
 
 function workerStatus(value: unknown): OrcaWorkerStatus {
@@ -139,7 +166,7 @@ function workerStatus(value: unknown): OrcaWorkerStatus {
 }
 
 export function parseOrcaPermissionMode(value: unknown): OrcaWorkerPermissionMode | null {
-  return value === 'auto' || value === 'bypassPermissions' ? value : null;
+  return value === 'ask' || value === 'auto' || value === 'bypassPermissions' ? value : null;
 }
 
 /** 解析 worker 列表;缺 id / sessionId 的条目直接丢弃(不猜)。保持被控端顺序(新→旧)。 */
@@ -163,6 +190,9 @@ export function parseOrcaTeamWorkers(value: unknown): OrcaTeamWorker[] {
       model: text(session?.model),
       effort: text(session?.effort),
       title: text(session?.title),
+      ...(executionDevice(row.executionDevice)
+        ? { executionDevice: executionDevice(row.executionDevice) }
+        : {}),
     });
   }
   return workers;

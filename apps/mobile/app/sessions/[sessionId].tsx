@@ -262,6 +262,7 @@ import {
   ContextSheetRow,
 } from '@/session/ContextSheet';
 import { OrcaTeamPanelView, OrcaWorkerFormView } from '@/session/ContextSheetCollabView';
+import { OrcaWorkerDirectoryPicker } from '@/session/OrcaWorkerDirectoryPicker';
 import { useSessionOrcaCollab } from '@/session/useSessionOrcaCollab';
 import { orcaWorkerProvidersForLead, subscribeOrcaStartFailure, takeOrcaStartFailure } from '@/session/orcaTeam';
 import { RecentPhotosStrip } from '@/session/ContextSheetMediaViews';
@@ -366,6 +367,7 @@ import {
   supportsMobileSessionAgentSwitch,
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
+import { formatProviderAccountLabel, resolveSessionUsageAccount } from '@/session/sessionUsageAccount';
 import { useRemoteAgentCatalogs } from '@/session/useRemoteAgentCatalogs';
 import {
   drainComposerAnnotationSubmissions,
@@ -566,6 +568,7 @@ import {
 } from '@/session/messageRenderStreamingCache';
 import { shouldSuppressEmptyMessageState } from '@/session/sessionEmptyState';
 import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
+import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
@@ -2081,8 +2084,16 @@ export default function SessionScreen() {
   // 「复用 + 移到栈顶」,返回手势就落回 Worker,且每往返一次改写一次栈内 Screen 顺序
   // (Android 白屏)。已在栈里 → dismissTo 回退,不在栈里 → push。理由与不变量见
   // collabSessionNavigation.ts。
-  const openCollabSession = useCallback((targetSessionId: string) => {
+  const openCollabSession = useCallback((
+    targetSessionId: string,
+    target?: { deviceId: string; deviceName?: string | null },
+  ) => {
     if (!deviceId || !targetSessionId) return;
+    // 在另一台电脑运行的 Worker 打开那台上的真实任务；其余沿用当前电脑。
+    const targetDeviceId = target?.deviceId ?? deviceId;
+    const targetDeviceName = target
+      ? (target.deviceName ?? t('session.collab.otherComputer'))
+      : deviceName;
     navigateToCollabSession(
       {
         getState: () => navigation.getState(),
@@ -2103,14 +2114,19 @@ export default function SessionScreen() {
           },
         }),
       },
-      { sessionId: targetSessionId, deviceId, deviceName },
+      { sessionId: targetSessionId, deviceId: targetDeviceId, deviceName: targetDeviceName },
       sessionId,
     );
-  }, [deviceId, deviceName, navigation, router, sessionId]);
+  }, [deviceId, deviceName, navigation, router, sessionId, t]);
   // 来源目录在协同 hook 之后才取得(它依赖 Worker 选择器是否打开),经 ref 在提交时读。
   const collabProvidersRef = useRef<readonly ProviderView[] | null>(null);
+  const executionMakerForDevice = useCallback(
+    (targetDeviceId: string) => createMobileMakerTransport({ deviceId: targetDeviceId, invoke }),
+    [invoke],
+  );
   const collab = useSessionOrcaCollab({
     maker,
+    executionMakerForDevice,
     deviceId: deviceId || null,
     sessionId,
     session: currentSession,
@@ -2127,14 +2143,18 @@ export default function SessionScreen() {
   });
   const composerDeviceProviders = useDeviceProviders(
     deviceId || undefined,
-    modelSheetOpen || collab.workerForm.modelPicker.open,
+    modelSheetOpen,
   );
+  const collabWorkerDeviceId = collab.workerForm.form.executionDeviceId ?? deviceId;
+  const collabDeviceProviders = useDeviceProviders(collabWorkerDeviceId || undefined, collab.workerForm.modelPicker.open);
+  const collabModelPricing = useDeviceModelPricing(collabWorkerDeviceId || undefined);
+  const collabApiKeyStatus = useDeviceApiKeyStatus(collabWorkerDeviceId || undefined);
   // SSH 远端 Lead 的 Worker 只能用远端可路由的来源(与桌面创建 Worker 面板同口径)。
   const collabWorkerProviders = useMemo(
-    () => orcaWorkerProvidersForLead(composerDeviceProviders.providers, !!currentSession?.remoteHostId?.trim()),
-    [composerDeviceProviders.providers, currentSession?.remoteHostId],
+    () => orcaWorkerProvidersForLead(collabDeviceProviders.providers, !!currentSession?.remoteHostId?.trim()),
+    [collabDeviceProviders.providers, currentSession?.remoteHostId],
   );
-  collabProvidersRef.current = composerDeviceProviders.ready ? collabWorkerProviders : null;
+  collabProvidersRef.current = collabDeviceProviders.ready ? collabWorkerProviders : null;
   // Worker 任务打开详情时刷新自身记录(焦点可能已在别处变化)。
   const refreshWorkerSelf = collab.refreshWorkerSelf;
   useEffect(() => {
@@ -2155,14 +2175,10 @@ export default function SessionScreen() {
   const accountProvider = composerDeviceProviders.ready
     ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)
     : undefined;
-  const providerAccountIdentity = accountProvider?.openAiAccount?.identity?.trim()
-    || accountProvider?.subscriptionAccount?.identity?.trim();
-  const providerDisplayName = accountProvider?.name?.trim();
-  const providerAccountLabel = providerDisplayName && providerAccountIdentity
-    && !providerDisplayName.includes(providerAccountIdentity)
-    ? `${providerDisplayName} · ${providerAccountIdentity}`
-    : providerDisplayName;
-  const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession, accountProvider);
+  // Codex 限额读取 / 重置作用于被控电脑的账号:Agent 在另一台电脑运行时(远程 Agent)这一轮消耗的
+  // 是那台的账号,被控电脑的控件与之无关(余量改由任务菜单读那台,见 sessionUsageAccount)。
+  const localCodexRateLimitControl = !sessionAgentRunsOnOtherComputer(currentSession)
+    && canUseLocalCodexRateLimitControl(currentSession, accountProvider);
   const accountProviderId = currentSession?.providerId ?? 'openai';
   const accountControlScope = `${deviceId}\0${sessionId}\0${accountProviderId}`;
   const accountControlScopeRef = useRef(accountControlScope);
@@ -2308,6 +2324,7 @@ export default function SessionScreen() {
   const completedRunId = unreadRunIdFromProjection(scheduleEventSnapshot.lastProjection, sessionId);
   // 同一轻量索引同时提供历史失败提示和未读记录；已读不会消除历史失败。
   const scheduleNoticeSource = JSON.stringify([getActiveMobileSessionRealm(), auth.user?.id, deviceId, sessionId]);
+  const sessionSourceForSchedule = currentSession?.source;
   const [scheduleFailure, setScheduleFailure] = useState<{ source: string; run?: FailedScheduleRunSnapshot } | null>(null);
   // —— 会话未读「真实展示即已读」回执 ——
   // 手机端打开会话且**本次连接代已完成整窗同步**后,驻留满 dwell 把被控端该会话的
@@ -2365,12 +2382,15 @@ export default function SessionScreen() {
     let active = true;
     const isActive = () => active && messageScreenFocusedRef.current && messageAppActiveRef.current;
     const cancel = deferScheduleIndexHydration(() => {
+      // An ordinary task has no automation runs to mark read or failures to show. Skip the
+      // device-wide index scan when the current index already says this task is unbound.
+      if (!sessionMayHaveScheduleRuns(deviceId, sessionId, sessionSourceForSchedule)) return;
       void withTransientRemoteRetry(() => markSessionScheduleRunsRead(maker, sessionId, deviceId, isActive, {
         onIndex: (index) => setScheduleFailure({ source: scheduleNoticeSource, run: index.get(sessionId)?.latestFailedRun }),
       })).catch(() => undefined);
     });
     return () => { active = false; cancel(); };
-  }, [appStateActive, connectionEpoch, deviceId, invoke, maker, remoteHistoryAvailable, scheduleEventSnapshot.sessionIndexVersion, scheduleNoticeSource, sessionId]));
+  }, [appStateActive, connectionEpoch, deviceId, invoke, maker, remoteHistoryAvailable, scheduleEventSnapshot.sessionIndexVersion, scheduleNoticeSource, sessionId, sessionSourceForSchedule]));
   useFocusEffect(useCallback(() => {
     if (!appStateActive || !remoteHistoryAvailable || !completedRunId) return;
     void maker.schedule.markRunRead(completedRunId).catch(() => undefined);
@@ -2626,6 +2646,26 @@ export default function SessionScreen() {
     () => agentCatalogFor(nextAgentDeviceId),
     [agentCatalogFor, nextAgentDeviceId],
   );
+  // 任务菜单的账号余量读 Agent 现在所在那台(远程 Agent):手机直接经 device-link 读它,与读它的
+  // 模型目录同一条路;分享来的供应商等读不到,只显示任务价值。任务价值与上下文仍读被控电脑。
+  const usageAccount = resolveSessionUsageAccount({
+    agentDeviceId: currentAgentDeviceId,
+    providerId: currentSession?.providerId,
+    sharedTaskGuest: isSharedTaskPeer(deviceId),
+    remoteHostId: currentSession?.remoteHostId,
+  });
+  const agentAccountMaker = useMobileMakerTransport(
+    usageAccount.kind === 'device' ? usageAccount.deviceId : deviceId,
+  );
+  const menuAccountReader = usageAccount.kind === 'host'
+    ? maker
+    : usageAccount.kind === 'device' ? agentAccountMaker : null;
+  /** 菜单上的来源与登录身份:Agent 在另一台电脑时按那台的目录,不借被控电脑的同名来源。 */
+  const menuAccountProvider = usageAccount.kind !== 'host'
+    ? (currentAgentCatalog.loading
+        ? undefined
+        : currentAgentCatalog.providers.find((provider) => provider.id === currentSession?.providerId))
+    : accountProvider;
   const runtimeOptions = useMemo(
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
@@ -7878,7 +7918,7 @@ export default function SessionScreen() {
   const selectSessionPermissionMode = useCallback((mode: string) => {
     void (async () => {
       if (!currentSession) return;
-      if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
+      if (!await confirmFullAccessChange(currentSession.permissionMode, mode, { agentKind: currentSession.agentKind })) return;
       await runControlAction(
         () => maker.setPermissionMode(sessionId, mode),
         { permissionMode: mode },
@@ -9325,7 +9365,7 @@ export default function SessionScreen() {
               setSettingsOpen(false);
               guardedPush({ pathname: '/shared-session', params: { sessionId, deviceId } });
             }}
-            providerName={providerAccountLabel}
+            providerName={formatProviderAccountLabel(menuAccountProvider)}
             modelLabel={sessionModelDisplayName}
             messageOnly={sessionManagedByHost}
             onOpenSearch={() => {
@@ -9333,7 +9373,8 @@ export default function SessionScreen() {
               setSettingsOpen(false);
             }}
             usageReader={maker}
-            accountProvider={accountProvider}
+            accountUsageReader={menuAccountReader}
+            accountProvider={menuAccountProvider}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
             busy={controlBusy}
             codexRateLimits={localCodexRateLimitControl ? codexRateLimits : null}
@@ -9530,6 +9571,10 @@ export default function SessionScreen() {
           ) : contextSheetView === 'collab' || contextSheetView === 'collab-create' ? (
             <OrcaWorkerFormView
               agents={collab.workerForm.agents}
+              permissionModes={collab.workerForm.permissionModes}
+              executionDevices={collab.workerForm.executionDevices}
+              executionDevicesLoading={collab.workerForm.executionDevicesLoading}
+              executionDevicesError={collab.workerForm.executionDevicesError}
               busy={collab.busy}
               customRoleMode={collab.workerForm.customRoleMode}
               error={collab.error}
@@ -9540,6 +9585,7 @@ export default function SessionScreen() {
               onCustomRoleModeChange={collab.workerForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collab.workerForm.changePermission(mode)}
               onPickModel={collab.workerForm.modelPicker.openPicker}
+              onPickDirectory={collab.workerForm.directoryPicker.openPicker}
             />
           ) : (
             // goal 接回载荷按 sessionId 归属、渲染时同步过滤(codex review P1):
@@ -9569,7 +9615,7 @@ export default function SessionScreen() {
             unified={{
               currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: !!currentSession.fastMode },
               scope: JSON.stringify([auth.user?.id, deviceId]),
-              agents: sessionAgentSwitchSupported ? ['claude-code','codex','pi'] : [sessionAgentKind],
+              agents: sessionAgentSwitchSupported ? ['claude-code','codex','pi','cursor'] : [sessionAgentKind],
               loadCapabilities: async agent => {
                 const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
                 if (!result) throw new Error('Capabilities unavailable');
@@ -9627,6 +9673,8 @@ export default function SessionScreen() {
           />
         ) : null
         )}</MountOnFirstOpen>
+        <OrcaWorkerDirectoryPicker picker={collab.workerForm.directoryPicker}
+          deviceId={collab.workerForm.form.executionDeviceId} workingDir={collab.workerForm.form.remoteDir} mode={collab.workerForm.form.remoteDirMode} />
         <MountOnFirstOpen open={collab.workerForm.modelPicker.open}>{() => currentSession && collab.eligible ? (
           // 协同 Worker 的模型选择:与会话模型浮窗同一套统一模型目录,但只回写 Worker 表单,
           // 不触碰当前任务的模型。iOS 原生 sheet 不能叠开:打开前先收起 + 面板,关闭后再展开。
@@ -9639,10 +9687,10 @@ export default function SessionScreen() {
                 selectedEffort: collab.workerForm.form.model.effort ?? '',
                 selectedFastMode: collab.workerForm.form.model.fast,
               } : undefined,
-              scope: JSON.stringify([auth.user?.id, deviceId, 'orca-worker']),
+              scope: JSON.stringify([auth.user?.id, collabWorkerDeviceId, 'orca-worker']),
               agents: collab.workerForm.pickerAgents,
               loadCapabilities: async agent => {
-                const result = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent));
+                const result = normalizeMobileAgentCapabilities(await collab.workerForm.maker.getCapabilities(agent));
                 if (!result) throw new Error('Capabilities unavailable');
                 return result;
               },
@@ -9651,26 +9699,26 @@ export default function SessionScreen() {
             activeModelId={collab.workerForm.form.model?.id ?? ''}
             activePermissionMode=""
             agentKind={collab.workerForm.form.agent}
-            apiKeyStatus={deviceApiKeyStatus}
+            apiKeyStatus={collabApiKeyStatus}
             capabilities={null}
-            emptyHint={composerDeviceProviders.error && !composerDeviceProviders.unsupported
-              ? humanizeRemoteError(composerDeviceProviders.error)
+            emptyHint={collabDeviceProviders.error && !collabDeviceProviders.unsupported
+              ? humanizeRemoteError(collabDeviceProviders.error)
               : undefined}
             flatOptions={collab.workerForm.modelPicker.flatModelOptions}
             hidePermissionTrigger
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
-            loading={composerDeviceProviders.loading}
-            modelVisibilityOverrides={composerDeviceProviders.modelVisibilityOverrides}
+            loading={collabDeviceProviders.loading}
+            modelVisibilityOverrides={collabDeviceProviders.modelVisibilityOverrides}
             onClose={collab.workerForm.modelPicker.close}
             onClosed={collab.workerForm.modelPicker.closed}
             onSelectFlatModel={collab.workerForm.modelPicker.selectFlatModel}
             onSelectPermissionMode={() => undefined}
             onSelectProviderRow={() => undefined}
             permissionOptions={[]}
-            pricing={deviceModelPricing}
+            pricing={collabModelPricing}
             providers={collabWorkerProviders}
-            providersReady={composerDeviceProviders.ready}
-            providersUnsupported={composerDeviceProviders.unsupported}
+            providersReady={collabDeviceProviders.ready}
+            providersUnsupported={collabDeviceProviders.unsupported}
             selectedEffort={collab.workerForm.form.model?.effort ?? ''}
             selectedFastMode={!!collab.workerForm.form.model?.fast}
             selectedProviderId={collab.workerForm.form.model?.providerId ?? null}

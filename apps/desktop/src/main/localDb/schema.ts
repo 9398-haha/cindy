@@ -236,6 +236,11 @@ export const sessions = sqliteTable(
      */
     agentDeviceId: text('agent_device_id'),
     /**
+     * 本任务是另一台电脑上协同 Lead 派来的 Worker(JSON,见 shared/orcaRemoteWorker.ts)。
+     * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
+     */
+    orcaRemoteLead: text('orca_remote_lead'),
+    /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
      * 时间戳都是 append-only 覆盖写、**没有清除操作**——语义详见
@@ -391,7 +396,7 @@ export const botRuntimeSnapshots = sqliteTable(
       .notNull()
       .references(() => sessions.id, { onDelete: 'cascade' }),
     profileVersion: integer('profile_version').notNull(),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     workingDir: text('working_dir').notNull(),
     memoryScopeKey: text('memory_scope_key'),
     configuredJson: text('configured_json').notNull().default('{}'),
@@ -721,6 +726,13 @@ export const orcaTeams = sqliteTable(
   }),
 );
 
+/** 远端创建回执丢失或本机崩溃后的清理身份，成功关联 Worker 后删除。 */
+export const orcaRemoteOpens = sqliteTable('orca_remote_opens', {
+  remoteSessionId: text('remote_session_id').primaryKey(),
+  deviceId: text('device_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
 export const orcaWorkers = sqliteTable(
   'orca_workers',
   {
@@ -742,6 +754,20 @@ export const orcaWorkers = sqliteTable(
     focused: integer('focused', { mode: 'boolean' }).notNull().default(false),
     /** multi-worker Phase 1: idle 释放时间戳, NULL = 非 idle */
     idleSince: integer('idle_since'),
+    /**
+     * Worker 在同账号另一台电脑运行时那台的设备 id；NULL = 本机 Worker。
+     * 此时 session_id 指向本机代理任务行，remote_session_id 是那台上的真实任务。
+     */
+    executionDeviceId: text('execution_device_id'),
+    remoteSessionId: text('remote_session_id'),
+    /** 已作为回报送给 Lead 的远端最后一条 assistant 消息 id，用于重连补报去重。 */
+    lastBridgedMessageId: text('last_bridged_message_id'),
+    /** 已通知运行设备结束协同的时刻；NULL 且已归档 = 待重连后补发。 */
+    remoteReleasedAt: integer('remote_released_at'),
+    /** 派活前落盘，重启后按投递回执及历史恢复待回报。 */
+    pendingRemoteReport: text('pending_remote_report'),
+    /** 停止已确认后只补发 release，不能误停用户后续的普通任务。 */
+    remoteStopConfirmedAt: integer('remote_stop_confirmed_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -892,7 +918,7 @@ export const subagentRuns = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     logicalAgentId: text('logical_agent_id').notNull(),
     parentToolUseId: text('parent_tool_use_id'),
     /** JSON string[] containing task/tool aliases observed for this logical child. */
@@ -962,7 +988,7 @@ export const subagentRunAliases = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     alias: text('alias').notNull(),
     runId: text('run_id')
       .notNull()
@@ -1340,9 +1366,9 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
-    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -1461,7 +1487,7 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1759,7 +1785,7 @@ export const dailyModelUsage = sqliteTable(
   {
     /** 本地时区 YYYY-MM-DD 字符串 (localDayKey)。 */
     day: text('day').notNull(),
-    /** 'claude-code' | 'codex' | 'pi' — 网关模型 id 可能跨 agent 撞名, 需区分。 */
+    /** 'claude-code' | 'codex' | 'pi' | 'cursor' — 网关模型 id 可能跨 agent 撞名, 需区分。 */
     agentKind: text('agent_kind').notNull(),
     /** SDK 模型 id; 拿不到时兜底 'unknown'。 */
     model: text('model').notNull(),
@@ -1812,7 +1838,7 @@ export const skillUsageSources = sqliteTable(
     rawFilePath: text('raw_file_path').primaryKey(),
     /** 当前源文件最后一次用哪个解析器版本扫描。用于 analyzer 升级时渐进重建。 */
     analyzerVersion: text('analyzer_version').notNull().default('6'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     sessionId: text('session_id').notNull(),
     sdkSessionId: text('sdk_session_id').notNull(),
     mtimeMs: integer('mtime_ms').notNull().default(0),
@@ -1842,7 +1868,7 @@ export const skillUsageExposures = sqliteTable(
     rawLineNo: integer('raw_line_no').notNull(),
     sessionId: text('session_id').notNull(),
     sdkSessionId: text('sdk_session_id').notNull(),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'cursor'] }).notNull(),
     skillName: text('skill_name').notNull(),
     skillPath: text('skill_path'),
     /** 规范 SKILL.md 文档 hash；拿不到规范文档时为 NULL，不参与版本聚合。 */

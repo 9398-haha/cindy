@@ -164,7 +164,10 @@
     "retryToolInput": "讀取失敗，重試",
     "toolResultCompacted": "完整工具輸出已釋放（原始大小 {{size}}）",
     "mermaidEmpty": "空 Mermaid 圖表。",
-    "diffEditCount": "{{n}} 處編輯"
+    "diffEditCount": "{{n}} 處編輯",
+    "groupSentNamed": "從群聊「{{name}}」傳送",
+    "groupSent": "從群聊傳送",
+    "sourceGroupId": "群聊 ID：{{id}}"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -262,6 +265,12 @@
         "reason": "中斷原因",
         "attempt": "本次重試 {{attempt}}/{{total}}",
         "sessionTotal": "本任務累計重新連線 {{count}} 次"
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} 達到用量上限，已換到 {{to}} 繼續",
+        "auth": "{{from}} 登入已失效，已換到 {{to}} 繼續",
+        "unavailable": "{{from}} 連不上，已換到 {{to}} 繼續",
+        "overload": "{{from}} 的服務繁忙，已換到 {{to}} 繼續"
       }
     },
     "modelLabel": "模型",
