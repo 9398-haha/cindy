@@ -376,7 +376,9 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
       { agent: 'codex', baseUrl: 'https://opencode.example/zen/go/v1?token=secret-q', modelId: 'kimi-k2', apiKey: 'sk-live-abcdef123456', wireProtocol: 'openai-chat' },
       async () => fakeResponse(400, '{"error":{"message":"model kimi-k2 is not served by this endpoint","authorization":"Bearer sk-live-abcdef123456"}}'),
     );
-    expect(r).toMatchObject({ ok: false, code: 'UNKNOWN', status: 400 });
+    expect(r).toMatchObject({ ok: false, code: 'UNKNOWN', status: 400, modelId: 'kimi-k2' });
+    expect(r.detail).toContain('not served by this endpoint');
+    expect(r.detail).not.toContain('sk-live-abcdef123456');
     expect(probeLog.warn).toHaveBeenCalledTimes(1);
     const [msg, ctx] = probeLog.warn.mock.calls[0] as [string, Record<string, unknown>];
     expect(msg).toBe('provider connection probe failed');
@@ -388,6 +390,43 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     expect(serialized).not.toContain('/zen/go/v1');
     expect(serialized).not.toContain('secret-q');
     expect(serialized).not.toContain('sk-live-abcdef123456');
+  });
+
+  it('redacts opaque probe credentials even when the upstream echoes them without labels', async () => {
+    const apiKey = 'opaque-credential-value';
+    const customHeader = 'private-header-value';
+    const result = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://relay.example/v1', modelId: 'm', apiKey,
+        headers: { 'X-Custom-Auth': customHeader }, wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, JSON.stringify({ error: { message: `echoed ${apiKey} and ${customHeader}` } })),
+    );
+    expect(result.detail).toContain('<redacted>');
+    expect(result.detail).not.toContain(apiKey);
+    expect(result.detail).not.toContain(customHeader);
+    const logged = JSON.stringify(probeLog.warn.mock.calls[0][1]);
+    expect(logged).not.toContain(apiKey);
+    expect(logged).not.toContain(customHeader);
+  });
+
+  it('redacts an opaque credential before the classifier truncates the detail', async () => {
+    const apiKey = 'opaque-credential-spanning-the-detail-limit';
+    const result = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://relay.example/v1', modelId: 'm', apiKey,
+        wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, `${'a'.repeat(485)}${apiKey}`),
+    );
+    expect(result.detail).not.toContain(apiKey.slice(0, 15));
+    expect(JSON.stringify(probeLog.warn.mock.calls[0][1])).not.toContain(apiKey.slice(0, 15));
+  });
+
+  it('keeps the error category when a credential overlaps its matching words', async () => {
+    const result = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://relay.example/v1', modelId: 'm', apiKey: 'token',
+        wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, 'invalid token'),
+    );
+    expect(result.code).toBe('AUTH_INVALID');
+    expect(result.detail).not.toContain('token');
   });
 
   it('拿到 SSE 响应头后读首帧中断:异常照常抛出,但主进程已留痕(#4963 review)', async () => {
@@ -740,6 +779,59 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(() => resolveSavedProbeSpec('nope', 'claude-code')).toThrow(/not found/);
     expect(() => resolveSavedProbeSpec('xd', 'claude-code')).toThrow(/not a custom provider/);
     expect(() => resolveSavedProbeSpec('my-relay', 'codex')).toThrow(/no runtime/);
+  });
+
+  it('优先挑与 runtime 协议匹配的模型,而不是列表里第一个对话模型(#4954)', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'oc-go',
+        name: 'OpenCode Go',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://opencode.ai/zen/go/v1',
+            wireProtocol: 'openai-chat',
+            models: [
+              { id: 'grok-4.6', name: 'Grok' },
+              { id: 'glm-5.2', name: 'GLM' },
+            ],
+          },
+          'claude-code': {
+            baseUrl: 'https://opencode.ai/zen/go/v1',
+            wireProtocol: 'anthropic-messages',
+            models: [
+              { id: 'grok-4.6', name: 'Grok' },
+              { id: 'qwen3.6-plus', name: 'Qwen' },
+            ],
+          },
+        },
+      }),
+    ]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('oc-go', 'codex')).toMatchObject({
+      modelId: 'glm-5.2',
+      wireProtocol: 'openai-chat',
+    });
+    expect(resolveSavedProbeSpec('oc-go', 'claude-code')).toMatchObject({
+      modelId: 'qwen3.6-plus',
+      wireProtocol: 'anthropic-messages',
+    });
+  });
+
+  it('keeps a user-configured model route when it differs from the runtime default', () => {
+    setCustomProviders([buildUserProvider({
+      id: 'explicit-route', name: 'Explicit route', runtimes: { codex: {
+        baseUrl: 'https://opencode.ai/zen/go/v1', wireProtocol: 'openai-chat', models: [
+          { id: 'grok-4.6', name: 'Grok', route: {
+            baseUrl: 'https://opencode.ai/zen/go/v1', wireProtocol: 'openai-responses',
+          } },
+          { id: 'glm-5.2', name: 'GLM' },
+        ],
+      } },
+    })]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('explicit-route', 'codex')).toMatchObject({
+      modelId: 'grok-4.6', wireProtocol: 'openai-responses',
+    });
   });
 
   it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', () => {

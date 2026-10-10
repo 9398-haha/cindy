@@ -6156,6 +6156,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       latencyMs: number;
+      modelId?: string;
       detail?: string;
     }> => ipcRenderer.invoke('maker:provider:test-connection', input),
     /**

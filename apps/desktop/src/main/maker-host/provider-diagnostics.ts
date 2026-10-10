@@ -21,8 +21,8 @@ import {
   providerWireProtocolForApi,
   type PiModelApi,
   type ProviderModelRecord,
-  isAgentSelectableModel,
   isLoopbackProviderUrl,
+  selectProtocolCompatibleProbeModel,
   type AgentKind,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -32,6 +32,7 @@ import {
   classifyProviderError,
   type ProviderErrorClassification,
   type ProviderErrorCode,
+  type ProviderErrorInput,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
@@ -82,7 +83,9 @@ export interface ProviderTestResult {
   /** HTTP 状态码（网络层失败时缺省）。 */
   status?: number;
   latencyMs: number;
-  /** 上游原始信息摘要（详情展开用，UI 主文案走 i18n）。 */
+  /** 本次探测实际调用的模型。失败文案与日志用同一值。 */
+  modelId?: string;
+  /** 上游原始信息摘要（已脱敏）。失败时 UI 与日志展示同一段。 */
   detail?: string;
 }
 
@@ -252,7 +255,7 @@ async function readFirstSsePayload(res: Response): Promise<string | null> {
   }
 }
 
-function classifyStreamedError(error: Record<string, unknown>): ProviderErrorClassification {
+function classifyStreamedError(error: Record<string, unknown>, spec: ProviderProbeSpec): ProviderErrorClassification {
   const bodyText = JSON.stringify(error).slice(0, MAX_ERROR_BODY_BYTES);
   const explicitStatus =
     typeof error.status === 'number'
@@ -265,7 +268,7 @@ function classifyStreamedError(error: Record<string, unknown>): ProviderErrorCla
   const type = typeof error.type === 'string' ? error.type.toLowerCase() : '';
   const inferredStatus =
     explicitStatus ?? (type.includes('server') || type.includes('overload') ? 503 : 400);
-  return classifyProviderError({ status: inferredStatus, bodyText });
+  return classifyProbeError({ status: inferredStatus, bodyText }, spec);
 }
 
 /** 从 Error（fetch 抛出）提取网络层错误码。 */
@@ -290,11 +293,43 @@ function probeUpstreamOrigin(baseUrl: string): string {
 
 /** 进日志的摘要上限;分类器给出的 detail 已经过 redactSensitiveText,这里只再兜一层凭证头形态与长度。 */
 const PROBE_DETAIL_MAX_CHARS = 512;
-function sanitizeProbeDetail(detail: string | undefined): string | undefined {
+function redactProbeCredentialValues(text: string, spec: ProviderProbeSpec): string {
+  let safe = text;
+  // Upstreams can echo an opaque key without labeling it. Remove the exact
+  // credentials used by this probe before the detail reaches logs or Renderer.
+  const credentials = [spec.apiKey, ...Object.values(spec.headers ?? {})]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .flatMap((value) => [value, value.replace(/^Bearer\s+/i, '')])
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  for (const value of credentials) {
+    if (value.length >= 4) {
+      safe = safe.replaceAll(value, '<redacted>');
+    } else {
+      // A very short fixture/key can occur inside ordinary words (for example
+      // `k` in `socket`). Redact it only as a standalone value.
+      const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      safe = safe.replace(new RegExp(`(^|\\W)${escaped}(?=\\W|$)`, 'g'), '$1<redacted>');
+    }
+  }
+  return safe;
+}
+
+function classifyProbeError(input: ProviderErrorInput, spec: ProviderProbeSpec): ProviderErrorClassification {
+  const classified = classifyProviderError(input);
+  if (!input.bodyText) return classified;
+  const safeBody = redactProbeCredentialValues(input.bodyText, spec);
+  if (safeBody === input.bodyText) return classified;
+  // Secret removal must precede the classifier's 500-character detail limit,
+  // while the category still uses the original upstream wording.
+  return { ...classified, detail: classifyProviderError({ ...input, bodyText: safeBody }).detail };
+}
+
+function sanitizeProbeDetail(detail: string | undefined, spec: ProviderProbeSpec): string | undefined {
   if (!detail) return undefined;
-  return detail
-    .replace(/(authorization|x-api-key|x-goog-api-key)(["'\s:=]+)[^\s"',}]+/gi, '$1$2<redacted>')
-    .slice(0, PROBE_DETAIL_MAX_CHARS);
+  const safe = redactProbeCredentialValues(detail, spec)
+    .replace(/(authorization|x-api-key|x-goog-api-key)(["'\s:=]+)[^\s"',}]+/gi, '$1$2<redacted>');
+  return safe.slice(0, PROBE_DETAIL_MAX_CHARS);
 }
 
 /**
@@ -302,8 +337,11 @@ function sanitizeProbeDetail(detail: string | undefined): string | undefined {
  * 「未知错误,请查看日志」,而此前主进程一行都不写,日志里无迹可循。字段不含路径 / query / 凭证。
  */
 function logProbeFailure(spec: ProviderProbeSpec, result: ProviderTestResult): ProviderTestResult {
-  if (result.ok) return result;
-  const detail = sanitizeProbeDetail(result.detail);
+  const detail = sanitizeProbeDetail(result.detail, spec);
+  const annotated: ProviderTestResult = { ...result, modelId: spec.modelId };
+  if (detail) annotated.detail = detail;
+  else delete annotated.detail;
+  if (annotated.ok) return annotated;
   log.warn('provider connection probe failed', {
     agent: spec.agent,
     provider: spec.catalogPresetId ?? 'custom',
@@ -315,7 +353,7 @@ function logProbeFailure(spec: ProviderProbeSpec, result: ProviderTestResult): P
     latencyMs: result.latencyMs,
     detail,
   });
-  return detail === result.detail ? result : { ...result, detail };
+  return annotated;
 }
 
 /** 跑一次探测请求并分类结果。fetch 可注入（单测）。失败一律经 logProbeFailure 留痕。 */
@@ -372,8 +410,8 @@ async function runProviderProbeUnlogged(
       const detail = result.errorMessage ?? 'Native provider probe failed';
       const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
       const status = statusMatch ? Number(statusMatch[1] ?? statusMatch[2]) : undefined;
-      const cls = classifyProviderError({ status, bodyText: detail,
-        ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
+      const cls = classifyProbeError({ status, bodyText: detail,
+        ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) }, spec);
       return { ok: false, code: cls.code, status, latencyMs: Date.now() - start, detail: cls.detail };
     } catch (err) {
       const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
@@ -423,7 +461,7 @@ async function runProviderProbeUnlogged(
         try {
           const event: unknown = JSON.parse(firstPayload);
           if (isPlainObject(event) && isPlainObject(event.error)) {
-            const cls = classifyStreamedError(event.error);
+            const cls = classifyStreamedError(event.error, spec);
             return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail };
           }
         } catch {
@@ -452,7 +490,7 @@ async function runProviderProbeUnlogged(
   } catch {
     /* 读体失败按空体分类 */
   }
-  const cls = classifyProviderError({ status: res.status, bodyText });
+  const cls = classifyProbeError({ status: res.status, bodyText }, spec);
   return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail };
 }
 
@@ -468,11 +506,16 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   const routing = provider.routing[agent];
   if (!routing) throw new Error(`provider '${providerId}' has no runtime for '${agent}'`);
   if (routing.disabled) throw new Error(`provider '${providerId}' runtime '${agent}' is disabled`);
-  // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
-  // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
-  // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
-  const model = (provider.models[agent] ?? []).find((m) =>
-    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
+  // 探测发的是聊天请求。先跳过非聊天模型(#882),保留用户显式指定的逐模型路由,
+  // 再优先挑与 runtime 协议匹配的模型:同一列表常混有只服务另一种端点的模型,
+  // 挑错就会把可用配置探成 400(#4954)。没有匹配项时回退到第一个聊天模型。
+  const runtimeWire = routing.wireProtocol
+    ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'pi' ? 'openai-chat' : 'openai-responses');
+  const model = selectProtocolCompatibleProbeModel(
+    provider.models[agent] ?? [],
+    runtimeWire,
+    routing.upstream,
+    routing.requestPath,
   );
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
@@ -489,7 +532,8 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     );
   }
   const baseUrl = modelRouting.upstream;
-  const wireProtocol = modelRouting.wireProtocol;
+  // 默认协议有时不写进路由描述符。探测仍要带上实际选用的协议，避免回落成另一种端点。
+  const wireProtocol = modelRouting.wireProtocol ?? runtimeWire;
   const native = modelApi ? { api: modelApi, nativeModel: invocationModelRecord(model, baseUrl, modelApi) } : {};
   const catalogPresetId = model.catalogPresetId ?? routing.piCatalogProviderId;
   // Pi derives its inference path from wireProtocol and does not consume requestPath.

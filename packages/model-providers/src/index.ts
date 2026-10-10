@@ -333,3 +333,5 @@ export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
 
 export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
+export { selectProtocolCompatibleProbeModel } from "./probeModelSelection.js";
+export type { ProbeModelCandidate } from "./probeModelSelection.js";

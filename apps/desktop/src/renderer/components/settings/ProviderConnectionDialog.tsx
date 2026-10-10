@@ -63,7 +63,8 @@ import {
   canSendHydratedApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
-  firstProviderChatModel,
+  providerConnectionProbeFailureMessage,
+  providerConnectionProbeModel,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
   resolveProviderConnectionProbeRoute,
@@ -236,8 +237,31 @@ interface TestState {
   /** 失败分类码（providerError.<code> i18n 键）。 */
   code?: string;
   latencyMs?: number;
+  /** 本次探测的模型。 */
+  modelId?: string;
+  /** 上游 HTTP 状态码。 */
+  httpStatus?: number;
+  /** 脱敏后的上游响应摘要。 */
+  detail?: string;
 }
 const IDLE_TEST: TestState = { status: 'idle' };
+
+function ProbeFailureText({ failure }: { failure: TestState }) {
+  const { t } = useTranslation();
+  const message = t(`providerError.${failure.code ?? 'UNKNOWN'}`);
+  const copy = providerConnectionProbeFailureMessage({
+    code: failure.code,
+    modelId: failure.modelId,
+    status: failure.httpStatus,
+    detail: failure.detail,
+  });
+  const text = copy ? t(copy.key, { ...copy.values, message }) : message;
+  return (
+    <span className="min-w-0 max-w-full flex-[1_1_16rem] select-text break-words text-12 text-[var(--error-fg)]" title={copy?.title}>
+      {text}
+    </span>
+  );
+}
 
 function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
   return {
@@ -732,18 +756,23 @@ export function ProviderConnectionDialog({
           : initial.auth?.method === 'none'
             ? 'none'
             : 'apiKey';
+      const wireProtocol = rc.wireProtocol ?? defaultWireFor(agent);
+      const probeModel = providerConnectionProbeModel({
+        baseUrl: rc.baseUrl,
+        requestPath: agent === 'pi' ? '' : (rc.requestPath ?? ''),
+        wireProtocol,
+        models: rc.models,
+      });
       return {
         baseUrl: rc.baseUrl,
         requestPath: agent === 'pi' ? '' : (rc.requestPath ?? ''),
         modelsUrl: rc.modelsUrl ?? '',
-        wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
+        wireProtocol,
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
-        ...(agent === 'pi'
-          ? { modelPiApi: firstProviderChatModel(rc.models)?.piApi }
-          : {}),
-        modelRoute: firstProviderChatModel(rc.models)?.route,
-        modelApi: firstProviderChatModel(rc.models)?.api,
+        ...(agent === 'pi' ? { modelPiApi: probeModel?.piApi } : {}),
+        modelRoute: probeModel?.route,
+        modelApi: probeModel?.api,
         catalogPresetId: rc.catalogPresetId,
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
@@ -1194,18 +1223,17 @@ export function ProviderConnectionDialog({
     const rf = rt[agent];
     const probeFields = runtimeProbeFields(agent, rf);
     const defaultBaseUrl = rf.baseUrl.trim();
-    const firstModelConfig = firstProviderChatModel(rf.models);
-    const firstModel = firstModelConfig?.id.trim();
+    const probeRoute = resolveProviderConnectionProbeRoute(agent, probeFields, presets);
+    const probedModelId = probeRoute?.modelId;
     if (!matchesEndpointTemplate(agent, rf)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
     }
-    if (!defaultBaseUrl || !firstModel) {
+    if (!defaultBaseUrl || !providerConnectionProbeModel(probeFields)) {
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
     }
-    const probeRoute = resolveProviderConnectionProbeRoute(agent, probeFields, presets);
-    if (!probeRoute) {
+    if (!probeRoute || !probedModelId) {
       toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
       return;
     }
@@ -1249,7 +1277,7 @@ export function ProviderConnectionDialog({
               spec: {
                 agent,
                 baseUrl,
-                modelId: firstModel,
+                modelId: probedModelId,
                 authMethod: authMode,
                 wireProtocol: probeWireProtocol,
                 ...(probeRoute.api ? { api: probeRoute.api } : {}),
@@ -1271,7 +1299,13 @@ export function ProviderConnectionDialog({
         ...prev,
         [agent]: result.ok
           ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'fail', code: result.code ?? 'UNKNOWN' },
+          : {
+              status: 'fail',
+              code: result.code ?? 'UNKNOWN',
+              modelId: result.modelId ?? probedModelId,
+              httpStatus: result.status,
+              detail: result.detail,
+            },
       }));
     } catch (e) {
       if (
@@ -1282,7 +1316,7 @@ export function ProviderConnectionDialog({
       )
         return;
       const ipc = extractIpcError(e);
-      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
+      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN', modelId: probedModelId } }));
       if (ipc?.message) toast.error(ipc.message);
     }
   }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate]);
@@ -2713,9 +2747,7 @@ export function ProviderConnectionDialog({
                   </span>
                 )}
                 {test[activeTab].status === 'fail' && (
-                  <span className="text-12 text-[var(--error-fg)]">
-                    {t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
-                  </span>
+                  <ProbeFailureText failure={test[activeTab]} />
                 )}
               </div>
             )}

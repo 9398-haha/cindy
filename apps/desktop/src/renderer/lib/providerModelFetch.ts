@@ -5,6 +5,7 @@ import {
   isLoopbackProviderUrl,
   resolvePiModelRoute,
   providerWireProtocolForApi,
+  selectProtocolCompatibleProbeModel,
   type AgentKind,
   type PiModelApi,
   type ProviderModelRouteConfig,
@@ -41,36 +42,62 @@ export interface ProviderConnectionProbeRoute {
   baseUrl: string;
   wireProtocol: ProviderWireProtocol;
   requestPath?: string;
+  /** Chat model the probe will call. Absent when the form has no chat model. */
+  modelId?: string;
 }
 
-/** Resolve the first model's effective inference route using the same override order as runtime. */
-export function resolveProviderConnectionProbeRoute(
+type ProbeRouteFields = Pick<
+  ProviderConnectionTestSignatureFields,
+  'baseUrl' | 'requestPath' | 'wireProtocol' | 'models' | 'catalogPresetId'
+>;
+
+function modelsForProbe(
   agent: ProviderProbeAgent,
-  fields: Pick<
-    ProviderConnectionTestSignatureFields,
-    'baseUrl' | 'requestPath' | 'wireProtocol' | 'models' | 'catalogPresetId'
-  >,
-  presets: readonly ProviderPreset[] = [],
-): ProviderConnectionProbeRoute | null {
-  const projectedModels = fields.catalogPresetId ? buildUserProvider({
+  fields: ProbeRouteFields,
+  presets: readonly ProviderPreset[],
+) {
+  return fields.catalogPresetId ? buildUserProvider({
     id: 'connection-probe', name: 'Connection', runtimes: { [agent]: {
       baseUrl: fields.baseUrl, wireProtocol: fields.wireProtocol,
       requestPath: fields.requestPath || undefined, catalogPresetId: fields.catalogPresetId,
       models: fields.models.map(model => ({ ...model, name: model.id })),
     } },
-  }, { presets }).models[agent] : undefined;
-  const firstModel = firstProviderChatModel(projectedModels ?? fields.models);
+  }, { presets }).models[agent] : fields.models;
+}
+
+/** Keep explicit model routes; otherwise prefer a chat model matching the connection. */
+export function providerConnectionProbeModel<T extends ProviderConnectionTestSignatureFields['models'][number]>(
+  fields: Pick<ProviderConnectionTestSignatureFields, 'baseUrl' | 'wireProtocol' | 'models'> &
+    Partial<Pick<ProviderConnectionTestSignatureFields, 'requestPath'>>,
+  models: readonly T[] = fields.models as readonly T[],
+): T | undefined {
+  return selectProtocolCompatibleProbeModel(models, fields.wireProtocol, fields.baseUrl, fields.requestPath);
+}
+
+/** Resolve the probed model's effective inference route using the same override order as runtime. */
+export function resolveProviderConnectionProbeRoute(
+  agent: ProviderProbeAgent,
+  fields: ProbeRouteFields,
+  presets: readonly ProviderPreset[] = [],
+): ProviderConnectionProbeRoute | null {
+  const projectedModels = modelsForProbe(agent, fields, presets);
+  const firstModel = (projectedModels
+    ? selectProtocolCompatibleProbeModel(projectedModels, fields.wireProtocol, fields.baseUrl, fields.requestPath)
+    : undefined)
+    ?? selectProtocolCompatibleProbeModel(fields.models, fields.wireProtocol, fields.baseUrl, fields.requestPath);
+  const modelId = firstModel?.id.trim() || undefined;
   const api = firstModel?.api ?? firstModel?.piApi;
   if (api && ['google-generative-ai', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {
     return { api, baseUrl: firstModel?.route?.baseUrl ?? fields.baseUrl,
-      wireProtocol: providerWireProtocolForApi(api) ?? fields.wireProtocol };
+      wireProtocol: providerWireProtocolForApi(api) ?? fields.wireProtocol,
+      ...(modelId ? { modelId } : {}) };
   }
   if (agent === 'pi') {
     const route = resolvePiModelRoute(firstModel, {
       baseUrl: fields.baseUrl,
       wireProtocol: fields.wireProtocol,
     });
-    return route ? { baseUrl: route.baseUrl.trim(), wireProtocol: route.wireProtocol } : null;
+    return route ? { baseUrl: route.baseUrl.trim(), wireProtocol: route.wireProtocol, ...(modelId ? { modelId } : {}) } : null;
   }
 
   const modelRoute = firstModel?.route;
@@ -79,7 +106,45 @@ export function resolveProviderConnectionProbeRoute(
     baseUrl: (modelRoute?.baseUrl ?? fields.baseUrl).trim(),
     wireProtocol: modelRoute?.wireProtocol ?? fields.wireProtocol,
     ...(requestPath ? { requestPath } : {}),
+    ...(modelId ? { modelId } : {}),
   };
+}
+
+const PROBE_FAILURE_DETAIL_MAX = 180;
+
+export interface ProviderConnectionProbeFailure {
+  code?: string;
+  modelId?: string;
+  status?: number;
+  detail?: string;
+}
+
+function collapseProbeDetail(detail: string | undefined): string | undefined {
+  const text = detail?.replace(/\s+/g, ' ').trim();
+  return text || undefined;
+}
+
+/** i18n key for a failed connection test. Null keeps the classified providerError sentence. */
+export function providerConnectionProbeFailureMessage(
+  failure: ProviderConnectionProbeFailure,
+): { key: string; values: Record<string, string | number>; title?: string } | null {
+  const model = failure.modelId?.trim();
+  if (!model) return null;
+  const full = collapseProbeDetail(failure.detail);
+  const detail = full && full.length > PROBE_FAILURE_DETAIL_MAX
+    ? `${full.slice(0, PROBE_FAILURE_DETAIL_MAX - 1)}…`
+    : full;
+  if (failure.status !== undefined && detail) {
+    return {
+      key: 'settings.providers.custom.test.failModelStatusDetail',
+      values: { model, status: failure.status, detail },
+      ...(full !== detail ? { title: full } : {}),
+    };
+  }
+  if (failure.status !== undefined) {
+    return { key: 'settings.providers.custom.test.failModelStatus', values: { model, status: failure.status } };
+  }
+  return { key: 'settings.providers.custom.test.failModel', values: { model } };
 }
 
 export function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
@@ -264,7 +329,7 @@ export function connectionTestCanUseSaved(
   if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
   if (form.wireProtocol !== baseline.wireProtocol) return false;
   if ((form.catalogPresetId ?? null) !== (baseline.catalogPresetId ?? null)) return false;
-  const firstModel = firstProviderChatModel(form.models);
+  const firstModel = providerConnectionProbeModel(form);
   if ((firstModel?.piApi ?? null) !== (baseline.modelPiApi ?? null)) return false;
   if ((firstModel?.api ?? null) !== (baseline.modelApi ?? null)) return false;
   if (
@@ -284,12 +349,12 @@ export function providerConnectionTestRequestSignature(
   return JSON.stringify({
     request: providerModelFetchRequestSignature(fields, authMode),
     wireProtocol: fields.wireProtocol,
-    modelId: firstProviderChatModel(fields.models)?.id.trim() ?? null,
-    modelPiApi: firstProviderChatModel(fields.models)?.piApi ?? null,
-    modelApi: firstProviderChatModel(fields.models)?.api ?? null,
+    modelId: providerConnectionProbeModel(fields)?.id.trim() ?? null,
+    modelPiApi: providerConnectionProbeModel(fields)?.piApi ?? null,
+    modelApi: providerConnectionProbeModel(fields)?.api ?? null,
     catalogPresetId: fields.catalogPresetId ?? null,
     modelRoute: normalizedModelRoute(
-      firstProviderChatModel(fields.models)?.route,
+      providerConnectionProbeModel(fields)?.route,
     ),
   });
 }

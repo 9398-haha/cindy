@@ -5547,6 +5547,7 @@ interface ElectronAPI {
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       latencyMs: number;
+      modelId?: string;
       detail?: string;
     }>;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */

@@ -47,7 +47,7 @@ export interface ProviderErrorClassification {
   code: ProviderErrorCode;
   /** 是否值得原样重试（限流 / 网络抖动 / 上游 5xx）。 */
   retryable: boolean;
-  /** 上游原始信息摘要（日志 / 详情展开用；UI 主文案走 i18n，不直接展示 detail）。 */
+  /** 上游原始信息摘要（已脱敏）。日志与测试连接失败文案使用同一段。 */
   detail?: string;
 }
 
