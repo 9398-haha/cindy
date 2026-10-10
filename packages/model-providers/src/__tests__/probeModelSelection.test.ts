@@ -26,13 +26,26 @@ describe('selectProtocolCompatibleProbeModel', () => {
     expect(selectProtocolCompatibleProbeModel(mixed, 'openai-chat', 'https://relay.example/v1')?.id).toBe('grok-4.6');
   });
 
-  it('lets an explicit route override the catalog and still skips non-chat models', () => {
+  it('preserves an explicit model route and still skips non-chat models', () => {
     const models = [
       { id: 'text-embedding-3-large', mode: 'embedding' },
       { id: 'glm-5.2', route: { baseUrl: OPENCODE_GO, wireProtocol: 'openai-responses' as const } },
       { id: 'deepseek-v4-flash' },
     ];
-    expect(selectProtocolCompatibleProbeModel(models, 'openai-chat', OPENCODE_GO)?.id).toBe('deepseek-v4-flash');
+    expect(selectProtocolCompatibleProbeModel(models, 'openai-chat', OPENCODE_GO)?.id).toBe('glm-5.2');
+  });
+
+  it('does not treat a catalog-projected route as a user override', () => {
+    const models = [
+      { id: 'grok-4.6', route: { baseUrl: OPENCODE_GO, wireProtocol: 'openai-responses' as const }, userModelConfig: {} },
+      { id: 'glm-5.2' },
+    ];
+    expect(selectProtocolCompatibleProbeModel(models, 'openai-chat', OPENCODE_GO)?.id).toBe('glm-5.2');
+  });
+
+  it('does not use standard endpoint catalog evidence for a custom request path', () => {
+    expect(selectProtocolCompatibleProbeModel(mixed, 'openai-chat', OPENCODE_GO, '/custom/chat')?.id)
+      .toBe('grok-4.6');
   });
 
   it('falls back to the first chat model when every known protocol mismatches', () => {

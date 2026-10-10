@@ -13,21 +13,28 @@ export interface ProbeModelCandidate {
   api?: PiModelApi | null;
   piApi?: PiModelApi | null;
   route?: { baseUrl?: string; wireProtocol?: ProviderWireProtocol; requestPath?: string } | null;
+  /** Original saved model fields, before catalog route projection. */
+  userModelConfig?: {
+    api?: PiModelApi | null;
+    piApi?: PiModelApi | null;
+    route?: { baseUrl?: string; wireProtocol?: ProviderWireProtocol; requestPath?: string } | null;
+  } | null;
   discoveredMetadata?: { mode?: string } | null;
 }
 
 /**
  * Pick the chat model a connection test should call.
  *
- * Prefer a model whose protocol matches the connection. Evidence is only an
- * explicit route/API on the model, or one catalog row at this exact endpoint
- * and model id. A custom host never inherits another supplier's model list,
- * and an unknown model stays eligible ahead of a known mismatch.
+ * Preserve explicitly configured model transports. Otherwise prefer a model
+ * whose catalog protocol matches the connection at this exact endpoint and id.
+ * Custom hosts and request paths never borrow standard endpoint evidence, and
+ * an unknown model stays eligible ahead of a known mismatch.
  */
 export function selectProtocolCompatibleProbeModel<T extends ProbeModelCandidate>(
   models: readonly T[],
   wireProtocol: ProviderWireProtocol,
   baseUrl: string,
+  requestPath?: string,
 ): T | undefined {
   const chat = models.filter((model) => {
     const id = model.id.trim();
@@ -41,7 +48,7 @@ export function selectProtocolCompatibleProbeModel<T extends ProbeModelCandidate
       { userProvider: true },
     );
   });
-  const ranked = chat.map((model) => ({ model, rank: probeProtocolRank(model, wireProtocol, baseUrl) }));
+  const ranked = chat.map((model) => ({ model, rank: probeProtocolRank(model, wireProtocol, baseUrl, requestPath) }));
   ranked.sort((a, b) => a.rank - b.rank);
   return ranked[0]?.model;
 }
@@ -50,20 +57,18 @@ function probeProtocolRank(
   model: ProbeModelCandidate,
   wireProtocol: ProviderWireProtocol,
   baseUrl: string,
+  requestPath?: string,
 ): number {
-  const known = knownProbeWire(model, baseUrl);
+  // Preserve an explicitly configured model transport. Catalog projection can
+  // also add a route/API, but that remains catalog evidence rather than a user
+  // choice and should still be ranked against the runtime protocol.
+  const configured = model.userModelConfig ?? model;
+  if (configured.route?.wireProtocol || configured.api || configured.piApi) return 0;
+  // Catalog evidence describes the standard endpoint, not a custom request path.
+  if (configured.route?.requestPath || requestPath?.trim()) return 1;
+  const known = catalogProbeWire(model.id.trim(), configured.route?.baseUrl ?? baseUrl);
   if (known === undefined) return 1;
   return known === wireProtocol ? 0 : 2;
-}
-
-function knownProbeWire(
-  model: ProbeModelCandidate,
-  baseUrl: string,
-): ProviderWireProtocol | typeof UNMAPPED_PROBE_WIRE | undefined {
-  if (model.route?.wireProtocol) return model.route.wireProtocol;
-  const explicit = model.api ?? model.piApi;
-  if (explicit) return providerWireProtocolForApi(explicit) ?? UNMAPPED_PROBE_WIRE;
-  return catalogProbeWire(model.id.trim(), baseUrl);
 }
 
 /**

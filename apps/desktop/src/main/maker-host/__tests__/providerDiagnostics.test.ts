@@ -392,6 +392,43 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     expect(serialized).not.toContain('sk-live-abcdef123456');
   });
 
+  it('redacts opaque probe credentials even when the upstream echoes them without labels', async () => {
+    const apiKey = 'opaque-credential-value';
+    const customHeader = 'private-header-value';
+    const result = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://relay.example/v1', modelId: 'm', apiKey,
+        headers: { 'X-Custom-Auth': customHeader }, wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, JSON.stringify({ error: { message: `echoed ${apiKey} and ${customHeader}` } })),
+    );
+    expect(result.detail).toContain('<redacted>');
+    expect(result.detail).not.toContain(apiKey);
+    expect(result.detail).not.toContain(customHeader);
+    const logged = JSON.stringify(probeLog.warn.mock.calls[0][1]);
+    expect(logged).not.toContain(apiKey);
+    expect(logged).not.toContain(customHeader);
+  });
+
+  it('redacts an opaque credential before the classifier truncates the detail', async () => {
+    const apiKey = 'opaque-credential-spanning-the-detail-limit';
+    const result = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://relay.example/v1', modelId: 'm', apiKey,
+        wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, `${'a'.repeat(485)}${apiKey}`),
+    );
+    expect(result.detail).not.toContain(apiKey.slice(0, 15));
+    expect(JSON.stringify(probeLog.warn.mock.calls[0][1])).not.toContain(apiKey.slice(0, 15));
+  });
+
+  it('keeps the error category when a credential overlaps its matching words', async () => {
+    const result = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://relay.example/v1', modelId: 'm', apiKey: 'token',
+        wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, 'invalid token'),
+    );
+    expect(result.code).toBe('AUTH_INVALID');
+    expect(result.detail).not.toContain('token');
+  });
+
   it('拿到 SSE 响应头后读首帧中断:异常照常抛出,但主进程已留痕(#4963 review)', async () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) { controller.error(new Error('socket hang up')); },
@@ -777,6 +814,23 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(resolveSavedProbeSpec('oc-go', 'claude-code')).toMatchObject({
       modelId: 'qwen3.6-plus',
       wireProtocol: 'anthropic-messages',
+    });
+  });
+
+  it('keeps a user-configured model route when it differs from the runtime default', () => {
+    setCustomProviders([buildUserProvider({
+      id: 'explicit-route', name: 'Explicit route', runtimes: { codex: {
+        baseUrl: 'https://opencode.ai/zen/go/v1', wireProtocol: 'openai-chat', models: [
+          { id: 'grok-4.6', name: 'Grok', route: {
+            baseUrl: 'https://opencode.ai/zen/go/v1', wireProtocol: 'openai-responses',
+          } },
+          { id: 'glm-5.2', name: 'GLM' },
+        ],
+      } },
+    })]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('explicit-route', 'codex')).toMatchObject({
+      modelId: 'grok-4.6', wireProtocol: 'openai-responses',
     });
   });
 

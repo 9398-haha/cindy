@@ -504,6 +504,24 @@ it('prefers a protocol-compatible model over the first chat model (#4954)', () =
   })?.modelId).toBe('grok-4.6');
 });
 
+it('probes the first model when it has an explicit alternate route or the form uses a custom path', () => {
+  const input = {
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+    requestPath: '',
+    wireProtocol: 'openai-chat' as const,
+    models: [
+      { id: 'grok-4.6', route: { baseUrl: 'https://opencode.ai/zen/go/v1', wireProtocol: 'openai-responses' as const } },
+      { id: 'glm-5.2' },
+    ],
+  };
+  expect(resolveProviderConnectionProbeRoute('codex', input)).toMatchObject({
+    modelId: 'grok-4.6', wireProtocol: 'openai-responses',
+  });
+  expect(resolveProviderConnectionProbeRoute('codex', {
+    ...input, models: [{ id: 'grok-4.6' }, { id: 'glm-5.2' }], requestPath: '/custom/chat',
+  })?.modelId).toBe('grok-4.6');
+});
+
 it('shows the probed model, HTTP status and upstream summary', () => {
   const failure = providerConnectionProbeFailureMessage({
     code: 'UNKNOWN',

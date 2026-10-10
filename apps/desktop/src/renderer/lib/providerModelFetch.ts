@@ -65,12 +65,13 @@ function modelsForProbe(
   }, { presets }).models[agent] : fields.models;
 }
 
-/** Chat model whose protocol matches this connection, else the first chat model. */
+/** Keep explicit model routes; otherwise prefer a chat model matching the connection. */
 export function providerConnectionProbeModel<T extends ProviderConnectionTestSignatureFields['models'][number]>(
-  fields: Pick<ProviderConnectionTestSignatureFields, 'baseUrl' | 'wireProtocol' | 'models'>,
+  fields: Pick<ProviderConnectionTestSignatureFields, 'baseUrl' | 'wireProtocol' | 'models'> &
+    Partial<Pick<ProviderConnectionTestSignatureFields, 'requestPath'>>,
   models: readonly T[] = fields.models as readonly T[],
 ): T | undefined {
-  return selectProtocolCompatibleProbeModel(models, fields.wireProtocol, fields.baseUrl);
+  return selectProtocolCompatibleProbeModel(models, fields.wireProtocol, fields.baseUrl, fields.requestPath);
 }
 
 /** Resolve the probed model's effective inference route using the same override order as runtime. */
@@ -81,9 +82,9 @@ export function resolveProviderConnectionProbeRoute(
 ): ProviderConnectionProbeRoute | null {
   const projectedModels = modelsForProbe(agent, fields, presets);
   const firstModel = (projectedModels
-    ? selectProtocolCompatibleProbeModel(projectedModels, fields.wireProtocol, fields.baseUrl)
+    ? selectProtocolCompatibleProbeModel(projectedModels, fields.wireProtocol, fields.baseUrl, fields.requestPath)
     : undefined)
-    ?? selectProtocolCompatibleProbeModel(fields.models, fields.wireProtocol, fields.baseUrl);
+    ?? selectProtocolCompatibleProbeModel(fields.models, fields.wireProtocol, fields.baseUrl, fields.requestPath);
   const modelId = firstModel?.id.trim() || undefined;
   const api = firstModel?.api ?? firstModel?.piApi;
   if (api && ['google-generative-ai', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {

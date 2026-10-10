@@ -759,6 +759,7 @@ export function ProviderConnectionDialog({
       const wireProtocol = rc.wireProtocol ?? defaultWireFor(agent);
       const probeModel = providerConnectionProbeModel({
         baseUrl: rc.baseUrl,
+        requestPath: agent === 'pi' ? '' : (rc.requestPath ?? ''),
         wireProtocol,
         models: rc.models,
       });
