@@ -1,4 +1,8 @@
 import { refreshLocalCapabilities } from '@/hooks/useAgentCapabilities';
+import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
+import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
+import { CodexResetCredits } from '../status/CodexResetCredits';
+import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 /**
  * ProvidersSection —— 设置 → 模型供应商页(2026-07 重构:双栏管理)。
  *
@@ -685,6 +689,9 @@ function DetailHeader({
         }
       : undefined);
   const subscription = useProviderSubscriptionCard(provider);
+  const resetEnabled = Boolean(provider && providerWeeklyQuotaSource({ ...provider, suspended: false }) === 'codex');
+  const { snapshot: resetSnapshot, refresh: refreshResets } = useCodexRateLimits(resetEnabled, provider?.id ?? 'openai');
+  const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, provider?.id ?? 'openai');
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const hasDetail = Boolean(detail);
   useLayoutEffect(() => {
@@ -890,7 +897,11 @@ function DetailHeader({
                       ? () => void window.electronAPI.openExternal('https://grok.com')
                       : undefined
                 }
-              />
+              >
+                {resetEnabled ? (
+                  <CodexResetCredits key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
+                ) : null}
+              </QuotaHoverCard>
             </div>
           ))}
         {children}
