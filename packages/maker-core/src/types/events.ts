@@ -10,6 +10,7 @@
  */
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import {
   parseToolLoopErrorDetails,
@@ -86,7 +87,7 @@ export interface AgentTaskUsage {
 }
 
 export interface AgentTaskUpdateEventData {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** Provider task id when available; falls back to the parent tool call id. */
   taskId: string;
   /** The tool_use id that launched or controls this subagent task. */
@@ -160,7 +161,7 @@ export interface AgentEvent {
   type: AgentEventType;
   data: unknown;
   /** 事件来源标识，便于调试 */
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /**
    * Events that finish work owned by a completed turn can still arrive after a
    * later turn has started (for example, a V1 collab child). These are still
@@ -317,6 +318,8 @@ export type InteractionRequest =
   | (InteractionRequestBase & {
       kind: 'ask_user_question';
       questions: AskUserQuestionItem[];
+      /** Optional question: the provider keeps running; absence means a blocking question. */
+      delivery?: 'async';
     })
   | (InteractionRequestBase & {
       kind: 'plan_review';
@@ -416,6 +419,8 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
+  /** Host-measured live tok/s (Pi extension algorithm). Display only. */
+  tokenSpeed?: TokenSpeedSnapshot;
   /**
    * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
    * 只由 Claude Code / Pi 的 AutoCompactController 锁存。

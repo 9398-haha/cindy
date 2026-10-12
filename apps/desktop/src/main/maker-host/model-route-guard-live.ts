@@ -13,9 +13,7 @@
 
 import {
   getModel,
-  connectedProvidersForAgent,
   effectiveSourceIdForModel,
-  isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
   modelSupportsFastMode,
@@ -26,6 +24,8 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
+import { resolveNewTaskDefaultRoute } from '../../shared/draftModelCalibration.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
 import {
@@ -33,6 +33,8 @@ import {
   isXdGatewayPaymentRequiredRoute,
 } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
+import { withCursorDiscoveredModels } from './cursor-model-catalog.js';
+import { getNewTaskDraftSelection } from './newMakerDefaultsCache.js';
 import {
   isRegistryTombstoneForConsumer,
   MODEL_PLANE_POLICIES,
@@ -52,9 +54,14 @@ import {
  * hidden media model and make checkModelRoute treat it as catalog-unknown.
  */
 async function listRouteGuardProviders(
-  catalog = getActiveCatalog(),
+  catalog = routeGuardCatalog(),
 ): Promise<ProviderView[]> {
   return getDesktopProviderService().listProviders({ catalog });
+}
+
+/** Native membership plus the admission-only alias required by older saved routes. */
+function routeGuardCatalog() {
+  return withCursorDiscoveredModels(getActiveCatalog(), { includeLegacyDefault: true });
 }
 
 function tombstoneGuardOptions(
@@ -74,9 +81,23 @@ function tombstoneGuardOptions(
 }
 
 /**
+ * Headless defaults are trusted main-process operations, not untrusted status projections.
+ * Allow the provider service to claim an existing native subscription before materializing
+ * the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
+ */
+function listTrustedDefaultRouteProviders(): Promise<ProviderView[]> {
+  return getDesktopProviderService().listProviders({
+    allowSideEffects: true,
+    waitForDiscovery: true,
+    getCatalog: routeGuardCatalog,
+  });
+}
+
+/**
  * Headless 调度的实时来源快照：
  * - 给定 modelId 时按模型选择器同一 rail 物化实际 provider；
- * - 未给 modelId 时为 Pi 取首个可聊天模型，并把 providerId/model 成对返回。
+ * - 未给 modelId 时按新建任务口径(resolveNewTaskDefaultRoute)挑默认模型，并把
+ *   providerId/model 成对返回；一个可用来源都没有 → null。
  * 这样 spawn 凭证、proxy endpoint 与会话持久化不会各自重新猜一次默认来源。
  */
 export async function resolveDefaultScheduleRoute(
@@ -84,14 +105,7 @@ export async function resolveDefaultScheduleRoute(
   preferredProviderId?: string | null,
   modelId?: string,
 ): Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null> {
-  // Scheduler fire is a trusted main-process operation, not an untrusted status projection.
-  // Allow the provider service to claim an existing native subscription before materializing
-  // the route; otherwise legacy/local owners can look disconnected until another UI read heals it.
-  const views = await getDesktopProviderService().listProviders({
-    allowSideEffects: true,
-    waitForDiscovery: true,
-    getCatalog: getActiveCatalog,
-  });
+  const views = await listTrustedDefaultRouteProviders();
   const preferredModelId = modelId?.trim();
   if (preferredModelId) {
     const providerId = effectiveSourceIdForModel(
@@ -113,22 +127,33 @@ export async function resolveDefaultScheduleRoute(
     }
     return null;
   }
-  const connected = connectedProvidersForAgent(views, agent);
-  const candidates = preferredProviderId
-    ? connected.filter((provider) => provider.id === preferredProviderId)
-    : connected;
-  for (const provider of candidates) {
-    for (const model of provider.models[agent] ?? []) {
-      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) continue;
-      return { model: model.id, providerId: provider.id };
-    }
-  }
-  return null;
+  return resolveNewTaskDefaultRoute({
+    providers: views,
+    agent,
+    draft: getNewTaskDraftSelection(activeOwnerScopeKey(), agent),
+    requiredProviderId: preferredProviderId,
+  });
+}
+
+/**
+ * 没指定模型的无人值守入口(/learn、IM 新建任务等)按新建任务口径解析 (模型, 来源);
+ * 一个可用来源都没有 → null,调用方明确失败。
+ */
+export async function resolveNewTaskDefaultModelRoute(
+  agent: AgentKind,
+  requiredProviderId?: string | null,
+): Promise<{ model: string; providerId: string } | null> {
+  return resolveNewTaskDefaultRoute({
+    providers: await listTrustedDefaultRouteProviders(),
+    agent,
+    draft: getNewTaskDraftSelection(activeOwnerScopeKey(), agent),
+    requiredProviderId,
+  });
 }
 
 /** 该 agent 的静态原生默认来源偏好(nativeDefaultSourceId 的无 rail 近似)。 */
 function staticNativeDefaults(agent: AgentKind): readonly string[] {
-  return agent === 'codex' ? ['openai', 'xd'] : ['xd'];
+  return agent === 'cursor' ? ['cursor'] : agent === 'codex' ? ['openai', 'xd'] : ['xd'];
 }
 
 /**
@@ -176,7 +201,7 @@ export async function verdictForModelRoute(
   model: string,
   providerId: string | null,
 ): Promise<ModelRouteVerdict> {
-  const catalog = getActiveCatalog();
+  const catalog = routeGuardCatalog();
   const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
@@ -228,7 +253,7 @@ export async function resolveLenientSessionRoute(
   /** 仅 desiredFastMode=true 且路由被本解析改动时给出:落地拷贝不支持 Fast ⇒ false。 */
   fastMode?: boolean;
 }> {
-  const catalog = getActiveCatalog();
+  const catalog = routeGuardCatalog();
   const guardOptions = tombstoneGuardOptions(catalog);
   let views: ProviderView[];
   try {
@@ -283,7 +308,7 @@ export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
 ): Promise<ScheduledModelSelection> {
   const providers = await getDesktopProviderService().listProviders({
-    allowSideEffects: false, catalog: getActiveCatalog(),
+    allowSideEffects: false, catalog: routeGuardCatalog(),
   });
   return resolveScheduledModelSelection(selection, providers);
 }
@@ -330,6 +355,7 @@ const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
+  cursor: 'cursor-default',
 };
 
 /**

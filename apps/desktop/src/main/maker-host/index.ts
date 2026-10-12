@@ -1,3 +1,6 @@
+import { discoverCursorAgentBinarySync } from './cursor-binary-discovery.js';
+import { createDesktopCursorAuthAdapter } from './cursor-auth-adapter.js';
+import { setCursorDiscoveredModels, clearCursorDiscoveredModels, hasCursorDiscoveredModels } from './cursor-model-catalog.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
@@ -36,7 +39,6 @@ import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import fsSync from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -44,6 +46,7 @@ import {
   isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
+  CursorAgent,
   configureDefaultImageResizer,
   type AgentKind,
   type InteractionRequest,
@@ -85,7 +88,9 @@ import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
-import { requestHostInteraction } from '../maker-ipc/interactionRouter.js';
+import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
+import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
+import { isAppUpdateOwnerTurn } from '../agent-app-update/callerAuthority.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
@@ -112,13 +117,18 @@ import { prepareBotWorkspaceRuntime } from '../maker-ipc/botWorkspaceRuntime.js'
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
+  isActiveInputOwnerAuthored,
   isSessionInTurn,
   wireSessionToIpc,
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { readProviderGroupBinding } from '../provider-group/bindings.js';
+import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
+import { t } from '../i18n.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
@@ -138,15 +148,10 @@ import {
   writeCodexHistoryHasProductPrompt,
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { outboundFetch } from './outbound-fetch.js';
+import { guardedOutboundFetch, outboundFetch } from './outbound-fetch.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
-import {
-  getVisionBridgeController,
-  setVisionBridgeController,
-} from '../vision-bridge/vision-bridge-controller.js';
-import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
-import * as blobStore from '../cindy-media/blobStore.js';
+import { setVisionBridgeController } from '../vision-bridge/vision-bridge-controller.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
 import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
@@ -390,6 +395,8 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+/** Upper bound for letting the confirming turn finish its reply before an Agent-approved restart. */
+const AGENT_APP_UPDATE_TURN_DRAIN_MS = 2 * 60 * 1000;
 /** Prepared Bot runtime records waiting for the matching Maker startup result. */
 const pendingBotRuntimeSnapshots = new Map<string, BotProfileRuntimeSnapshot>();
 // Maker copies start options for every runtime, including rebuilds of one task.
@@ -398,6 +405,14 @@ let botRuntimeResourcePreflight:
   | ((opts: MakerSessionCreateOpts) => Promise<BotProfileRuntimeSnapshot | null>)
   | null = null;
 let _registerPiAgent: (() => boolean) | null = null;
+let _refreshCursorModels: ((force?: boolean) => Promise<void>) | null = null;
+/** Bounded native model discovery; reusable after the user signs in outside Cindy. */
+export async function refreshCursorModels(force = false): Promise<void> {
+  await _refreshCursorModels?.(force);
+  if (force && !hasCursorDiscoveredModels()) {
+    throw new Error('Cursor CLI is unavailable or signed out. Install the official Cursor CLI, run agent login, and retry. Restart Cindy after installing the CLI.');
+  }
+}
 /** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
 let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
 
@@ -947,7 +962,7 @@ export function getMaker(): Maker {
         if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))
           return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
         const agentKind = context.agentKind;
-        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'cursor')
           return { ok: false, errorCode: 'UNKNOWN_AGENT' };
         const catalog = await listBotRuntimeMcpServers({ agentKind, remoteHostId: context.remoteHostId });
         const providers = (_mcpProviders[agentKind] ?? []).map((provider) => ({
@@ -965,12 +980,14 @@ export function getMaker(): Maker {
               && entry?.source === 'builtin' && !REMOTE_ALLOWED_SERVER_NAMES.has(provider.name);
             return entry?.available === false || remoteBridgeMissing
               ? 'transport-unavailable-for-current-runtime' : null;
-          });
+          },
+          // The caller's own engine is the only evidence of what this task can call.
+          (server) => session.readMcpServerTools(server));
         if (_maker?.getSession(session.id) !== session) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
         return { ...result, permission: session.stablePermissionModeState,
           hostCapabilities: Object.fromEntries(Object.entries(session.capabilities)
             .filter(([, value]) => value && typeof value === 'object' && 'supported' in value)),
-          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。Cindy 应用安装更新和重启须通过内置更新界面；check_app_update 仅检查更新。' };
+          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。安装 Cindy 更新须调用 install_app_update，由宿主向用户确认后经内置更新器完成；check_app_update 仅检查更新。' };
       },
       botCapabilities: createDesktopBotCapabilityService(),
       createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
@@ -1011,6 +1028,16 @@ export function getMaker(): Maker {
         return Boolean(session && session.instanceId === sessionInstanceId
           && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
       },
+      askUserQuestionAsync: (
+        context: import('@cindy/mcps').LiziMcpSessionContext,
+        questions: Parameters<import('@cindy/maker-core').Session['askUserQuestionAsync']>[0],
+      ) => {
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        if (!session || session.instanceId !== context.sessionInstanceId || isAppSessionBoundaryPending()) {
+          throw new Error('Question caller is no longer active');
+        }
+        return session.askUserQuestionAsync(questions);
+      },
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
@@ -1042,6 +1069,37 @@ export function getMaker(): Maker {
           requestHostInteraction(session, request, bounded));
       },
     };
+    // Agent app update: live-session facts for owner-only confirmation cards.
+    const liveLocalSession = (sessionId: string, sessionInstanceId: string) => {
+      const session = _maker?.getSession(sessionId);
+      return session && session.instanceId === sessionInstanceId && session.getStatus() === 'active'
+        && !session.remoteHostId ? session : null;
+    };
+    setAgentAppUpdateSessionHost({
+      resolveCaller: ({ sessionId, sessionInstanceId }) => {
+        const session = liveLocalSession(sessionId, sessionInstanceId);
+        if (!session || isAppSessionBoundaryPending()) return 'unavailable';
+        return isAppUpdateOwnerTurn({
+          turnRunning: session.isTurnRunning(),
+          turnOrigin: session.getCurrentTurnOrigin(),
+          route: getActiveInteractionRoute(session),
+          ownerAuthoredInput: () => isActiveInputOwnerAuthored(sessionId),
+        }) ? 'owner' : 'not-owner';
+      },
+      countOtherRunningTasks: (callerSessionId) => (_maker?.listActiveSessions() ?? [])
+        .filter((session) => session.id !== callerSessionId
+          && (isSessionInTurn(session.id) || session.isTurnRunning())).length,
+      requestHostPermission: makerMemoryProviderDeps.requestHostPermission,
+      // Let the confirming turn deliver its reply first; never block the restart longer than the bound.
+      waitForCallerTurnToEnd: async ({ sessionId, sessionInstanceId }) => {
+        const deadline = Date.now() + AGENT_APP_UPDATE_TURN_DRAIN_MS;
+        while (Date.now() < deadline) {
+          const session = liveLocalSession(sessionId, sessionInstanceId);
+          if (!session || (!session.isTurnRunning() && !isSessionInTurn(sessionId))) return;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      },
+    });
     const orcaTeamStoreAdapter = createDesktopOrcaTeamStoreAdapter({
       getWorkerLink,
       updateWorkerStatus,
@@ -2406,7 +2464,6 @@ export function getMaker(): Maker {
       getRemotePiTransport: async (
         remoteHostId,
         {
-          binaryPath: _localBinaryPath,
           remoteBinaryPath: providedRemoteBinaryPath,
           args,
           cwd,
@@ -2578,6 +2635,30 @@ export function getMaker(): Maker {
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = piAgent;
 
+    // Cursor is optional and uses the user's native CLI/account. Discovery never sends a prompt.
+    const cursorBinary = discoverCursorAgentBinarySync();
+    const cursorAgent = cursorBinary.installed ? new CursorAgent({
+      binaryPath: cursorBinary.binaryPath,
+      auth: createDesktopCursorAuthAdapter(cursorBinary.binaryPath),
+      logger: desktopMakerLogger,
+      runtimeConfig: {
+        get makerMemoryEnabled() { return makerMemoryManager.isEnabled(); },
+        userDataPath: app.getPath('userData'),
+      },
+      makerMemory: makerMemoryManager,
+      mcpProviders: piMcpProviders,
+      preparePiExtraSpawnConfig: (providers, ctx) => {
+        if (!ctx?.workingDir) throw new Error('Cursor MCP requires a task working directory');
+        return getPiExtraSpawnConfig(providers, desktopMakerLogger, { ...ctx, workingDir: ctx.workingDir, agentKind: 'cursor' });
+      },
+      registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
+      reviewAutoPermissionAction,
+    }) : null;
+    if (cursorAgent) {
+      makerAgents.cursor = cursorAgent;
+      _mcpProviders.cursor = piMcpProviders;
+    }
+
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
       getProviderById: (providerId) =>
@@ -2700,6 +2781,15 @@ export function getMaker(): Maker {
           maxPages: lastPage,
           maxInputBytes: REMOTE_AGENT_PDF_MAX_BYTES,
         }),
+        // 供应商组分配到那台的任务：告诉那台直接运行，不再进入它自己的组(provider-groups.md §4 防转圈)。
+        isGroupAssigned: (sessionId) => readProviderGroupBinding(sessionId) !== null,
+        // 分享来的供应商被分享者建成了组：那台出问题时对方发来「需要换一台」，本机交接后带回凭证(§6.1)。
+        groupSwitch: getProviderGroupGuestSwitch(),
+        // 供应商分享的受邀者任务：WebFetch 用本机网络抓取(系统代理、单跳、内网要本机批准)。
+        isSharedProviderDevice: (deviceId) => parseProviderShareAgentDeviceId(deviceId) !== null,
+        webFetch: guardedOutboundFetch,
+        // 受邀者任务读写凭证类文件时，本机确认卡上的说明(provider-sharing.md §9 第 7 条)。
+        sharedProviderCredentialNotice: () => t('newChat.sharedProviderCredential.description'),
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,
@@ -2957,6 +3047,35 @@ export function getMaker(): Maker {
     // 为 false —— 一次性调用会被 skipped-unauthed 白白消费掉唯一机会。授权就绪后的重试
     // 由 codex auth 事件驱动(见下方 requestCodexModelBackfill 的调用点)。
     const makerRef = _maker;
+    if (cursorAgent) {
+      const owner = activeOwnerScopeKey();
+      let pending: Promise<void> | null = null;
+      let lastAttempt = 0;
+      _refreshCursorModels = (force = false) => {
+        if (pending) return pending;
+        if (!force && Date.now() - lastAttempt < 30_000) return Promise.resolve();
+        lastAttempt = Date.now();
+        pending = (async () => {
+          try {
+            // The adapter owns the probe directory until native exit is confirmed.
+            const models = await cursorAgent.discoverModels();
+            if (_maker !== makerRef || activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) return;
+            setCursorDiscoveredModels(models, owner);
+            refreshSelectableModelsAndBroadcast({ agentKind: 'cursor' });
+          } catch {
+            if (_maker === makerRef && activeOwnerScopeKey() === owner) {
+              setCursorDiscoveredModels([], owner);
+              refreshSelectableModelsAndBroadcast({ agentKind: 'cursor' });
+            }
+            desktopMakerLogger.info('Cursor model discovery unavailable; sign in with cursor-agent login');
+          }
+        })().catch(() => {
+          desktopMakerLogger.warn('Cursor model discovery could not prepare its workspace');
+        }).finally(() => { pending = null; });
+        return pending;
+      };
+      void refreshCursorModels();
+    }
     _sessionArchiveSync = createSessionArchiveSync({
       capture: () => {
         const snapshot = getCurrentDbClientSnapshot();
@@ -3113,6 +3232,8 @@ export async function preflightBotRuntimeResources(
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
+  clearCursorDiscoveredModels();
+  _refreshCursorModels = null;
   disposeRemoteAgentHost();
   _sessionArchiveSync?.stop();
   _sessionArchiveSync = null;

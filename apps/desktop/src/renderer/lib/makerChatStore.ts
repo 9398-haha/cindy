@@ -1,4 +1,5 @@
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
+import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
 export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
@@ -34,7 +35,7 @@ import { parsePluginConnectionInput } from '@cindy/device-link';
  * - User-initiated stopSession (NOT called on session switch anymore)
  */
 
-import { HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, type HistoryViewPage, type HistoryDetailPage } from '@cindy/maker-shared/message-window';
+import { HISTORY_WORK_PATCH_CHANNEL, HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, historyPrefetchVersion, historySnapshotCovers, historySnapshotFromPage, selectHistoryPrefetchSessions, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
@@ -83,8 +84,10 @@ import type { AgentMeta, MessageRole, Message, MessageAutomationOrigin } from '@
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import {
   readMessageSourceDevice,
+  readMessageSourceGroup,
   readMessageSourcePlugin,
   type MessageSourceDevice,
+  type MessageSourceGroup,
   type MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import {
@@ -149,7 +152,7 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { clearCachedMessages, readCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import { clearCachedMessages, readCachedMessages, persistListMessage, sessionCacheInvalidationToken } from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -502,6 +505,12 @@ export interface ChatMessage {
   sourceDevice?: MessageSourceDevice;
   /** 插件任务派发的消息来源(读自 agentMeta.sourcePlugin)。 */
   sourcePlugin?: MessageSourcePlugin;
+  /** Group source of an explicitly sent private assistant message. */
+  sourceGroup?: MessageSourceGroup;
+  /** Host-stamped delivery remains visible after source identity is redacted. */
+  explicitDelivery?: boolean;
+  /** Provider phase survives live deltas and durable history projection. */
+  assistantPhase?: string;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -598,6 +607,8 @@ export interface ChatMessage {
    * 但 MessageStream 渲染 null、content 置空不外泄原文。
    */
   isSyntheticTrigger?: boolean;
+  /** Recovery identity retained after the synthetic prompt body is hidden. */
+  isContinuationTrigger?: boolean;
   /**
    * image-local-cache: image attachments for rendering in the message stream.
    * Two shapes coexist:
@@ -674,7 +685,7 @@ export interface ChatMessage {
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'cursor';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -725,6 +736,8 @@ export interface AgentStatus {
   generationActive?: boolean;
   /** False hides live TPS. Omitted on placeholder status frames. */
   generationReliable?: boolean;
+  /** Host-measured live tok/s; absent from old hosts and before the first output. */
+  tokenSpeed?: TokenSpeedSnapshot;
   /**
    * Side-channel running (mivo MJ 按钮等不走 LLM 的后台任务)。
    * RunningStatusBar 据此把 token 计数行隐藏掉, 避免显示"上一轮残留 718 tokens"
@@ -2448,7 +2461,7 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
-  target: 'claude-code' | 'codex' | 'pi';
+  target: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -2469,7 +2482,7 @@ export interface SessionChatState {
    * Codex reducer。ensureInitialMessages 从 DB sessions.agent_kind 读出来灌进。
    * 默认 'claude-code' 兼容老路径(老 session row 没有此字段时按 Claude 处理)。
    */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** 下一条消息发送时才由 main 应用的跨引擎切换意图。 */
   agentSwitchIntent: AgentSwitchIntentRecord | null;
   /**
@@ -3790,7 +3803,6 @@ function updateIslandsAfterAroundMerge(
   // 块完全落在主段更老一侧:与既有孤岛合并(经块连通的孤岛合并成一座)或新建一座。
   let mergedOldestClientId: string | null = null;
   let mergedNewestClientId: string | null = null;
-  let mergedAny = false;
   const next: LoadedWindowIsland[] = [];
   for (const island of islands) {
     const oldestIdx = messageIndexByClientId(messages, island.oldestClientId);
@@ -3801,7 +3813,6 @@ function updateIslandsAfterAroundMerge(
       next.push(island);
       continue;
     }
-    mergedAny = true;
     if (mergedOldestClientId === null || oldestIdx < blockStart) {
       mergedOldestClientId = island.oldestClientId;
     }
@@ -4127,8 +4138,7 @@ function persistTurnErrorDeferredTracked(
 ): void {
   // 必须在 live error 已经 setState 之后调用,这样抓到的是这一代横幅的 epoch。
   const epoch = _liveErrorEpoch.get(sessionId) ?? 0;
-  let pending: Promise<string | undefined>;
-  pending = makerApiFor(sessionId)
+  const pending: Promise<string | undefined> = makerApiFor(sessionId)
     .input.persistTurnErrorDeferred(sessionId, errData, agentMeta)
     .then((persistId) => {
       const id = typeof persistId === 'string' && persistId ? persistId : undefined;
@@ -4578,6 +4588,15 @@ function hasMatchingAutoResumePendingError(messages: ChatMessage[], data: unknow
       item.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
       typeof item.systemCardData?.error === 'string' &&
       item.systemCardData.error === message,
+  );
+}
+
+/** 进行中行是「供应商组正在换电脑」：这次失败先不呈现，不论哪种 Agent(provider-groups.md §6.1)。 */
+function hasProviderGroupSwitchPendingCard(messages: ChatMessage[]): boolean {
+  return messages.some(
+    (item) =>
+      item.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
+      Boolean(item.systemCardData?.groupSwitchPending),
   );
 }
 
@@ -5548,7 +5567,7 @@ export function handleStreamEvent(
       : null;
   const isCodexReconnectProgress =
     event.type === 'error' &&
-    (event.source === 'codex' || event.source === 'pi') &&
+    (event.source === 'codex' || event.source === 'pi' || event.source === 'cursor') &&
     !isTerminalErrorData(event.data) &&
     reconnectAttempt !== null &&
     !isCodexUserActionableRetryError(event.data);
@@ -5574,12 +5593,18 @@ export function handleStreamEvent(
   // - model / parentUuid 让纯文本子代理在 streaming 阶段也能反查模型 chip;
   // - turnCompleted 由 main 在 done 边界盖到该 SDK turn 的最后一条 assistant 上,
   //   让后台任务自动续跑时前一轮正式总结不会被后续补充回复顶掉。
+  const phaseData = event.data as { phase?: unknown; runtimeRecovery?: boolean } | undefined;
+  const assistantPhase = phaseData?.runtimeRecovery === true
+    ? 'commentary'
+    : typeof phaseData?.phase === 'string' ? phaseData.phase : incomingMeta?.assistantPhase;
   const assistantMetaFields: {
     botPrivateReply?: boolean;
+    assistantPhase?: string;
     model?: string;
     parentToolUseId?: string;
     turnCompleted?: boolean;
   } = {
+    ...(typeof assistantPhase === 'string' ? { assistantPhase } : {}),
     ...(typeof incomingMeta?.model === 'string' && incomingMeta.model
       ? { model: incomingMeta.model }
       : {}),
@@ -5734,6 +5759,7 @@ export function handleStreamEvent(
         // 把 model/parentToolUseId 补写到在途流式 assistant 消息上,否则纯文本(零工具)
         // 子代理在流式渲染期间 buildSubagentModelMap 始终为空、chip 缺失(仅重载后才补上)。
         const hasAssistantFields =
+          assistantMetaFields.assistantPhase !== undefined ||
           assistantMetaFields.model !== undefined ||
           assistantMetaFields.parentToolUseId !== undefined ||
           assistantMetaFields.turnCompleted === true ||
@@ -6411,8 +6437,8 @@ export function handleStreamEvent(
       const finalized = finalizeStreamingInState(state);
       const derivedRetryText = deriveErrorRetryText(finalized);
       const suppressAutoResumeBroadcastError =
-        event.source === 'codex' &&
-        !isCodexUserActionableRetryError(event.data) &&
+        ((event.source === 'codex' && !isCodexUserActionableRetryError(event.data)) ||
+          hasProviderGroupSwitchPendingCard(finalized.messages)) &&
         hasMatchingAutoResumePendingError(finalized.messages, event.data);
       // main coordinator 在终止型 error 时**先**同步 emit projection(errorRetryText
       // = projectionRetryText 的权威 retry token,active-turn 恢复恒非空)再 broadcast
@@ -7019,8 +7045,13 @@ function mergeLiveGenerationStatus(
   previous: AgentStatus,
 ): Pick<
   AgentStatus,
-  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
+  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable' | 'tokenSpeed'
 > {
+  // Speed belongs to the turn that produced it: a new turn drops the old value,
+  // frames without the field keep the latest one (including the final average).
+  // An unreliable frame without it means the host withdrew the speed (suspend).
+  const tokenSpeed = readTokenSpeedSnapshot(update.tokenSpeed)
+    ?? (isTurnStart || update.generationReliable === false ? undefined : previous.tokenSpeed);
   // Turn start drops leftover metrics from the previous turn, then keeps any
   // live fields carried by this same status. A reconnect-shaped first event
   // (isRunning false→true with output / duration already present) must not
@@ -7044,6 +7075,7 @@ function mergeLiveGenerationStatus(
       generationDurationMs: baseline.generationDurationMs,
       generationActive: update.isRunning ? baseline.generationActive : false,
       generationReliable: baseline.generationReliable,
+      tokenSpeed,
     };
   }
   const merged = {
@@ -7061,6 +7093,7 @@ function mergeLiveGenerationStatus(
       typeof update.generationReliable === 'boolean'
         ? update.generationReliable
         : baseline.generationReliable,
+    tokenSpeed,
   };
   if (!update.isRunning) {
     return { ...merged, generationActive: false };
@@ -7268,7 +7301,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+    source?: 'claude-code' | 'codex' | 'pi' | 'cursor' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
     turnScope?: 'turn' | 'background';
@@ -7320,7 +7353,7 @@ type PendingTextDeltaBatch = {
   text: string;
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
-  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+  source?: 'claude-code' | 'codex' | 'pi' | 'cursor' | 'vision-bridge';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -7584,7 +7617,8 @@ function enqueueTextDeltaPayload(
   ingress: LiveIngressContext = {},
 ): void {
   if (!event) return;
-  const data = event.data as { text?: unknown };
+  const data = event.data as { text?: unknown; phase?: unknown; runtimeRecovery?: boolean };
+  const phase = data.runtimeRecovery === true ? 'commentary' : typeof data.phase === 'string' ? data.phase : undefined;
   const text = typeof data.text === 'string' ? data.text : '';
   const dataOwner = getDataOwnerGeneration();
   let existing = pendingTextDeltaBatches.get(sessionId);
@@ -7604,7 +7638,8 @@ function enqueueTextDeltaPayload(
     existing.text += text;
     if (!existing.persistId && persistId) existing.persistId = persistId;
     if (event.source) existing.source = event.source;
-    if (event.agentMeta) existing.agentMeta = event.agentMeta;
+    if (event.agentMeta) existing.agentMeta = { ...existing.agentMeta, ...event.agentMeta };
+    if (phase) existing.agentMeta = { ...existing.agentMeta, assistantPhase: phase };
   } else {
     pendingTextDeltaBatches.set(sessionId, {
       text,
@@ -7612,7 +7647,7 @@ function enqueueTextDeltaPayload(
       ingress,
       source: event.source,
       persistId,
-      ...(event.agentMeta ? { agentMeta: event.agentMeta } : {}),
+      agentMeta: { ...event.agentMeta, ...(phase ? { assistantPhase: phase } : {}) },
     });
   }
   scheduleTextDeltaFlush();
@@ -8923,13 +8958,19 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         inboundEvent?.type === 'text' &&
         inboundEvent.data?.isFinal === false &&
         inboundEvent.data?.isFullText !== true;
-      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta) {
+      const listMessage = (push.payload as { listMessage?: unknown } | null)?.listMessage === true;
+      if (listMessage && inboundSid && !_activeViewSessions.has(inboundSid)) {
+        if (!_lastViewedAt.has(inboundSid)) _lastViewedAt.set(inboundSid, Date.now());
+        _ensureSoftEvictionTimer();
+      }
+      if (push.deviceId && inboundSid && isDurableMessagePush && !isOrdinaryStreamingTextDelta && !listMessage) {
         scheduleRemoteMessageRepair(inboundSid);
       }
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
       if (inboundSid) {
         const view = getRemoteHistoryView(inboundSid);
-        if (view && ['maker:history-view-changed', 'local-db:messages:created', 'maker:status-changed'].includes(push.channel)) view.invalidate();
+        if (view && push.channel === HISTORY_WORK_PATCH_CHANNEL) view.applyWorkPatch(push.payload as HistoryWorkPatch);
+        else if (view && ['maker:history-view-changed', 'local-db:messages:created', 'maker:status-changed'].includes(push.channel)) view.invalidate();
       }
       switch (push.channel) {
         case SESSION_SYNC_CHANNEL: {
@@ -8945,6 +8986,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
             invalidateHistory: (sessionId) => {
               const state = sessions.get(sessionId);
               if (!state) return;
+              if (listMessage) {
+                bumpMessagesEpoch(sessionId);
+                setState(sessionId, current => ({ ...current, historyLoaded: false }));
+                return;
+              }
               if (getRemoteHistoryView(sessionId)) {
                 // resyncRequired also repairs unrelated durable rows; a full
                 // text snapshot only protects its own live block.
@@ -8986,6 +9032,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload, remoteIngress);
+          if (listMessage && push.deviceId && inboundSid) {
+            const row = (push.payload as { message?: Message }).message;
+            if (row && !isBeforeOrAtRendererClearBoundary(inboundSid, row.createdAt)) persistListMessage(push.deviceId, inboundSid, row);
+          }
           break;
         case 'local-db:messages:deleted':
           handleMessageDeletedRaw(push.payload, remoteIngress);
@@ -10038,7 +10088,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   isTurnRunning: boolean;
 }
 
@@ -10088,7 +10138,7 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'cursor') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -11073,8 +11123,8 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   if (existing) return existing;
   // Self-reference is intentional: a detached clear/owner generation must not
   // keep draining after a newer pump replaces this Promise in the registry.
-  // eslint-disable-next-line prefer-const
   let run!: Promise<void>;
+  // eslint-disable-next-line prefer-const -- The pump reads its identity after awaited preparation.
   run = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);
@@ -11233,16 +11283,17 @@ function retryInvalidatedInitialHistoryFetchIfNeeded(
 }
 
 /**
- * DB sessions.agent_kind('cc' / 'codex' / 'pi')→ maker-core AgentKind 的唯一映射点。
+ * DB sessions.agent_kind('cc' / 'codex' / 'pi' / 'cursor')→ maker-core AgentKind 的唯一映射点。
  * 缺失 / 异常值走 fallback(默认 'claude-code',老 row 兼容)。所有从 session
  * row 派生 agentKind 的地方必须走这里,不要在调用点手写三元(历史上多处各写
  * 一份,遗漏 fallback 语义差异被 review 逐个揪出)。
  */
 function dbAgentKindToMakerKind(
   dbKind: string | null | undefined,
-  fallback: 'claude-code' | 'codex' | 'pi' = 'claude-code',
-): 'claude-code' | 'codex' | 'pi' {
+  fallback: 'claude-code' | 'codex' | 'pi' | 'cursor' = 'claude-code',
+): 'claude-code' | 'codex' | 'pi' | 'cursor' {
   if (dbKind === 'codex') return 'codex';
+  if (dbKind === 'cursor') return 'cursor';
   if (dbKind === 'cc') return 'claude-code';
   if (dbKind === 'pi') return 'pi';
   return fallback;
@@ -11474,7 +11525,8 @@ function createRemoteHistoryView(sessionId: string) {
   const view = new HistoryViewController<HistoryChatMessage>({
     page: async (before) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
-      const page = await call<HistoryViewPage<Message>>('local-db:messages:view', [sessionId, { before, lazyDetails: true }]);
+      // Remote reads ask for Host-projected running lines; a local view already holds live rows.
+      const page = await call<HistoryViewPage<Message>>('local-db:messages:view', [sessionId, { before, lazyDetails: true, ...(deviceId ? { workLines: true } : {}) }]);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       writeCache = writer;
       return { ...page, items: mapHistoryViewMessages(page.items, mapRows) };
@@ -11535,6 +11587,72 @@ function createRemoteHistoryView(sessionId: string) {
     return isCurrent() ? snapshot : null;
   });
   return view;
+}
+
+// Activity version already read ahead, per device and task, valid only while that mirror entry
+// is current (account switch or cache invalidation resets it). Memory only.
+const remoteHistoryPrefetchedAt = new Map<string, { version: string; owner: ReturnType<typeof getDataOwnerGeneration>; token: number }>();
+const remoteHistoryPrefetchRuns = new Map<string, { again: boolean }>();
+
+/**
+ * After a list read that may follow missed pushes (bootstrap/reconnect), read the latest
+ * history page of recently changed tasks into the mirror a task restores on open. Open tasks
+ * read their own view. Sequential and best effort: a failed read waits for the next refresh.
+ */
+async function prefetchRemoteHistories(deviceId: string): Promise<void> {
+  const run = remoteHistoryPrefetchRuns.get(deviceId);
+  if (run) { run.again = true; return; }
+  const state = { again: true };
+  remoteHistoryPrefetchRuns.set(deviceId, state);
+  const owner = getDataOwnerGeneration();
+  const key = (sessionId: string) => JSON.stringify([deviceId, sessionId]);
+  const isCurrent = (sessionId: string) => isDataOwnerGenerationCurrent(owner)
+    && !isRemoteDeviceMarkedDisconnected(deviceId)
+    && remoteProjectsStore.getSessionDeviceId(sessionId) === deviceId;
+  try {
+    while (state.again) {
+      state.again = false;
+      const candidates = selectHistoryPrefetchSessions(remoteProjectsStore.getDeviceSessions(deviceId, 'active'), {
+        eligible: (session) => session.status === 'active' && session.source !== 'scheduler' && !getRemoteHistoryView(session.id),
+        prefetchedAt: (sessionId) => {
+          const entry = remoteHistoryPrefetchedAt.get(key(sessionId));
+          return entry && isDataOwnerGenerationCurrent(entry.owner)
+            && entry.token === sessionCacheInvalidationToken(sessionId) ? entry.version : undefined;
+        },
+      });
+      for (const session of candidates) {
+        if (!isCurrent(session.id)) continue;
+        const token = sessionCacheInvalidationToken(session.id);
+        const previous = await readRemoteHistoryCache<HistoryChatMessage>(deviceId, session.id);
+        if (!historySnapshotCovers(previous, session)) {
+          // Capture write authority before the read, like an open view does.
+          const write = remoteHistoryCacheWriter(deviceId, session.id);
+          let page: HistoryViewPage<Message>;
+          try {
+            page = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:messages:view',
+              [session.id, { lazyDetails: true }]) as HistoryViewPage<Message>;
+          } catch (error) {
+            // A Host without the history view serves tasks the old way; nothing to read ahead.
+            if (isHistoryViewUnavailable(error)) return;
+            throw error;
+          }
+          if (page == null || !isCurrent(session.id) || getRemoteHistoryView(session.id)) continue;
+          const items = mapHistoryViewMessages(page.items, (rows: Message[]) => mapServerMessages(rows).map((row) => ({
+            ...row, id: row.id ?? row.clientId, createdAt: row.createdAt ?? '',
+          })));
+          write(historySnapshotFromPage({ ...page, items }, previous));
+        }
+        const version = historyPrefetchVersion(session);
+        if (version !== undefined) {
+          remoteHistoryPrefetchedAt.set(key(session.id), { version, owner, token });
+        }
+      }
+    }
+  } catch {
+    // Offline or slow Host: the task opens through its normal read; the next refresh retries.
+  } finally {
+    remoteHistoryPrefetchRuns.delete(deviceId);
+  }
 }
 
 function ensureInitialMessages(sessionId: string): void {
@@ -13758,7 +13876,7 @@ export function buildCreateOptsForCurrentSession(
     agentKind: current.agentKind,
     workingDir,
     model,
-    effort,
+    ...(effort ? { effort } : {}),
     permissionMode,
     fastMode: current.fastMode,
     planMode: current.planModeEnabled,
@@ -14353,7 +14471,7 @@ function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
 function scheduleAutoName(
   sessionId: string,
   text: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
   isUserText = true,
 ): void {
   // 与 main 共用 normalizeAutoTitle,两端算出的占位串逐字一致,回流时不跳变。
@@ -14469,7 +14587,7 @@ function clearAutoTitlePreviewSafely(sessionId: string): void {
 function maybeAutoNameUnnamedSession(
   sessionId: string,
   seed: AutoTitleSeed | null,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
 ): void {
   if (!seed?.isUserText) return;
   if (sessions.get(sessionId)?.autoTitleDisabled === true) return;
@@ -14869,7 +14987,7 @@ async function sendMessageCore(
       // 用会话真实 agentKind 起名 — 之前写死 'claude-code',导致 Codex 会话也
       // 用 Claude haiku 起标题:纯 Codex 用户(无 Claude 鉴权)会 oneShot 失败 →
       // fallback 原话,表现为"Codex 会话标题没有智能总结"。current.agentKind 已是
-      // maker 格式('claude-code' | 'codex' | 'pi'),直接透传。起名走立即占位 + 后台覆盖。
+      // maker 格式('claude-code' | 'codex' | 'pi' | 'cursor'),直接透传。起名走立即占位 + 后台覆盖。
       if (autoTitleSeed) {
         scheduleAutoName(
           sessionId,
@@ -17050,6 +17168,7 @@ import {
   syntheticTriggerKind,
   UI_ACTION_TRIGGER_PREFIX,
 } from '../../shared/interruptedTurn.js';
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 export { UI_ACTION_TRIGGER_PREFIX };
 
 /**
@@ -17182,7 +17301,7 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
  * sdkSessionId——否则 buildCreateOpts 会把旧引擎的原生会话 id 当 resume 目标
  * (main 侧 reconcileCreateOptsWithDb 是兜底,这里是第一现场收敛)。
  */
-function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi'): void {
+function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor'): void {
   if (!sessionId) return;
   setState(sessionId, (s) => {
     const nextProviderId = s.agentSwitchIntent ? s.agentSwitchIntent.providerId : s.sessionProviderId;
@@ -17214,7 +17333,7 @@ function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'
  */
 function noteAgentSwitchIntent(
   sessionId: string,
-  target: 'claude-code' | 'codex' | 'pi',
+  target: 'claude-code' | 'codex' | 'pi' | 'cursor',
   opts: {
     model: string;
     providerId: string | null;
@@ -17273,7 +17392,7 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
   if (
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
-    && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'pi' && item.targetAgentKind !== 'cursor'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
@@ -17338,7 +17457,7 @@ function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
 function setSessionRuntime(
   sessionId: string,
   opts: {
-    agentKind?: 'claude-code' | 'codex' | 'pi';
+    agentKind?: 'claude-code' | 'codex' | 'pi' | 'cursor';
     fastMode?: boolean;
     planModeEnabled?: boolean;
     /** Seed before SessionView hydrates the DB row; sendMessage reads this for SSH routing. */
@@ -17443,7 +17562,7 @@ function mirrorSessionFields(
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
   // 同步清 sdkSessionId(旧引擎的原生会话 id 对新引擎无意义,与 noteAgentSwitched
   // 口径一致)。幂等:发起窗口已 noteAgentSwitched → 同值 no-op。
-  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi') {
+  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi' || patch.agentKind === 'cursor') {
     const nextKind = dbToMakerAgentKind(patch.agentKind);
     setState(sessionId, (s) => {
       // New hosts publish the full runtime snapshot before explicitly clearing
@@ -17541,6 +17660,7 @@ export const makerChatStore = {
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
   getPromptRecommendationCompletionStatus,
   ensureInitialMessages,
+  prefetchRemoteHistories,
   reloadMessages,
   /** 消息菜单:本地移除一次删除动作覆盖的整轮记录。 */
   removeMessagesByClientIds,
@@ -17719,7 +17839,7 @@ export const makerChatStore = {
       taskType?: string;
       toolUseId?: string;
       title?: string;
-      provider?: 'pi' | 'claude-code';
+      provider?: 'pi' | 'claude-code' | 'cursor';
     }>,
     opts?: {
       staleRunningCandidates?: ReadonlySet<string>;
@@ -17738,7 +17858,7 @@ export const makerChatStore = {
           next.taskUpdates?.has(t.taskId) ||
           (t.toolUseId ? next.taskUpdates?.has(t.toolUseId) : false);
         if (seen) continue;
-        const provider = t.provider === 'pi' ? 'pi' : 'claude-code';
+        const provider = t.provider === 'cursor' ? 'cursor' : t.provider === 'pi' ? 'pi' : 'claude-code';
         next = handleStreamEvent(next, {
           sessionId,
           type: 'agent_task_update',
@@ -18639,6 +18759,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           content: '',
           isStreaming: false,
           isSyntheticTrigger: true,
+          isContinuationTrigger: isContinuationMessage(m),
           // 中断自动续跑补发的续跑指令带 [UI_ACTION_TRIGGER] 前缀(复用人工「继续」
           // 那条常量),会先命中本分支 —— 但它同样是**自动**动作,必须渲染「已自动
           // 继续」分隔线(MessageStream 对 systemCardType 的处理刻意优先于 synthetic
@@ -18667,6 +18788,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           systemCardType: 'auto-resume' as const,
+          isContinuationTrigger: true,
           // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数)。
           // SystemCard 据此二选一:带信息 → 三态重连行;不带 → silent-stop 原来的
           // 「已自动继续」分隔条(见 hasInterruptionContext)。
@@ -18833,6 +18955,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       clientId: m.clientId,
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      ...(m.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(m.agentMeta) } : {}),
+      ...(m.role === 'assistant' && typeof m.agentMeta?.assistantPhase === 'string' ? { assistantPhase: m.agentMeta.assistantPhase } : {}),
+      ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.turnCompleted === true

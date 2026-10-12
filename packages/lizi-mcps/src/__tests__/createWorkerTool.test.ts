@@ -50,6 +50,13 @@ function setupWorkerSession() {
 }
 
 describe('create_worker tool', () => {
+  it.each(['claude-code', 'codex', 'pi', 'cursor'] as const)('preserves %s worker harness identity', async (agent) => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', { role: 'developer', agent, label: 'worker' });
+    expect(result.isError).toBeUndefined();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ agent }));
+  });
+
   it('forwards the explicit working_dir to the host', async () => {
     const { registry, createWorker } = setup();
     const result = await registry.call('create_worker', {
@@ -57,6 +64,16 @@ describe('create_worker tool', () => {
     });
     expect(result.isError).toBeUndefined();
     expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/tmp/candidate with spaces ' }));
+  });
+
+  it('forwards the Worker Agent location ("local" = the task computer, omitted = same as the Lead)', async () => {
+    const { registry, createWorker } = setup();
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'remote', agent_device_id: 'share:s1' });
+    expect(createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: 'share:s1' }));
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'local', agent_device_id: 'local' });
+    expect(createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null }));
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'lead' });
+    expect((createWorker.mock.calls.at(-1) as unknown[])[0]).not.toHaveProperty('agentDeviceId');
   });
 
   it('rejects an empty explicit directory instead of silently inheriting', async () => {

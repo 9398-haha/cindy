@@ -117,6 +117,7 @@ export function ErrorTailErrorBanner({
   onDismiss,
   agentKind,
   remoteHostId,
+  agentDeviceId,
   deviceLinkDeviceId,
   modelId,
   providerId,
@@ -138,7 +139,8 @@ export function ErrorTailErrorBanner({
   errorText: string;
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
+  agentDeviceId?: string | null;
   remoteHostId?: string;
   deviceLinkDeviceId?: string | null;
   modelId?: string;
@@ -174,6 +176,7 @@ export function ErrorTailErrorBanner({
       onSilentStopContinue={onSilentStopContinue}
       usageLimitRecovery={usageLimitRecovery}
       agentKind={agentKind}
+      agentDeviceId={agentDeviceId}
       remoteHostId={remoteHostId}
       deviceLinkDeviceId={deviceLinkDeviceId}
       modelId={modelId}

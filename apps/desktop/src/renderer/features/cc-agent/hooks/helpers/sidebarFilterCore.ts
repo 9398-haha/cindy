@@ -52,7 +52,7 @@ export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
 /** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
-export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi' | 'cursor';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -359,8 +359,8 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
 /* ============================== groupDevice load/persist ============================== */
 
 /**
- * 「按设备分组」开关(E 期):默认开(定稿)。仅在有远程设备连接时可见/生效
- * (与顶部设备切换栏同一出现条件);仅本机时选项隐藏、效果自然为单段。
+ * 「按设备分组」开关(E 期):默认开(定稿)。有可选远程设备（含断线缓存）时可见/生效；
+ * 没有可选远程设备时选项隐藏、效果自然为单段，不改写偏好。
  */
 export function loadGroupDevice(): boolean {
   const storage = safeStorage();

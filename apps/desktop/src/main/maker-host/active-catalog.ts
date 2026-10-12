@@ -2,6 +2,7 @@ import {
   projectProviderMediaModels,
   isCustomRoutedProvider,
   isOrganizationManagedProvider,
+  stripCodexGatewayWirePrefix,
 } from '@cindy/model-providers';
 import {
   applyExistingModelLocalPatch,
@@ -212,7 +213,7 @@ export interface XdGatewayModelInfo {
   /**
    * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: AgentKind[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -522,9 +523,9 @@ function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set
 /** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
 export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
   // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
-  // wire model 还可能带 `codex/` 前缀（视觉桥按模型前缀选面时传给路由判定的形态）；
+  // wire model 还可能带 `openai-codex/` / `codex/` 前缀（视觉桥按模型前缀选面时传给路由判定的形态）；
   // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
-  const normalized = modelId.replace(/\[1m\]$/, '').replace(/^codex\//, '');
+  const normalized = stripCodexGatewayWirePrefix(modelId.replace(/\[1m\]$/, ''));
   return xdCodexAnthropicBridgeModelIds.has(normalized);
 }
 
@@ -705,7 +706,7 @@ function modelRegistryMetaFields(
 ): RegistryMetaFields | undefined {
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
-  const registryAgent = agent === 'pi' ? undefined : agent;
+  const registryAgent = agent === 'claude-code' || agent === 'codex' ? agent : undefined;
   const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
   if (!matched) return undefined;
@@ -972,9 +973,10 @@ function materializeXaiAccountModels(
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
     // The server catalog may predate a client-known variant. Its bundled visibility
     // remains a sparse fallback; explicit server and later user choices still win.
+    const registryAgent = agent === 'claude-code' || agent === 'codex' ? agent : undefined;
     const bundledEntry = findModelRegistryRoute(BUNDLED_CATALOG.modelRegistry, 'xai', entry.id,
-      agent === 'pi' ? undefined : agent)?.entry;
-    const bundledDefaultEnabled = (agent === 'pi' ? undefined : bundledEntry?.perAgent?.[agent]?.defaultEnabled)
+      registryAgent)?.entry;
+    const bundledDefaultEnabled = (registryAgent ? bundledEntry?.perAgent?.[registryAgent]?.defaultEnabled : undefined)
       ?? bundledEntry?.defaultEnabled;
     const { efforts, defaultEffort } = resolveXaiAccountCapabilities(
       entry,
@@ -1093,8 +1095,9 @@ function declaredPiModels(providerId: string, discovered: readonly CatalogModel[
     // A sibling Harness discovers membership, not Pi-specific thinking tiers.
     // Keep portable tiers as a fallback for unknown models; known models inherit
     // the Registry, and Codex-only labels cannot become Pi capabilities.
-    const { efforts: _efforts, defaultEffort: _defaultEffort, ...metadata } =
-      model.discoveredMetadata ?? catalogModelMetadata(model);
+    const metadata = { ...(model.discoveredMetadata ?? catalogModelMetadata(model)) };
+    delete metadata.efforts;
+    delete metadata.defaultEffort;
     const efforts = model.efforts.filter(effort => PI_REASONING_EFFORTS.some(level => level === effort));
     byId.set(id, {
       ...model, id, piApi, efforts,
@@ -1516,11 +1519,12 @@ function computeMerged(): Catalog {
         // Resolve without an agent: each harness adapts the same model-level intent.
         const registryEntry = findModelRegistryRoute(b.modelRegistry, 'xd', gm.id)?.entry;
         // Registry describes the model; Gateway controls which tiers this route opens.
-        // Gateway's GPT discount routes use codex/<model> (or the bare GPT ID).
+        // Gateway's GPT discount routes use openai-codex/<model>, codex/<model>, or the bare GPT ID.
         // Resolve their exact OpenAI model identity for display only. Do not inherit
         // subscription perAgent tiers, route availability, prices or request IDs.
-        const standardId = /^(?:codex\/)?gpt-[^/]+$/.test(gm.id)
-          ? `openai/${gm.id.replace(/^codex\//, '')}`
+        const bareGatewayGptId = stripCodexGatewayWirePrefix(gm.id);
+        const standardId = /^gpt-[^/]+$/.test(bareGatewayGptId)
+          ? `openai/${bareGatewayGptId}`
           : gm.id;
         const standardEntry =
           b.modelRegistry?.models.find((entry) => entry.id === standardId) ?? registryEntry;
@@ -1896,7 +1900,7 @@ function computeMerged(): Catalog {
         // identifies a vendor, and arbitrary private namespaces remain excluded.
         const openAiModel = identity !== undefined
           ? identity.startsWith('openai/')
-          : /^(?:(?:codex|openai|chatgpt)\/)?(?:gpt-|codex-|o\d+(?:[.-]|$))/.test(model.id);
+          : /^(?:(?:openai-codex|codex|openai|chatgpt)\/)?(?:gpt-|codex-|o\d+(?:[.-]|$))/.test(model.id);
         if (!openAiModel || model.userModelConfig?.contextWindow !== undefined ||
             (identity && localOverrides.baseModels?.[identity]?.contextWindow !== undefined) ||
             hasLocalContextWindowOverride(localOverrides, provider.id, rootId,

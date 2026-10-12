@@ -318,6 +318,18 @@ describe('Session per-turn origin 打标', () => {
     releaseLease();
   });
 
+  it('exposes the dispatched turn origin to Host authority checks and clears it at terminal', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    expect(session.getCurrentTurnOrigin()).toBeNull();
+    await session.send('go', { origin: SCHED_ORIGIN });
+    expect(session.getCurrentTurnOrigin()).toEqual(SCHED_ORIGIN);
+    await emit({ type: 'done', data: {} });
+    expect(session.getCurrentTurnOrigin()).toBeNull();
+    await session.send('typed');
+    expect(session.getCurrentTurnOrigin()).toBeNull();
+  });
+
   it.each([SCHED_ORIGIN, { kind: 'user', surface: 'im' } as const])('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空 (%j)', async (origin) => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);
@@ -567,18 +579,19 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
-  it('still stamps an in-flight start-failure after the prior turn already observed done', async () => {
+  it.each(['codex', 'pi', 'cursor'] as const)('stamps %s in-flight start-failure after the prior turn already observed done', async (agentKind) => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      agentKind,
       dispatchEvent: {
         type: 'error',
         data: { message: 'second failed', isTerminal: true },
-        source: 'codex',
+        source: agentKind,
       },
       dispatchOnSend: 2,
       holdDispatch: true,
       holdOnSend: 2,
     });
-    const session = makeSession(handle);
+    const session = makeSession(handle, agentKind);
     const seen: AgentEvent[] = [];
     session.onEvent((event) => seen.push({ ...event }));
 

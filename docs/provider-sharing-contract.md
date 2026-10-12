@@ -123,7 +123,7 @@ interface ReceivedShare {
 
 仿 `/shared-task/join`：口令在 `#` 之后（`#<token>[?app=cindy|cindycn|cindydev]`），页面不访问数据库。
 桌面浏览器一律唤起 `cindy://provider-share/join?invitation=<token>&server=<origin+prefix>`（与共享任务一致：各区域与 dev 的桌面版
-都注册 `cindy://`；`app` 提示只给手机网页用）。唤起失败时提示把链接粘贴到 Cindy（设置 → 模型供应商 → 左栏「分享给我的供应商」→「粘贴分享链接」）。
+都注册 `cindy://`；`app` 提示只给手机网页用）。唤起失败时提示把链接粘贴到 Cindy（设置 → 模型供应商 → 右上角「输入分享链接…」；2026-10-08 起入口从左栏组末移到这里，加入页文案需同步）。
 手机浏览器不唤起 App，显示「请在电脑上打开这个链接」并提供复制链接。五种语言、深浅色、严格 CSP。
 
 ## 4. 身份名片（auth-server）

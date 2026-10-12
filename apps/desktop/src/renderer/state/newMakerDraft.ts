@@ -20,8 +20,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
-import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
-import type { BotModelRoute } from '../../shared/botModelChain';
+import { sameModelRoute, type AppDefaultModelSelection, type AppModelRoute } from '../../shared/appDefaultModelSelection';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
@@ -83,11 +82,23 @@ export interface CollabWorkerConfig {
   initialTask?: string;
   /** 当前协同 Team 后续新 Worker 共用的默认权限。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
+  /**
+   * 首个 Worker 的运行设备与那台上的目录。与 initialTask 一样不跨重启持久化：设备在线与
+   * 版本随时会变，重启后回到这台电脑，由用户重新选择。
+   */
+  executionDeviceId?: string;
+  executionWorkingDir?: string;
+  /**
+   * 首个 Worker 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null = 任务所在电脑，
+   * 缺省 = 跟 Lead。模型与来源是按这个位置的目录选的；与草稿自己的 agentDeviceId 一样不跨重启
+   * 保留，带着它的整份配置在加载时丢弃(只丢位置会让模型落到别的目录上)。
+   */
+  agentDeviceId?: string | null;
 }
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex' | 'pi' | 'cursor';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -107,9 +118,10 @@ export interface NewMakerDraft {
   /** device-link 目标设备友好名(草稿页横幅展示),与 deviceLinkDeviceId 同源。 */
   deviceLinkDeviceName: string | null;
   /**
-   * Agent 在同账号另一台电脑上运行(任务、项目文件与命令仍在本机):那台电脑的 deviceId。
-   * 模型目录、Agent 登录与供应商都来自那台。与 remoteHostId / deviceLinkDeviceId 互斥;
-   * 与 deviceLinkDeviceId 同理**不跨重启持久化**(绑的是一台可能离线的活动设备)。
+   * Agent 在同账号另一台电脑上运行(任务、项目文件与命令仍在任务所在电脑:本机,或 deviceLinkDeviceId
+   * 那台被控电脑):运行 Agent 的那台电脑的 deviceId。模型目录、Agent 登录与供应商都来自那台。
+   * 与 remoteHostId 互斥;换任务所在电脑即清空。与 deviceLinkDeviceId 同理**不跨重启持久化**
+   * (绑的是一台可能离线的活动设备)。
    */
   agentDeviceId: string | null;
   /** agentDeviceId 那台电脑的友好名(展示用)。 */
@@ -162,8 +174,8 @@ export interface NewMakerDraft {
    * lastByVendor 整个快照随任意 draft 写入落盘,model 即使从没被用户碰过也会带上
    * sanitize 的种子默认值 —— 仅凭 lastByVendor 无法区分"真选过"和"默认回填"。
    * 调度任务默认模型的三级回退(getPersistedVendorModel 消费)只认这里标记过的
-   * vendor,否则全新 / 没用过该 vendor 的用户会被对话侧 Opus 种子默认顶掉
-   * 成本保守兜底。patchVendorPrefs 收到显式 model 时置 true;只改思考档 / Fast
+   * vendor,否则全新 / 没用过该 vendor 的用户会拿到未经供应商清单校准的种子默认。
+   * patchVendorPrefs 收到显式 model 时置 true;只改思考档 / Fast
    * 的会话回写走 patchVendorPrefsPreservingModelChoice：不得打标、不得清标，
    * 也不得在已打标后改写 lastByVendor.model / providerId / effort。
    */
@@ -186,6 +198,7 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'cursor') return { model: getDefaultModelForVendor('cursor').id, effort: 'medium', permissionMode: 'ask', planMode: false, providerId: 'cursor' };
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -243,6 +256,7 @@ function makeDefault(): NewMakerDraft {
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
+      cursor: defaultVendorPrefs('cursor'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
     },
@@ -276,7 +290,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   if (!raw || typeof raw !== 'object') return def;
   const r = raw as Partial<NewMakerDraft>;
   // 引擎白名单按 SELECTABLE_VENDORS(选择器同一张表的来源)校验 —— 新增引擎时这里零改动。
-  // 曾经是逐个写死的三元(`r.vendor === 'codex' || r.vendor === 'pi' ? … : 'cc'`),
+  // 曾经是逐个写死的三元(`r.vendor === 'codex' || r.vendor === 'pi' || r.vendor === 'cursor' ? … : 'cc'`),
   // 每上线一个引擎都得手工补一次;漏补则用户选中新引擎、重启后被静默重置回 Claude。
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
@@ -318,7 +332,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
-    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
+    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'cursor' ? 'cursor' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
   // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
@@ -328,6 +342,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   const workerConfig: CollabWorkerConfig | undefined = (() => {
     const wc = collabRaw?.workerConfig;
     if (!wc || typeof wc !== 'object') return undefined;
+    // 按另一台电脑(远程供应商)目录选的配置不跨重启保留，见 CollabWorkerConfig.agentDeviceId。
+    if (typeof wc.agentDeviceId === 'string') return undefined;
     const model = typeof wc.model === 'string' && wc.model.trim() ? wc.model : undefined;
     if (!model) return undefined;
     const role = typeof wc.role === 'string' && wc.role.trim() ? wc.role.trim() : 'developer';
@@ -371,13 +387,13 @@ function sanitize(raw: unknown): NewMakerDraft {
     };
   };
   // modelChosenByVendor: 老版本 localStorage 没有这个字段 → 空对象兜底
-  //（语义上等于"全部 vendor 都没显式选过",调度三级回退会落到成本保守兜底)。
+  //（语义上等于"全部 vendor 都没显式选过",调度三级回退会落到新建任务默认)。
   const modelChosenRaw =
     r.modelChosenByVendor && typeof r.modelChosenByVendor === 'object'
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+  for (const v of ['cc', 'orca', 'codex', 'pi', 'cursor'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 老版本没有独立的组合标记：显式选过模型/来源/思考深度/Fast 都是足够强的
@@ -408,7 +424,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   const legacyCcModel =
     legacyCcModelCandidate &&
     (r.defaultTupleCustomized === undefined || !isKnownProductTuple('cc', legacyCcPrefs));
-  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi'] as const).some((slotVendor) => {
+  const legacySourceSelection = (['cc', 'orca', 'codex', 'pi', 'cursor'] as const).some((slotVendor) => {
     const prefs = lastByVendorRaw[slotVendor];
     if (
       !prefs ||
@@ -471,6 +487,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
+      cursor: sanitizeVendorPrefs(lastByVendorRaw.cursor, 'cursor'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
@@ -855,8 +872,10 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.deviceLinkDeviceId = null;
     next.deviceLinkDeviceName = null;
   }
-  // 「Agent 在另一台电脑运行」只用于本机任务：任务本身建到远程设备或 SSH 主机时不成立。
-  if (next.deviceLinkDeviceId != null || next.remoteHostId != null) {
+  // 「Agent 在另一台电脑运行」：本机任务，或远程控制下建到被控电脑的任务(被控电脑是否支持由草稿页
+  // 判定)。任务建到 SSH 主机时不成立；换了任务所在电脑(本机 ↔ 被控电脑、被控电脑之间)时上一台的
+  // 选择不再适用，除非同一个 patch 显式给了新值。运行 Agent 的电脑不能就是任务所在电脑。
+  if (next.remoteHostId != null) {
     next.agentDeviceId = null;
     next.agentDeviceName = null;
   } else if ('agentDeviceId' in normalizedPatch) {
@@ -864,6 +883,13 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.agentDeviceId =
       typeof agentDeviceId === 'string' && agentDeviceId.trim().length > 0 ? agentDeviceId.trim() : null;
     if (next.agentDeviceId == null) next.agentDeviceName = null;
+  } else if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId) {
+    next.agentDeviceId = null;
+    next.agentDeviceName = null;
+  }
+  if (next.agentDeviceId != null && next.agentDeviceId === next.deviceLinkDeviceId) {
+    next.agentDeviceId = null;
+    next.agentDeviceName = null;
   }
   // 换目标设备(含本机 ↔ 被控设备、被控设备 A ↔ B)→ 丢掉 Worker 富配置,只留
   // enabled + worker。model / providerId / effort / fast 都是**设备作用域**的:被控端
@@ -937,7 +963,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const stored = readStoredDraftRecord();
   const base = stored ? sanitize(stored) : currentDraft;
   const prefs = base.lastByVendor[base.vendor];
-  const current: BotModelRoute | null = prefs.model ? {
+  const current: AppModelRoute | null = prefs.model ? {
     harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
     model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
     fastMode: base.fastModeByModel[prefs.model] === true,
@@ -983,7 +1009,7 @@ export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVen
 }
 
 export interface SuggestedDefaultTuple {
-  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
+  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi' | 'cursor'>;
   providerId: string;
   model: string;
   effort?: Effort | null;
@@ -1232,8 +1258,8 @@ export function getCurrentVendorPrefs(): VendorPrefs {
  * 所以这里要求 modelChosenByVendor[vendor] === true(新建页 picker 或已有
  * 任务换模经 patchVendorPrefs 打的标)才返回,否则一律 ''。
  * 调度任务的默认模型三级回退(useScheduleForm getScheduleDefaultModel)依赖这个
- * 区分:没显式选过的用户应落到调度自己的成本保守兜底(Sonnet),而不是被
- * 对话侧的 Opus 种子默认顶掉。读 raw localStorage 而非 getDraft(),解析失败 → ''。
+ * 区分:没显式选过的用户应落到按供应商清单校准后的新建任务默认,而不是未经校准的
+ * 种子默认。读 raw localStorage 而非 getDraft(),解析失败 → ''。
  */
 export function getPersistedVendorModel(vendor: MakerVendor): string {
   if (typeof window === 'undefined') return '';

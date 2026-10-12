@@ -8,7 +8,7 @@
  * may add opaque `providerRunIds` without changing the product model.
  */
 
-export type SubagentProvider = 'claude-code' | 'codex' | 'pi';
+export type SubagentProvider = 'claude-code' | 'codex' | 'pi' | 'cursor';
 
 export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
@@ -80,6 +80,8 @@ export interface SubagentChildRun {
   awaitingApproval?: boolean;
   output?: string;
   outputTruncated?: boolean;
+  /** Final reply readiness, independent of commentary; absent on legacy hosts/runners. */
+  resultReady?: boolean;
   error?: string;
 }
 

@@ -16,7 +16,7 @@
  * @vitest-environment node
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -510,6 +510,10 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
     expect(hasKey(input, 'fastMode')).toBe(true);
     expect(input.fastMode).toBe(true);
   });
+  it('preserves Cursor native effort and Fast selections', () => {
+    const input = buildScheduleInput(makeForm({ agentKind: 'cursor', model: 'grok-4.7', effort: 'xhigh', fastMode: true }));
+    expect(input).toMatchObject({ agentKind: 'cursor', model: 'grok-4.7', effort: 'xhigh', fastMode: true });
+  });
 
   it('claude-code 不序列化 fastMode(runner 忽略此字段)', () => {
     const input = buildScheduleInput(makeForm({ agentKind: 'claude-code', fastMode: true }));
@@ -646,13 +650,17 @@ describe('hasRealBinding / agentKind 映射', () => {
   it('sessionAgentKindToScheduleAgentKind 映射', () => {
     expect(sessionAgentKindToScheduleAgentKind('cc')).toBe('claude-code');
     expect(sessionAgentKindToScheduleAgentKind('codex')).toBe('codex');
+    expect(sessionAgentKindToScheduleAgentKind('cursor')).toBe('cursor');
   });
 });
 
 describe('resolveTemplateAgentFields', () => {
   const defaults = {
-    getDefaultModel: (agentKind: ScheduleFormState['agentKind']) =>
-      agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+    // 与真实实现同口径:默认路由限定在给定来源内并整对返回。
+    getDefaultRoute: (agentKind: ScheduleFormState['agentKind'], preferred?: string | null) => ({
+      model: agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+      providerId: preferred ?? null,
+    }),
     getAgentPrefs: (agentKind: ScheduleFormState['agentKind']) =>
       agentKind === 'codex'
         ? { providerId: 'openai', effort: 'high' as const, fastMode: true }
@@ -679,6 +687,26 @@ describe('resolveTemplateAgentFields', () => {
       effort: 'medium',
       fastMode: false,
     });
+  });
+
+  it('跨 agent 用默认路由时整对应用,并限定在任务记忆 / 模板的来源内', () => {
+    const getDefaultRoute = vi.fn((_agent: string, preferred?: string | null) =>
+      preferred === 'xd'
+        ? { model: 'claude-sonnet-5', providerId: 'xd' }
+        : { model: 'claude-opus-5-5', providerId: 'anthropic' });
+    const withRoute = {
+      getDefaultRoute,
+      getAgentPrefs: () => ({ providerId: '', effort: '' as const, fastMode: false }),
+    };
+    const form = makeForm({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    expect(resolveTemplateAgentFields(form, makeTemplate({ agentKind: 'claude-code' }), withRoute))
+      .toMatchObject({ model: 'claude-opus-5-5', providerId: 'anthropic' });
+    // 任务只记了来源(没记模型):默认模型必须由这个来源提供。
+    expect(resolveTemplateAgentFields(form, makeTemplate({ agentKind: 'claude-code' }), {
+      ...withRoute,
+      getAgentPrefs: () => ({ providerId: 'xd', effort: '' as const, fastMode: false }),
+    })).toMatchObject({ model: 'claude-sonnet-5', providerId: 'xd' });
+    expect(getDefaultRoute).toHaveBeenLastCalledWith('claude-code', 'xd');
   });
 
   it('模板显式给 model/provider/effort/fast 时优先使用模板值', () => {

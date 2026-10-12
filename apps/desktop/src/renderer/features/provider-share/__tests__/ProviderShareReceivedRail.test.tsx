@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 
+import { ProviderSharePasteButton } from '../ProviderSharePasteDialog';
 import { ProviderShareReceivedDetail, ProviderShareReceivedRailGroup } from '../ProviderShareReceivedRail';
 import { resetProviderShareStoreForTests } from '../providerShareStore';
 
@@ -15,7 +16,8 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
-vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => undefined) }));
+const refreshCatalog = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: refreshCatalog }));
 const confirmSpy = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: confirmSpy }) }));
 const joinSpy = vi.hoisted(() => vi.fn());
@@ -67,13 +69,10 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe('ProviderShareReceivedRailGroup', () => {
-  it('stays visible when empty and hands a pasted link to the apply dialog', async () => {
-    render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={() => undefined} />);
-    expect(screen.getByText('providerShare.received.title')).toBeTruthy();
-    expect(screen.getByText('providerShare.received.empty')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.paste' }));
+describe('ProviderSharePasteButton', () => {
+  it('hands an entered link to the apply dialog', async () => {
+    render(<ProviderSharePasteButton />);
+    fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.enterLink' }));
     const dialog = await screen.findByTestId('provider-share-paste-dialog');
     fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.pasteDialog.open' }));
     expect(joinSpy).not.toHaveBeenCalled();
@@ -86,12 +85,22 @@ describe('ProviderShareReceivedRailGroup', () => {
     expect(joinSpy).toHaveBeenCalledWith('see https://x.test/provider-share/join#abc');
     await waitFor(() => expect(screen.queryByTestId('provider-share-paste-dialog')).toBeNull());
   });
+});
+
+describe('ProviderShareReceivedRailGroup', () => {
+  it('is hidden while nothing is shared with me', async () => {
+    render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={() => undefined} />);
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'received' }));
+    expect(screen.queryByTestId('provider-share-received')).toBeNull();
+    expect(screen.queryByText('providerShare.received.title')).toBeNull();
+  });
 
   it('lists received shares next to the providers and selects one', async () => {
     received = [share];
     const onSelect = vi.fn();
     render(<ProviderShareReceivedRailGroup selectedShareId={null} onSelect={onSelect} />);
     const row = await screen.findByTestId('provider-share-received-row');
+    expect(screen.getByText('providerShare.received.title')).toBeTruthy();
     expect(row.textContent).toContain('Cindy AI');
     expect(row.getAttribute('aria-label')).toContain('providerShare.received.statusPaused');
     fireEvent.click(row);
@@ -131,9 +140,22 @@ describe('ProviderShareReceivedDetail', () => {
     expect(Array.from(list.querySelectorAll('li')).map((item) => item.textContent)).toEqual(['Opus 5.5', 'GPT-5.5']);
   });
 
-  it('says when the models cannot be read', () => {
-    catalog.value = { providers: [], loading: false, error: 'boom', unsupported: false };
+  it('says why the models cannot be read and offers a reload', () => {
+    catalog.value = {
+      providers: [], loading: false, error: '[DEVICE_LINK_TIMEOUT] timed out', unsupported: false,
+    };
     render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />);
-    expect(screen.getByText('providerShare.received.modelsFailed')).toBeTruthy();
+    expect(screen.getByText('providerShare.received.modelsFailedWithCode:{"code":"DEVICE_LINK_TIMEOUT"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'providerShare.received.retryModels' }));
+    expect(refreshCatalog).toHaveBeenCalledWith('share:share-1');
+  });
+
+  it('tells a refusal by the owner computer apart from a failed read', () => {
+    catalog.value = {
+      providers: [], loading: false,
+      error: 'Error invoking remote method: Error: [REMOTE_AGENT_SHARE_UNAVAILABLE] not available', unsupported: false,
+    };
+    render(<ProviderShareReceivedDetail share={{ ...share, status: 'active' }} />);
+    expect(screen.getByText('providerShare.received.modelsRefused')).toBeTruthy();
   });
 });

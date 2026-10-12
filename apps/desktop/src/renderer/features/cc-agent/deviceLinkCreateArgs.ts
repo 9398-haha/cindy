@@ -23,8 +23,8 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
 export interface DeviceLinkCreateParams {
-  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi'(persistedAgentKind)。 */
-  agentKind: 'cc' | 'codex' | 'pi';
+  /** 草稿 vendor 形态:'cc' | 'codex' | 'pi' | 'cursor'(persistedAgentKind)。 */
+  agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   /**
    * 被控端上的项目目录。缺省 / 空白 = 在该设备上建**不绑项目的 standalone dialogue**,
    * workspaceKind 随之派生为 'dialogue',运行目录由被控端分配。
@@ -55,10 +55,15 @@ export interface DeviceLinkCreateParams {
    * 落 `sessions.provider_id`,使新远程会话首个请求即按所选来源路由(与会话内切来源对称)。
    */
   providerId?: string | null;
+  /**
+   * 远程 Agent:Agent 在同账号另一台电脑运行(被控电脑支持时才会给)。此时 model / providerId
+   * 属于那台电脑的目录,被控电脑把它记进任务、经那台运行 Agent(与手机新建任务同一个参数)。
+   */
+  agentDeviceId?: string | null;
 }
 
 export interface DeviceLinkCreateArgs {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** 仅远程 worktree 流程出现(与 worktree:create 登记的绑定同 id)。 */
   id?: string;
   /** 仅项目会话出现;dialogue 不带此字段(被控端自行分配运行目录)。 */
@@ -66,7 +71,7 @@ export interface DeviceLinkCreateArgs {
   /** 由 workingDir 派生 —— 有目录 'project',无目录 'dialogue'。归属一致的关键。 */
   workspaceKind: WorkspaceKind;
   model: string;
-  effort: Effort;
+  effort?: Effort;
   permissionMode: PermissionMode;
   fastMode: boolean;
   planMode?: boolean;
@@ -75,6 +80,8 @@ export interface DeviceLinkCreateArgs {
   writableDirs?: string[];
   /** 仅当草稿显式选了非空来源时出现(null/空 = 跟随默认路由 → 不放进 args,provider_id 留 NULL)。 */
   providerId?: string;
+  /** 仅当 Agent 在另一台电脑运行时出现;缺省 = Agent 在被控电脑本身。 */
+  agentDeviceId?: string;
 }
 
 export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLinkCreateArgs {
@@ -89,7 +96,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(dir ? { workingDir: dir } : {}),
     workspaceKind: dir ? 'project' : 'dialogue',
     model: p.model,
-    effort: p.effort,
+    ...(p.effort ? { effort: p.effort } : {}),
     permissionMode: p.permissionMode,
     fastMode: p.fastMode,
     ...(p.planModeEnabled ? { planMode: true } : {}),
@@ -98,6 +105,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(p.writableDirs && p.writableDirs.length > 0 ? { writableDirs: p.writableDirs } : {}),
     // providerId 同理:仅非空显式来源才放进 args;null/空 → 不带 → 被控端 provider_id 留 NULL(默认路由)。
     ...(p.providerId ? { providerId: p.providerId } : {}),
+    ...(p.agentDeviceId ? { agentDeviceId: p.agentDeviceId } : {}),
   };
 }
 
@@ -118,15 +126,20 @@ export interface DeviceLinkSubmissionCandidate {
 }
 
 export interface DeviceLinkSubmissionParams {
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   workingDir?: string;
   id?: string;
   extraDirs?: string[];
   writableDirs?: string[];
   candidate: DeviceLinkSubmissionCandidate;
-  /** **被控端**供应商目录(useDeviceProviders 经隧道拉到的那一份)。 */
+  /**
+   * 模型目录(useDeviceProviders 经隧道拉到的那一份):通常是**被控端**的;Agent 在另一台电脑运行时
+   * 是那台的(来源也在那份目录里解析)。
+   */
   deviceProviders: ProviderView[];
   capabilityAgentKind: AgentKind;
+  /** 远程 Agent:运行 Agent 的另一台电脑;缺省 = 被控电脑本身。 */
+  agentDeviceId?: string | null;
 }
 
 /**
@@ -168,6 +181,7 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     extraDirs: p.extraDirs,
     writableDirs: p.writableDirs,
     providerId,
+    agentDeviceId: p.agentDeviceId,
   });
 }
 
@@ -211,7 +225,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     workingDir: p.workDir,
     workspaceKind: p.args.workspaceKind,
     model: p.args.model,
-    effort: p.args.effort,
+    effort: p.args.effort ?? '',
     permissionMode: p.args.permissionMode,
     providerId: p.args.providerId ?? null,
     sdkSessionId: null,
@@ -228,8 +242,10 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
     userSendAt: null,
     status: 'active',
-    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
+    // Session.agentKind 是本机形态('cc' | 'codex' | 'pi' | 'cursor'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
+    // 乐观行就带上 Agent 所在电脑:会话页的模型按钮与目录从一开始就按那台显示。
+    ...(p.args.agentDeviceId ? { agentDeviceId: p.args.agentDeviceId } : {}),
     extraDirs: p.args.extraDirs ?? [],
     writableDirs: p.args.writableDirs ?? [],
     createdAt: p.nowIso,

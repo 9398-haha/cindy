@@ -2166,6 +2166,24 @@ describe('Maker session capabilities', () => {
   });
 });
 
+describe('Session engine MCP tool status', () => {
+  it('reads the live engine and reports an engine without a status entry as null', async () => {
+    const read = vi.fn(async () => ({ state: 'connected' as const, tools: [{ name: 'search' }] }));
+    const codex = createAgent(async (opts) => ({
+      ...createHandle({ id: opts.sessionId ?? 'with-status' }), readMcpServerTools: read,
+    }));
+    const pi = createAgent(async (opts) => createHandle({ id: opts.sessionId ?? 'plain', agentKind: 'pi' }), 'pi');
+    const maker = new Maker({ agents: { codex, pi }, storage: createStorage(), logger: createLogger() });
+    try {
+      const withStatus = await maker.createSession({ id: 'with-status', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      const plain = await maker.createSession({ id: 'plain', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+      expect(await withStatus.readMcpServerTools('custom_omc')).toEqual({ state: 'connected', tools: [{ name: 'search' }] });
+      expect(read).toHaveBeenCalledWith('custom_omc');
+      expect(await plain.readMcpServerTools('custom_omc')).toBeNull();
+    } finally { await maker.shutdown(); }
+  });
+});
+
 describe('Maker Pi runtime skill status', () => {
   it('keeps managed skills pinned to the active session launch snapshot', async () => {
     const managedPath = '/managed/context-mode/SKILL.md';
@@ -4223,11 +4241,11 @@ describe('Session permission mode leases', () => {
 });
 
 describe('Maker invalid-resume persistence bridge', () => {
-  it('injects a compare-and-clear callback for resumed Claude sessions', async () => {
+  it.each(['claude-code', 'pi', 'cursor'] as const)('injects a compare-and-clear callback for resumed %s sessions', async (agentKind) => {
     const storage = createStorage();
     await storage.create({
       id: 'session-1',
-      agentKind: 'claude-code',
+      agentKind,
       workDir: '/repo',
       title: 'Resume me',
       model: 'claude-opus-4-6',
@@ -4236,16 +4254,16 @@ describe('Maker invalid-resume persistence bridge', () => {
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
       expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(true);
       expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(false);
-      return createHandle({ id: '<pending>', agentKind: 'claude-code' });
+      return createHandle({ id: '<pending>', agentKind });
     });
     const maker = new Maker({
-      agents: { 'claude-code': createAgent(startSession, 'claude-code') },
+      agents: { [agentKind]: createAgent(startSession, agentKind) },
       storage,
       logger: createLogger(),
     });
     await maker.createSession({
       id: 'session-1',
-      agentKind: 'claude-code',
+      agentKind,
       workingDir: '/repo',
       model: 'claude-opus-4-6',
       resumeSessionId: 'sdk-old',

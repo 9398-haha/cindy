@@ -132,8 +132,6 @@ export function localizeTemplateParamValidation(
 
 const DEFAULT_CRON = '0 9 * * *';
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
-const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
-const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 
 export function createMobileScheduleDraft(
   schedule?: RemoteSchedule | null,
@@ -150,7 +148,8 @@ export function createMobileScheduleDraft(
       timezone: DEFAULT_TIMEZONE,
       intervalMinutes: '',
       agentKind: 'claude-code',
-      model: DEFAULT_CLAUDE_MODEL,
+      // 留空 = 用运行电脑的新建任务默认模型(序列化时省略,由 host 实时解析),不写死型号。
+      model: '',
       providerId: '',
       effort: '',
       fastMode: false,
@@ -179,7 +178,7 @@ export function createMobileScheduleDraft(
     modelAgentKind: schedule.modelAgentKind,
     boundAgent: schedule.targetSessionId
       ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
-    model: schedule.model ?? (schedule.targetSessionId ? '' : defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code')),
+    model: schedule.model ?? '',
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
@@ -212,7 +211,7 @@ export function applyTemplateToMobileScheduleDraft(
   paramValues: Record<string, string> = {},
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
-  const model = template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind));
+  const model = template.model ?? (draft.agentKind === agentKind ? draft.model : '');
   return {
     ...draft,
     name: template.name || draft.name,
@@ -469,10 +468,11 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   const model = draft.model.trim();
   if (model) input.model = model;
   const effort = draft.effort.trim();
-  if (isMobileScheduleEffort(effort)) input.effort = effort;
+  if (draft.agentKind !== 'cursor' && isMobileScheduleEffort(effort)) input.effort = effort;
   // Fast 对 Codex 与 Pi 都生效(runner 对 claude-code 忽略此字段,并按模型 supportsFastMode
   // 收口);只序列化 codex 会让 Pi 任务里开的 Fast 被静默丢弃。
   if (draft.agentKind === 'codex' || draft.agentKind === 'pi') input.fastMode = draft.fastMode;
+  if (draft.agentKind === 'cursor') { input.effort = ''; input.fastMode = false; }
   return input;
 }
 
@@ -525,7 +525,7 @@ export function updateDraftAgentKind(
     agentKind,
     // Selecting another Harness must leave follow mode even on pre-upgrade bindings.
     ...(draft.modelAgentKind || draft.targetSessionId.trim() ? { modelAgentKind: agentKind } : {}),
-    model: defaultModelFor(agentKind),
+    model: '',
     providerId: '',
     effort: '',
     fastMode: false,
@@ -689,14 +689,6 @@ function isMobileScheduleEffort(value: string): value is MobileScheduleEffort {
 
 function hasTemplateParam(params: Record<string, string>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(params, key) && params[key] !== '';
-}
-
-function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
-  if (agentKind === 'codex') return DEFAULT_CODEX_MODEL;
-  // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;留空 → 序列化时省略 → host 解析
-  // 该 Pi agent 的当前默认模型(用户仍可在自由文本模型框里显式指定)。
-  if (agentKind === 'pi') return '';
-  return DEFAULT_CLAUDE_MODEL;
 }
 
 function validateIntervalMinutes(

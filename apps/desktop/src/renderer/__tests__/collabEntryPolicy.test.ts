@@ -17,6 +17,15 @@ const R = resolve(__dirname, '..');
 const read = (rel: string) => readFileSync(resolve(R, rel), 'utf8').replace(/\r\n/g, '\n');
 
 describe('resolveCollabEntryPolicy 五类场景', () => {
+  it.each([
+    { workspaceKind: 'project', workingDir: '/repo' },
+    { workspaceKind: 'dialogue', workingDir: null },
+    { workspaceKind: 'project', workingDir: '/repo', deviceLinkDeviceId: 'host' },
+  ])('does not offer orchestration for native Cursor: %j', (target) => {
+    expect(resolveCollabEntryPolicy({ ...target, agentKind: 'cursor' }).eligible).toBe(false);
+    expect(resolveCollabEntryPolicy({ ...target, agentKind: 'codex' }).eligible).toBe(true);
+  });
+
   it('本地项目:可挂入口,查本机项目级', () => {
     expect(
       resolveCollabEntryPolicy({ workspaceKind: 'project', workingDir: '/Users/me/proj' }),
@@ -105,6 +114,16 @@ describe('resolveCollabEntryPolicy 五类场景', () => {
         workspaceKind: 'dialogue',
         workingDir: '/app-managed/dialogues/2026-08-02/worker-1',
         orcaRole: 'worker',
+      }).eligible,
+    ).toBe(false);
+  });
+
+  it('另一台电脑派来的远端 Worker:同样不挂入口', () => {
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'project',
+        workingDir: '/Users/me/Interviews',
+        orcaRemoteWorker: true,
       }).eligible,
     ).toBe(false);
   });

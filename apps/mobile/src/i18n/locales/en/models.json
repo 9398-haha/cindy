@@ -92,6 +92,10 @@
     "recommended": "Recommended",
     "source": "Source",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Provider Group · {{count}} computer",
+    "groupBadge_other": "Provider Group · {{count}} computers",
     "harness": "Harness",
     "restoreRecommended": "Restore recommended",
     "saveFailed": "Could not save. Please try again.",
@@ -103,5 +107,9 @@
       "minute": "m",
       "second": "s"
     }
+  },
+  "cursorGroups": {
+    "models": "Cursor Models",
+    "other": "Other Models"
   }
 }

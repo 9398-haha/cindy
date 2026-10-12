@@ -26,6 +26,7 @@ import {
   type RelayErrorCode,
   type RelayErrorPayload,
 } from '@cindy/device-link-protocol';
+import type { InvokeResultTransfer, InvokeTransferOptions } from './invokeTransfer.js';
 import { isProviderSharePeer as isProviderSharePeerLocal } from './providerSharePeer.js';
 import { isSharedTaskPeer as isSharedTaskPeerLocal } from './sharedTaskPeer.js';
 
@@ -139,6 +140,9 @@ export interface LinkOpenPayload {
 /** 控制端能安全消费完整 ProviderLogoKind（含 #527 新增品牌）的 maker:provider:list 投影。 */
 export const CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 = 'provider-logo-kinds-v2';
 
+/** Includes Cursor when browsing models across engines in an existing task. */
+export const CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1 = 'cursor-model-picker-v1';
+
 /** 控制端能区分 set-model 中显式 providerId:null 与 JSON optional 占位。 */
 export const CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1 =
   'set-model-explicit-provider-null-v1';
@@ -205,6 +209,8 @@ export interface LinkClosePayload {
 export interface InvokePayload {
   channel: string;
   args: unknown[];
+  /** 可选结果传输编码声明（见 invokeTransfer.ts）；旧被控端忽略。 */
+  transfer?: InvokeTransferOptions;
 }
 
 /**
@@ -213,7 +219,12 @@ export interface InvokePayload {
  * 控制端 renderer 继续用现有 extractIpcError 解码,错误协议全链路免改。
  */
 export type InvokeResultPayload =
-  | { ok: true; result: unknown }
+  | {
+      ok: true;
+      result: unknown;
+      /** 仅在请求声明了 transfer 时出现；控制端 DeviceLinkClient 在交给调用方前还原。 */
+      transfer?: InvokeResultTransfer;
+    }
   | {
       ok: false;
       error: { code: DeviceLinkErrorCode | 'IPC_ERROR'; message: string };

@@ -138,8 +138,8 @@ export interface ScheduleFormState {
   recurring: boolean;
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
-  agentKind: 'claude-code' | 'codex' | 'pi';
-  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'cursor';
   /** The bound task's baseline, independent of the editable model choice. Form-only. */
   boundAgent?: { sessionId: string; agentKind: ScheduleFormState['agentKind'] };
   model: string;
@@ -378,15 +378,20 @@ export function applyRunMode(
 
 /** renderer Session.agentKind('cc'|'codex')→ schedule agentKind 映射。 */
 export function sessionAgentKindToScheduleAgentKind(
-  kind: 'cc' | 'codex' | 'pi',
+  kind: 'cc' | 'codex' | 'pi' | 'cursor',
 ): ScheduleFormState['agentKind'] {
   if (kind === 'codex') return 'codex';
+  if (kind === 'cursor') return 'cursor';
   if (kind === 'pi') return 'pi';
   return 'claude-code';
 }
 
 interface TemplateAgentDefaults {
-  getDefaultModel: (agentKind: ScheduleFormState['agentKind']) => string;
+  /** 目标 agent 在给定来源内的默认模型及与之成对的来源(null = 跟随原生默认)。 */
+  getDefaultRoute: (
+    agentKind: ScheduleFormState['agentKind'],
+    preferredProviderId?: string | null,
+  ) => { model: string; providerId: string | null };
   getAgentPrefs: (
     agentKind: ScheduleFormState['agentKind'],
   ) => Pick<ScheduleFormState, 'providerId' | 'effort' | 'fastMode'>;
@@ -403,11 +408,22 @@ export function resolveTemplateAgentFields(
   const templateModel = typeof template.model === 'string' ? template.model.trim() : '';
   const templateProviderId = typeof template.providerId === 'string' ? template.providerId.trim() : undefined;
   const templateEffort = template.effort && isEffortValue(template.effort) ? template.effort : undefined;
+  // 模板没给模型、换了 agent 时用默认路由:限定在模板 / 任务记忆的来源内,模型与来源整对应用。
+  const defaultRoute =
+    agentChanged && !templateModel
+      ? defaults.getDefaultRoute(agentKind, templateProviderId ?? (agentPrefs?.providerId || null))
+      : null;
 
   return {
     agentKind,
-    model: templateModel || (agentChanged ? defaults.getDefaultModel(agentKind) : form.model),
-    providerId: templateProviderId ?? (agentChanged ? (agentPrefs?.providerId ?? '') : form.providerId),
+    model: templateModel || (agentChanged ? (defaultRoute?.model ?? '') : form.model),
+    providerId:
+      templateProviderId ??
+      (agentChanged
+        ? defaultRoute
+          ? (defaultRoute.providerId ?? '')
+          : (agentPrefs?.providerId ?? '')
+        : form.providerId),
     effort: templateEffort ?? (agentChanged ? (agentPrefs?.effort ?? '') : form.effort),
     fastMode: template.fastMode ?? (agentChanged ? (agentPrefs?.fastMode ?? false) : form.fastMode),
   };
@@ -588,10 +604,8 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   // 让 update patch 按「key 在 + undefined」把旧 provider_id 清成 NULL。
   base.providerId = form.providerId.trim() || undefined;
   if (form.effort && isEffortValue(form.effort)) base.effort = form.effort;
-  // fastMode 对 Codex / Pi 都生效(runner.ts:665 明确 claude-code 忽略此字段);只序列化
-  // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
-  // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
-  if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
+  // Fast 按引擎和模型的原生能力门控；保留显式 false，避免执行端沿用之前的值。
+  if (form.agentKind === 'codex' || form.agentKind === 'pi' || form.agentKind === 'cursor') base.fastMode = form.fastMode;
   return base;
 }
 

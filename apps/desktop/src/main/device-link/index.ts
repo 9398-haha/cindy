@@ -14,6 +14,7 @@ import os from 'node:os';
 import { tryPeerInvoke } from './filePeer';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
 import { deviceName, initializeDeviceName } from './deviceName';
+import { desktopTransferCodec } from './transferCodec';
 import { watchNetworkChanges } from './networkChanges';
 import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
@@ -28,7 +29,9 @@ import {
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
@@ -526,9 +529,11 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * 必须用同一份 —— 只在一处声明会让另一条路径静默降级(mobile 侧 review 实测过这个坑)。
  */
 const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_CURSOR_MODEL_PICKER_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   // 桌面控制桌面时同样收微批:批的收益是**relay 帧数**,只要有一个控制端不支持,
   // 被控端就得为它保留逐帧流,聚合出站速率照旧能招来 1013 并连带踢掉已启用微批的
@@ -675,6 +680,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   };
   client = new DeviceLinkClient({
     getWsUrl: wsUrl,
+    transferCodec: desktopTransferCodec,
     getToken: async () => {
       // Prepare the name before the first hello without blocking Electron's main thread.
       await deviceNameReady;
@@ -1820,7 +1826,9 @@ export async function remoteInvoke(
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     // 共享任务与供应商分享的对端是另一个账号：只走 relay，不尝试点对点直连。
     if (!isScopedPeer(deviceId)) {
-      const accelerated = await tryPeerInvoke(deviceId, channel, args, (peer, nextChannel, nextArgs) => {
+      // 直连会保存这个回调，之后在空闲关闭等定时器里调用（届时 preSend 可能已失效）。
+      // 必须是 async：失效时返回 rejected promise，不能同步抛出绕过调用方的 .catch。
+      const accelerated = await tryPeerInvoke(deviceId, channel, args, async (peer, nextChannel, nextArgs) => {
         preSend();
         return remoteInvoke(peer, nextChannel, nextArgs, { preSend });
       });
@@ -1858,16 +1866,19 @@ export async function remoteBackgroundInvoke(
   agentDeviceId: string,
   channel: string,
   args: unknown[],
+  options?: { preSend?: () => void },
 ): Promise<InvokeResultPayload> {
+  options?.preSend?.();
   // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
   const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
+  options?.preSend?.();
   const shared = deviceId !== agentDeviceId;
-  if (!shared) return backgroundInvokeDevice(deviceId, channel, args);
+  if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
   try {
     // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。
     const result = isCrossRegionProviderShareTarget(deviceId)
       ? await crossRegionInvoke(deviceId, channel, args, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'))
-      : await backgroundInvokeDevice(deviceId, channel, args);
+      : await backgroundInvokeDevice(deviceId, channel, args, options);
     if (result.ok) return result;
     if (!isProviderShareRefusal(result.error.code, result.error.message)) return result;
     noteProviderShareAccessFailure();
@@ -1881,14 +1892,25 @@ export async function remoteBackgroundInvoke(
   }
 }
 
-async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
+/**
+ * 分享者那台电脑(已解析成本地 peer key)的只读请求：relay 只在建链时登记受邀者这台电脑，没建过链的
+ * 电脑直接发 invoke 会被当成不在分享名单里(`providerShare peer unavailable`)。与远程 Agent、手机代读
+ * 分享同一条路：先建后台链路，再请求。
+ */
+export function providerShareHostInvoke(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
+  return backgroundInvokeDevice(target, channel, args);
+}
+
+async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+  options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
       hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
       closeLink: () => closeRemoteLink(deviceId),
     });
   }
-  return remoteInvoke(deviceId, channel, args);
+  // 账号等调用方状态必须穿过建链、上线与排队等待，在实际发送边界复验。
+  return remoteInvoke(deviceId, channel, args, options);
 }
 
 /**

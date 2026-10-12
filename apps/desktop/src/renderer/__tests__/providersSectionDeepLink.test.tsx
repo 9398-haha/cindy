@@ -43,7 +43,9 @@ const {
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
+  useTranslation: () => ({ t: (key: string, params?: { agent?: string }) =>
+    key === 'settings.providers.detail.singleAgentNote' ? `${key} ${params?.agent}` : key,
+    i18n: { language: 'zh-CN' } }),
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
@@ -132,6 +134,7 @@ import { updateCustomProvider } from '@/lib/customProviders';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import { useProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
+import { __testing as localProviderGroupsTesting } from '@/features/provider-group/useLocalProviderGroups';
 
 vi.mock('@/components/settings/useProviderSubscriptionCard', () => ({
   useProviderSubscriptionCard: vi.fn(() => null),
@@ -219,6 +222,33 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  it('keeps an installed Cursor CLI visible and retryable without discovered models', async () => {
+    providersState.providers = [makeProvider('cursor', {
+      name: 'Cursor', agents: ['cursor'], auth: { method: 'none' },
+      models: { cursor: [] }, connected: false,
+    })];
+    vi.mocked(window.electronAPI.maker.scanLocalCli).mockResolvedValue({ detections: [{
+      cli: 'cursor-cli', providerId: 'cursor', installed: true, loggedIn: true, sharedWithCindy: true,
+    }] });
+    renderAt('?tab=providers');
+    fireEvent.click(await screen.findByRole('button', { name: /^Cursor/ }));
+    expect(await screen.findByTestId('cursor-provider-setup')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' })).toBeTruthy();
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+  });
+
+  it('labels the connected Cursor header with its actual engine and connection state', async () => {
+    providersState.providers = [makeProvider('cursor', {
+      name: 'Cursor', agents: ['cursor'], auth: { method: 'none' },
+      models: { cursor: [] }, connected: true,
+    })];
+    renderAt('?tab=providers&connect=cursor');
+    const subtitle = await screen.findByText(/^settings.providers.cursor.localAccount/);
+    expect(subtitle.textContent).toContain('singleAgentNote Cursor');
+    expect(screen.getByText('settings.providers.pill.connected')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.button.disconnect' })).toBeNull();
+  });
+
   it('does not rediscover a deleted local Codex provider into the settings list', async () => {
     providersState.providers.push(makeProvider('openai', {
       name: 'Deleted local account', removed: true, imageModels: [{ id: 'image', name: 'Image' }],
@@ -503,7 +533,9 @@ describe('ProvidersSection — 深链定位', () => {
 
   it('a cancelled login cannot clear a newer login on the same account', async () => {
     const completions: ((result: { ok: boolean }) => void)[] = [];
-    const login = vi.fn((_id: string, _options?: { ownerId?: string }) => new Promise<{ ok: boolean }>((resolve) => completions.push(resolve)));
+    const login = vi.fn<(id: string, options?: { ownerId?: string }) => Promise<{ ok: boolean }>>(
+      () => new Promise((resolve) => completions.push(resolve)),
+    );
     let progress!: Parameters<typeof window.electronAPI.maker.onProviderOAuthProgress>[0];
     const openExternal = vi.fn(async () => ({ success: true }));
     window.electronAPI.openExternal = openExternal;
@@ -1008,5 +1040,62 @@ describe('ProvidersSection — 深链定位', () => {
       releaseOwner: true,
       ownerId,
     });
+  });
+});
+
+describe('ProvidersSection — 允许被远程调用与供应商组', () => {
+  afterEach(() => localProviderGroupsTesting.reset());
+
+  it('folds the provider group into the remote-use row and waits for the group settings before showing it', async () => {
+    localProviderGroupsTesting.reset();
+    let answer!: (groups: Record<string, unknown>) => void;
+    const list = new Promise<Record<string, unknown>>((resolve) => {
+      answer = resolve;
+    });
+    const command = vi.fn((cmd: { action: string }) =>
+      cmd.action === 'list' ? list : Promise.reject(new Error(`unexpected ${cmd.action}`)),
+    );
+    Object.assign(window.electronAPI, {
+      deviceLink: {
+        getState: vi.fn(async () => ({ remoteControlEnabled: true })),
+        listDevices: vi.fn(async () => ({ devices: [] })),
+        onPresenceChanged: () => () => undefined,
+        onControlTargetChanged: () => () => undefined,
+      },
+      providerGroup: { command, onChanged: () => () => undefined },
+    });
+    providersState.providers = [
+      makeProvider('anthropic', { name: 'Anthropic', connected: true, remoteInvocationEnabled: true }),
+    ];
+    renderAt('?tab=providers&connect=anthropic');
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'list' }));
+    await waitFor(() => expect(window.electronAPI.deviceLink.getState).toHaveBeenCalled());
+    // 等「允许远程控制」读完，只剩组设置没读到。
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // 组设置还没读到：整行先不出现，不先显示「远程与分享」再跳成组。
+    expect(screen.queryByTestId('provider-remote-access')).toBeNull();
+
+    await act(async () => {
+      answer({
+        anthropic: {
+          strategy: 'least',
+          autoSwitch: true,
+          members: [
+            { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+            { key: 'device:mini:anthropic', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+          ],
+        },
+      });
+      await list;
+    });
+    const row = await screen.findByTestId('provider-remote-access');
+    // 组的状态写在入口按钮上，不再单独占一行；有组时说明 Agent 由组选电脑运行。
+    expect(within(row).getByTestId('provider-share-entry').textContent).toBe('settings.providers.remote.groupBadge');
+    expect(within(row).getByText('settings.providers.detail.remoteAccess.descriptionGroup')).toBeTruthy();
+    expect(within(row).getByRole('switch', { name: 'settings.providers.detail.remoteAccess.ariaLabel' })).toBeTruthy();
+    expect(screen.queryByTestId('provider-group-row')).toBeNull();
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'get' }));
   });
 });

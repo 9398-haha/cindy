@@ -5,9 +5,11 @@ import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
+import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
+  MessageSourceGroup,
   MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
@@ -21,7 +23,7 @@ export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
  * 暂时只有 'cc'（Claude Code）。未来扩展 'codex' 等时新增枚举值即可，
  * schema 不动；老 session DEFAULT 'cc' 兜底。
  */
-export type AgentKind = 'cc' | 'codex' | 'pi';
+export type AgentKind = 'cc' | 'codex' | 'pi' | 'cursor';
 export type MakerVendor = AgentKind | 'orca';
 export type OrcaRole = 'lead' | 'worker';
 
@@ -192,6 +194,10 @@ export interface CcMeta {
   sourceDevice?: MessageSourceDevice;
   /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
   sourcePlugin?: MessageSourcePlugin;
+  /** Group source of an explicitly sent private assistant message. */
+  sourceGroup?: MessageSourceGroup;
+  /** Guest-safe independent assistant delivery; does not seal a model turn. */
+  explicitDelivery?: boolean;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;
@@ -269,6 +275,10 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  /** Main-owned input receipt, retained for audit; never an authorization grant. */
+  botTaskCoordinationInput?: import('../../shared/botTaskCoordination').BotTaskCoordination;
+  /** Accepted internal coordination turn, used to suppress successful completion attention. */
+  botTaskCoordination?: boolean;
   /** Turn of a Bot's hidden group-chat lane; the group chat surfaces its result and failures. */
   botGroupLane?: boolean;
   botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
@@ -410,6 +420,11 @@ export interface Session {
    */
   agentDeviceId?: string | null;
   /**
+   * 本任务是另一台电脑上协同 Lead 派来的 Worker(任务、目录与命令都在本机)。
+   * null/undefined = 普通任务；旧版本 payload 没有该字段。
+   */
+  orcaRemoteLead?: OrcaRemoteLead | null;
+  /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——
    * 从本地 DB 反序列化出来的 session 此字段恒为 undefined。
@@ -458,7 +473,7 @@ export type UsageHistorySession = Pick<
 >;
 
 export interface SessionRuntimeProfileProjection {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor';
   model: string;
   providerId: string | null;
   effort: Effort | null;
@@ -485,8 +500,8 @@ export type MessageRole =
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
-  fromAgentKind: 'cc' | 'codex' | 'pi';
-  toAgentKind: 'cc' | 'codex' | 'pi';
+  fromAgentKind: 'cc' | 'codex' | 'pi' | 'cursor';
+  toAgentKind: 'cc' | 'codex' | 'pi' | 'cursor';
   fromModel: string | null;
   toModel: string | null;
   /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */
@@ -519,7 +534,7 @@ export interface Message {
    * session-agent-switch 后 session.agentKind 只代表当前活跃引擎,历史行按本字段解析;
    * null = 切换功能上线前的老消息(回落 session.agentKind)。
    */
-  agentKind?: 'cc' | 'codex' | 'pi' | null;
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor' | null;
   /** Structured guard details for a persisted tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
   createdAt: string; // ISO 8601

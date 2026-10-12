@@ -13,6 +13,11 @@ import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
+import {
+  parseOrcaRemoteLead,
+  serializeOrcaRemoteLead,
+  type OrcaRemoteLead,
+} from '../../shared/orcaRemoteWorker.js';
 
 import type {
   sessions,
@@ -268,6 +273,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     writableDirs: safeParseStringArray(row.writableDirs),
     remoteHostId: row.remoteHostId ?? null,
     agentDeviceId: row.agentDeviceId ?? null,
+    orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead ?? null),
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,
@@ -331,7 +337,7 @@ export function messageToCamel(row: MessageRow): Message {
     content,
     toolUseId: row.toolUseId,
     agentMeta,
-    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
+    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | 'cursor' | null) ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -375,6 +381,8 @@ export function sessionCreateToRow(
         remoteHostId?: string | null;
         /** Agent 在同账号另一台电脑上运行时那台电脑的 deviceId; null/undefined = Agent 在本机。 */
         agentDeviceId?: string | null;
+        /** 仅运行设备上的协同远端 Worker 入口写入(见 shared/orcaRemoteWorker.ts)。 */
+        orcaRemoteLead?: OrcaRemoteLead | null;
         /**
          * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
          * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
@@ -395,7 +403,7 @@ export function sessionCreateToRow(
         : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
     workspaceKind: body?.workspaceKind ?? 'project',
-    model: body?.model ?? 'claude-sonnet-4-6',
+    model: body?.model ?? (body?.agentKind === 'cursor' ? 'cursor-default' : 'claude-sonnet-4-6'),
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
     permissionMode: (body?.permissionMode as SessionInsert['permissionMode']) ?? 'ask',
     status: 'active',
@@ -421,6 +429,7 @@ export function sessionCreateToRow(
     remoteHostId: normalizeRemoteHostId(body?.remoteHostId),
     // Agent 运行在另一台电脑时与 SSH 远端互斥：两者同时给出时以 SSH 远端为准、不记录设备。
     agentDeviceId: normalizeRemoteHostId(body?.remoteHostId) ? null : normalizeRemoteHostId(body?.agentDeviceId),
+    orcaRemoteLead: body?.orcaRemoteLead ? serializeOrcaRemoteLead(body.orcaRemoteLead) : null,
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:
@@ -502,7 +511,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'cursor' | null;
     createdAt?: number;
   },
   now: number,

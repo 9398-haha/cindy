@@ -285,7 +285,7 @@ export function makerApiForDevice(deviceId: string): RoutableMaker {
 /** Mutation 前按明确 deviceId 重新读取被控端能力，避免复用可能过期的 renderer cache。 */
 export function agentCapabilitiesForDevice(
   deviceId: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'cursor',
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
@@ -908,6 +908,7 @@ export interface RoutableOrcaWorkflows {
   archiveWorker: FullOrca['archiveWorker'];
   endTeam: FullOrca['endTeam'];
   getCollaborationSettings: FullOrca['getCollaborationSettings'];
+  listExecutionDevices: FullOrca['listExecutionDevices'];
 }
 
 /**
@@ -953,6 +954,7 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
     getCollaborationSettings: t(
       'maker:collaboration-settings:get',
     ) as FullOrca['getCollaborationSettings'],
+    listExecutionDevices: t('maker:orca:execution-devices') as FullOrca['listExecutionDevices'],
   };
 }
 

@@ -308,6 +308,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { MessageSourceLabels } from './MessageSourceLabels';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
@@ -420,7 +421,7 @@ interface MessageStreamProps {
   sessionTitle?: string | null;
   /** Owning agent kind — propagated to UserMessage so capability gates
    *  (fork/rewind icon visibility) can read the right agent's capabilities. */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
   /** Owning session's remote SSH host id (null for local sessions). Forwarded
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
@@ -1607,30 +1608,66 @@ export function buildRenderItems(
   // Task session。不能只检查整窗「最新」计划：后面若已有可解析的新 session，
   // 较早的半截 Task 卡仍会漏出来。逐个 Task insertion 用其前缀复核，等 prepend
   // 补齐标题/早期 TaskCreate 后再由同一 stable key 插回。
+  let needsTaskHistoryValidation = false;
   if (opts?.historyWindowIncomplete === true) {
+    for (const insertion of planInsertAt.values()) {
+      if (insertion.source === 'task') {
+        needsTaskHistoryValidation = true;
+        break;
+      }
+    }
+  }
+  // Ordinary tool history and TodoWrite/update_plan need no Task prefix validation.
+  if (needsTaskHistoryValidation) {
+    // Build the indexes once. The old validation path rescanned the whole
+    // prefix and filtered the whole suffix for every Task insertion. A paged
+    // history window can contain many task rows, so keep message order while
+    // looking up only plan ids and their late results.
+    const planToolUseCountAtInsertion = new Map<number, number>();
+    const toolResultsByUseId = new Map<
+      string,
+      Array<{ index: number; message: ChatMessage }>
+    >();
+    const planToolUseIds: string[] = [];
+    for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+      const message = messages[messageIndex];
+      if (message.role === 'tool_result' && typeof message.toolUseId === 'string') {
+        const results = toolResultsByUseId.get(message.toolUseId) ?? [];
+        results.push({ index: messageIndex, message });
+        toolResultsByUseId.set(message.toolUseId, results);
+      }
+      if (
+        isAgentPlanToolName(message.toolName)
+        && typeof message.toolUseId === 'string'
+        && message.toolUseId.length > 0
+      ) {
+        planToolUseIds.push(message.toolUseId);
+      }
+      if (planInsertAt.has(messageIndex)) {
+        planToolUseCountAtInsertion.set(messageIndex, planToolUseIds.length);
+      }
+    }
+
     for (const [index, insertion] of planInsertAt) {
       if (insertion.source !== 'task') continue;
       const prefix = messages.slice(0, index + 1);
-      const prefixPlanToolUseIds = new Set(
-        prefix
-          .filter((message) => isAgentPlanToolName(message.toolName))
-          .map((message) => message.toolUseId)
-          .filter((toolUseId): toolUseId is string => Boolean(toolUseId)),
-      );
+      const prefixPlanToolUseIds = new Set<string>();
+      const planToolUseCount = planToolUseCountAtInsertion.get(index) ?? 0;
+      for (let planIndex = 0; planIndex < planToolUseCount; planIndex += 1) {
+        prefixPlanToolUseIds.add(planToolUseIds[planIndex]);
+      }
       // TaskList / TaskGet 的权威内容在后续 tool_result 行里。只切到工具行会把
       // 已完整的 snapshot 重新判成半截；保留当前前缀中计划调用的匹配结果，但
       // 不把后续计划事件带进来，避免改变「正在复核哪张 insertion」的语义。
-      const validationMessages = [
-        ...prefix,
-        ...messages
-          .slice(index + 1)
-          .filter(
-            (message) =>
-              message.role === 'tool_result' &&
-              typeof message.toolUseId === 'string' &&
-              prefixPlanToolUseIds.has(message.toolUseId),
-          ),
-      ];
+      const lateResults: Array<{ index: number; message: ChatMessage }> = [];
+      for (const toolUseId of prefixPlanToolUseIds) {
+        for (const result of toolResultsByUseId.get(toolUseId) ?? []) {
+          if (result.index > index) lateResults.push(result);
+        }
+      }
+      if (lateResults.length > 1) lateResults.sort((left, right) => left.index - right.index);
+      const validationMessages = prefix;
+      for (const result of lateResults) validationMessages.push(result.message);
       const stateAtInsertion = getLatestMessageTodoState(validationMessages, {
         taskHistoryMayBeIncomplete: true,
       });
@@ -2526,7 +2563,7 @@ function renderWorkGroupChild(
     workingDir: string;
     sessionId?: string;
     sessionTitle?: string | null;
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
     remoteHostId?: string | null;
     sessionSource?: string | null;
     isSessionStreaming: boolean;
@@ -3001,6 +3038,7 @@ export function MessageStream({
         streaming: isSessionStreaming,
         isLive: (row) => row.isStreaming === true,
         pendingHandoff: handoff?.pending,
+        staleTail: handoff?.tail,
         isLocalMessage: (row) => row.isLocalSystemCard === true,
         isLocalUser: (row) =>
           row.role === 'user' &&
@@ -6643,7 +6681,7 @@ const MessageItem = memo(function MessageItem({
   remoteHostId?: string | null;
   /** Forwarded to User/AssistantMessage so they can read this agent's
    *  capabilities (gates Fork/Rewind icon visibility). */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'cursor';
   /** Whether this session currently has an in-flight SDK turn. Rewind uses it
    *  to require an idle live query; fork can still target stable history. */
   sessionRunning?: boolean;
@@ -6714,7 +6752,6 @@ const MessageItem = memo(function MessageItem({
           sharedAuthorMemberId={message.sharedAuthorMemberId}
           workingDir={workingDir}
           content={message.content}
-          sessionReferences={message.sessionReferences}
           quotesEncoded={message.quotesEncoded}
           agentReferences={message.agentReferences}
           pastedTextRanges={message.pastedTextRanges}
@@ -6749,7 +6786,7 @@ const MessageItem = memo(function MessageItem({
             workingDir={workingDir}
           />
         );
-        return simplifiedBotConversation && message.systemCardType === 'bot-session-task'
+        return simplifiedBotConversation && (message.systemCardType === 'bot-session-task' || message.systemCardType === 'bot-session-task-result')
           ? withAssistantAvatar(
               assistantAvatar ? (
                 <span aria-hidden="true" className="invisible">
@@ -6763,6 +6800,7 @@ const MessageItem = memo(function MessageItem({
       return withAssistantAvatar(
         assistantAvatar,
         <>
+          <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
             workingDir={workingDir}
             localFileRefs={localFileRefs}
