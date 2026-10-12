@@ -480,7 +480,7 @@ import {
   orcaWorkerCreationReservations,
   sessions,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { nextBotModelRoute, type BotModelRoute } from '../../shared/botModelChain.js';
 import { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import { readEffectiveBotModelChain, readEffectiveBotModelSelection } from '../maker-host/bot-model-chain-settings-store.js';
 import {
