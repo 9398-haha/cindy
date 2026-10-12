@@ -419,6 +419,100 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('keeps the cached home projection stable across usage-only refreshes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const beforeRow = before[0];
+    expect(beforeRow).toBeDefined();
+    expect(beforeRow).not.toHaveProperty('totalCostUsd');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 2.5,
+    });
+    expect(remoteSessionStore.getHomeSessions()).toBe(before);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(beforeRow);
+
+    // A later ordinary recompute must still reuse the projection because usage
+    // fields are intentionally absent from Home.
+    remoteSessionStore.setDeviceIdentity([{ deviceId: 'dev-1', name: 'Mac' }]);
+    expect(remoteSessionStore.getHomeSessions()).toBe(before);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(beforeRow);
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toHaveProperty('totalCostUsd');
+  });
+
+  it('black-box: repeated device refreshes keep the visible home snapshot stable', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const beforeRows = [...before];
+
+    for (let index = 0; index < 100; index += 1) {
+      remoteSessionStore.setDeviceIdentity([
+        { deviceId: 'dev-1', name: 'Mac' },
+        { deviceId: `unrelated-${index}`, name: `Other ${index}` },
+      ]);
+    }
+
+    const after = remoteSessionStore.getHomeSessions();
+    expect(after).toBe(before);
+    expect(after).toEqual(beforeRows);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalCostUsd'))).toBe(true);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalMoney'))).toBe(true);
+    expect(after.every((row) => !Object.prototype.hasOwnProperty.call(row, 'totalTokenUsage'))).toBe(true);
+  });
+
+  it('refreshes Home metadata after unchanged device refreshes and usage-only pushes', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    const homeChanged = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribeHomeStatus(homeChanged);
+    try {
+      remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', { sessionId: 's1', totalTokens: 500 });
+      for (let index = 0; index < 10; index += 1) {
+        remoteSessionStore.setDeviceIdentity([
+          { deviceId: 'dev-1', name: 'Mac' },
+          { deviceId: `other-${index}`, name: 'Other' },
+        ]);
+      }
+      expect(remoteSessionStore.getHomeSessions()).toBe(before);
+      expect(homeChanged).not.toHaveBeenCalled();
+      expect(remoteSessionStore.getSessions()[0].totalTokenUsage).toBe(500);
+      expect(remoteSessionStore.getDeviceIdentity()[1].deviceId).toBe('other-9');
+
+      remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Renamed' });
+      const renamed = remoteSessionStore.getHomeSessions();
+      expect(renamed).not.toBe(before);
+      expect(renamed[0]).toMatchObject({ id: 's1', title: 'Renamed' });
+      expect(renamed[0]).not.toHaveProperty('totalTokenUsage');
+      expect(renamed[1]).toBe(before[1]);
+      expect(homeChanged).toHaveBeenCalledTimes(1);
+
+      remoteSessionStore.renameDevice('dev-1', 'New Mac');
+      expect(remoteSessionStore.getHomeSessions().every((row) => row.deviceLinkDeviceName === 'New Mac')).toBe(true);
+      expect(homeChanged).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it.each(['remove', 'clear'] as const)('rebuilds Home after %s and reusing a session ID', (action) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
+    const before = remoteSessionStore.getHomeSessions();
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s2'), session('s1')]);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([before[1], before[0]]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toBe(before[1]);
+
+    if (action === 'clear') remoteSessionStore.clear();
+    else remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    expect(remoteSessionStore.getHomeSessions()).toEqual([]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    expect(remoteSessionStore.getHomeSessions()).toHaveLength(1);
+    expect(remoteSessionStore.getHomeSessions()[0]).not.toBe(before[0]);
+    expect(remoteSessionStore.getHomeSessions()[0]).toMatchObject({ id: 's1', title: 's1' });
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'Restored title' });
+    expect(remoteSessionStore.getHomeSessions()[0].title).toBe('Restored title');
+  });
+
   it('removes archived sessions from the active mirror', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
     remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });
@@ -2341,6 +2435,94 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('断流期间漏收超过一页：补读到已验证上界后，整段旧历史保留', () => {
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted();
+    const latestPage = [
+      messageAt('gap-3', 's1', '2026-01-01T09:00:05.000Z'),
+      messageAt('gap-4', 's1', '2026-01-01T09:00:06.000Z'),
+    ];
+    // 本页最旧行晚于已验证上界:直接提交会丢掉 old-*,所以需要先补读。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, true)).toBe(true);
+    // 本页不满页(历史到头)、或已验证区间不存在时,补读不改变结果。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, false)).toBe(false);
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s2', latestPage, true)).toBe(false);
+
+    const bridged = [
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('gap-1', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('gap-2', 's1', '2026-01-01T09:00:04.000Z'),
+      ...latestPage,
+    ];
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', bridged, true)).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', bridged, { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'old-1',
+      'old-2',
+      'gap-1',
+      'gap-2',
+      'gap-3',
+      'gap-4',
+    ]);
+  });
+
+  it('漏推提示后只信区间下界：补读覆盖整段才相接，旧历史不被整段丢弃', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    // 订阅内的 push 把上界推过了一条被漏推的 gap-3。
+    remoteSessionStore.appendMessage('s1', messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'));
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+
+    const latestPage = [
+      messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'),
+      messageAt('new-5', 's1', '2026-01-01T09:00:05.000Z'),
+    ];
+    // 上界已不可信:即使最新页与 live-4 有交集,也要补读到区间下界。
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', latestPage, true)).toBe(true);
+    const bridged = [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('gap-3', 's1', '2026-01-01T09:00:03.000Z'),
+      ...latestPage,
+    ];
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', bridged, true)).toBe(false);
+    remoteSessionStore.setLatestMessageWindow('s1', bridged, { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'old-1', 'old-2', 'gap-3', 'live-4', 'new-5',
+    ]);
+  });
+
+  it('漏推提示后没补读到区间下界时，仍按未验证处置', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'));
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_SYNC_CHANNEL, { sessionId: 's1', resyncRequired: true });
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('gap-3', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('live-4', 's1', '2026-01-01T09:00:04.000Z'),
+    ], { moreBeyondWindow: true });
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['gap-3', 'live-4']);
+  });
+
+  it('来源不明的缓存段没有已验证区间可接，不触发补读', () => {
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+    ]);
+    expect(remoteSessionStore.latestMessageWindowNeedsBridge('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ], true)).toBe(false);
+  });
+
   it('rejects late paging whose anchor was removed by a concurrent latest-window refresh', () => {
     const old = messageAt('old-anchor', 's1', '2026-01-01T09:00:00.000Z');
     const latest = messageAt('new-anchor', 's1', '2026-01-01T10:00:00.000Z');
@@ -3198,6 +3380,23 @@ describe('remoteSessionStore', () => {
       generationActive: false,
       generationReliable: true,
     });
+  });
+
+  it('carries the host tok/s across statuses without it and clears it for the next turn', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const tokenSpeed = { rate: 42, average: 40, tokens: 120, elapsedMs: 3_000, streaming: true };
+    pushMakerStatus('s1', { isRunning: true, status: 'Generating...', tokenSpeed });
+    pushMakerStatus('s1', { isRunning: true, status: 'Running tool' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toEqual(tokenSpeed);
+    // The host withdrew the speed (suspended mid-generation): the stale reading goes too.
+    pushMakerStatus('s1', { isRunning: true, generationReliable: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+    pushMakerStatus('s1', { isRunning: false });
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
+    pushMakerStatus('s1', { isRunning: false });
+    pushMakerStatus('s1', { isRunning: true, status: 'Thinking' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').tokenSpeed).toBeUndefined();
   });
 
   it('clears leftover task updates on a real turn start, scoped to that session', () => {
@@ -6685,66 +6884,26 @@ describe('list message reuse', () => {
     expect(remoteSessionStore.getMessages('s1')[0].content).toBe(content);
   });
 
+  it('merges the disk window under list-only rows when the task opens', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
+    const at = (id: string, createdAt: string) => messageAt(id, 's1', createdAt);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', { sessionId: 's1', listMessage: true,
+      message: at('prefetched', '2026-01-01T00:00:09.000Z') });
+    remoteSessionStore.enterSessionMessageDetail('s1');
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      at('older', '2026-01-01T00:00:01.000Z'), { ...at('prefetched', '2026-01-01T00:00:09.000Z'), content: 'cached copy' },
+    ]);
+    expect(remoteSessionStore.getMessages('s1').map(row => [row.id, row.content])).toEqual([
+      ['older', 'hello'], ['prefetched', 'hello'],
+    ]);
+    // Only a list-only mirror merges; a loaded window keeps the existing "if empty" rule.
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [at('ignored', '2026-01-01T00:00:00.000Z')]);
+    expect(remoteSessionStore.getMessages('s1').map(row => row.id)).toEqual(['older', 'prefetched']);
+  });
+
   it('does not let another device seed the same task ID', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('s1')]);
     remoteSessionStore.applyRemotePush('other', 'local-db:messages:created', { sessionId: 's1', listMessage: true, message: message('wrong', 's1') });
     expect(remoteSessionStore.getMessages('s1')).toEqual([]);
   });
-});
-
-it('retains response speed per session at completion, freezes aborts and clears the next turn', () => {
-  remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('tps-one'), session('tps-two')]);
-  const speed = { phase: 'generating', waitOrigin: 'turn', firstResponseMs: 2000, waitingMs: 0,
-    durationMs: 3000, outputTokens: 50, estimated: true, averageRate: 16.7, recentRate: 20,
-    samples: [{ durationMs: 1000, outputTokens: 20, rate: 20 }], sampledAt: 1 };
-  pushMakerStatus('tps-one', { isRunning: true, responseSpeed: speed });
-  remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
-    sessionId: 'tps-one', event: { type: 'error', data: { message: 'cancelled', isTerminal: true } },
-  });
-  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
-    .toMatchObject({ phase: 'complete', estimated: true, outputTokens: 50 });
-  expect(remoteSessionStore.getSessionRunStatus('tps-two').responseSpeed).toBeUndefined();
-  pushMakerStatus('tps-two', { isRunning: true });
-  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed?.outputTokens).toBe(50);
-  pushMakerStatus('tps-one', { isRunning: true, responseSpeed: { ...speed, phase: 'waiting',
-    firstResponseMs: null, outputTokens: 0, durationMs: 0, samples: [] } });
-  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
-    .toMatchObject({ phase: 'waiting', firstResponseMs: null, outputTokens: 0, samples: [] });
-  pushMakerStatus('tps-one', { isRunning: false, responseSpeed: { ...speed, phase: 'complete',
-    outputTokens: 300, estimated: false, averageRate: 100, recentRate: 100 } });
-  expect(remoteSessionStore.getSessionRunStatus('tps-one').responseSpeed)
-    .toMatchObject({ phase: 'complete', estimated: false, outputTokens: 300 });
-});
-
-it('keeps response speed failures through terminal tails, distinguishes cancellation and actual retries', () => {
-  remoteSessionStore.clear();
-  remoteSessionStore.setDeviceSessions('dev-1', 'Host', [session('speed-errors')]);
-  remoteSessionStore.enterSessionMessageDetail('speed-errors');
-  const speed = { phase: 'generating', waitOrigin: 'turn', firstResponseMs: 1000, waitingMs: 0,
-    durationMs: 2000, outputTokens: 50, estimated: true, averageRate: 25, recentRate: 30,
-    samples: [{ durationMs: 2000, outputTokens: 50, rate: 30 }], sampledAt: Date.now() };
-  const event = (type: string, data: Record<string, unknown>) => remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
-    sessionId: 'speed-errors', event: { type, data, source: 'pi' },
-  });
-  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
-  event('error', { message: 'temporary warning', isTerminal: false });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).not.toBe(true);
-  event('error', { message: 'API unavailable', isTerminal: false, willRetry: true });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed).toMatchObject({ retrying: true, recentRate: null });
-  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).toBe(true);
-  event('thinking', { stage: 'delta', blockId: 'recovered-thinking', text: 'reasoning resumed' });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.retrying).toBe(false);
-  event('error', { message: 'API unavailable', isTerminal: true });
-  event('done', {});
-  pushMakerStatus('speed-errors', { isRunning: false, responseSpeed: { ...speed, phase: 'complete', estimated: false } });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors')).toMatchObject({ isRunning: false, hasTerminalError: true,
-    responseSpeed: { outcome: 'failed', recentRate: null, samples: speed.samples } });
-  pushMakerStatus('speed-errors', { isRunning: true, responseSpeed: speed });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors').responseSpeed?.outcome).toBeUndefined();
-  event('done', { type: 'pi/agent_settled', status: 'cancelled' });
-  event('error', { message: 'aborted transport', isTerminal: true });
-  expect(remoteSessionStore.getSessionRunStatus('speed-errors')).toMatchObject({ hasTerminalError: false,
-    responseSpeed: { outcome: 'cancelled', recentRate: null } });
-  remoteSessionStore.clear();
 });
