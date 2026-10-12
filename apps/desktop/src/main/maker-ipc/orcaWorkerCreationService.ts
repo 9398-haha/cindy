@@ -487,20 +487,22 @@ function selectWorkerModel(params: {
   input: OrcaWorkerCreateParams;
   lead: OrcaLeadSessionSnapshot;
   defaults: OrcaWorkerDefaultsSnapshot;
-  availableModels: OrcaWorkerModelCapabilities[];
   /** Worker 那一处的目录里有 Lead 的模型(或与 Lead 同一处)时才沿用它；缺省沿用。 */
   inheritLeadModel?: boolean;
+  availableModels: readonly OrcaWorkerModelCapabilities[];
+  providers: readonly OrcaWorkerProviderSnapshot[];
 }): string {
   const { input, lead, defaults, inheritLeadModel = true } = params;
   return input.model
     ?? defaults.model
-    // pi 显式列出(与 model-defaults.ts 对齐,避免将来改 cc 默认时 pi 静默跟随)。
+    ?? (input.agent === lead.agentKind && inheritLeadModel ? lead.model : undefined)
     // Cursor 没有跨引擎默认型号：只取本机原生目录的第一项，取不到就留下空串交给后续校验。
-    ?? (input.agent === lead.agentKind && inheritLeadModel ? lead.model
-        : input.agent === 'cursor' ? (params.availableModels[0]?.id ?? '')
-        : input.agent === 'codex' ? 'gpt-5.5'
-        : input.agent === 'pi' ? 'claude-sonnet-4-6'
-        : 'claude-sonnet-4-6');
+    // 其它引擎不写死型号：取目录里排第一、且有已连接来源提供的模型；一个都没有则留空。
+    ?? (input.agent === 'cursor'
+      ? (params.availableModels[0]?.id ?? '')
+      : params.availableModels.find((model) =>
+        params.providers.some((provider) => provider.models.includes(model.id)))?.id)
+    ?? '';
 }
 
 /**
@@ -1216,8 +1218,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       input: params,
       lead,
       defaults,
-      availableModels,
       inheritLeadModel: sameLocationAsLead || availableModels.some((model) => model.id === lead.model),
+      availableModels,
+      providers: agentProviders,
     });
     const leadProviderId =
       params.agent === routeLead.agentKind && typeof routeLead.providerId === 'string' && routeLead.providerId.trim()
